@@ -390,7 +390,7 @@ export async function resolveApiKeyForTask(
   tool: AgenticToolName
 ): Promise<import('@agor/core/config').KeyResolutionResult> {
   // Call daemon service to resolve API key (no direct database access from executor!)
-  // This allows executors to run as different Unix users without needing database access.
+  // This keeps executors independent of direct database access in every substrate.
   // `tool` scopes the per-user lookup to the calling SDK's bucket so a Codex spawn
   // never resolves a key stored under `agentic_tools['claude-code']`, and vice versa.
   const executorSessionToken = (client as AgorClient & { executorSessionToken?: string })

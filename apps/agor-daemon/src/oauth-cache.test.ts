@@ -15,6 +15,14 @@ vi.mock('@agor/core/db', () => ({
   },
 }));
 
+// The subject-entitlement precondition is enforced inside `persistOAuthToken`
+// and is driven for real, against a real database and a real demotion, in
+// `services/mcp-capability-role.test.ts`. Stubbed here so this file stays about
+// what it is about: which columns a completed flow lands.
+vi.mock('@agor/core/tools/mcp/grant-entitlement', () => ({
+  assertMcpGrantSubjectEntitled: vi.fn(async () => undefined),
+}));
+
 vi.mock('@agor/core/tools/mcp/oauth-token-expiry', () => ({
   resolveTokenExpiry: () => ({
     expiresAt: new Date(Date.now() + 3_600_000),

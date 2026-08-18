@@ -74,8 +74,8 @@ let zellijAttached = false;
 
 /**
  * Zellij resurrection metadata can contain terminal viewport/scrollback.
- * Keep its directory private to the effective Unix identity. Shared-user
- * modes intentionally share that identity and therefore do not claim stronger
+ * Keep its directory private to the effective execution home. Shared-home
+ * modes intentionally share that directory and therefore do not claim stronger
  * isolation than the rest of the shared home.
  */
 export function ensurePrivateZellijCacheDirectory(directory: string): void {
@@ -436,7 +436,7 @@ export async function handleZellijAttach(
     const userShell = effectiveUser.shell;
     console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
 
-    // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
+    // Ensure the selected execution home contains Zellij's private cache directory.
     // Zellij needs this for plugin data, session info, and session serialization
     const zellijCacheDir = `${actualHome}/.cache/zellij`;
     if (!fs.existsSync(zellijCacheDir)) {

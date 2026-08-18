@@ -4,7 +4,7 @@
  * Handles JWT token storage and retrieval for daemon authentication
  */
 
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,12 @@ const AGOR_DIR = join(homedir(), '.agor');
 const TOKEN_FILE = join(AGOR_DIR, 'cli-token');
 
 export interface StoredAuth {
+  version: 2;
+  target: {
+    url: string;
+    origin: string;
+    deploymentId: string;
+  };
   accessToken: string;
   user: {
     user_id: string;
@@ -33,6 +39,7 @@ export async function saveToken(auth: StoredAuth): Promise<void> {
   await writeFile(TOKEN_FILE, JSON.stringify(auth, null, 2), {
     mode: 0o600, // Owner read/write only
   });
+  await chmod(TOKEN_FILE, 0o600);
 }
 
 /**
@@ -41,7 +48,20 @@ export async function saveToken(auth: StoredAuth): Promise<void> {
 export async function loadToken(): Promise<StoredAuth | null> {
   try {
     const data = await readFile(TOKEN_FILE, 'utf-8');
-    const auth = JSON.parse(data) as StoredAuth;
+    const auth = JSON.parse(data) as Partial<StoredAuth>;
+
+    // Legacy tokens were not bound to an origin or deployment and must never
+    // be sent speculatively to the currently configured URL.
+    if (
+      auth.version !== 2 ||
+      !auth.target?.url ||
+      !auth.target?.origin ||
+      !auth.target.deploymentId ||
+      !auth.accessToken ||
+      !auth.user
+    ) {
+      return null;
+    }
 
     // Check if token is expired
     if (auth.expiresAt && Date.now() > auth.expiresAt) {
@@ -50,7 +70,7 @@ export async function loadToken(): Promise<StoredAuth | null> {
       return null;
     }
 
-    return auth;
+    return auth as StoredAuth;
   } catch {
     // File doesn't exist or is invalid
     return null;

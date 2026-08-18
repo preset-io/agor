@@ -139,6 +139,7 @@
 [data-streamdown="link"] {
   color: var(--ant-color-primary);
   text-decoration: underline;
+  cursor: pointer;
 }
 
 [data-streamdown="link"]:hover {

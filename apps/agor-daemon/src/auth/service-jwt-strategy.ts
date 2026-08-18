@@ -73,7 +73,7 @@ function propagateTenantFromJwtPayload(
  * Extended JWT Strategy that handles service tokens
  *
  * Service tokens are used by the executor to authenticate with the daemon
- * for privileged operations (unix.sync-*, git.*, etc.)
+ * for privileged executor operations (git.*, etc.)
  */
 export class ServiceJWTStrategy extends JWTStrategy {
   constructor(

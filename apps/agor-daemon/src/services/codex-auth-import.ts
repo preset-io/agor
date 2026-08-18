@@ -3,7 +3,7 @@
  *
  * Accepts the contents of a Codex CLI `auth.json` pasted in the browser
  * (onboarding wizard / settings), validates its shape, writes it 0600 into the
- * Codex home of the Unix identity that will run Codex for this user, verifies
+ * Codex execution home for this user, verifies
  * it back, and flips the user's Codex auth method to `subscription` so
  * executors use the file instead of an env API key.
  *
@@ -11,8 +11,8 @@
  * - The pasted payload is token material: browser → daemon → target user's
  *   filesystem only. It is never logged, never echoed back, and never enters
  *   any agent/LLM context. The response carries non-secret metadata only.
- * - The write happens AS the target Unix user (sudo, content over stdin), so
- *   ownership and 0600 permissions hold in insulated/strict modes.
+ * - The write uses the configured execution substrate with restrictive file
+ *   permissions in the selected execution home.
  * - Callers act only on their own credentials — the target identity is always
  *   derived from the authenticated user, never from request data.
  */
@@ -30,7 +30,7 @@ import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
-  resolveCodexUnixIdentity,
+  resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareDatabase) {
@@ -59,22 +59,21 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
       const parsed = parseCodexAuthJson(data?.authJson);
       if (!parsed.ok) throw new BadRequest(parsed.error);
 
-      const identity = await resolveCodexUnixIdentity(
+      const identity = await resolveCodexCredentialRoute(
         userId,
         withTenantDatabase,
         app.get('config')
       );
       if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
+          `Cannot determine the credential home for this Codex login: ${identity.message}`
         );
       }
 
       const summary = await persistVerifiedCodexAuth({
         app,
         normalized: parsed.normalized,
-        targetUnixUser: identity.unixUser,
-        reportedUnixUser: identity.reportedUnixUser,
+        delegatedHomeKey: identity.delegatedHomeKey,
         userId,
         authUser,
         codexHome: identity.codexHome,

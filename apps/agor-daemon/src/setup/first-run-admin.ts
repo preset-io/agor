@@ -86,7 +86,7 @@ async function writeCredentialsExclusive(
           'This usually means a previous bootstrap left a credentials file behind',
           'while the database was reset. To proceed:',
           `  - If you still have the password: keep ${path} as-is and create the`,
-          `    admin manually (\`agor user create-admin\`), or restore the DB.`,
+          `    admin manually (\`agor local create-admin\`), or restore the DB.`,
           `  - If the password is lost: delete ${path} and restart the daemon`,
           '    to regenerate.',
         ].join('\n')

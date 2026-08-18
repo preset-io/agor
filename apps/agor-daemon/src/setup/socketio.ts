@@ -8,9 +8,8 @@
  * Browser-emitted terminal events (terminal:input, terminal:resize, join)
  * are gated by per-event authentication checks. Without these checks any
  * anonymous socket that knew a target user_id could inject keystrokes into
- * that user's web terminal channel — which under unix_user_mode=strict is
- * full impersonation of the victim's OS identity, and under simple mode is a
- * shell as the daemon user (with read access to ~/.agor/config.yaml,
+ * that user's web terminal channel. In simple mode this is a shell as the
+ * daemon user (with read access to ~/.agor/config.yaml,
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 

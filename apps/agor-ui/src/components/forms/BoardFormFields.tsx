@@ -1,6 +1,7 @@
 import type { Board, Group, User } from '@agor-live/client';
 import type { FormInstance } from 'antd';
-import { Alert, Form, Input, Tabs, Typography } from 'antd';
+import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
+import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import {
   RbacPermissionFields,
   type RbacPermissionValue,
@@ -46,6 +47,10 @@ export function extractBoardFormValues(form: FormInstance): Partial<Board> {
   const bgColor = values.background_color;
   return {
     name: values.name,
+    // Board icons are Unicode emoji strings. Keep the historical default when
+    // a new board has not selected one; existing multi-codepoint values pass
+    // through unchanged.
+    icon: values.icon || '📋',
     description: values.description,
     // background_color is usually a string (gradient/CSS/hex), but the
     // ColorPicker yields an AntD AggregationColor. Only serialize via
@@ -97,13 +102,17 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
 }) => {
   const generalFields = (
     <>
-      <Form.Item
-        label="Name"
-        name="name"
-        rules={[{ required: true, message: 'Please enter a board name' }]}
-        style={{ marginBottom: 24 }}
-      >
-        <Input placeholder="My Board" autoFocus={autoFocus} />
+      <Form.Item label="Name" required style={{ marginBottom: 24 }}>
+        <Space.Compact style={{ display: 'flex' }}>
+          <FormEmojiPickerInput fieldName="icon" defaultEmoji="📋" />
+          <Form.Item
+            name="name"
+            noStyle
+            rules={[{ required: true, message: 'Please enter a board name' }]}
+          >
+            <Input placeholder="My Board" style={{ flex: 1 }} autoFocus={autoFocus} />
+          </Form.Item>
+        </Space.Compact>
       </Form.Item>
 
       <Form.Item label="Description" name="description">

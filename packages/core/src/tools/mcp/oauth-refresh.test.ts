@@ -44,12 +44,19 @@ import {
 // plain `function` constructors (not arrow factories) so `new X()` works.
 // ---------------------------------------------------------------------------
 
-const { mockGetToken, mockSaveToken, mockDeleteToken, mockFindById } = vi.hoisted(() => ({
-  mockGetToken: vi.fn(),
-  mockSaveToken: vi.fn(),
-  mockDeleteToken: vi.fn(),
-  mockFindById: vi.fn(),
-}));
+const { mockGetToken, mockSaveToken, mockDeleteToken, mockFindById, mockUserFindById } = vi.hoisted(
+  () => ({
+    mockGetToken: vi.fn(),
+    mockSaveToken: vi.fn(),
+    mockDeleteToken: vi.fn(),
+    mockFindById: vi.fn(),
+    // Persisting a refreshed token now requires the grant's subject to still be
+    // entitled to hold it (`assertMcpGrantSubjectEntitled`), so these
+    // orchestration tests need a subject who is. The refusal itself is covered
+    // where it is enforced — see the daemon's `mcp-capability-role` tests.
+    mockUserFindById: vi.fn(async () => ({ user_id: 'user-1', role: 'member' })),
+  })
+);
 
 vi.mock('../../db/repositories', () => ({
   UserMCPOAuthTokenRepository: function UserMCPOAuthTokenRepositoryMock() {
@@ -62,6 +69,11 @@ vi.mock('../../db/repositories', () => ({
   MCPServerRepository: function MCPServerRepositoryMock() {
     return {
       findById: mockFindById,
+    };
+  },
+  UsersRepository: function UsersRepositoryMock() {
+    return {
+      findById: mockUserFindById,
     };
   },
 }));

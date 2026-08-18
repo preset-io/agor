@@ -28,7 +28,7 @@ non-applicability is non-obvious or affects implementation or review.
 ## Classify each resource
 
 A tenant is the customer/account isolation boundary, not a user, branch, board,
-repo, session, RBAC role, or Unix user.
+repo, session, RBAC role, or execution-home key.
 
 | Classification    | Required handling and proof                                                                                                                                    |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -5,6 +5,20 @@ creates it once with mode `0600`. After initialization Agor does not silently re
 comments, formatting, key order, YAML anchors, read-only ConfigMaps, and infrastructure-as-code
 ownership.
 
+Every deployment must have a stable UUID in the daemon block:
+
+```yaml
+daemon:
+  deployment_id: 019c1234-5678-7123-8123-123456789abc
+```
+
+`agor init` generates it. Every replica of one HA deployment must share it; a copied config used
+to create a separate deployment must receive a new value. The daemon refuses to start without a
+valid deployment ID. Interactive `agor daemon start` can back up and explicitly rewrite an older
+config after warning that YAML comments and formatting may be lost; noninteractive startup fails
+with a paste-ready UUID instead. The ID is public, opaque identity—not a credential—and is exposed
+by `/health` so the CLI can bind logins and local administration to the correct deployment.
+
 Change operator settings in the file (or its Helm/Terraform/Ansible/secret-manager source), then
 restart the daemon. Settings needed before the database is reachable—database/bootstrap, tenant
 routing, filesystem, listener, executor, and security settings—belong here or in deployment env.
@@ -38,8 +52,8 @@ YAML list, including `[]` when a tool-free deployment is intentional.
 
 Supported environment overrides still win over YAML. Important examples are `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
-`AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, `AGOR_EXECUTOR_USERNAME`, and
-`AGOR_DAEMON_UNIX_USER`. They are resolved in memory and never written back.
+`AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, and the sandbox overrides. They are
+resolved in memory and never written back.
 
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.

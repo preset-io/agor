@@ -1,13 +1,13 @@
 /**
  * A session is stamped with its creator's `unix_username` at creation, and in
- * `delegated`/`strict` that stamp is the OS identity the executor runs as. If
+ * `delegated` mode that stamp is the execution-home key the external substrate uses. If
  * an admin later changes the user's `unix_username`, the stamp names an
  * identity the user no longer owns and the SDK state sits in a home directory
  * the instance cannot read, so the prompt has to be refused.
  *
  * That property comes from `unix_user_mode` alone, but `validateSessionUnixUsername`
  * used to be registered only inside the `branch_rbac` spread — so an
- * open-access instance running `strict` kept executing prompts as the stale
+ * open-access instance running `delegated` kept executing prompts as the stale
  * user, while the same request was refused once RBAC was on.
  *
  * These tests run the before-create chains that `registerHooks` actually
@@ -15,13 +15,18 @@
  * the validator, it was in whether the validator was reached.
  */
 
-import type { HookContext } from '@agor/core/types';
+import {
+  type HookContext,
+  type MessageCreate,
+  MessageRole,
+  type SessionID,
+} from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 
 type RegisteredHook = (context: HookContext) => unknown;
 
-const SESSION_ID = '00000000-0000-7000-8000-000000000001';
+const SESSION_ID = '00000000-0000-7000-8000-000000000001' as SessionID;
 const BRANCH_ID = '00000000-0000-7000-8000-000000000002';
 const CREATOR_ID = '00000000-0000-7000-8000-000000000003';
 
@@ -37,7 +42,7 @@ interface Harness {
  */
 const buildHarness = (options: {
   branchRbac: boolean;
-  unixUserMode: 'simple' | 'delegated' | 'insulated' | 'strict';
+  unixUserMode: 'simple' | 'sandbox' | 'delegated';
   /** Creator's `unix_username` today; the session is always stamped 'alice'. */
   creatorUnixUsername: string | null;
 }): Harness => {
@@ -46,8 +51,6 @@ const buildHarness = (options: {
   const app = {
     service(path: string) {
       return {
-        // `strict` also subscribes to service events to materialize Unix
-        // groups; nothing here exercises that path.
         on() {},
         hooks(hooks: { before?: Record<string, RegisteredHook[]> }) {
           const key = path.replace(/^\//, '');
@@ -119,21 +122,32 @@ const executorAuthentication = (sessionId: string) => ({
 });
 
 /** An external prompt write, as the REST/socket transports deliver it. */
-const makeContext = (path: 'messages' | 'tasks', asExecutor: false | string = false): HookContext =>
-  ({
+const makeContext = (
+  path: 'messages' | 'tasks',
+  asExecutor: false | string = false
+): HookContext => {
+  const message = {
+    session_id: SESSION_ID,
+    type: 'user',
+    role: MessageRole.USER,
+    index: 0,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    content_preview: 'ship it',
+    content: 'ship it',
+  } satisfies MessageCreate;
+
+  return {
     path,
     method: 'create',
-    data:
-      path === 'messages'
-        ? { session_id: SESSION_ID, role: 'user', content: 'ship it' }
-        : { session_id: SESSION_ID, full_prompt: 'ship it' },
+    data: path === 'messages' ? message : { session_id: SESSION_ID, full_prompt: 'ship it' },
     params: {
       provider: 'rest',
       user: { user_id: CREATOR_ID, role: 'member' },
       query: {},
       ...(asExecutor ? { authentication: executorAuthentication(asExecutor) } : {}),
     },
-  }) as unknown as HookContext;
+  } as unknown as HookContext;
+};
 
 const runCreateChain = async (
   harness: Harness,
@@ -149,7 +163,7 @@ const runCreateChain = async (
 };
 
 const PROMPT_WRITES = ['messages', 'tasks'] as const;
-const IDENTITY_MODES = ['delegated', 'strict'] as const;
+const IDENTITY_MODES = ['delegated'] as const;
 
 describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path) => {
   describe.each(IDENTITY_MODES)('unix_user_mode: %s, branch_rbac: false', (unixUserMode) => {
@@ -215,8 +229,7 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
   });
 
   /**
-   * `simple` and `insulated` never execute as the stamped identity —
-   * `resolveUnixUserForImpersonation` ignores `session.unix_username` in both —
+   * `simple` and `sandbox` never execute using the stamped home key —
    * so refusing on drift there would lock a user out of their own sessions over
    * an identity nothing runs as. RBAC still stamps sessions in those modes,
    * which is what used to make the check fire.

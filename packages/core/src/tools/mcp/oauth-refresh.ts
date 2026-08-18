@@ -10,6 +10,7 @@ import {
 } from '../../db/repositories';
 import type { MCPServerID, UserID } from '../../types';
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
@@ -303,8 +304,13 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
-    const committed = await tenantWork(deps, (db) =>
-      new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
+    const committed = await tenantWork(deps, async (db) => {
+      // Inside this unit of work rather than before it: the entitlement is a
+      // precondition of the write, and on PostgreSQL this callback is the
+      // transaction the write commits in. See `assertMcpGrantSubjectEntitled`
+      // for the residual window this still leaves open.
+      await assertGrantSubjectForRefresh(deps, db);
+      return new UserMCPOAuthTokenRepository(db).completeClaimedRefresh(
         deps.userId,
         deps.mcpServerId,
         fence,
@@ -313,8 +319,8 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
           refreshToken: result.refresh_token,
           expiresAt: expiry.expiresAt,
         }
-      )
-    );
+      );
+    });
     if (!committed) return observeCommittedRefresh(deps, fence);
     console.log('[MCP OAuth Refresh] refresh_succeeded category=committed');
     return result.access_token;
@@ -350,6 +356,23 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
   }
 }
 
+/**
+ * The grant subject's standing, as a precondition of persisting a refreshed
+ * token. `userId === null` is the tenant-owned `shared` grant, which has no
+ * individual subject to re-check.
+ */
+async function assertGrantSubjectForRefresh(
+  deps: RefreshAndPersistDeps,
+  db: Database | TenantScopeAwareDatabase
+): Promise<void> {
+  await assertMcpGrantSubjectEntitled({
+    db,
+    tenantId: deps.tenantId ?? getCurrentTenantId(),
+    subjectUserId: deps.userId,
+    oauthMode: deps.userId === null ? 'shared' : 'per_user',
+  });
+}
+
 async function refreshStandalone(deps: RefreshAndPersistDeps): Promise<string> {
   const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
   const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
@@ -370,6 +393,7 @@ async function refreshStandalone(deps: RefreshAndPersistDeps): Promise<string> {
       allowLocalhostHttp: true,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
+    await assertGrantSubjectForRefresh(deps, deps.db);
     await userTokenRepo.saveToken(deps.userId, deps.mcpServerId, {
       accessToken: result.access_token,
       refreshToken: result.refresh_token,

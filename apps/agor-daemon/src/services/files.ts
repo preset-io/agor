@@ -16,7 +16,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -115,12 +115,12 @@ export class FilesService {
 
       const currentUserId = params.user?.user_id as UserID | undefined;
       const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
-      const asUser = await resolveExecutorReadAsUser(
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         currentUser ?? currentUserId,
         this.app.get('config')
       );
-      return { branchId: branch.branch_id, asUser };
+      return { branchId: branch.branch_id, delegatedHomeKey };
     });
     if (!resolved) return [];
 
@@ -142,10 +142,9 @@ export class FilesService {
         },
         {
           logPrefix: `[FilesService ${sessionId}]`,
-          // In strict mode, autocomplete runs as the requesting Unix user.
-          // In simple/insulated mode this stays undefined so default installs
-          // do not require sudo and configured executor defaults can apply.
-          asUser: resolved.asUser,
+          // Delegated mode passes the caller's stable execution-home key to
+          // the external launcher. Local modes do not select a host identity.
+          delegatedHomeKey: resolved.delegatedHomeKey,
         }
       );
 

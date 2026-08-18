@@ -83,6 +83,39 @@ describe('UsersService — git token env var hardening', () => {
   });
 });
 
+describe('UsersService — delegated execution home key validation', () => {
+  for (const invalid of ['1alice', '-alice', 'Alice', '../alice', 'alice name', 'a'.repeat(33)]) {
+    dbTest(`rejects invalid key ${JSON.stringify(invalid)} on create`, async ({ db }) => {
+      const service = new UsersService(db);
+      await expect(
+        service.create({
+          email: `invalid-${Math.random().toString(36).slice(2)}@test.local`,
+          password: 'test-password-1234',
+          unix_username: invalid,
+        })
+      ).rejects.toThrow(/Execution home key/);
+    });
+
+    dbTest(`rejects invalid key ${JSON.stringify(invalid)} on patch`, async ({ db }) => {
+      const service = new UsersService(db);
+      const id = await makeUser(service);
+      await expect(service.patch(id, { unix_username: invalid })).rejects.toThrow(
+        /Execution home key/
+      );
+    });
+  }
+
+  dbTest('accepts the canonical delegated key syntax', async ({ db }) => {
+    const service = new UsersService(db);
+    const user = await service.create({
+      email: 'valid-home-key@test.local',
+      password: 'test-password-1234',
+      unix_username: '_alice-1',
+    });
+    expect(user.unix_username).toBe('_alice-1');
+  });
+});
+
 describe('UsersService — avatar source metadata', () => {
   dbTest(
     'marks explicit avatar URL patches as manual and clears Slack metadata',

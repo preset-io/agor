@@ -181,8 +181,8 @@ const security: Array<{ title: string; body: string }> = [
     body: 'The open-source flags that widen attack surface (shared dev boxes, broad bypass modes) are off in Cloud. We know which knobs belong in which position because we run it ourselves.',
   },
   {
-    title: 'Unix-level isolation',
-    body: 'Sessions, worktrees, and environments run as distinct Unix users, with filesystem permissions enforcing the boundaries between users, branches, and agents as defense-in-depth.',
+    title: 'Substrate isolation',
+    body: 'Sessions and workspaces are routed through tenant-scoped runtime and storage boundaries rather than host-user impersonation.',
   },
   {
     title: 'Independently reviewed',
@@ -587,7 +587,7 @@ export function AgorCloudLanding() {
               <img
                 className={styles.trustShot}
                 src="/screenshots/security-review-fanout.png"
-                alt="A security-review branch in Agor, with sub-sessions fanned out across RBAC, secrets management, Unix isolation, dependency supply chain, and more"
+                alt="A security-review branch in Agor, with sub-sessions fanned out across RBAC, secrets management, execution isolation, dependency supply chain, and more"
                 loading="lazy"
               />
             </div>

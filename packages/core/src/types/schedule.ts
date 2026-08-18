@@ -272,7 +272,7 @@ export interface Schedule {
 
   /**
    * User who created the schedule. The scheduler uses this user's
-   * `unix_username` for spawned-session impersonation (same path as
+   * immutable `unix_username` execution-home stamp (same path as
    * today, just keyed off `schedules.created_by` instead of
    * `branches.created_by`).
    */

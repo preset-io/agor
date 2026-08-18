@@ -316,6 +316,12 @@
       "import": "./dist/tools/mcp/auth-secrets.js",
       "require": "./dist/tools/mcp/auth-secrets.cjs"
     },
+    "./tools/mcp/env-secrets": {
+      "source": "./src/tools/mcp/env-secrets.ts",
+      "types": "./dist/tools/mcp/env-secrets.d.ts",
+      "import": "./dist/tools/mcp/env-secrets.js",
+      "require": "./dist/tools/mcp/env-secrets.cjs"
+    },
     "./tools/mcp/jwt-auth": {
       "source": "./src/tools/mcp/jwt-auth.ts",
       "types": "./dist/tools/mcp/jwt-auth.d.ts",
@@ -339,6 +345,12 @@
       "types": "./dist/tools/mcp/oauth-refresh.d.ts",
       "import": "./dist/tools/mcp/oauth-refresh.js",
       "require": "./dist/tools/mcp/oauth-refresh.cjs"
+    },
+    "./tools/mcp/grant-entitlement": {
+      "source": "./src/tools/mcp/grant-entitlement.ts",
+      "types": "./dist/tools/mcp/grant-entitlement.d.ts",
+      "import": "./dist/tools/mcp/grant-entitlement.js",
+      "require": "./dist/tools/mcp/grant-entitlement.cjs"
     },
     "./tools/mcp/oauth-token-expiry": {
       "source": "./src/tools/mcp/oauth-token-expiry.ts",
@@ -417,12 +429,6 @@
       "types": "./dist/local-actions/index.d.ts",
       "import": "./dist/local-actions/index.js",
       "require": "./dist/local-actions/index.cjs"
-    },
-    "./local-actions/identity": {
-      "source": "./src/local-actions/identity.ts",
-      "types": "./dist/local-actions/identity.d.ts",
-      "import": "./dist/local-actions/identity.js",
-      "require": "./dist/local-actions/identity.cjs"
     },
     "./templates/teammate-welcome-note": {
       "source": "./src/templates/teammate-welcome-note.ts",

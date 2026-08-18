@@ -2,6 +2,7 @@ import { scrubGitRemotesAction } from '@agor/core/local-actions';
 import { Command, Flags } from '@oclif/core';
 
 export default class ScrubGitRemotes extends Command {
+  static override summary = 'Audit or scrub credentials from local Git remotes';
   static override description =
     'Scan registered repos/branches for credential-bearing git remote URLs and optionally scrub them (local/offline).';
 

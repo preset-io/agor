@@ -41,6 +41,7 @@ import {
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  requireDeploymentId,
   resolveDataHomeFromConfig,
   resolveDeploymentConfig,
   resolveEffectiveConfig,
@@ -175,6 +176,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
   config = resolveEffectiveConfig(config);
+  requireDeploymentId(config);
   assertValidEffectiveExecutionConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
@@ -307,7 +309,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       ? extractDbFilePath(databaseUrl)
       : undefined;
 
-  // Wire the configured executor command template + impersonation user so the
+  // Wire the configured executor command template and delegated home key so the
   // ~10 spawnExecutorFireAndForget() call sites pick them up without needing
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change

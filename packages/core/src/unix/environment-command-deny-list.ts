@@ -11,8 +11,8 @@
  *   able to escape the branch sandbox. Env commands are intentionally
  *   varied (docker, pnpm, make, custom scripts), so this list is short.
  * - Regexes operate on the final shell string. Pattern matching shell
- *   strings is *not* a hard boundary — real isolation is Unix users +
- *   filesystem permissions. This catches copy-paste mistakes and
+ *   strings is *not* a hard boundary — sandbox or external-substrate
+ *   containment is. This catches copy-paste mistakes and
  *   compromised-repo scenarios, not a determined insider.
  */
 

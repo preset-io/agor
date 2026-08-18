@@ -350,10 +350,10 @@ export const branchFixtures = [
     issue: 'https://github.com/preset-io/agor/issues/42',
     pr: 'https://github.com/preset-io/agor/pull/1254',
     notes:
-      'Review lane fan-out: sudoers warning copy drafted, docs link attached, awaiting a second pass.',
+      'Review lane fan-out: sandbox warning copy drafted, docs link attached, awaiting a second pass.',
     env: { status: 'starting', url: 'http://localhost:3030' },
     sessions: [
-      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'sudoers audit'],
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'sandbox audit'],
       ['OpenCode', 'opencode', SessionStatus.AWAITING_PERMISSION, 'waiting on ops note'],
     ],
   },

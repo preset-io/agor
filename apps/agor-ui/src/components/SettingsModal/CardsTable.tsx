@@ -266,7 +266,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       <Form.Item label="Name" style={{ marginBottom: 24 }}>
         <Flex gap={8}>
           <Form.Item name="emoji" noStyle>
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="📋" />
+            <FormEmojiPickerInput fieldName="emoji" defaultEmoji="📋" />
           </Form.Item>
           <Form.Item name="name" noStyle rules={[{ required: true, message: 'Name is required' }]}>
             <Input placeholder="e.g. Support Ticket" style={{ flex: 1 }} />

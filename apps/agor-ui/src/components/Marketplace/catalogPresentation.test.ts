@@ -61,18 +61,21 @@ describe('connectBlockedReason', () => {
     expect(connectBlockedReason(entry({ auth_type: 'unknown' }))).toBeUndefined();
   });
 
-  it('refuses a locally-run server', () => {
+  it('refuses an entry with no endpoint to dial', () => {
+    // Unreachable for anything the loader served — it refuses such an entry
+    // outright now — but these arrive over the wire, so the UI still answers.
     expect(
       connectBlockedReason(entry({ transport: 'stdio', has_remote: false, remote_url: undefined }))
-    ).toMatch(/runs locally/i);
+    ).toMatch(/cannot be installed/i);
   });
 
-  it.each(['oauth', 'credentials'] as const)(
-    'refuses %s auth while only the no-auth branch exists',
-    (authType) => {
-      expect(connectBlockedReason(entry({ auth_type: authType }))).toMatch(/needs an account/i);
-    }
-  );
+  it('allows oauth: connecting sets it up and the user signs in afterwards', () => {
+    expect(connectBlockedReason(entry({ auth_type: 'oauth' }))).toBeUndefined();
+  });
+
+  it('refuses credentials auth, which nothing can obtain for the user', () => {
+    expect(connectBlockedReason(entry({ auth_type: 'credentials' }))).toMatch(/needs an API key/i);
+  });
 });
 
 describe('connectStatus', () => {
@@ -94,12 +97,22 @@ describe('connectStatus', () => {
       connectStatus(entry({ transport: 'stdio', has_remote: false, remote_url: undefined }))
     ).toMatchObject({
       readiness: 'blocked',
-      label: 'Runs locally',
+      label: 'Not installable',
     });
-    expect(connectStatus(entry({ auth_type: 'oauth' }))).toMatchObject({
+    expect(connectStatus(entry({ auth_type: 'credentials' }))).toMatchObject({
       readiness: 'blocked',
-      label: 'Needs an account',
+      label: 'Needs an API key',
     });
+  });
+
+  it('separates "sign in afterwards" from "no account needed"', () => {
+    // Both connect, so both must not be `blocked` — but a card promising "no
+    // account needed" over a server that wants the user's Notion login is the
+    // thing this vocabulary exists to prevent.
+    const oauth = connectStatus(entry({ auth_type: 'oauth' }));
+    expect(oauth.readiness).toBe('sign-in');
+    expect(oauth.readiness).not.toBe(connectStatus(entry()).readiness);
+    expect(oauth.detail).toMatch(/your own account/i);
   });
 });
 
@@ -110,10 +123,21 @@ describe('isConnectable', () => {
   });
 
   it('excludes what the card calls blocked', () => {
-    expect(isConnectable(entry({ auth_type: 'oauth' }))).toBe(false);
     expect(isConnectable(entry({ auth_type: 'credentials' }))).toBe(false);
     expect(
       isConnectable(entry({ transport: 'stdio', has_remote: false, remote_url: undefined }))
+    ).toBe(false);
+  });
+
+  it('keeps oauth, which connects and then asks the user to sign in', () => {
+    expect(isConnectable(entry({ auth_type: 'oauth' }))).toBe(true);
+  });
+
+  it('still excludes an endpoint-less oauth entry — nothing to sign into', () => {
+    expect(
+      isConnectable(
+        entry({ auth_type: 'oauth', transport: 'stdio', has_remote: false, remote_url: undefined })
+      )
     ).toBe(false);
   });
 

@@ -45,7 +45,7 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 
 ## Deployment
 
-- [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix-level isolation for secure shared development environments
+- [Execution Isolation](https://agor.live/guide/multiplayer-unix-isolation): RBAC with fail-closed local sandboxing or delegated execution for shared environments
 - [Containerized Execution](https://agor.live/guide/containerized-execution): Running Agor executors in Kubernetes, Docker, or containerized environments
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor — development environment setup and codebase structure
 
@@ -62,7 +62,7 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 - [Claude Tag Validates the Category](https://agor.live/blog/claude-tag-vs-agor-assistants): Why teams still need modeled, governed, observable, multi-specialist teammates
 - [Agor-OpenClaw Framework](https://agor.live/blog/agor-openclaw): OpenClaw patterns running 100% inside Agor
 - [Agor vs. OpenClaw](https://agor.live/blog/openclaw): What the fastest-growing open-source project teaches us about agentic AI
-- [Agor Cloud Private Beta](https://agor.live/blog/agor-cloud): Fully managed Agor with Unix-level isolation and enterprise observability
+- [Agor Cloud Private Beta](https://agor.live/blog/agor-cloud): Fully managed Agor with tenant-scoped execution isolation and enterprise observability
 - [Agor Platform](https://agor.live/blog/agor-platform): Agor as a full platform — REST API, CLI, and TypeScript client
 - [The Orchestration Layers](https://agor.live/blog/orchestration-layers): How software development evolved from prompts to orchestrating multiple AI agents
 - [Context Engineering](https://agor.live/blog/context-engineering): Maintainable AI context with bite-sized markdown nuggets

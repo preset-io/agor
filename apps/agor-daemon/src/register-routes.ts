@@ -10,6 +10,7 @@ import { Transform } from 'node:stream';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
+  requireDeploymentId,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -4351,6 +4352,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
+        service: 'agor-daemon',
+        deploymentId: requireDeploymentId(config),
+        // Present only for daemons detached by `agor daemon start`. The CLI
+        // compares this opaque ID with its local ownership record before it
+        // sends a signal, preventing a stale/recycled PID from being killed.
+        managedInstanceId: process.env.AGOR_MANAGED_DAEMON_INSTANCE_ID,
         status:
           healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
             ? 'ok'
@@ -4389,7 +4396,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           managedEnvsExecutionMode:
             config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           // True when the daemon runs in a multi-user Unix isolation mode
-          // (insulated/strict). UI hides "trust everyone on this instance"
+          // (sandbox). UI hides "trust everyone on this instance"
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',

@@ -888,9 +888,10 @@ const GatewayAgentConfigurationFields: React.FC<{
 
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
- * and navigation lives in the unified modal footer. Selections drive a live
- * manifest preview + derived scope/event list via {@link buildSlackManifest} /
- * {@link requiredBotScopes}, so the user never adds a scope by hand.
+ * and navigation lives in the unified modal footer. Selections drive the derived
+ * scope/event list on the Options step ({@link requiredBotScopes}) and the
+ * copyable manifest on the Create app step ({@link buildSlackManifest}), so the
+ * user never adds a scope by hand.
  */
 const SlackSetupWizard: React.FC<{
   client: AgorClient | null;
@@ -1062,8 +1063,8 @@ const SlackSetupWizard: React.FC<{
       {/* Step 0: Options (kept mounted so Form.Items stay registered for validation) */}
       <div style={{ display: step === 0 ? undefined : 'none' }}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          Choose what the bot can do. Your selections build a Slack app manifest below — paste it
-          into Slack in the next step so every scope and event is preconfigured for you.
+          Choose what the bot can do. Your selections become a Slack app manifest you'll paste into
+          Slack on the next step, so every scope and event is preconfigured for you.
         </Typography.Paragraph>
 
         <Form.Item
@@ -1243,10 +1244,14 @@ const SlackSetupWizard: React.FC<{
           </Form.Item>
         )}
 
-        <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
-          Manifest preview
+        <Typography.Text strong style={{ fontSize: 13 }}>
+          {`Required Slack Scopes & Events (${scopes.length} scopes, ${events.length} events)`}
         </Typography.Text>
-        {manifestPreview}
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
+          Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+          <code>app_mention</code>, not <code>message.*</code> channel events. You copy the full
+          manifest on the next step.
+        </Typography.Paragraph>
         {scopeList}
       </div>
 

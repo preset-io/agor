@@ -19,6 +19,7 @@ import { toAgenticToolsStatus } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId, shortId } from '../../lib/ids';
+import { isValidExecutionHomeKey } from '../../types/user';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
@@ -195,12 +196,15 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    * Create a new user
    */
   async create(data: Partial<InternalUser>): Promise<InternalUser> {
+    if (data.unix_username !== undefined && !isValidExecutionHomeKey(data.unix_username)) {
+      throw new RepositoryError('Invalid execution home key format');
+    }
     // Validate unix_username uniqueness if provided
     if (data.unix_username) {
       const isTaken = await this.isUnixUsernameTaken(data.unix_username);
       if (isTaken) {
         throw new RepositoryError(
-          `Unix username "${data.unix_username}" is already in use by another user`
+          `Execution home key "${data.unix_username}" is already in use by another user`
         );
       }
     }
@@ -316,12 +320,16 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       throw new EntityNotFoundError('User', id);
     }
 
+    if (updates.unix_username !== undefined && !isValidExecutionHomeKey(updates.unix_username)) {
+      throw new RepositoryError('Invalid execution home key format');
+    }
+
     // Validate unix_username uniqueness if being changed
     if (updates.unix_username && updates.unix_username !== current.unix_username) {
       const isTaken = await this.isUnixUsernameTaken(updates.unix_username, fullId);
       if (isTaken) {
         throw new RepositoryError(
-          `Unix username "${updates.unix_username}" is already in use by another user`
+          `Execution home key "${updates.unix_username}" is already in use by another user`
         );
       }
     }

@@ -21,9 +21,9 @@ const mocks = vi.hoisted(() => {
     spawnExecutorFireAndForget: vi.fn(),
     generateScopedServiceToken: vi.fn(() => 'terminal-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
-    resolveUnixUserForImpersonation: vi.fn(() => ({
+    resolveDelegatedHomeKey: vi.fn(() => ({
       unixUser: null,
-      reportedUnixUser: null,
+      delegatedHomeKey: null,
     })),
     createUserProcessEnvironment: vi.fn(async () => ({})),
     joinRequestingSocket: vi.fn(async () => true),
@@ -75,7 +75,7 @@ vi.mock('@agor/core/db', () => ({
 
 vi.mock('@agor/core/unix', () => ({
   UnixUserNotFoundError: class UnixUserNotFoundError extends Error {},
-  resolveUnixUserForImpersonation: mocks.resolveUnixUserForImpersonation,
+  resolveDelegatedHomeKey: mocks.resolveDelegatedHomeKey,
   validateResolvedUnixUser: () => undefined,
 }));
 
@@ -126,9 +126,9 @@ beforeEach(() => {
   mocks.canOpen = true;
   mocks.branchesById.clear();
   mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
-  mocks.resolveUnixUserForImpersonation.mockReturnValue({
+  mocks.resolveDelegatedHomeKey.mockReturnValue({
     unixUser: null,
-    reportedUnixUser: null,
+    delegatedHomeKey: null,
   });
   mocks.createUserProcessEnvironment.mockResolvedValue({});
   mocks.joinRequestingSocket.mockResolvedValue(true);
@@ -289,23 +289,6 @@ describe('process-affine attachment creation', () => {
     expect(a.terminalId).not.toBe(b.terminalId);
     expect(a.sessionName).not.toBe(b.sessionName);
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps strict/impersonated terminals in the branch cwd', async () => {
-    mocks.config = {
-      daemon: { port: 3030 },
-      execution: { branch_rbac: false, unix_user_mode: 'strict' },
-    };
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({
-      unixUser: 'alice',
-      reportedUnixUser: 'alice',
-    });
-    const service = new TerminalsService(makeApp() as never, {} as never);
-    await service.create({ branchId: 'branch-1' as BranchID }, params as never);
-    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
-      expect.objectContaining({ params: expect.objectContaining({ cwd: mocks.branch.path }) }),
-      expect.objectContaining({ asUser: 'alice' })
-    );
   });
 
   it('enforces branch session permission', async () => {

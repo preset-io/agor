@@ -1,6 +1,6 @@
 import { Tabs } from 'nextra/components';
 
-<Tabs items={['npm (Recommended)', 'Homebrew', 'Docker Compose']} defaultIndex={0}>
+<Tabs items={['npm (Recommended)', 'Docker Compose']} defaultIndex={0}>
   <Tabs.Tab>
     Most users should start here. It's the most universal path, and it's the one the rest of the docs assume.
 
@@ -15,40 +15,6 @@ import { Tabs } from 'nextra/components';
     agor daemon start
     agor open
     ```
-
-  </Tabs.Tab>
-
-  <Tabs.Tab>
-    If you already use Homebrew, this is a convenient alternative on macOS or Linux.
-
-    The Homebrew formula installs a compatible Node runtime for you.
-
-    ```bash
-    # Install Agor
-    brew tap preset-io/agor https://github.com/preset-io/agor
-    brew install agor-live
-
-    # First run
-    agor init
-    agor daemon start
-    agor open
-    ```
-
-    > **Heads up — 24h release cooldown.** The formula installs via npm with
-    > `--min-release-age=1` for supply-chain protection, so a brand-new
-    > `agor-live` release isn't installable via Homebrew until ~24 hours
-    > after it lands on npm. If `brew install` fails with
-    > `notarget No matching version found for @agor-live/client@<version>
-    > with a date before …`, wait until the cooldown lapses and retry.
-    > Re-running succeeds; nothing is broken.
-
-    > **Why a tap, not `brew install agor-live` directly?** Agor is licensed
-    > under [BUSL-1.1](https://spdx.org/licenses/BUSL-1.1.html), which is
-    > source-available rather than OSI-approved open source. Homebrew's
-    > [core repository](https://docs.brew.sh/License-Guidelines) only
-    > accepts DFSG-compatible licenses, so BUSL projects (Agor, HashiCorp's
-    > Terraform/Vault, CockroachDB, Sentry, …) ship via their own taps
-    > instead. The tap install path is the supported, long-term solution.
 
   </Tabs.Tab>
 

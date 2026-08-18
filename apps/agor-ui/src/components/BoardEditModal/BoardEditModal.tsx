@@ -82,6 +82,7 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
         form.resetFields();
         form.setFieldsValue({
           name: fresh.name,
+          icon: fresh.icon,
           description: fresh.description,
           background_color: fresh.background_color,
           custom_css: fresh.custom_css,

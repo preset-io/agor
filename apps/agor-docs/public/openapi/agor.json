@@ -542,11 +542,6 @@
         "additionalProperties": true,
         "description": "Schema for gateway. See @agor-live/client for the authoritative TypeScript type."
       },
-      "local-actions": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for local-actions. See @agor-live/client for the authoritative TypeScript type."
-      },
       "agentic-tool-settings": {
         "type": "object",
         "additionalProperties": true,
@@ -7010,43 +7005,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/gateway"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/local-actions": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/local-actions"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["admin"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/local-actions"
               }
             }
           }

@@ -56,6 +56,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CLIENT_DIR="$REPO_ROOT/packages/client"
+CLI_DIR="$REPO_ROOT/apps/agor-cli"
 INTERNAL_STAGE="$SCRIPT_DIR/.internal.stage"
 RELEASE_DIR="$SCRIPT_DIR/release"
 INTEGRATION_IDS=(claude codex copilot gemini opencode cursor)
@@ -69,6 +70,7 @@ echo ""
 echo "📍 Repository root: $REPO_ROOT"
 echo "📦 agor-live:       $SCRIPT_DIR"
 echo "📦 @agor-live/client: $CLIENT_DIR"
+echo "📦 @agor/cli:         $CLI_DIR"
 echo "🧩 Agentic tools:   ${INTEGRATION_IDS[*]}"
 echo ""
 
@@ -94,11 +96,11 @@ else
 fi
 
 if [[ -n "$BUMP" || -n "$TARGET_VERSION" ]]; then
-  # Update the base, client, and every version-aligned integration package.
-  node - "$NEW_VERSION" "$SCRIPT_DIR" "$CLIENT_DIR" "${INTEGRATION_DIRS[@]}" <<'NODE'
+  # Update the base, CLI, client, and every version-aligned integration package.
+  node - "$NEW_VERSION" "$SCRIPT_DIR" "$CLI_DIR" "$CLIENT_DIR" "${INTEGRATION_DIRS[@]}" <<'NODE'
 const fs = require('fs');
-const [version, base, client, ...integrations] = process.argv.slice(2);
-for (const directory of [base, client, ...integrations]) {
+const [version, base, cli, client, ...integrations] = process.argv.slice(2);
+for (const directory of [base, cli, client, ...integrations]) {
   const packagePath = `${directory}/package.json`;
   const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   pkg.version = version;
@@ -114,11 +116,23 @@ for (const directory of integrations) {
 }
 NODE
   echo "  ✓ Updated agor-live/package.json"
+  echo "  ✓ Updated @agor/cli/package.json"
   echo "  ✓ Updated @agor-live/client/package.json"
   echo "  ✓ Updated version-aligned agentic tool packages"
   echo ""
 else
-  # Sync client version to match agor-live (no bump, just align)
+  # Sync CLI/client versions to match agor-live (no bump, just align)
+  CLI_VERSION=$(node -p "require('$CLI_DIR/package.json').version")
+  if [[ "$CLI_VERSION" != "$NEW_VERSION" ]]; then
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('$CLI_DIR/package.json', 'utf8'));
+      pkg.version = '$NEW_VERSION';
+      fs.writeFileSync('$CLI_DIR/package.json', JSON.stringify(pkg, null, 2) + '\n');
+    "
+    echo "📌 Synced @agor/cli version: $CLI_VERSION → $NEW_VERSION"
+    echo ""
+  fi
   CLIENT_VERSION=$(node -p "require('$CLIENT_DIR/package.json').version")
   if [[ "$CLIENT_VERSION" != "$NEW_VERSION" ]]; then
     node -e "

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const base = JSON.parse(await readFile(join(root, 'packages/agor-live/package.json'), 'utf8'));
+const cli = JSON.parse(await readFile(join(root, 'apps/agor-cli/package.json'), 'utf8'));
 const integrations = ['claude', 'codex', 'copilot', 'gemini', 'opencode', 'cursor'];
 const forbiddenBaseDependencies = [
   '@anthropic-ai/claude-agent-sdk',
@@ -14,6 +15,9 @@ const forbiddenBaseDependencies = [
   'opencode-ai',
 ];
 const failures = [];
+if (cli.version !== base.version) {
+  failures.push(`@agor/cli: ${cli.version} != agor-live ${base.version}`);
+}
 const EXACT_SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 for (const dependency of forbiddenBaseDependencies) {

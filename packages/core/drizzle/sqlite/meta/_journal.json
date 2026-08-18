@@ -610,6 +610,20 @@
       "when": 1787000000000,
       "tag": "0088_drop_mcp_catalog_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1787100000000,
+      "tag": "0089_knowledge_assistant_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1787184000000,
+      "tag": "0090_knowledge_teammate_attribution",
+      "breakpoints": true
     }
   ]
 }

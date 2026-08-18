@@ -104,7 +104,7 @@ Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-in
 
 Terminal sessions are branch-scoped. Users only see terminals for branches they're actively using.
 
-> **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `insulated` or `strict` mode in shared environments. See [Security](/security).
+> **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `sandbox` mode in shared Linux environments. See [Security](/security).
 
 ---
 
@@ -149,7 +149,7 @@ When teammates share a board, sessions still execute under a specific user's ide
 
 - The session's Anthropic / OpenAI key is the **session creator's** key (billing follows usage).
 - Env vars merge: `gateway/channel → user globals → session-scoped`, so a Slack-driven session run as you carries _your_ `GITHUB_TOKEN`, not a shared bot token.
-- In `unix_user_mode: strict`, the executor process literally runs as the user's Unix account.
+- In `unix_user_mode: sandbox`, the executor runs as the daemon user inside an RBAC-derived filesystem boundary.
 
 This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, branches, and conversations are shared.
 

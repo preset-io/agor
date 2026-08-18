@@ -1,5 +1,7 @@
 # Daemon git-operation audit (2026-05-24)
 
+> **Historical audit record.** Unix impersonation, sudoers, POSIX projection, and related paths cited below were removed in 0.25; file pointers describe the audited revision, not the current tree.
+
 **Status:** audit / read-only. No code changes proposed in this branch — only a phased migration plan and a documented "must stay" set so the next attempt doesn't re-litigate the boundary.
 **Scope:** every `simple-git` call site, `git`-CLI shell-out, and `fs.rm`/`fs.read` against `~/.agor/repos/` or `~/.agor/worktrees/` inside `apps/agor-daemon/src/**`.
 **Companion docs:** [`context/explorations/daemon-fs-decoupling.md`](../../context/explorations/daemon-fs-decoupling.md) (broader FS decoupling, §1.1 inventory), [`context/explorations/executor-expansion.md`](../../context/explorations/executor-expansion.md) (the target executor command surface), [`context/explorations/clone-redesign.md`](../../context/explorations/clone-redesign.md) (storage_mode='clone' vs 'worktree' that the executor commands now branch on).

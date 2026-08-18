@@ -386,18 +386,10 @@ export function OpenCodeProviderSettings({
       </Typography.Paragraph>
       {settings && (
         <Alert
-          type={settings.isolation.boundary === 'os' ? 'success' : 'warning'}
+          type="warning"
           showIcon
-          title={
-            settings.isolation.boundary === 'os'
-              ? 'Credentials are isolated by the session owner’s Unix identity.'
-              : 'Credentials use separate logical namespaces under a shared Unix identity.'
-          }
-          description={
-            settings.isolation.boundary === 'os'
-              ? 'Strict mode enforces the credential boundary with filesystem ownership and permissions.'
-              : 'Simple and insulated modes require users who share the Unix identity to trust one another.'
-          }
+          title="Credentials use logical namespaces in the daemon credential home."
+          description="This is not a host-account boundary. Use sandbox filesystem policy or a reviewed external substrate for untrusted users."
         />
       )}
       {(error || loadFailed) && (

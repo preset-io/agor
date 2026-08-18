@@ -7,20 +7,20 @@
  * `codex-auth-import`) doubles as the shared core its siblings import from.
  *
  * SECURITY CONTRACT (inherited by every caller):
- * - The target Unix identity is always derived from the authenticated user,
+ * - The delegated home key is always derived from the authenticated user,
  *   never from request data — callers act only on their own credentials.
  * - Token material flows browser → daemon → target user's filesystem only. It is
  *   never logged, echoed back, or placed in any agent/LLM context; failures log
  *   an error class, never token bytes.
- * - Writes happen AS the target Unix user (sudo, content over stdin), so
- *   ownership and 0600 permissions hold in insulated/strict modes.
+ * - Writes run through the configured execution substrate and use restrictive
+ *   file permissions in the selected execution home.
  */
 
 import { join } from 'node:path';
 import {
   type AgorConfig,
   hasTenantSafeExecutorCredentialHome,
-  unixUserModeRequiresUsername,
+  unixUserModeRequiresExecutionHomeKey,
 } from '@agor/core/config';
 import { getCurrentTenantId, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -31,11 +31,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import {
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
+import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
@@ -55,13 +51,11 @@ interface UsersServiceLike {
   ): Promise<unknown>;
 }
 
-export type CodexUnixIdentityResolution =
+export type CodexCredentialRouteResolution =
   | {
       ok: true;
-      /** Local sudo identity; null for simple/delegated external execution. */
-      unixUser: string | null;
-      /** Identity reported to an external executor launcher. */
-      reportedUnixUser: string | null;
+      /** Opaque home key reported to an external executor launcher. */
+      delegatedHomeKey: string | null;
       /** Stable trusted identity for persistent-per-user storage selection. */
       userId: UserID;
       /**
@@ -80,22 +74,20 @@ export type CodexUnixIdentityResolution =
     };
 
 /**
- * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
- * for this user: the daemon user (simple, and delegated WITHOUT an executor
- * command template), the shared executor user (insulated), or the caller's own
- * Unix account (strict). Delegated templated execution additionally requires
- * an explicit persistent-per-user executor-home guarantee.
+ * Resolve the credential-home route that Codex will read for this user.
+ * Delegated execution additionally requires an explicit persistent-per-user
+ * executor-home guarantee.
  *
  * Returns a discriminated result rather than throwing so callers with
  * different failure semantics (the import endpoint rejects, the check-auth
  * probe must distinguish "no identity configured" from "could not resolve")
  * don't have to grep error messages.
  */
-export async function resolveCodexUnixIdentity(
+export async function resolveCodexCredentialRoute(
   userId: UserID | undefined,
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
   config: DeepReadonly<AgorConfig>
-): Promise<CodexUnixIdentityResolution> {
+): Promise<CodexCredentialRouteResolution> {
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
   if (!hasTenantSafeExecutorCredentialHome(config)) {
@@ -120,24 +112,21 @@ export async function resolveCodexUnixIdentity(
       ok: false,
       reason: 'unsupported-mode',
       message:
-        'In delegated Unix user mode with templated execution, Codex credentials live in the ' +
+        'In delegated execution mode with templated execution, Codex credentials live in the ' +
         "execution substrate's per-user home, but execution.executor_storage.user_home does not " +
         'guarantee persistent-per-user routing. Configure that contract or use an API key.',
     };
   }
 
   let unixUsername: string | null = null;
-  // Both strict and delegated require a per-user unix_username. In strict the
-  // resolver impersonates it; in delegated (non-templated) it resolves to no
-  // impersonation (auth.json lives in the daemon user's home, like simple),
-  // but a missing username must still surface as the actionable
-  // `missing-username` result.
-  if (unixUserModeRequiresUsername(mode)) {
+  // Delegated execution requires a stable per-user home key. A missing value
+  // must surface as the actionable `missing-username` result.
+  if (unixUserModeRequiresExecutionHomeKey(mode)) {
     if (!userId) {
       return {
         ok: false,
         reason: 'resolve-failed',
-        message: `${mode === 'strict' ? 'Strict' : 'Delegated'} Unix user mode requires an authenticated user context.`,
+        message: 'Delegated execution mode requires an authenticated user context.',
       };
     }
     const row = await withTenantDatabase((tenantDb) =>
@@ -148,18 +137,17 @@ export async function resolveCodexUnixIdentity(
       return {
         ok: false,
         reason: 'missing-username',
-        message: `${mode === 'strict' ? 'Strict' : 'Delegated'} Unix user mode requires a unix_username — ask an admin to set one for your account.`,
+        message:
+          'Delegated execution mode requires a unix_username — ask an admin to set one for your account.',
       };
     }
   }
 
   try {
-    const resolved = resolveUnixUserForImpersonation({
+    const resolved = resolveDelegatedHomeKey({
       mode,
-      userUnixUsername: unixUsername,
-      executorUnixUser: config.execution?.executor_unix_user,
+      executionHomeKey: unixUsername,
     });
-    validateResolvedUnixUser(mode, resolved.unixUser);
     if (!userId) {
       return {
         ok: false,
@@ -189,10 +177,9 @@ export async function resolveCodexUnixIdentity(
     }
     return {
       ok: true,
-      unixUser: resolved.unixUser,
-      reportedUnixUser: resolved.reportedUnixUser,
+      delegatedHomeKey: resolved.delegatedHomeKey,
       userId,
-      codexHome,
+      ...(codexHome ? { codexHome } : {}),
     };
   } catch (err) {
     return {
@@ -213,33 +200,29 @@ export async function resolveCodexUnixIdentity(
 export async function persistVerifiedCodexAuth(options: {
   app: AppLike;
   normalized: string;
-  targetUnixUser: string | null;
-  reportedUnixUser: string | null;
+  delegatedHomeKey: string | null;
   userId: UserID;
   authUser: NonNullable<AuthenticatedParams['user']>;
-  /** Per-user store `.codex` for sandbox mode (see CodexUnixIdentityResolution.codexHome). */
+  /** Per-user store `.codex` for sandbox mode (see CodexCredentialRouteResolution.codexHome). */
   codexHome?: string;
 }): Promise<CodexAuthSummary> {
-  const { app, normalized, targetUnixUser, reportedUnixUser, userId, authUser, codexHome } =
-    options;
+  const { app, normalized, delegatedHomeKey, userId, authUser, codexHome } = options;
 
   let summary: CodexAuthSummary;
   try {
-    summary = await writeCodexAuthViaExecutor(normalized, targetUnixUser, {
-      reportedUnixUser,
+    summary = await writeCodexAuthViaExecutor(normalized, {
+      delegatedHomeKey,
       userId,
       codexHome,
     });
   } catch (err) {
-    // The error may carry sudo/bash stderr; log a class-level summary only
+    // The error may carry launcher stderr; log a class-level summary only
     // so token material (or its absence) never reaches daemon logs.
     console.error(
-      `[CodexAuth] Failed to write auth.json${targetUnixUser ? ` as ${targetUnixUser}` : ''}: ${
-        err instanceof Error ? err.constructor.name : 'unknown error'
-      }`
+      `[CodexAuth] Failed to write auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
     );
     throw new BadRequest(
-      'Could not write the Codex credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
+      'Could not write the Codex credentials file on the server. Check daemon logs or use an API key instead.'
     );
   }
 

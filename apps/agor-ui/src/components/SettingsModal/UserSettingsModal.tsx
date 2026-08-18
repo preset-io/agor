@@ -1,5 +1,6 @@
 import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
@@ -1106,7 +1107,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'security',
       },
       {
-        label: 'Unix username',
+        label: 'Execution home key',
         kind: 'setting',
         keywords: 'impersonation os process user',
         panelKey: 'security',
@@ -1522,19 +1523,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
 
         <FieldRow
-          label="Unix username"
+          label="Execution home key"
           name="unix_username"
           help={
             isAdmin
-              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+              ? 'Transitional home key used only by delegated execution'
               : 'Maintained by administrators'
           }
           rules={[
             {
-              pattern: /^[a-z0-9_-]+$/,
-              message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+              pattern: EXECUTION_HOME_KEY_PATTERN,
+              message:
+                'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
             },
-            { max: 32, message: 'Unix username must be 32 characters or less' },
+            { max: 32, message: 'Execution home key must be 32 characters or less' },
           ]}
         >
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />

@@ -15,17 +15,24 @@
  * whether a caller may be shown a row, an attachment link, or load one by id.
  * They decide visibility, not policy, so they stay beside the write authorizer
  * rather than folding into it.
+ *
+ * Those reads answer "whose row is this?", which a role change does not revisit.
+ * The endpoints that issue a credential rather than read one need the second
+ * question too, so the role floor those carry lives here as well — see
+ * {@link MCP_CAPABILITY_ISSUING_SERVICE_PATHS}.
  */
 
 import {
   MCPServerRepository,
   resolveMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   isAtLeastMemberRole,
   isMCPServerUsableBy,
+  isMcpGrantSubjectEntitled,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
@@ -41,6 +48,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { runInOAuthTenantScope } from '../oauth-auth-helpers.js';
 
 export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
 
@@ -180,6 +188,186 @@ function assertAtLeastMember(role: unknown): void {
  * {@link canConfigureMCPServers}; nothing is authorized by reading it.
  */
 export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp';
+
+/**
+ * The `/mcp-servers/*` endpoints that mint, refresh, or exchange a credential,
+ * rather than exercising one that already exists.
+ *
+ * Ownership is a durable grant; role is current standing. `owner_user_id`
+ * records who configured a row and is never revisited when a user's role
+ * changes, so `loadMcpServerForCaller` keeps admitting the owner of a server
+ * after they are demoted to `viewer` — it is answering "whose row is this?",
+ * which demotion does not change the answer to. For reading a server one owns
+ * that is defensible. For these endpoints it is not: starting an authorization
+ * flow, exchanging a code, or refreshing a grant issues *new* capability, and a
+ * read-only account may not acquire capability it did not already hold.
+ * Discovery belongs here too — it opens the server's transport on its stored
+ * credential and writes the result back onto the row.
+ *
+ * So each of these carries a role floor in front of the ownership check, the
+ * way {@link authorizeMcpServerWrite} does for configuration CRUD. Ownership
+ * still decides *which* server; role decides whether the caller may issue
+ * against any at all.
+ *
+ * Registered by iterating this list rather than by adding a hook to each
+ * `app.service(...).hooks(...)` call in turn: a floor that is correct and a
+ * floor that runs are different claims, and the endpoints are spread over
+ * ~1,800 lines of `register-services.ts`, so per-endpoint wiring is exactly
+ * where the next one gets forgotten.
+ *
+ * This list is not the security boundary for durable credentials, and must not
+ * be read as one. Whether a grant may be *stored* is decided at the two writes
+ * that store it — `persistOAuthToken` and `refreshAndPersistToken` both call
+ * `assertMcpGrantSubjectEntitled` themselves — precisely so that no list of
+ * endpoints has to be complete for the rule to hold. An earlier revision tried
+ * to keep this list honest with a source scan for minting calls; a scan
+ * enumerates callers, and callers can be aliased, wrapped, or newly added, so
+ * it was replaced by enforcement at the choke point.
+ *
+ * What this list *is*: the endpoints a person drives where the caller's own
+ * role is the right question, and where refusing up front beats a provider
+ * round-trip that fails at the write. Two of them (`discover`, `test-jwt`)
+ * reach a provider on a stored credential without persisting a grant, so for
+ * those this is the only check there is.
+ *
+ * Absent because they issue nothing:
+ * - `oauth-disconnect` — revocation. Refusing a demoted user the ability to
+ *   drop their own grant would strand the credential this change exists to
+ *   contain, so it stays open at every role.
+ * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
+ */
+export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
+  // Mints an authorization URL and a pending flow against a saved server.
+  'mcp-servers/oauth-start',
+  // Exchanges the authorization code and persists the resulting token.
+  'mcp-servers/oauth-complete',
+  // Forces a refresh, extending a grant's lifetime on demand.
+  'mcp-servers/oauth-refresh',
+  // Writes a shared token onto the named row and backfills its token endpoint.
+  'mcp-servers/test-oauth',
+  // Fetches an access token from a caller-supplied endpoint with
+  // caller-supplied credentials.
+  'mcp-servers/test-jwt',
+  // Opens the server's transport on its stored credential and writes the
+  // capability list back onto the row.
+  'mcp-servers/discover',
+] as const;
+
+/**
+ * Whether the user a credential would be minted *for* still stands where they
+ * stood when the grant was first authorized.
+ *
+ * The caller floor above cannot answer this, because on these two surfaces the
+ * caller is frequently not the subject:
+ *
+ * - `oauth-callback` is the provider's browser redirect. It carries no session
+ *   at all — its authorization is the one-shot `state` — so the only identity
+ *   available is the one the pending flow recorded when it started. A member
+ *   who starts a flow, is demoted, and then completes the redirect would
+ *   otherwise have a token exchanged and persisted: the floor is on the start,
+ *   and nothing re-asked at the finish.
+ * - `oauth-auth-headers` refreshes and persists new access tokens
+ *   (`refreshAndPersistToken`), which is minting by the same definition, but is
+ *   called by an executor under a session token or service account. Flooring
+ *   that caller would floor a robot; the standing that matters is the grant
+ *   owner's.
+ *
+ * So both ask this about the *subject* rather than the requester. `shared`
+ * grants keep their admin floor — they were always admin-only to start
+ * (`oauth-start`) — and per-user grants get the member floor they never had.
+ *
+ * Deliberately not a `hasMinimumRole` call: see {@link assertMcpCapabilityRole}
+ * for why an absent role must not read as MEMBER here.
+ */
+export { isMcpGrantSubjectEntitled } from '@agor/core/mcp';
+
+/**
+ * {@link isMcpGrantSubjectEntitled} against the subject's stored role.
+ *
+ * The role is read here rather than taken from the request because on both
+ * calling surfaces the subject is not the requester, so there is no
+ * `params.user` to read it from — the callback has no session at all, and the
+ * refresh path is driven by an executor. Reading it fresh is also what makes a
+ * demotion land without waiting for anything to expire.
+ *
+ * Fails closed on an unknown or unnamed subject: a credential that cannot be
+ * attributed to a current user is not one to keep minting.
+ */
+export async function isMcpGrantOwnerEntitled(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  ownerUserId: string | undefined,
+  oauthMode: 'per_user' | 'shared' | undefined
+): Promise<boolean> {
+  if (!ownerUserId) return false;
+  const owner = await runInOAuthTenantScope(db, tenantId, () =>
+    new UsersRepository(db).findById(ownerUserId)
+  );
+  if (!owner) return false;
+  return isMcpGrantSubjectEntitled(owner.role, oauthMode);
+}
+
+/**
+ * The role floor for the endpoints above.
+ *
+ * Shares {@link isAtLeastMemberRole} with the write path rather than reaching
+ * for the generic `requireMinimumRole(ROLES.MEMBER)` hook: that one normalizes
+ * through `normalizeRole`, which answers MEMBER for an absent or empty role, so
+ * it admits precisely the caller carrying no role at all. The MCP floor is
+ * decided on the raw role for that reason, and having two floors that disagree
+ * on the same question is how the first one was lost.
+ *
+ * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
+ * provider, and an executor service account carries no role to floor.
+ */
+export function assertMcpCapabilityRole(
+  params: AuthenticatedParams | undefined,
+  action: string
+): void {
+  if (!params?.provider) return;
+  const user = params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return;
+  if (isAtLeastMemberRole(user.role)) return;
+  throw new Forbidden(`You need member access to ${action}`);
+}
+
+/** {@link assertMcpCapabilityRole} as a Feathers hook, for the registration below. */
+export function requireMcpCapabilityRole<T extends { params: AuthenticatedParams }>(
+  action: string
+): (context: T) => T {
+  return (context) => {
+    assertMcpCapabilityRole(context.params, action);
+    return context;
+  };
+}
+
+/**
+ * Wire the floor onto every path in {@link MCP_CAPABILITY_ISSUING_SERVICE_PATHS}.
+ *
+ * A function rather than a loop inlined at the call site so a test can apply
+ * the real wiring to a real app and drive it, instead of asserting against a
+ * copy of the loop that could drift from the one that ships — the same reason
+ * {@link createMcpServerWriteAuthorizationHook} is a factory.
+ *
+ * Feathers appends hooks, so the `ctx.requireAuth` each of these services
+ * registers inline still runs first and this decides on an authenticated
+ * caller. Called after those registrations for that reason.
+ */
+export function registerMcpCapabilityRoleFloor(app: {
+  // Method syntax, not a function-typed property: under `strictFunctionTypes`
+  // the latter checks `hooks`' parameter contravariantly and no structural
+  // stand-in for Feathers' `HookOptions<A, S>` is assignable to it. Methods are
+  // checked bivariantly, which is what lets a real app satisfy this without the
+  // util importing the whole `Application` type just to name a loop.
+  service(path: string): { hooks(map: unknown): unknown };
+}): void {
+  for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
+    app.service(path).hooks({
+      before: { create: [requireMcpCapabilityRole('connect and authorize MCP servers')] },
+    });
+  }
+}
 
 /**
  * A member widening their own server's reach, which is what

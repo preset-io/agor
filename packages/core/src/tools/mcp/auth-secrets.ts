@@ -54,6 +54,14 @@ export function redactMCPAuthSecrets(auth?: MCPAuth): MCPAuth | undefined {
   return changed ? redacted : auth;
 }
 
+/**
+ * INVARIANT: the sentinel is never persisted. See the long-form rationale on
+ * `restoreRedactedMCPEnvSecrets` — a submitted sentinel is a claim of
+ * "unchanged", never a value, so when there is nothing stored to restore (a
+ * stale form whose token a concurrent edit or an OAuth disconnect cleared)
+ * the field is dropped rather than written. Storing it would leave the server
+ * authenticating with a literal `••••••••`.
+ */
 export function restoreRedactedMCPAuthSecrets(options: {
   current?: MCPAuth;
   next?: MCPAuth;
@@ -64,11 +72,13 @@ export function restoreRedactedMCPAuthSecrets(options: {
   const record = restored as unknown as Record<string, unknown>;
 
   for (const field of MCP_AUTH_SECRET_FIELDS) {
-    if (
-      restored[field] === MCP_HEADER_REDACTED_SENTINEL &&
-      options.current?.[field] !== undefined
-    ) {
-      record[field] = options.current[field];
+    if (restored[field] !== MCP_HEADER_REDACTED_SENTINEL) continue;
+
+    const stored = options.current?.[field];
+    if (stored !== undefined) {
+      record[field] = stored;
+    } else {
+      delete record[field];
     }
   }
 

@@ -74,8 +74,8 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
   your team. Optional; works fine solo.
 - **Governance & observability** — branch-scoped RBAC and ACLs, per-user credentials and env
   vars, and per-prompt token + dollar accounting with full, durable history across every session.
-- **Self-hosted, with real isolation** — your repos, your DB (LibSQL or Postgres), and progressive
-  Unix isolation modes (`simple` → `insulated` → `strict`). BSL 1.1.
+- **Self-hosted, with explicit isolation** — your repos and database (LibSQL or Postgres), with
+  trusted local, fail-closed sandbox, or delegated external execution. BSL 1.1.
 
 ---
 
@@ -127,7 +127,7 @@ Agor is built on three foundational entities — everything else builds on these
 | **[Multiplayer & Social](https://agor.live/guide/multiplayer-social)**    | Live cursors, facepiles, spatial comments, and a shared multiplayer terminal.                                                                                                                                                                                                        |
 | **[Rich Chat UX](https://agor.live/guide/rich-chat-ux)**                  | Per-prompt token + dollar accounting, model/effort selectors, structured tool blocks, completion chimes.                                                                                                                                                                             |
 | **[Environments](https://agor.live/guide/environment-configuration)**     | One-click dev servers per branch with auto-managed unique ports — no more port fights.                                                                                                                                                                                               |
-| **[Security & RBAC](https://agor.live/guide/multiplayer-unix-isolation)** | Branch-scoped permission tiers (ACLs), per-user credentials and env vars, and progressive Unix isolation (`simple` / `insulated` / `strict`).                                                                                                                                        |
+| **[Security & RBAC](https://agor.live/guide/multiplayer-unix-isolation)** | Branch-scoped permission tiers, per-user credentials and env vars, and explicit execution modes (`simple` / `sandbox` / `delegated`).                                                                                                                                                |
 | **[Knowledge](https://agor.live/guide/knowledge)**                        | A shared, searchable markdown knowledge base — one place for decisions, runbooks, prompts, and agent memory.                                                                                                                                                                         |
 | **[Scheduler](https://agor.live/guide/scheduler)**                        | Cron-style triggers for templated prompts. Powers teammate heartbeats, standups, and automated audits.                                                                                                                                                                               |
 | **[Message Gateway](https://agor.live/guide/message-gateway)**            | Slack and GitHub as portals into Agor sessions.                                                                                                                                                                                                                                      |
@@ -221,7 +221,7 @@ graph TB
 
 The **daemon** (`apps/agor-daemon`, FeathersJS) owns the database, services, WebSocket events, and
 the MCP HTTP endpoint. The **executor** (`packages/executor`) is a process-isolated runtime that
-spawns agents via their SDKs and can run as a separate Unix user. Shared types, the Drizzle schema,
+spawns agents via their SDKs locally, inside the filesystem sandbox, or through a delegated external substrate. Shared types, the Drizzle schema,
 and git utilities live in `@agor/core` (`packages/core`).
 
 **[Full Architecture Guide →](https://agor.live/guide/architecture)**

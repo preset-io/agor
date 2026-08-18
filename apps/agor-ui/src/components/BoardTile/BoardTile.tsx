@@ -9,15 +9,16 @@ import type { CSSProperties } from 'react';
 export const NeutralBoardIcon = AppstoreOutlined;
 
 /**
- * A board's face is its primary assistant's emoji — boards no longer carry
- * their own icon. Resolves `primary_teammate_id → branch → teammate emoji`
- * from the already-loaded branch map; returns undefined when the board has no
- * primary teammate (or it isn't loaded), so callers render the neutral glyph.
+ * Resolve a board's own icon first. A primary teammate's emoji remains a
+ * compatibility fallback for boards that do not have an icon of their own.
+ * Auto-created teammate boards initialize `board.icon` from the teammate, but
+ * the two identities may intentionally diverge afterward.
  */
 export function getBoardEmoji(
-  board: Pick<Board, 'primary_teammate_id'>,
+  board: Pick<Board, 'icon' | 'primary_teammate_id'>,
   branchById?: Map<string, Branch> | null
 ): string | undefined {
+  if (board.icon) return board.icon;
   const teammateId = board.primary_teammate_id;
   if (!teammateId || !branchById) return undefined;
   const branch = branchById.get(teammateId);
@@ -25,7 +26,7 @@ export function getBoardEmoji(
 }
 
 export interface BoardTileProps {
-  /** Pre-resolved primary-assistant emoji (see {@link getBoardEmoji}). */
+  /** Pre-resolved board emoji (see {@link getBoardEmoji}). */
   emoji?: string;
   size?: number;
   style?: CSSProperties;
@@ -73,7 +74,7 @@ export interface BoardSelectOption {
 
 /**
  * Options for an AntD board `Select` where every board wears its face — the
- * primary-assistant emoji or the neutral {@link BoardTile} — so an
+ * board emoji, primary-teammate fallback, or neutral {@link BoardTile} — so an
  * assistant-less board never shows as a bare name. Pair with
  * `filterOption={boardSelectFilter}` to keep text search working against `name`.
  */

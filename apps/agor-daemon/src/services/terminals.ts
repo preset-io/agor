@@ -29,12 +29,7 @@ import type {
   TerminalAllocatedEvent,
   UserID,
 } from '@agor/core/types';
-import {
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  UnixUserNotFoundError,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
+import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
@@ -266,20 +261,12 @@ export class TerminalsService {
     const user = await this.withTenantDatabase((tenantDb) =>
       new UsersRepository(tenantDb).findById(userId)
     );
-    const impersonation = resolveUnixUserForImpersonation({
+    const delegatedHome = resolveDelegatedHomeKey({
       mode: unixUserMode as UnixUserMode,
-      userUnixUsername: user?.unix_username ?? null,
-      executorUnixUser: config.execution?.executor_unix_user,
+      executionHomeKey: user?.unix_username ?? null,
     });
-    try {
-      validateResolvedUnixUser(unixUserMode as UnixUserMode, impersonation.unixUser);
-    } catch (error) {
-      if (error instanceof UnixUserNotFoundError) throw new Error(error.message);
-      throw error;
-    }
-
     const executorEnv = await this.withTenantDatabase((tenantDb) =>
-      createUserProcessEnvironment(userId, tenantDb, undefined, !!impersonation.unixUser)
+      createUserProcessEnvironment(userId, tenantDb)
     );
 
     // Sandbox mount context for the terminal. The OWNER is the terminal user
@@ -389,10 +376,10 @@ export class TerminalsService {
         },
         {
           logPrefix: `[TerminalsService.executor ${shortId(userId)}/${shortId(terminalId)}]`,
-          asUser: impersonation.unixUser || undefined,
+          delegatedHomeKey: delegatedHome.delegatedHomeKey || undefined,
           env: executorEnv,
           templateVariables: {
-            unix_user: impersonation.reportedUnixUser || undefined,
+            unix_user: delegatedHome.delegatedHomeKey || undefined,
             executor_type: 'shell',
           },
           onExit: () => this.handleExecutorExit(terminalId, userId),

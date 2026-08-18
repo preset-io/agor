@@ -533,6 +533,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
+          features: { goals: false },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {

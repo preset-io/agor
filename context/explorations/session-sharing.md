@@ -1,5 +1,10 @@
 # Session Sharing & Identity Borrowing
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** short-term flag **shipped** (`dangerously_allow_session_sharing`).
 Longer-term redesign options are tracked here for future work; none are
 scheduled yet.

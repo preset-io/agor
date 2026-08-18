@@ -8,6 +8,7 @@ import {
   getKnowledgeUrl,
   getSessionUrl,
   isAllowedHealthCheckUrl,
+  normalizeHttpBaseUrl,
   normalizeOptionalHttpUrl,
 } from './url';
 
@@ -72,6 +73,23 @@ describe('entity URL builders — fullUrl double-prefix regression', () => {
   it('does not strip /ui from a path-prefixed base (e.g. https://host/myapp)', () => {
     const url = getSessionUrl(SESSION_ID, 'https://agor.example.com/myapp');
     expect(url).toMatch(/^https:\/\/agor\.example\.com\/myapp\/ui\/s\//);
+  });
+});
+
+describe('normalizeHttpBaseUrl', () => {
+  it('canonicalizes origins and preserves a path prefix without a trailing slash', () => {
+    expect(normalizeHttpBaseUrl(' HTTPS://Example.com:443/agor/// ', 'daemon URL')).toBe(
+      'https://example.com/agor'
+    );
+  });
+
+  it('rejects values that are unsafe to compose with daemon endpoint paths', () => {
+    expect(() => normalizeHttpBaseUrl('https://user:secret@example.com', 'daemon URL')).toThrow(
+      'must not include credentials'
+    );
+    expect(() => normalizeHttpBaseUrl('https://example.com/?target=other', 'daemon URL')).toThrow(
+      'must not include a query string or fragment'
+    );
   });
 });
 

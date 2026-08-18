@@ -84,10 +84,9 @@ export interface OpenCodeProviderDiscovery {
 }
 
 export type OpenCodeCredentialIsolation = {
-  // Mirrors the non-delegated UnixUserMode values (delegated has no native-state
-  // home boundary). `sandbox` = no OS impersonation, logical boundary.
-  mode: 'simple' | 'insulated' | 'strict' | 'sandbox';
-  boundary: 'logical' | 'os';
+  // Delegated mode has no daemon-managed native-state home boundary.
+  mode: 'simple' | 'sandbox';
+  boundary: 'logical';
 };
 
 export type OpenCodeProviderSettings = OpenCodeProviderDiscovery & {

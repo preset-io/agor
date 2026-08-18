@@ -643,7 +643,9 @@ describe('OpenCodeProviderSettings', () => {
     });
     renderSettings(service);
 
-    expect(await screen.findByText(/separate logical namespaces/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/logical namespaces in the daemon credential home/i)
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText('Account ID')).not.toBeInTheDocument();
     fireEvent.mouseDown(screen.getByLabelText('Region'));
     fireEvent.click(await screen.findByText('US'));

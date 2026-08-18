@@ -13,7 +13,7 @@ import { diagnoseWebTerminalRuntime } from '../lib/optional-capabilities.js';
 import { diagnoseSandbox, sandboxInstallHint } from '../lib/sandbox-diagnostics.js';
 
 export default class Doctor extends Command {
-  static description = 'Check this Agor installation and its agentic tools';
+  static description = 'Check the local Agor installation and its agentic tools';
   static flags = {
     json: Flags.boolean({ description: 'Print machine-readable JSON', default: false }),
   };

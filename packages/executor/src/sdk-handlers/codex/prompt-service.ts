@@ -1121,6 +1121,9 @@ export class CodexPromptService {
     );
 
     const codexConfigPayload: CodexConfigObject = {
+      // Agor owns durable task continuation. Codex goals can automatically
+      // continue after an internal answer without completing the SDK turn.
+      features: { goals: false },
       model_instructions_file: instructionsFile,
       ...(Object.keys(mcpServersConfig).length > 0 ? { mcp_servers: mcpServersConfig } : {}),
       // Codex Apps (for example the GitHub connector supplied by a plugin)

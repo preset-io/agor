@@ -70,7 +70,7 @@ export const sessions = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
 
-    // Unix username for SDK impersonation (immutable once set)
+    // Immutable execution-home key (legacy column name)
     // Set from creator's unix_username at session creation time
     // NEVER changes, even if user's unix_username changes later
     // This ensures SDK session data remains accessible in the original home directory
@@ -636,12 +636,8 @@ export const repos = pgTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for repo-level git access (canonical 24-char suffix; legacy 8-char valid)
-    // Users who have access to ANY branch in this repo get added to this group.
-    // Applied to repo Unix-group-managed paths:
-    // - repo root (non-recursive) for traversal into .git/worktrees/<name>
-    // - .git (recursive) for shared git objects/refs and git operations
-    unix_group: text('unix_group'),
+    // Retired nullable compatibility stamp retained for rollback/audit only.
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
 
     data: t
       .json<unknown>('data')
@@ -784,7 +780,7 @@ export const branches = pgTable(
     }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
-    unix_group: text('unix_group'), // canonical 24-char suffix; legacy 8-char stamps remain valid
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
     others_fs_access: text('others_fs_access', {
       enum: ['none', 'read', 'write'],
     })
@@ -1021,7 +1017,7 @@ export const users = pgTable(
       .notNull()
       .default('member'),
 
-    // Unix username for process impersonation (optional, app-enforced uniqueness)
+    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
     unix_username: text('unix_username'),
 
     // Absolute host home dir used as the per-user sandbox overlay SOURCE under
@@ -2390,6 +2386,9 @@ export const kbDocuments = pgTable(
     updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    updated_by_session_id: varchar('updated_by_session_id', { length: 36 }),
+    updated_by_agentic_tool: text('updated_by_agentic_tool'),
+    updated_by_teammate_name: text('updated_by_teammate_name'),
     updated_at: t.timestamp('updated_at'),
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
@@ -2437,6 +2436,9 @@ export const kbDocumentVersions = pgTable(
     created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    created_by_session_id: varchar('created_by_session_id', { length: 36 }),
+    created_by_agentic_tool: text('created_by_agentic_tool'),
+    created_by_teammate_name: text('created_by_teammate_name'),
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({

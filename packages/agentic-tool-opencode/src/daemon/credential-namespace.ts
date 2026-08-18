@@ -69,7 +69,7 @@ export function assertOpenCodeNativeAuthSupported(
   const mode = config.execution?.unix_user_mode ?? 'simple';
   if (mode === 'delegated') {
     throw new BadRequest(
-      'OpenCode provider connection and execution are unavailable in delegated Unix user mode because the execution substrate does not provide a native-state home boundary.'
+      'OpenCode provider connection and execution are unavailable in delegated execution mode because the execution substrate does not provide a native-state home boundary.'
     );
   }
   return mode;

@@ -1,5 +1,5 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
@@ -17,17 +17,6 @@ vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
   return {
     ...actual,
-    UsersRepository: vi.fn(),
-  };
-});
-
-vi.mock('@agor/core/unix', async () => {
-  const actual = await vi.importActual<typeof import('@agor/core/unix')>('@agor/core/unix');
-  return {
-    ...actual,
-    // The real validator asserts against /etc/passwd — the mocked Unix
-    // accounts in these tests don't exist on the test host.
-    validateResolvedUnixUser: vi.fn(),
   };
 });
 
@@ -44,7 +33,6 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
 const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
-const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -151,9 +139,9 @@ describe('codex-auth-import', () => {
     const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
 
     expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
-    const [writtenContent, asUser] = writeCodexAuthViaExecutorMock.mock.calls[0];
+    const [writtenContent, routing] = writeCodexAuthViaExecutorMock.mock.calls[0];
     expect(JSON.parse(writtenContent)).toEqual(JSON.parse(VALID_AUTH_JSON));
-    expect(asUser).toBeNull();
+    expect(routing).toEqual({ delegatedHomeKey: null, userId: 'user-1', codexHome: undefined });
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
@@ -183,49 +171,5 @@ describe('codex-auth-import', () => {
     } finally {
       errorSpy.mockRestore();
     }
-  });
-
-  it('strict mode targets the caller’s unix_username', async () => {
-    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
-    // `new UsersRepository(db)` — the implementation must be constructible.
-    usersRepositoryMock.mockImplementation(function mockRepo() {
-      return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
-    } as never);
-    const { app } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
-    expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(expect.any(String), 'alice', {
-      reportedUnixUser: 'alice',
-      userId: 'user-1',
-    });
-  });
-
-  it('strict mode without a unix_username rejects before writing', async () => {
-    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
-    usersRepositoryMock.mockImplementation(function mockRepo() {
-      return { findById: vi.fn(async () => ({ unix_username: null })) };
-    } as never);
-    const { app } = makeApp();
-    await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
-      /Unix account/
-    );
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
-  });
-
-  it('insulated mode targets the configured executor user', async () => {
-    loadConfigSyncMock.mockReturnValue({
-      execution: { unix_user_mode: 'insulated', executor_unix_user: 'agor_executor' },
-    } as never);
-    const { app } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
-    expect(result.status).toBe('authenticated');
-    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(
-      expect.any(String),
-      'agor_executor',
-      {
-        reportedUnixUser: 'agor_executor',
-        userId: 'user-1',
-      }
-    );
   });
 });

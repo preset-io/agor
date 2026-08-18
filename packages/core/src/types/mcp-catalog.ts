@@ -9,7 +9,7 @@
 // authored text plus the transport details needed to dial the server.
 
 import type { AgenticToolName } from './agentic-tool';
-import type { MCPServer } from './mcp';
+import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode, MCPServer } from './mcp';
 import type { Session } from './session';
 
 /**
@@ -162,6 +162,74 @@ export interface MCPCatalogEntry {
   popularity_rank?: number;
 
   auth_type: MCPCatalogAuthType;
+
+  /**
+   * Per-server OAuth settings, for the endpoints discovery cannot fully
+   * describe. See {@link MCPCatalogEntryOAuth}. Omitted by every entry that
+   * does not need one, which is the intended state.
+   */
+  oauth?: MCPCatalogEntryOAuth;
+}
+
+/**
+ * The non-secret half of an OAuth client configuration, as an entry may state
+ * it.
+ *
+ * Everything here is optional and nothing here is normally needed. A server
+ * that implements the MCP authorization spec is set up entirely from what it
+ * publishes: the `WWW-Authenticate` challenge names its protected-resource
+ * metadata (RFC 9728), that names its authorization server, that publishes its
+ * endpoints and registration endpoint (RFC 8414), and Dynamic Client
+ * Registration (RFC 7591) mints the client. Connect declares none of that, and
+ * every entry in `curated.yaml` today states nothing here, because a fact
+ * fetched from the vendor at the moment of use cannot go stale and an authored
+ * one silently can — and nothing sweeps this file for rot.
+ *
+ * So this is an escape hatch for the servers that fall short of that, not a
+ * place to restate what discovery already returns. Each field is here because
+ * it reaches something at runtime that no request can otherwise supply:
+ *
+ * - `scope` becomes the `scope` parameter of the authorization request and of
+ *   the DCR registration. Discovery covers it only when the resource metadata
+ *   publishes `scopes_supported` *and* the client is being registered
+ *   dynamically; a server that publishes neither grants a default scope that
+ *   may be empty, and the flow completes with a token that can do nothing.
+ * - `client_id` becomes the `client_id` of the authorization request, for a
+ *   server that pre-registers one public client for MCP clients instead of
+ *   running DCR. It is public by construction — RFC 6749 §2.2, and it travels
+ *   in the browser's address bar during the flow.
+ * - `dcr_mode` decides whether registration may fall back to an unadvertised
+ *   `/register`, for a server that runs DCR without publishing the endpoint.
+ * - `compatibility_mode` decides whether authorization-server metadata may be
+ *   fetched straight from the MCP origin, for a server that predates RFC 9728.
+ *
+ * What is deliberately absent is as load-bearing as what is here:
+ *
+ * - **No client secret.** `curated.yaml` is checked into a public repository
+ *   and is byte-identical for every tenant, so a secret in it is a published
+ *   secret shared by everyone. A server that cannot work without a confidential
+ *   client cannot be a catalog entry.
+ * - **No `authorization_url` / `token_url`.** These are where an authorization
+ *   code and a client credential are sent, so a stale one does not fail closed
+ *   — it delivers a live grant to whatever now answers at that hostname. They
+ *   are also the two facts discovery is most reliable about, and the runtime
+ *   requires them as a set with `client_id` anyway. Declaring them would take
+ *   the one part of the flow that must not drift and make it the part this file
+ *   is responsible for keeping current.
+ *
+ * None of this is user-specific: an entry is the same for every installer, and
+ * the credential each installer obtains is per-user and lives outside the
+ * server row entirely.
+ */
+export interface MCPCatalogEntryOAuth {
+  /** Space-separated OAuth scopes to request. */
+  scope?: string;
+  /** A pre-registered *public* client id. Never a confidential one. */
+  client_id?: string;
+  /** Dynamic Client Registration policy; defaults to `advertised`. */
+  dcr_mode?: MCPOAuthDCRMode;
+  /** Authorization-metadata discovery strictness; defaults to `strict`. */
+  compatibility_mode?: MCPOAuthCompatibilityMode;
 }
 
 /**

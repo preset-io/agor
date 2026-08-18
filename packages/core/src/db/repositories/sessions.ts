@@ -184,7 +184,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       agentic_tool: session.agentic_tool ?? 'claude-code',
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
       created_by: session.created_by,
-      unix_username: session.unix_username ?? null, // Stamped at creation time by setSessionUnixUsername hook
+      unix_username: session.unix_username ?? null, // Immutable execution-home stamp set at creation
       board_id: null, // Board ID tracked separately in boards.sessions array
       parent_session_id: session.genealogy?.parent_session_id ?? null,
       forked_from_session_id: session.genealogy?.forked_from_session_id ?? null,

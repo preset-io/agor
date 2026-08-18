@@ -4,9 +4,11 @@ Operator runbook for moving a self-hosted, multi-user Agor deployment off the
 Unix-account isolation modes (`strict`, `insulated`) onto the filesystem-sandbox
 mode (`unix_user_mode: sandbox`).
 
-> Status: interim guide (mostly for the Agor team's own box). As `strict` /
-> `insulated` are formally deprecated this will graduate into `apps/agor-docs`.
-> Design + threat model: [`context/explorations/executor-sandboxing.md`](../explorations/executor-sandboxing.md).
+> This is an operator-reviewed reference procedure, not a one-command upgrade or
+> rollback mechanism. There is no published 0.24 bridge release: perform the
+> conversion as an offline 0.24.7 → 0.25.1 cutover using the scripts from the
+> 0.25.1 source tree. Design + threat model:
+> [`context/explorations/executor-sandboxing.md`](../explorations/executor-sandboxing.md).
 > User-facing setup: `apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx` → "Sandbox mode".
 
 ---
@@ -57,15 +59,24 @@ multi-tenant (use containers/microVMs for that).
    If blocked on Ubuntu 24.04+: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
 2. The daemon must run **as the user you will chown everything to** (e.g.
    `agorpg`). Note it — you'll pass it as `--daemon-user`.
-3. Deploy database migrations first and verify `users.filesystem_home` exists.
-4. Back up the database and deployment config. For volume-backed deployments,
-   take an application-consistent volume snapshot before changing ownership.
-5. Drain queued/running work and stop the daemon before `--apply`. The script
-   refuses to apply while its configured systemd service is active.
+3. While still running 0.24.7, inventory nested mount points and all ways the
+   daemon can run (systemd, foreground, supervisor, container, and so on).
+4. Drain queued/running work, stop **every** daemon connected to the database,
+   and take tested database, deployment-config, and storage backups. For
+   volume-backed deployments, take an application-consistent volume snapshot.
+5. Install the 0.25.1 software without starting its daemon. Run
+   `agor db migrate --offline-cutover` from 0.25.1 and verify
+   `users.filesystem_home` exists. An old 0.24.7 daemon must never run against
+   the advanced migration watermark.
+6. Use the migration scripts from the same 0.25.1 source tree. The apply path
+   refuses to run while its configured systemd service is active, but it cannot
+   prove that foreground, alternate-service, or containerized daemons stopped.
 
 ## Procedure
 
-All scripts live in `scripts/` and are **dry-run by default**.
+All scripts live in `scripts/`, require Linux/GNU userland, and are **dry-run by
+default**. `find -xdev` deliberately does not cross nested mount points; migrate
+any inventoried mounted subtree separately.
 
 ### 1. Pre-flight: confirm home relocation is safe
 
@@ -162,11 +173,12 @@ inside a session, confirm:
 - **Fast:** set `execution.unix_user_mode: simple`, keep `branch_rbac: true`,
   disable the web terminal, and restart. Ownership already matches the daemon.
   Filesystem and tool-home isolation are degraded until sandbox is restored.
-- **Full:** retain the ownership manifest as forensic rollback data, but do not
-  replay one `chown` process per inode. Reconcile branch/repo permissions in
-  bulk only where verification finds drift, restore homes by owner in bounded
-  batches, restore sudoers if removed, then return to `strict`/`insulated`.
-  Preserved branch/repo groups and ACLs reduce how much reconciliation is needed.
+- **Full:** stop every 0.25.1 daemon and restore the complete pre-upgrade
+  database, configuration, and storage backup before starting 0.24.7. Retain
+  the ownership manifest as forensic recovery data, but do not treat it as an
+  automatic rollback tool or replay one `chown` process per inode. Preserved
+  branch/repo groups and ACLs reduce recovery work, but the old daemon cannot
+  safely run against the 0.25.1 migration watermark.
 
 ## Known behavior changes to expect
 

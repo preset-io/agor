@@ -50,8 +50,7 @@ export interface FeaturesConfig {
    */
   managedEnvsExecutionMode?: ManagedEnvExecutionMode;
   /**
-   * True when the daemon runs in a multi-user Unix isolation mode
-   * (insulated/strict). The UI uses this to hide "trust everyone on this
+   * True when the daemon enforces the local multi-user filesystem sandbox. The UI uses this to hide "trust everyone on this
    * instance" surfaces (e.g. the `instance` scope option in the artifact
    * consent modal). Server-side gates are the source of truth.
    */

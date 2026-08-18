@@ -8,11 +8,8 @@
  * The executor is ephemeral and task-scoped. Each subprocess executes exactly
  * one command and then exits. Communication with daemon is via Feathers/WebSocket.
  *
- * IMPERSONATION:
- * Impersonation is handled at spawn time by the daemon using buildSpawnArgs().
- * When the daemon spawns the executor with asUser, it uses `sudo su -` to run
- * the executor directly as the target user. The executor itself doesn't handle
- * impersonation - it's already running as the correct user.
+ * The executor contains no host-user impersonation logic. An external
+ * delegated launcher may select its own execution identity before startup.
  */
 
 import { createInterface } from 'node:readline';
@@ -190,9 +187,8 @@ async function handlePromptPayload(
   // =========================================================================
   // APPLY ENVIRONMENT VARIABLES FROM PAYLOAD
   //
-  // When executor is spawned via impersonation (sudo su -), the parent
-  // process environment is lost. The daemon passes env vars in the payload,
-  // and we apply them here before starting the SDK.
+  // External launchers may intentionally replace the parent environment. The
+  // daemon passes approved env vars in the payload and we apply them here.
   // =========================================================================
   if (payload.env && Object.keys(payload.env).length > 0) {
     // Filter out process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)

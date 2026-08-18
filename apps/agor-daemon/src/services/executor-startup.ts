@@ -25,9 +25,9 @@ type ExecutorStartupSessionsService = Pick<
 export type ActiveExecutorSession = Session & { agentic_tool: AgenticToolName };
 
 /**
- * Supplied only by the Unix modes that make `session.unix_username` the OS
- * identity of the executor (`delegated`/`strict`). Omitted otherwise, so a
- * deployment that never impersonates per user pays no lookup.
+ * Supplied only in `delegated` mode, where `session.unix_username` is the
+ * opaque execution-home key forwarded to the external substrate. Omitted in
+ * local modes, so they pay no lookup.
  *
  * `loadCreator` receives the tenant-scoped handle this startup opened, so the
  * creator read cannot escape the session's tenant.

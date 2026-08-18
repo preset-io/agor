@@ -117,15 +117,19 @@ export const entryTitle = catalogDisplayName;
 /**
  * What a user would find out by pressing Connect, said before they press it.
  *
- * Only the no-auth branch is wired, and most entries need an account — so
- * without this the default experience is accepting a disclosure and then being
- * refused. `unknown` is its own case rather than being folded into either side:
+ * `unknown` is its own case rather than being folded into either side:
  * connecting checks the endpoint and may well succeed, but an entry that does
  * not say cannot promise it will. It is what an entry naming an endpoint and
  * stating no `auth_type` reads as, which is what curation is told to write
  * wherever nobody has established one.
+ *
+ * `sign-in` is separate from `ready` for the same reason: both connect, but one
+ * of them lands the user on a server they still have to sign into, and a card
+ * promising "no account needed" for a server that needs their Notion account is
+ * the promise this vocabulary exists to keep. It is not `blocked` — the sign-in
+ * happens, it just happens after connecting rather than instead of it.
  */
-export type ConnectReadiness = 'ready' | 'unchecked' | 'blocked';
+export type ConnectReadiness = 'ready' | 'sign-in' | 'unchecked' | 'blocked';
 
 export interface ConnectStatus {
   readiness: ConnectReadiness;
@@ -136,16 +140,39 @@ export interface ConnectStatus {
 }
 
 const CONNECT_STATUSES = {
-  local: {
+  /**
+   * An entry with no endpoint to dial.
+   *
+   * This used to read "Runs locally — an admin configures it directly", which
+   * described a capability that does not exist: the two entries it applied to
+   * carried no package or command data either, so there was no path to
+   * installing them for an admin or anyone else. The copy is gone with them,
+   * and the loader now refuses such an entry outright
+   * (`assertEntryIsServable`), so nothing served can reach this.
+   *
+   * The branch stays because `MCPCatalogEntry.remote_url` is optional and these
+   * entries arrive over the wire — the UI does not get to assume the loader
+   * that produced them was this one. What it must not do is describe the entry
+   * as a working feature; it says the marketplace cannot install it, which is
+   * true whatever produced it. If local servers are ever offered they arrive
+   * with fields describing how the server is run, and an affordance designed
+   * against those — not this string.
+   */
+  unavailable: {
     readiness: 'blocked',
-    label: 'Runs locally',
-    detail:
-      'This server runs locally rather than over the network. An admin configures it directly.',
+    label: 'Not installable',
+    detail: 'This entry names no endpoint to connect to, so it cannot be installed.',
   },
-  needsAccount: {
+  signIn: {
+    readiness: 'sign-in',
+    label: 'Sign in after connecting',
+    detail:
+      'This server uses your own account. Connecting sets it up, then you sign in from the session — nobody signs in on your behalf.',
+  },
+  needsKey: {
     readiness: 'blocked',
-    label: 'Needs an account',
-    detail: 'This server needs an account. Signing in from the marketplace is not available yet.',
+    label: 'Needs an API key',
+    detail: 'This server needs an API key. Adding one from the marketplace is not available yet.',
   },
   unchecked: {
     readiness: 'unchecked',
@@ -163,22 +190,26 @@ const CONNECT_STATUSES = {
 /**
  * Auth types that are not a refusal.
  *
- * The same rule the cards state: `none` is stated open, and `unknown` is simply
- * unstated — connecting checks the endpoint and stops cleanly if it turns out
- * to need an account. An entry that says nothing is worth offering, so a filter
- * demanding `none` would hide entries the card beside it called connectable.
+ * The same rule the cards state: `none` is stated open, `oauth` signs the user
+ * in with their own account after connecting, and `unknown` is simply unstated
+ * — connecting checks the endpoint and stops cleanly if it turns out to want an
+ * API key. An entry that says nothing is worth offering, so a filter demanding
+ * `none` would hide entries the card beside it called connectable.
+ *
+ * `credentials` is the one that stays out: nothing can obtain an API key on the
+ * user's behalf, and there is nowhere to put one they typed.
  *
  * Exported so the toolbar's filter and `connectStatus` cannot drift into
  * disagreeing about what "connectable" means.
  */
-export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'unknown'];
+export const CONNECTABLE_AUTH_TYPES: MCPCatalogAuthType[] = ['none', 'oauth', 'unknown'];
 
 export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   // `has_remote` is derived from `remote_url`, so testing the URL tests both.
-  if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.local;
-  if (entry.auth_type === 'oauth' || entry.auth_type === 'credentials') {
-    return CONNECT_STATUSES.needsAccount;
-  }
+  // Unreachable for anything the loader served; see `unavailable` above.
+  if (!entry.remote_url || entry.transport === 'stdio') return CONNECT_STATUSES.unavailable;
+  if (entry.auth_type === 'credentials') return CONNECT_STATUSES.needsKey;
+  if (entry.auth_type === 'oauth') return CONNECT_STATUSES.signIn;
   if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
   return CONNECT_STATUSES.ready;
 }

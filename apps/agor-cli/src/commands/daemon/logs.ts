@@ -2,10 +2,17 @@
  * `agor daemon logs` - View daemon logs
  */
 
+import { loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { isInstalledPackage } from '../../lib/context.js';
-import { getLogFilePath, readLogs } from '../../lib/daemon-manager.js';
+import {
+  getDaemonPid,
+  getLogFilePath,
+  getManagedDaemonIdentity,
+  readLogs,
+} from '../../lib/daemon-manager.js';
+import { assertLocalContextUnlockedWhenIdentified } from '../../lib/local-context.js';
 
 export default class DaemonLogs extends Command {
   static description = 'View daemon logs';
@@ -27,6 +34,11 @@ export default class DaemonLogs extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(DaemonLogs);
+    getDaemonPid(); // Clear stale identity before following its custom config path.
+    const identity = getManagedDaemonIdentity();
+    await assertLocalContextUnlockedWhenIdentified(
+      identity?.configPath ? await loadConfigFromFile(identity.configPath) : await loadConfig()
+    );
 
     // Check if running in production mode
     if (!isInstalledPackage()) {

@@ -12,12 +12,16 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile } from '@agor/core/config';
+import { resolveDaemonUrl } from '@agor/core/config';
+import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
+import { loadDaemonConfigWithDeploymentIdentity } from '../../lib/daemon-deployment-config.js';
 import { getDaemonPid, startDaemon } from '../../lib/daemon-manager.js';
+import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonStart extends Command {
   static description = 'Start the Agor daemon in the background';
@@ -44,13 +48,25 @@ export default class DaemonStart extends Command {
     const { flags } = await this.parse(DaemonStart);
 
     // 1. Load & validate config
-    const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();
+    const result = await loadDaemonConfigWithDeploymentIdentity(flags.config);
+    const config = result.config;
+    if (result.migrated) {
+      this.log(chalk.green(`✓ Added daemon.deployment_id: ${result.migrated.deploymentId}`));
+      this.log(chalk.dim(`Backup: ${result.migrated.backupPath}`));
+    }
+    await assertLocalContextUnlocked(config);
+    const daemonUrl = resolveDaemonUrl(config);
 
     // 2. Check if already running
     const existingPid = getDaemonPid();
     if (existingPid !== null) {
       this.log(chalk.yellow(`Daemon already running (PID ${existingPid})`));
       return;
+    }
+    if ((await probeAgorDaemon(daemonUrl)).running) {
+      this.error(
+        `An Agor daemon is already running at ${daemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
+      );
     }
 
     // 3. Fail before detaching when an upgrade still needs package reconciliation.
@@ -60,7 +76,7 @@ export default class DaemonStart extends Command {
     //    check on startup, but in background mode its stderr is redirected
     //    into ~/.agor/logs/daemon.log — so the error would be invisible at
     //    the user's terminal. Surface it inline here before spawning.
-    await this.failOnPendingMigrations();
+    await this.failOnPendingMigrations(resolveDatabaseUrl({ config }));
 
     // 5. Foreground mode: import and run in-process (blocks forever)
     if (flags.foreground) {
@@ -91,7 +107,10 @@ export default class DaemonStart extends Command {
     }
 
     try {
-      const pid = startDaemon(daemonPath, env);
+      const pid = startDaemon(daemonPath, env, {
+        daemonUrl,
+        ...(flags.config ? { configPath: resolve(flags.config) } : {}),
+      });
       this.log(chalk.green(`Daemon started (PID ${pid})`));
       this.log(chalk.dim('  Logs: ~/.agor/logs/daemon.log'));
     } catch (error) {
@@ -113,10 +132,10 @@ export default class DaemonStart extends Command {
     }
   }
 
-  private async failOnPendingMigrations(): Promise<void> {
+  private async failOnPendingMigrations(dbUrl: string): Promise<void> {
     let blocker: string | null;
     try {
-      blocker = await getDaemonStartMigrationBlocker();
+      blocker = await getDaemonStartMigrationBlocker(dbUrl);
     } catch (error) {
       // Don't swallow the failure silently — the old behavior (pre-regression)
       // was to warn and continue, but that is what led to the daemon dying in
@@ -168,15 +187,5 @@ export default class DaemonStart extends Command {
     // Resolve to compiled daemon entrypoint
     const here = dirname(fileURLToPath(import.meta.url));
     return resolve(here, '../../../agor-daemon/dist/main.js');
-  }
-
-  private async loadConfigFromPath(configPath: string): Promise<AgorConfig> {
-    try {
-      return await loadConfigFromFile(configPath);
-    } catch (error) {
-      this.log(chalk.red(`Failed to load config from ${configPath}:`));
-      this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
-      this.exit(1);
-    }
   }
 }

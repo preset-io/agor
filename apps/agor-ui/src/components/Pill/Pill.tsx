@@ -937,8 +937,8 @@ interface BoardPillProps extends BasePillProps {
   board: {
     name: string;
   };
-  /** Pre-resolved primary-assistant emoji (see `getBoardEmoji`); falls back to
-   * the neutral board glyph when absent — never a stored board icon. */
+  /** Pre-resolved board emoji (see `getBoardEmoji`); falls back to the neutral
+   * board glyph when the board has neither an icon nor a teammate fallback. */
   emoji?: string | null;
   compact?: boolean;
   title?: string;
@@ -1146,8 +1146,11 @@ export const IssuePill: React.FC<IssuePillProps> = ({
       <Tag
         icon={getIssueIcon(issueUrl)}
         color={PILL_COLORS.git}
+        href={issueUrl}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(event) => event.stopPropagation()}
         style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
-        onClick={() => window.open(issueUrl, '_blank')}
       >
         <span style={pillTextStyle}>Issue: {displayText}</span>
       </Tag>
@@ -1174,8 +1177,11 @@ export const PullRequestPill: React.FC<PullRequestPillProps> = ({
       <Tag
         icon={getPrIcon(prUrl)}
         color={PILL_COLORS.git}
+        href={prUrl}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(event) => event.stopPropagation()}
         style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
-        onClick={() => window.open(prUrl, '_blank')}
       >
         <span style={pillTextStyle}>PR: {displayText}</span>
       </Tag>
