@@ -335,6 +335,7 @@ jobs:
           cat > "$ROOT/home/.agor/config.yaml" <<'EOF'
           daemon:
             port: 3030
+            deployment_id: 019c1234-5678-7123-8123-123456789abc
           agentic_tools:
             installed: []
           EOF
