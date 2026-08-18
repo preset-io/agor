@@ -155,9 +155,9 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('I manage projects')).toBeInTheDocument();
     // Persona step is optional — no back button on the first step.
     expect(screen.queryByText('Back')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^continue/i)).not.toBeInTheDocument();
 
     clickButton('I write code');
-    clickButton(/^continue →/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     await waitFor(() => {
@@ -172,20 +172,53 @@ describe('OnboardingWizard', () => {
     });
   });
 
-  it('disables Continue until a persona is picked; Skip is the only way through unselected', async () => {
+  it('keeps Skip as the only way through without choosing a persona', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
-
-    const continueButton = screen.getByText(/^continue/i).closest('button');
-    expect(continueButton).toBeDisabled();
-
-    fireEvent.click(continueButton as HTMLButtonElement);
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
 
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(onUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '])('supports %s activation through semantic role buttons', async (key) => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({ onUpdateUser });
+
+    const button = screen.getByText('I manage projects').closest('button');
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    button?.focus();
+    fireEvent.keyDown(button as HTMLButtonElement, { key });
+    // jsdom does not perform the browser's native keyboard-to-click default
+    // action, so explicitly dispatch the resulting semantic activation.
+    fireEvent.click(button as HTMLButtonElement);
+
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    expect(onUpdateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks persona choices while persistence is pending and ignores double activation', async () => {
+    let resolveSave: () => void = () => {};
+    const onUpdateUser = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    renderWizard({ onUpdateUser });
+
+    const developer = screen.getByText('I write code').closest('button') as HTMLButtonElement;
+    fireEvent.click(developer);
+    fireEvent.click(developer);
+
+    expect(onUpdateUser).toHaveBeenCalledTimes(1);
+    expect(developer).toBeDisabled();
+    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+
+    resolveSave();
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
   });
 
   it('LLM step lists all providers with Claude recommended, and lets the user switch selection', async () => {
@@ -682,14 +715,30 @@ describe('OnboardingWizard', () => {
   });
 
   it('Back navigates to the previous step and preserves prior selections', async () => {
-    renderWizard();
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({ onUpdateUser });
 
     clickButton('I write code');
-    clickButton(/^continue →/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');
     expect(await screen.findByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText('I write code').closest('button')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+
+    clickButton('I lead a team');
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    expect(onUpdateUser).toHaveBeenCalledTimes(2);
+    expect(onUpdateUser).toHaveBeenLastCalledWith(
+      'user-1',
+      expect.objectContaining({
+        preferences: expect.objectContaining({
+          onboarding: expect.objectContaining({ persona: 'lead' }),
+        }),
+      })
+    );
   });
 
   it('dismiss button calls onDismiss and is hidden on the final step', async () => {

@@ -428,10 +428,15 @@ const ONB_ANIM_CSS = `
   .onb-draw  { animation: onb-draw 0.75s cubic-bezier(0.4,0,0.2,1) 0.1s both; }
 
   /* Glass hover — only on unselected cards; no transform (per UX preference) */
-  button.onb-card[aria-pressed='false']:hover {
+  button.onb-card[aria-pressed='false']:not(:disabled):hover {
     background: linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.07) 100%) !important;
     border-color: rgba(255,255,255,0.24) !important;
     box-shadow: 0 6px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18) !important;
+  }
+
+  button.onb-card:focus-visible {
+    outline: 2px solid #60d9d4;
+    outline-offset: 3px;
   }
 
   /* Skip link — plain text link; suppress antd text-button hover/active fill box */
@@ -447,6 +452,9 @@ const ONB_ANIM_CSS = `
     .onb-draw,
     .onb-particle {
       animation: none !important;
+    }
+    .onb-card {
+      transition: none !important;
     }
   }
 `;
@@ -550,6 +558,11 @@ export function OnboardingWizard({
 
   // ── Step 1: persona ─────────────────────────────────────────────────────
   const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaError, setPersonaError] = useState<string | null>(null);
+  // React state is not a synchronous activation lock. This ref prevents a
+  // double click/key activation from writing or advancing twice.
+  const personaTransitioningRef = useRef(false);
 
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
@@ -589,6 +602,9 @@ export function OnboardingWizard({
     if (!open) return;
     setCurrentStep(initialStep || 'persona');
     setSelectedPersona(null);
+    setPersonaSaving(false);
+    setPersonaError(null);
+    personaTransitioningRef.current = false;
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -776,7 +792,7 @@ export function OnboardingWizard({
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return !!selectedPersona;
+        return false;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -808,7 +824,6 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -823,7 +838,7 @@ export function OnboardingWizard({
     if (llmSaving || boardCreating) return null;
     switch (currentStep) {
       case 'persona':
-        return selectedPersona ? null : 'Pick one, or skip for now';
+        return null;
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -850,7 +865,6 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -866,7 +880,7 @@ export function OnboardingWizard({
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return 'Continue →';
+        return '';
       case 'llm': {
         if (
           selectedAgent &&
@@ -913,9 +927,44 @@ export function OnboardingWizard({
     [onUpdateUser, user]
   );
 
+  const persistOnboardingProgress = useCallback(
+    async (updates: Record<string, unknown>) => {
+      if (!user) return;
+      const current = (user.preferences?.onboarding ?? {}) as Record<string, unknown>;
+      const prefs: UserPreferences = {
+        ...user.preferences,
+        onboarding: { ...current, ...updates },
+      } as UserPreferences;
+      await onUpdateUser(user.user_id, { preferences: prefs });
+    },
+    [onUpdateUser, user]
+  );
+
   const goToStep = useCallback((step: WizardStep) => {
     setCurrentStep(step);
   }, []);
+
+  const handlePersonaSelect = useCallback(
+    async (persona: string) => {
+      if (personaTransitioningRef.current) return;
+      personaTransitioningRef.current = true;
+      setSelectedPersona(persona);
+      setPersonaSaving(true);
+      setPersonaError(null);
+      try {
+        await persistOnboardingProgress({ persona });
+        goToStep('llm');
+      } catch (err) {
+        setPersonaError(
+          `Failed to save your selection: ${err instanceof Error ? err.message : String(err)}`
+        );
+        personaTransitioningRef.current = false;
+      } finally {
+        setPersonaSaving(false);
+      }
+    },
+    [goToStep, persistOnboardingProgress]
+  );
 
   // Stable handlers for the memoized device sign-in pane — identity-preserving
   // so its internal timers never force wizard-wide re-renders.
@@ -937,7 +986,11 @@ export function OnboardingWizard({
   }, [goToStep]);
 
   const handleBack = useCallback(() => {
-    if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
+    if (stepIndex > 0) {
+      const previousStep = STEPS[stepIndex - 1];
+      if (previousStep === 'persona') personaTransitioningRef.current = false;
+      goToStep(previousStep);
+    }
   }, [stepIndex, goToStep]);
 
   const handleSkip = useCallback(() => {
@@ -958,11 +1011,7 @@ export function OnboardingWizard({
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
       case 'persona': {
-        if (selectedPersona) {
-          saveOnboardingProgress({ persona: selectedPersona });
-        }
-        goToStep('llm');
-        break;
+        return;
       }
       case 'llm': {
         if (!selectedAgent) return;
@@ -1213,9 +1262,30 @@ export function OnboardingWizard({
 
   // ─── Step renderers ───────────────────────────────────────────────────────
 
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousStepRef = useRef(currentStep);
+  useEffect(() => {
+    if (previousStepRef.current !== currentStep) {
+      stepHeadingRef.current?.focus({ preventScroll: true });
+      previousStepRef.current = currentStep;
+    }
+  }, [currentStep]);
+
+  const handleModalOpenChange = useCallback((isOpen: boolean) => {
+    // AntD's focus trap otherwise chooses the first role button when the modal
+    // opens, making that unselected card look preselected. Start at the heading
+    // instead; subsequent step changes use the same focus destination above.
+    if (isOpen) stepHeadingRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const renderStepBadge = (title: string) => (
     <div style={{ marginBottom: 12 }}>
-      <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
+      <Title
+        ref={stepHeadingRef}
+        tabIndex={-1}
+        level={3}
+        style={{ color: TEXT_PRIMARY, margin: 0 }}
+      >
         {title}
       </Title>
     </div>
@@ -1233,7 +1303,12 @@ export function OnboardingWizard({
           How do you work? We'll tailor your setup to what you actually need.
         </Paragraph>
 
+        {personaError && (
+          <Alert type="error" showIcon title={personaError} style={{ marginBottom: 16 }} />
+        )}
+
         <div
+          aria-busy={personaSaving}
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
@@ -1247,8 +1322,10 @@ export function OnboardingWizard({
                 key={persona.id}
                 type="button"
                 aria-pressed={isSelected}
+                aria-label={`${persona.title}. ${persona.desc}`}
                 className="onb-card"
-                onClick={() => setSelectedPersona(persona.id)}
+                disabled={personaSaving}
+                onClick={() => void handlePersonaSelect(persona.id)}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
                   border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
@@ -1256,7 +1333,8 @@ export function OnboardingWizard({
                   WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 12,
                   padding: '16px',
-                  cursor: 'pointer',
+                  cursor: personaSaving ? 'wait' : 'pointer',
+                  opacity: personaSaving && !isSelected ? 0.55 : 1,
                   textAlign: 'left',
                   boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
                   transition: 'all 0.15s ease',
@@ -1951,6 +2029,7 @@ export function OnboardingWizard({
             type="text"
             className="onb-skip"
             onClick={handleSkip}
+            disabled={personaSaving}
             style={{
               color: TEXT_MUTED,
               textDecoration: 'underline',
@@ -1961,18 +2040,20 @@ export function OnboardingWizard({
             Skip for now
           </Button>
         )}
-        <Tooltip title={!effectivePrimaryEnabled ? disabledReason : undefined}>
-          <Button
-            type="primary"
-            disabled={!effectivePrimaryEnabled}
-            onClick={handlePrimary}
-            icon={
-              isPrimaryLoading ? <Spin indicator={<LoadingOutlined />} size="small" /> : undefined
-            }
-          >
-            {primaryLabel}
-          </Button>
-        </Tooltip>
+        {currentStep !== 'persona' && (
+          <Tooltip title={!effectivePrimaryEnabled ? disabledReason : undefined}>
+            <Button
+              type="primary"
+              disabled={!effectivePrimaryEnabled}
+              onClick={handlePrimary}
+              icon={
+                isPrimaryLoading ? <Spin indicator={<LoadingOutlined />} size="small" /> : undefined
+              }
+            >
+              {primaryLabel}
+            </Button>
+          </Tooltip>
+        )}
       </div>
     </div>
   );
@@ -1986,6 +2067,7 @@ export function OnboardingWizard({
       {open && <style>{ONB_ANIM_CSS}</style>}
       <Modal
         open={open}
+        afterOpenChange={handleModalOpenChange}
         closable={false}
         mask={true}
         keyboard={false}
