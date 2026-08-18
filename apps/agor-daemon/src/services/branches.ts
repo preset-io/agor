@@ -2454,12 +2454,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Repo has no v2 environment config; nothing to sync');
     }
 
-    // Match the executor's render context (host IP + unix GID) and, crucially,
-    // pass the environment's facts so a `sync` template referencing `{{env.*}}`
-    // resolves to the running environment's real identity.
+    // Match the executor's render context and, crucially, pass the
+    // environment's facts so a `sync` template referencing `{{env.*}}` resolves
+    // to the running environment's real identity.
     const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
 
     const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },
@@ -2468,7 +2467,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         name: branch.name,
         path: branch.path,
         custom_context: branch.custom_context,
-        unix_gid: unixGid,
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,
