@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { globSync } from 'glob';
 import { describe, expect, it } from 'vitest';
+import { CONNECTED_DEPLOYMENT_COMMANDS, LOCAL_DEPLOYMENT_COMMANDS } from './command-groups';
 import { executionPolicyFor } from './execution-policy';
 
 describe('executionPolicyFor', () => {
@@ -68,6 +69,39 @@ describe('executionPolicyFor', () => {
         );
         const constructsClient = /\b(?:connectToDaemon|createRestClient)\b/.test(source);
         return constructsDatabase && constructsClient ? [path] : [];
+      });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('assigns every discovered root command to exactly one deployment group', () => {
+    const commandsDir = resolve(import.meta.dirname, '../commands');
+    const discoveredRoots = new Set(
+      globSync('**/*.ts', { cwd: commandsDir })
+        .filter((path) => !path.endsWith('.test.ts'))
+        .map((path) => path.split('/')[0].replace(/\.ts$/, ''))
+    );
+    const local = LOCAL_DEPLOYMENT_COMMANDS.map(([name]) => name);
+    const connected = CONNECTED_DEPLOYMENT_COMMANDS.map(([name]) => name);
+
+    const connectedNames = new Set<string>(connected);
+    expect(local.filter((name) => connectedNames.has(name))).toEqual([]);
+    expect([...new Set([...local, ...connected])].sort()).toEqual([...discoveredRoots].sort());
+  });
+
+  it('does not mix local deployment state with daemon-client access', () => {
+    const commandsDir = resolve(import.meta.dirname, '../commands');
+    const allowedTargetSelectionCommands = new Set(['login.ts']);
+    const violations = globSync('**/*.ts', { cwd: commandsDir })
+      .filter((path) => !path.endsWith('.test.ts') && !allowedTargetSelectionCommands.has(path))
+      .flatMap((path) => {
+        const source = readFileSync(resolve(commandsDir, path), 'utf8');
+        const accessesLocalDeployment =
+          /\b(?:createDatabase|createDatabaseAsync|getConfigPath|getDatabaseUrl|loadConfig)\b/.test(
+            source
+          );
+        const accessesDaemonClient = /\b(?:connectToDaemon|createRestClient)\b/.test(source);
+        return accessesLocalDeployment && accessesDaemonClient ? [path] : [];
       });
 
     expect(violations).toEqual([]);

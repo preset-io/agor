@@ -87,6 +87,8 @@ function createInitEnvironment(
   // must resolve daemon status only from the fixture's HOME/config, exactly as
   // a fresh shell would.
   delete env.DAEMON_URL;
+  delete env.AGOR_API_KEY;
+  delete env.AGOR_DEPLOYMENT_ID;
   delete env.PORT;
   delete env.AGOR_CONFIG_PATH;
   return env as Record<string, string>;

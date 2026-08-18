@@ -24,6 +24,7 @@ import {
 } from '../../lib/tenant-portability.js';
 
 export default class TenantInspect extends Command {
+  static override summary = 'Inspect one tenant without exposing its contents';
   static override description =
     'Inspect a single tenant in a standalone multi-tenant PostgreSQL runtime: emit a bounded, ' +
     'machine-readable inventory of tenant-owned database rows and configured tenant filesystem data. ' +

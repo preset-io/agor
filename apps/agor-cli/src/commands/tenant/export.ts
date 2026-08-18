@@ -25,6 +25,7 @@ import {
 } from '../../lib/tenant-portability.js';
 
 export default class TenantExport extends Command {
+  static override summary = 'Export one tenant to a verified archive';
   static override description =
     'Export all data for a single tenant to a versioned archive directory: tenant-owned database rows, ' +
     'the configured tenant filesystem tree, a manifest with hashes and schema/migration identity, and a ' +

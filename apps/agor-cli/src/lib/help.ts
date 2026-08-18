@@ -15,6 +15,11 @@ import { Help } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './auth.js';
 import { getBanner } from './banner.js';
+import {
+  CONNECTED_DEPLOYMENT_COMMANDS,
+  LOCAL_DEPLOYMENT_COMMANDS,
+  type RootCommandEntry,
+} from './command-groups.js';
 import { probeAgorDaemon } from './daemon-probe.js';
 import { resolveConnectedDeploymentTarget } from './deployment-target.js';
 
@@ -86,38 +91,13 @@ export default class CustomHelp extends Help {
 
     this.log(this.formatRoot());
     this.log('');
-    this.log(
-      this.formatDeploymentGroup('LOCAL DEPLOYMENT', [
-        ['config', 'Show the effective local deployment configuration'],
-        ['daemon', 'Manage the local daemon lifecycle'],
-        ['db', 'Manage the local database'],
-        ['doctor', 'Check the local installation'],
-        ['init', 'Initialize a local deployment'],
-        ['install', 'Manage locally installed agentic tools'],
-        ['local', 'Run local filesystem operations'],
-        ['telemetry', 'Manage local telemetry configuration'],
-        ['tenant', 'Manage local tenant data operations'],
-      ])
-    );
+    this.log(this.formatDeploymentGroup('LOCAL DEPLOYMENT', LOCAL_DEPLOYMENT_COMMANDS));
     this.log('');
-    this.log(
-      this.formatDeploymentGroup('CONNECTED DEPLOYMENT', [
-        ['login', 'Select and authenticate with a deployment'],
-        ['logout', 'Clear the current deployment connection'],
-        ['open', 'Open the connected deployment'],
-        ['version', 'Show the connected daemon version'],
-        ['board', 'Manage boards'],
-        ['branch', 'Manage branches and environments'],
-        ['mcp', 'Manage MCP servers'],
-        ['repo', 'Manage repositories'],
-        ['session', 'Inspect agent sessions'],
-        ['user', 'Manage user accounts'],
-      ])
-    );
+    this.log(this.formatDeploymentGroup('CONNECTED DEPLOYMENT', CONNECTED_DEPLOYMENT_COMMANDS));
     this.log('');
   }
 
-  private formatDeploymentGroup(title: string, entries: ReadonlyArray<readonly [string, string]>) {
+  private formatDeploymentGroup(title: string, entries: readonly RootCommandEntry[]) {
     const width = Math.max(...entries.map(([name]) => name.length));
     return [
       chalk.bold(title),
