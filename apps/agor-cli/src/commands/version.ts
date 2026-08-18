@@ -11,7 +11,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDaemonUrl } from '@agor-live/client/config';
+import { getDaemonUrl } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 
@@ -27,6 +27,7 @@ export default class Version extends Command {
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
   async run(): Promise<void> {
+    await this.parse(Version);
     // 1. Try the running daemon first — this is what the UI sees.
     const daemonUrl = await getDaemonUrl();
     const liveInfo = await fetchHealth(daemonUrl);
