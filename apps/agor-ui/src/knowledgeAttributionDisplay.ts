@@ -1,11 +1,10 @@
+import type { KnowledgeWriteAttribution } from '@agor/core/types';
+
 type UserSummary = { name?: string | null; email?: string | null };
 
-export interface KnowledgeAttribution {
-  userId?: string | null;
-  sessionId?: string | null;
-  agenticTool?: string | null;
-  teammateName?: string | null;
-}
+export type KnowledgeAttribution = { userId?: string | null } & {
+  [Key in keyof KnowledgeWriteAttribution]?: KnowledgeWriteAttribution[Key] | null;
+};
 
 export function knowledgeAttributionDisplay(
   attribution: KnowledgeAttribution,

@@ -37,8 +37,15 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
-  getTeammateConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
-    branch.teammate ?? branch.assistant,
+  getTeammateConfig: (branch: {
+    teammate?: unknown;
+    assistant?: unknown;
+    custom_context?: { teammate?: unknown; assistant?: unknown };
+  }) =>
+    branch.custom_context?.teammate ??
+    branch.custom_context?.assistant ??
+    branch.teammate ??
+    branch.assistant,
   isTeammate: (branch: { teammate?: unknown; assistant?: unknown }) =>
     Boolean(branch.teammate ?? branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
@@ -220,12 +227,19 @@ describe('Knowledge MCP input schemas', () => {
   it('passes trusted current-Session assistant attribution to Knowledge writes', async () => {
     const putDocument = vi.fn().mockResolvedValue({ document_id: 'doc-1' });
     const tools = await captureKnowledgeTools(
-      { 'kb/documents': { putDocument } },
       {
-        assistantIdentity: {
-          sessionId: 'session-1',
-          agenticTool: 'codex',
-          teammateName: 'Scout',
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+          }),
+        },
+        'kb/documents': { putDocument },
+      },
+      {
+        authenticatedSession: {
+          session_id: 'session-1',
+          agentic_tool: 'codex',
+          branch_id: 'branch-1',
         },
       }
     );

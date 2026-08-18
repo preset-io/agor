@@ -26,10 +26,9 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentVersion,
   KnowledgeNamespaceID,
+  KnowledgeWriteAttribution,
   NullableId,
-  PersistedAgenticToolName,
   QueryParams,
-  SessionID,
   User,
   UserID,
 } from '@agor/core/types';
@@ -77,11 +76,7 @@ export type KnowledgeDocumentParams = QueryParams<{
 }> &
   AuthenticatedParams & {
     /** Server-derived only; MCP callers cannot provide service params. */
-    knowledgeWriteAttribution?: {
-      sessionId: SessionID;
-      agenticTool: PersistedAgenticToolName;
-      teammateName?: string;
-    };
+    knowledgeWriteAttribution?: KnowledgeWriteAttribution;
   };
 
 type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput) & {

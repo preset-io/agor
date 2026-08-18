@@ -12,6 +12,14 @@ import type {
   UUID,
 } from './id';
 
+/** Trusted assistant attribution derived at the authenticated Knowledge write boundary. */
+export interface KnowledgeWriteAttribution {
+  sessionId: SessionID;
+  agenticTool: PersistedAgenticToolName;
+  /** Teammate display name captured at write time when the Session belongs to one. */
+  teammateName?: string;
+}
+
 export type KnowledgeNamespaceID = UUID;
 export type KnowledgeDocumentID = UUID;
 export type KnowledgeDocumentVersionID = UUID;

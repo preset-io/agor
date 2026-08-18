@@ -25,7 +25,7 @@ import { parseKnowledgeUri, ROLES } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { knowledgeChunkerOptionsFromSettings, knowledgeUnitsForMarkdown } from '../knowledge/units';
-import { KnowledgeDocumentsService } from './knowledge-documents';
+import { type KnowledgeDocumentParams, KnowledgeDocumentsService } from './knowledge-documents';
 import { KnowledgeEmbeddingIndexer } from './knowledge-embedding-indexer';
 import { KnowledgeGraphService } from './knowledge-graph';
 import { KnowledgeIndexingStatusService } from './knowledge-indexing';
@@ -437,6 +437,14 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(created.icon_emoji).toBe('📘');
 
       const assistantSessionId = generateId();
+      const assistantParams: KnowledgeDocumentParams = {
+        user: owner,
+        knowledgeWriteAttribution: {
+          sessionId: assistantSessionId,
+          agenticTool: 'codex',
+          teammateName: 'Scout',
+        },
+      };
 
       const updated = await service.putDocument(
         {
@@ -445,14 +453,7 @@ describe('KnowledgeDocumentsService permissions', () => {
           content_text: '# Guide\n\nUpdated',
           expected_version: 1,
         },
-        {
-          user: owner,
-          knowledgeWriteAttribution: {
-            sessionId: assistantSessionId,
-            agenticTool: 'codex',
-            teammateName: 'Scout',
-          },
-        } as never
+        assistantParams
       );
       expect(updated.document_id).toBe(created.document_id);
       expect(updated.icon_emoji).toBe('📘');
@@ -483,14 +484,7 @@ describe('KnowledgeDocumentsService permissions', () => {
           document_id: created.document_id,
           icon_emoji: '🤖',
         },
-        {
-          user: owner,
-          knowledgeWriteAttribution: {
-            sessionId: assistantSessionId,
-            agenticTool: 'codex',
-            teammateName: 'Scout',
-          },
-        } as never
+        assistantParams
       );
       expect(assistantIconUpdate.current_version_id).toBe(updated.current_version_id);
       expect(assistantIconUpdate).toMatchObject({
