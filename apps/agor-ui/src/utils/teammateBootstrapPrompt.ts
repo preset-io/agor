@@ -1,4 +1,4 @@
-import { findOnboardingPersona } from './onboardingPersonas';
+import { buildGoalBootstrapGuidance, findOnboardingGoal } from './onboardingGoals';
 
 export interface TeammateBootstrapPromptInput {
   displayName: string;
@@ -6,10 +6,16 @@ export interface TeammateBootstrapPromptInput {
   description?: string | null;
   userName?: string | null;
   userEmail?: string | null;
-  /** Onboarding persona id (see ONBOARDING_PERSONAS); shapes how the teammate introduces itself. */
-  persona?: string | null;
-  /** Persona-tailored MCP integration names surfaced in the onboarding wizard. */
+  /**
+   * Onboarding goal ids (see ONBOARDING_GOALS), order-preserving with the
+   * first-picked goal primary. Present (possibly empty) for onboarding-created
+   * teammates; omit entirely for teammates created outside onboarding.
+   */
+  goals?: string[] | null;
+  /** Goal-tailored MCP integration names surfaced in the onboarding wizard. */
   suggestedIntegrations?: string[] | null;
+  /** Whether this user can manage workspace MCP integrations. */
+  canManageIntegrations?: boolean;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -22,16 +28,19 @@ export interface TeammateBootstrapPromptContext {
     name?: string;
     email?: string;
   };
-  persona?: { id: string; title?: string };
+  /** Goal-driven guidance lines; present when goals were supplied. */
+  goalGuidance?: string[];
+  hasPrimaryGoal?: boolean;
+  canManageIntegrations?: boolean;
   suggestedIntegrations?: string[];
   firstSession: true;
 }
 
-export function buildTeammateOnboardingSessionTitle({
+export function buildTeammateFirstSessionTitle({
   displayName,
   emoji,
 }: Pick<TeammateBootstrapPromptInput, 'displayName' | 'emoji'>): string {
-  return `${emoji ? `${emoji} ` : ''}${displayName} onboarding`;
+  return `${emoji ? `${emoji} ` : ''}${displayName} — first session`;
 }
 
 function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext): string {
@@ -54,19 +63,38 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     lines.push(`- User email: ${context.user.email}`);
   }
 
-  if (context.persona) {
-    const suffix = context.persona.title ? ` (${context.persona.title})` : '';
-    lines.push(`- User persona: ${context.persona.id}${suffix}`);
-  }
-
   if (context.suggestedIntegrations?.length) {
     lines.push(`- Suggested integrations: ${context.suggestedIntegrations.join(', ')}`);
   }
 
+  if (context.goalGuidance?.length) {
+    lines.push('');
+    lines.push('What the user wants:');
+    for (const line of context.goalGuidance) {
+      lines.push(`- ${line}`);
+    }
+  }
+
   lines.push('');
   lines.push(
-    "Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
+    'Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user using the supplied context and live Agor state.'
   );
+  lines.push('');
+  lines.push('Canonical opening strategy:');
+  lines.push(
+    context.hasPrimaryGoal
+      ? '- Start on the primary goal. If live context is sufficient, perform one concrete first-win action now and report the result. If essential context is missing, ask exactly one specific question, then act immediately on the answer. Do not conduct an interview.'
+      : '- Do not assume a goal. Ask exactly one specific question about what the user is working on now, then take the first concrete action their answer enables. Do not conduct an interview.'
+  );
+  if (context.suggestedIntegrations?.length) {
+    // CP-11: the recommended integrations must be actively proposed, not just
+    // listed as context, or the teammate silently ignores them.
+    lines.push(
+      context.canManageIntegrations
+        ? 'When a suggested integration would unlock that win, name it, say what it unlocks, and direct the user to Marketplace to connect it. Do not wait to be asked.'
+        : 'When a suggested integration would unlock that win, name it and say what it unlocks, but explain that a workspace admin must connect it. Do not direct this user to an admin-only setup screen.'
+    );
+  }
 
   return lines.join('\n');
 }
@@ -77,13 +105,12 @@ export function buildTeammateBootstrapPromptContext({
   description,
   userName,
   userEmail,
-  persona,
+  goals,
   suggestedIntegrations,
+  canManageIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
-  const personaId = persona?.trim();
-  const personaProfile = findOnboardingPersona(personaId);
   const normalizedIntegrations = suggestedIntegrations
     ?.map((name) => name.trim())
     .filter((name) => name.length > 0);
@@ -102,9 +129,13 @@ export function buildTeammateBootstrapPromptContext({
           },
         }
       : {}),
-    ...(personaId
-      ? { persona: { id: personaId, ...(personaProfile ? { title: personaProfile.title } : {}) } }
-      : {}),
+    // A supplied (even empty) goals array marks an onboarding teammate and gets
+    // goal-driven guidance; omitting goals entirely leaves the block off.
+    ...(goals ? { goalGuidance: buildGoalBootstrapGuidance(goals) } : {}),
+    // Only lead with the primary-goal opener when a goal actually resolves — an
+    // empty (skip) or all-unknown goals array has no primary goal to act on.
+    ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
+    ...(canManageIntegrations !== undefined ? { canManageIntegrations } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };

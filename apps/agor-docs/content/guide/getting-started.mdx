@@ -29,38 +29,15 @@ Repeat the readiness check with `agor doctor`; see
 
 The first time you open the UI, the **Onboarding Wizard** runs — five quick steps that end with your first AI teammate ready to work:
 
-1. **You.** Pick how you work: *I write code*, *I manage projects*, *I lead a team*, or *Building solo*. The rest of the setup — and your teammate's first briefing — is tailored to this.
+1. **Goals.** Pick up to two outcomes, such as _Ship without the busywork_ or _Dig into anything_. The recommendations and your teammate's first briefing are tailored to what you want done. You can skip this step for a neutral start.
 2. **AI.** Connect a model: Claude (recommended), GPT, Gemini, or a custom endpoint. Paste an API key, use a Claude subscription token, or sign in with ChatGPT; Agor verifies the credential on the spot.
 3. **Workspace.** Name your AI teammate and pick its emoji. Agor creates a board named after it — the teammate's home for every branch and session it works on.
-4. **Tools.** Persona-tailored MCP integration suggestions (Slack first, plus the likes of GitHub, Sentry, HubSpot, Linear, or Figma). Connect what you want now, or skip — everything is available later in **Settings → MCP**.
-5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your new board and launches its first session with the agent you connected.
+4. **Tools.** Review goal-tailored integration suggestions such as Slack, GitHub, Sentry, HubSpot, Linear, or Figma. An admin can connect them from **Marketplace**; other members can ask a workspace admin. This step recommends tools but does not connect them automatically.
+5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your board. If you connected an AI model, it also launches the teammate's first session.
 
-Every step except the last can be skipped — the wizard never blocks you on a decision.
+Goals and AI are optional. Workspace and Tools are required so onboarding always finishes with a board and an explicit review of the recommendations.
 
-<div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
-  <img
-    src="/screenshots/onboarding-persona.png"
-    alt="Onboarding step 1: persona cards — I write code, I manage projects, I lead a team, Building solo"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-connect-ai.png"
-    alt="Onboarding step 2: Connect your AI — Claude selected (Recommended) with API key and Subscription token tabs; GPT and Gemini below"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-name-teammate.png"
-    alt="Onboarding step 3: Name your AI teammate — name and emoji, with its own board"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-mcp-tools.png"
-    alt="Onboarding step 4: Connect your tools via MCP — persona-tailored suggestions like Slack, HubSpot, Amplitude, Figma"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-</div>
-
-When the board opens, your teammate's first session picks up where the wizard left off — it already knows its name, how you work, and which tools you flagged. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp).
+When the board opens, a connected teammate's first session picks up where the wizard left off — it already knows its name, the goals you selected, and which tools were recommended. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp). If you skipped AI setup, connect a model later from **Settings → AI & Agents** and start a session from the board.
 
 ## Customize your install
 

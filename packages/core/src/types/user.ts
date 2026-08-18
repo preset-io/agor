@@ -372,7 +372,15 @@ export interface EventStreamPreferences {
  * Per-user onboarding state (stored in user.preferences)
  */
 export interface OnboardingState {
-  /** Onboarding persona id the user selected (see ONBOARDING_PERSONAS in agor-ui). */
+  /**
+   * Onboarding goal ids the user selected, order-preserving (primary first),
+   * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
+   */
+  goals?: string[];
+  /**
+   * @deprecated Legacy single-persona onboarding field. Not written by new
+   * completions and never re-read; retained only for pre-redesign records.
+   */
   persona?: string;
   /** Which path the user took */
   path?: 'teammate' | 'own-repo';

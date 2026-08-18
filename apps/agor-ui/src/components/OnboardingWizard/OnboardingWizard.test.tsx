@@ -1,5 +1,5 @@
 /**
- * Tests for the redesigned 5-step OnboardingWizard (persona → llm → workspace →
+ * Tests for the redesigned 5-step OnboardingWizard (goals → llm → workspace →
  * integrations → done).
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
@@ -146,33 +146,152 @@ describe('OnboardingWizard', () => {
     ).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
-  it('starts on the persona step; selecting a persona advances to LLM and saves onboarding progress', async () => {
+  it('starts on the goals step; selecting a goal advances without saving partial progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
-    expect(screen.getByText('I write code')).toBeInTheDocument();
-    expect(screen.getByText('I manage projects')).toBeInTheDocument();
-    // Persona step is optional — no back button on the first step.
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
+    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
+    expect(screen.getByText('Dig into anything')).toBeInTheDocument();
+    // Goals step is optional — no back button on the first step.
     expect(screen.queryByText('Back')).not.toBeInTheDocument();
 
-    clickButton('I write code');
-    clickButton(/^continue →/i);
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(onUpdateUser).toHaveBeenCalledWith(
-        'user-1',
-        expect.objectContaining({
-          preferences: expect.objectContaining({
-            onboarding: expect.objectContaining({ persona: 'developer' }),
-          }),
-        })
-      );
-    });
+    expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('disables Continue until a persona is picked; Skip is the only way through unselected', async () => {
+  it('renders goal cards as title + description only, with no emoji icon', () => {
+    const { baseElement } = renderWizard({ initialStep: 'goals' });
+    // The six goal-card emoji that used to sit above each title are gone.
+    for (const emoji of ['🔍', '✍️', '🛠️', '👥', '🧱', '🔬']) {
+      expect(baseElement.textContent).not.toContain(emoji);
+    }
+    // Title + description still render.
+    expect(screen.getByText('Hand off the build')).toBeInTheDocument();
+    expect(
+      screen.getByText('A working app, dashboard, or prototype — live on your board, ready to use.')
+    ).toBeInTheDocument();
+  });
+
+  it('reserves a fixed 2-line block for goal title and description so cards align in height', () => {
+    renderWizard({ initialStep: 'goals' });
+    // A short description ("PRs, bug triage, release notes — handled.") still
+    // reserves two lines of height so its card matches the taller ones — this is
+    // what keeps all six cards the same height regardless of copy length.
+    const shortDesc = screen.getByText('PRs, bug triage, release notes — handled.');
+    expect(shortDesc).toHaveStyle({ minHeight: '2.8em' });
+    // A one-line title ("Ship without the busywork") reserves two lines too.
+    const shortTitle = screen.getByText('Ship without the busywork');
+    expect(shortTitle).toHaveStyle({ minHeight: '2.6em' });
+  });
+
+  it('centers the modal so the footer stays on-screen on shorter viewports', () => {
+    renderWizard({ initialStep: 'goals' });
+    // antd flags a vertically-centered modal with ant-modal-centered on the wrap;
+    // this is the layout fix that keeps the Continue/Skip footer visible when the
+    // 6-card grid makes the modal tall.
+    expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
+  });
+
+  it('selects a goal on a single click and keeps it selected (no self-deselect)', () => {
+    renderWizard({ initialStep: 'goals' });
+    const card = screen.getByText('Ship without the busywork').closest('button');
+    expect(card).toHaveAttribute('aria-pressed', 'false');
+    // One click = exactly one toggle → stays selected. (Regression: a double-fire
+    // would flip it straight back to false.)
+    fireEvent.click(card as HTMLButtonElement);
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    // A second, separate click is what deselects — proving one click = one toggle.
+    fireEvent.click(card as HTMLButtonElement);
+    expect(card).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('does not change a goal card border width on selection (no layout shift)', () => {
+    renderWizard({ initialStep: 'goals' });
+    const card = screen
+      .getByText('Ship without the busywork')
+      .closest('button') as HTMLButtonElement;
+    // Unselected and selected both use a 1.5px border — only the color changes —
+    // so the box model never shifts. A shift here is what made selection read as
+    // "it deselected" and baited a re-click.
+    const unselectedWidth = card.style.borderTopWidth || card.style.borderWidth;
+    expect(unselectedWidth).toBe('1.5px');
+    fireEvent.click(card);
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    const selectedWidth = card.style.borderTopWidth || card.style.borderWidth;
+    expect(selectedWidth).toBe(unselectedWidth);
+  });
+
+  it('explains the multi-select interaction and why it matters, not just a mechanic label', () => {
+    renderWizard({ initialStep: 'goals' });
+    // What to do (pick up to two) AND why (it shapes the first session).
+    expect(
+      screen.getByText(/pick up to two — we'll shape your first session around them/i)
+    ).toBeInTheDocument();
+  });
+
+  it('is multi-select, order-preserving, and caps at two goals', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({ onComplete, initialStep: 'goals' });
+
+    // First-picked = primary, second-picked = secondary (order preserved).
+    clickButton('Dig into anything');
+    clickButton('Ship without the busywork');
+
+    // A third pick is blocked at the cap — its card is marked disabled (aria-disabled
+    // keeps it focusable so the explanatory tooltip stays reachable) and clicking
+    // it is a no-op rather than a fourth selection.
+    const thirdCard = screen.getByText('Hand off the build').closest('button');
+    expect(thirdCard).toHaveAttribute('aria-disabled', 'true');
+    // The reason is exposed to assistive tech (part of the card's name), not hover-only.
+    expect(thirdCard).toHaveTextContent('Deselect one to swap it for this.');
+    fireEvent.click(thirdCard as HTMLButtonElement);
+    expect(thirdCard).toHaveAttribute('aria-pressed', 'false');
+
+    // Advance through the required workspace/tools steps to inspect the emitted
+    // goals + merged recommendations.
+    clickButton(/^continue/i);
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton(/^continue →/i); // workspace
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+    await findAndClickButton(/^continue →/i); // integrations
+    clickButton(/open my board/i);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: ['dig-into-anything', 'ship-without-busywork'],
+        // Merge: first two of primary (dig) then first two of secondary (ship).
+        suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
+      })
+    );
+  });
+
+  it('treats Skip on the goals step as authoritative after a selection', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({ onComplete });
+
+    clickButton('Ship without the busywork');
+    clickButton(/skip for now/i);
+    await findAndClickButton(/skip for now/i); // llm
+
+    clickButton(/^continue →/i); // required workspace
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+    await findAndClickButton(/^continue →/i); // required tools
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: [],
+        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+      })
+    );
+  });
+
+  it('disables Continue until a goal is picked; Skip is the only way through unselected', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
@@ -180,7 +299,7 @@ describe('OnboardingWizard', () => {
     expect(continueButton).toBeDisabled();
 
     fireEvent.click(continueButton as HTMLButtonElement);
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
 
     clickButton(/skip for now/i);
 
@@ -483,21 +602,31 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Recommended tools')).toBeInTheDocument();
   });
 
-  it('integrations step shows persona-tailored MCP recommendations', async () => {
+  it('integrations step shows goal-tailored MCP recommendations', async () => {
     renderWizard({ initialStep: 'integrations' });
 
-    // No persona chosen — falls back to the default rec set.
+    // No goal chosen — falls back to the default rec set.
     expect(screen.getByText('Slack')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
-    // Recommendations only: nothing is connected here; the AI teammate does it later.
-    expect(screen.getByText(/ask your AI teammate to help set them up/i)).toBeInTheDocument();
+    // Recommendations only: nothing is connected here. Members get an honest
+    // capability-aware path instead of being sent to an admin-only screen.
+    expect(screen.getByText(/workspace admin can connect them for your team/i)).toBeInTheDocument();
+  });
+
+  it('directs admins to Marketplace for recommended integrations', () => {
+    renderWizard({
+      initialStep: 'integrations',
+      user: makeUser({ role: 'admin' } as Partial<User>),
+    });
+
+    expect(screen.getByText(/connect them from marketplace/i)).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
     const onComplete = vi.fn();
     const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
 
-    // persona (optional — Continue is disabled without a selection, so skip)
+    // goals (optional — Continue is disabled without a selection, so skip)
     clickButton(/skip for now/i);
 
     // llm
@@ -535,10 +664,11 @@ describe('OnboardingWizard', () => {
       teammateName: 'Rusty',
       teammateEmoji: '🤖',
       agent: 'claude-code',
-      // Persona was skipped → the default MCP suggestion set flows through, and
-      // the persona threaded to the completion handler is null.
+      // Goals were skipped → the default MCP suggestion set flows through, and
+      // the goals threaded to the completion handler are empty.
       suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      persona: null,
+      goals: [],
+      canManageIntegrations: false,
     });
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
@@ -547,12 +677,11 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('requires the workspace + tools steps but lets persona/llm skip, always yielding a board', async () => {
+  it('requires the workspace + tools steps but lets goals/llm skip, always yielding a board', async () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
-    // persona and llm stay optional.
-    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
@@ -594,7 +723,7 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
-    // persona — skipped.
+    // goals — skipped.
     clickButton(/skip for now/i);
 
     // llm — highlight a provider but never connect it, then skip. Selecting a
@@ -684,12 +813,17 @@ describe('OnboardingWizard', () => {
   it('Back navigates to the previous step and preserves prior selections', async () => {
     renderWizard();
 
-    clickButton('I write code');
-    clickButton(/^continue →/i);
+    clickButton('Ship without the busywork');
+    clickButton(/^continue/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');
-    expect(await screen.findByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(await screen.findByText(/what do you want done/i)).toBeInTheDocument();
+    // The prior goal selection survives the round-trip.
+    expect(screen.getByText('Ship without the busywork').closest('button')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
   });
 
   it('dismiss button calls onDismiss and is hidden on the final step', async () => {
@@ -698,7 +832,7 @@ describe('OnboardingWizard', () => {
 
     expect(document.querySelector('button[aria-label="Close"]')).not.toBeInTheDocument();
 
-    renderWizard({ onDismiss, initialStep: 'persona' });
+    renderWizard({ onDismiss, initialStep: 'goals' });
     const closeButtons = document.querySelectorAll('button[aria-label="Close"]');
     expect(closeButtons.length).toBeGreaterThan(0);
     fireEvent.click(closeButtons[closeButtons.length - 1]);
