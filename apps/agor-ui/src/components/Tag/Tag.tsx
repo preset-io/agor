@@ -1,8 +1,10 @@
 import type { TagProps as AntTagProps } from 'antd';
 import { Tag as AntTag } from 'antd';
-import { type CSSProperties, forwardRef } from 'react';
+import { type AnchorHTMLAttributes, type CSSProperties, forwardRef } from 'react';
 
 export interface TagProps extends AntTagProps {
+  /** Forwarded when Ant Design renders the Tag as an anchor via `href`. */
+  rel?: AnchorHTMLAttributes<HTMLAnchorElement>['rel'];
   /**
    * Grow up to the available width, then ellipsize inside the border instead of
    * painting past it. Needs an ancestor with a definite width — a percentage
@@ -44,7 +46,7 @@ function withTruncateStyles(styles: AntTagProps['styles']): AntTagProps['styles'
  * Use this instead of importing Tag directly from 'antd' to ensure
  * consistent outlined styling across the application.
  */
-const TagComponent = forwardRef<HTMLSpanElement, TagProps>(
+const TagComponent = forwardRef<HTMLSpanElement | HTMLAnchorElement, TagProps>(
   ({ variant = 'outlined', truncate = false, icon, style, styles, children, ...props }, ref) => {
     return (
       <AntTag

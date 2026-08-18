@@ -1143,21 +1143,17 @@ export const IssuePill: React.FC<IssuePillProps> = ({
 
   return (
     <Tooltip title={issueUrl}>
-      <a
+      <Tag
+        icon={getIssueIcon(issueUrl)}
+        color={PILL_COLORS.git}
         href={issueUrl}
         target="_blank"
         rel="noreferrer"
         onClick={(event) => event.stopPropagation()}
-        style={{ display: 'inline-flex', textDecoration: 'none' }}
+        style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
       >
-        <Tag
-          icon={getIssueIcon(issueUrl)}
-          color={PILL_COLORS.git}
-          style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
-        >
-          <span style={pillTextStyle}>Issue: {displayText}</span>
-        </Tag>
-      </a>
+        <span style={pillTextStyle}>Issue: {displayText}</span>
+      </Tag>
     </Tooltip>
   );
 };
@@ -1178,21 +1174,17 @@ export const PullRequestPill: React.FC<PullRequestPillProps> = ({
 
   return (
     <Tooltip title={prUrl}>
-      <a
+      <Tag
+        icon={getPrIcon(prUrl)}
+        color={PILL_COLORS.git}
         href={prUrl}
         target="_blank"
         rel="noreferrer"
         onClick={(event) => event.stopPropagation()}
-        style={{ display: 'inline-flex', textDecoration: 'none' }}
+        style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
       >
-        <Tag
-          icon={getPrIcon(prUrl)}
-          color={PILL_COLORS.git}
-          style={{ ...style, cursor: 'pointer', maxWidth: 220 }}
-        >
-          <span style={pillTextStyle}>PR: {displayText}</span>
-        </Tag>
-      </a>
+        <span style={pillTextStyle}>PR: {displayText}</span>
+      </Tag>
     </Tooltip>
   );
 };

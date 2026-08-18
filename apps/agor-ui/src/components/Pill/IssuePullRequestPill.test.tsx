@@ -13,6 +13,7 @@ describe('GitHub link pills', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noreferrer');
     expect(link).not.toHaveAttribute('tabindex', '-1');
-    expect(link.firstElementChild).toHaveStyle({ cursor: 'pointer' });
+    expect(link).toHaveStyle({ cursor: 'pointer' });
+    expect(link).toHaveClass('ant-tag');
   });
 });
