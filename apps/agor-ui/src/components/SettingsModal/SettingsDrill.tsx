@@ -42,6 +42,8 @@ export interface DrillController {
   /** Omit for autosave editors — the footer then shows no Save button. */
   onSave?: () => void | Promise<void>;
   saveLabel?: string;
+  /** Disables the footer Save button (e.g. an invalid create form). */
+  saveDisabled?: boolean;
   /** Invoked by the header back-arrow and footer Cancel. */
   onBack: () => void;
 }
@@ -146,6 +148,8 @@ export interface DrillInFrameProps {
   /** Omit for autosave editors; the footer then renders no Save button. */
   onSave?: () => void | Promise<void>;
   saveLabel?: string;
+  /** Disables the footer Save button (e.g. an invalid create form). */
+  saveDisabled?: boolean;
   /** Overrides the default back behavior (guarded close). */
   onBack?: () => void;
   /** Right-aligned node in the header row (e.g. a Reset action). */
@@ -165,6 +169,7 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   saving = false,
   onSave,
   saveLabel,
+  saveDisabled = false,
   onBack,
   extra,
   children,
@@ -206,11 +211,21 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
       dirty,
       saving,
       saveLabel,
+      saveDisabled,
       onSave: hasOnSave ? stableOnSave : undefined,
       onBack: stableBack,
     });
     return () => registerController(null);
-  }, [registerController, dirty, saving, saveLabel, hasOnSave, stableOnSave, stableBack]);
+  }, [
+    registerController,
+    dirty,
+    saving,
+    saveLabel,
+    saveDisabled,
+    hasOnSave,
+    stableOnSave,
+    stableBack,
+  ]);
 
   return (
     <Flex vertical style={{ height: '100%' }}>

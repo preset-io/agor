@@ -50,8 +50,10 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import type { AgenticToolOption } from '../../types';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
+import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { ToolIcon } from '../ToolIcon';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection, TOOL_LABELS } from './AgenticToolsSection';
@@ -69,7 +71,7 @@ import {
   SettingsDrillProvider,
   useDirtyLeaveGuard,
 } from './SettingsDrill';
-import { TeammatesTable } from './TeammatesTable';
+import { type TeammateCreateProgress, TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 
 const { Sider, Content } = Layout;
@@ -145,7 +147,11 @@ export interface SettingsModalProps {
   onDeleteGatewayChannel?: (channelId: string) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onCreateTeammate?: () => void;
+  onCreateTeammate?: (
+    result: TeammateTabResult,
+    progress?: TeammateCreateProgress
+  ) => Promise<void>;
+  availableAgents?: AgenticToolOption[];
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -182,6 +188,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onUpdateArtifact,
   onDeleteArtifact,
   onCreateTeammate,
+  availableAgents,
   branchStorageConfig,
 }) => {
   // Entity maps come straight from the store rather than through App props:
@@ -327,6 +334,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             key="save"
             type="primary"
             loading={controller.saving}
+            disabled={controller.saveDisabled}
             onClick={() => void controller.onSave?.()}
           >
             {controller.saveLabel ?? 'Save'}
@@ -577,6 +585,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 openDrill({ kind: 'teammates', mode: 'edit', recordId: branch.branch_id })
               }
               onCreateTeammate={onCreateTeammate}
+              availableAgents={availableAgents}
+              onCreateRepo={onCreateRepo}
+              mcpServerById={mcpServerById}
+              currentUser={currentUser}
+              client={client}
               onClose={onClose}
             />
           )

@@ -1,16 +1,45 @@
-import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  CreateRepoRequest,
+  MCPServer,
+  Repo,
+  Session,
+  User,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Popover, Space, Table, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Empty,
+  Input,
+  Popover,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import type { AgenticToolOption } from '../../types';
+import { useThemedMessage } from '../../utils/message';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { TeammateTab, type TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+
+/** Progress reporter passed to the teammate submit handler (mirrors CreateDialog). */
+export interface TeammateCreateProgress {
+  onStatusChange?: (status: string) => void;
+}
 
 interface TeammatesTableProps {
   branchById: Map<string, Branch>;
@@ -26,7 +55,17 @@ interface TeammatesTableProps {
     }
   ) => void;
   onRowClick?: (branch: Branch) => void;
-  onCreateTeammate?: () => void;
+  /** Creates the teammate from the drill-in form; must NOT close Settings. */
+  onCreateTeammate?: (
+    result: TeammateTabResult,
+    progress?: TeammateCreateProgress
+  ) => Promise<void>;
+  // Deps for the in-place "New teammate" drill-in (mirrors CreateDialog's TeammateTab).
+  availableAgents?: AgenticToolOption[];
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
+  mcpServerById?: Map<string, MCPServer>;
+  currentUser?: User | null;
+  client?: AgorClient | null;
   /** Close the parent Settings modal so the canvas isn't obscured by
    *  it after recenter. Wired by SettingsModal. */
   onClose?: () => void;
@@ -41,8 +80,33 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   onArchiveOrDelete,
   onRowClick,
   onCreateTeammate,
+  availableAgents = [],
+  onCreateRepo,
+  mcpServerById,
+  currentUser,
+  client,
   onClose,
 }) => {
+  const { showError } = useThemedMessage();
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const isCreating = drill?.kind === 'teammates' && drill.mode === 'create';
+  const teammateFormRef = useRef<(() => Promise<TeammateTabResult | null>) | null>(null);
+  const [teammateValid, setTeammateValid] = useState(false);
+  const [creatingTeammate, setCreatingTeammate] = useState(false);
+
+  const handleCreateTeammateSubmit = useCallback(async () => {
+    const result = await teammateFormRef.current?.();
+    if (!result) return; // invalid — TeammateTab surfaces field errors
+    setCreatingTeammate(true);
+    try {
+      await onCreateTeammate?.(result);
+      closeDrill();
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to create AI teammate');
+    } finally {
+      setCreatingTeammate(false);
+    }
+  }, [onCreateTeammate, closeDrill, showError]);
   // Teammates ARE branches (just branches flagged via
   // `custom_context.teammate`), so navigation reuses the `/w/<short>/`
   // URL via `goToBranch` — no separate `/teammate/<short>/` route.
@@ -231,6 +295,38 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
     },
   ];
 
+  // "New teammate" opens in place (drill-in) instead of closing Settings.
+  if (isCreating) {
+    return (
+      <DrillInFrame
+        title="New AI teammate"
+        saveLabel="Create teammate"
+        saving={creatingTeammate}
+        saveDisabled={!teammateValid}
+        onSave={handleCreateTeammateSubmit}
+      >
+        <div style={{ maxWidth: 640 }}>
+          <Alert
+            type="info"
+            showIcon
+            description="Teammates are persistent AI companions backed by a framework repo."
+            style={{ marginBottom: 16 }}
+          />
+          <TeammateTab
+            repoById={repoById}
+            onValidityChange={setTeammateValid}
+            formRef={teammateFormRef}
+            onCreateRepo={onCreateRepo}
+            availableAgents={availableAgents}
+            mcpServerById={mcpServerById}
+            currentUser={currentUser}
+            client={client}
+          />
+        </div>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
       <ListPanelHeader
@@ -249,7 +345,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={onCreateTeammate}
+            onClick={() => openDrill({ kind: 'teammates', mode: 'create' })}
             disabled={!onCreateTeammate}
           >
             Create AI teammate
