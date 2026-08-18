@@ -61,9 +61,8 @@ function requireAdmin(ctx: McpContext, action: string): void {
  */
 function widgetContentPreview(params: EnvVarsParams): string {
   const list = params.names.join(', ');
-  return params.names.length === 1
-    ? `Please provide ${list}: ${params.reason}`
-    : `Please provide ${list}: ${params.reason}`;
+  const noun = params.names.length === 1 ? 'variable' : 'variables';
+  return `Please provide ${noun} ${list}: ${params.reason}`;
 }
 
 /**
@@ -90,6 +89,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         'Ask the user to provide one or more environment variables via a compact in-conversation form. ' +
+        'PREFER this tool whenever you need an env var, API key, or token the user has not set: call it instead of telling the user to open Settings → Environment Variables or asking them to paste a value into chat. ' +
         'FIRE-AND-FORGET: the widget renders inline; end your turn after calling. You will receive a user-role message ("[Agor] User submitted ...") when the user responds. ' +
         'Values never enter your context — only the variable NAMES do. Do NOT ask the user to paste values into chat. ' +
         'Keep `reason` to ONE short sentence (≤200 chars) — it shows as a small muted line; do not restate what the widget does or describe the security contract (the UI handles that).',
@@ -230,6 +230,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         "Ask an admin to securely provide a gateway channel's platform tokens (Slack bot/app tokens, GitHub private key, Teams app password) via a compact form that appears at the end of your message, so setup finishes without anyone pasting xoxb-/xapp- tokens into chat. " +
+        'PREFER this tool over telling the admin to open Settings and paste tokens manually: it collects and verifies the credentials inline. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it is resolved. ' +
         'Token values never enter your context — only the channel identity and field NAMES do. ' +
         'Admin-only: a non-admin agent cannot mint this widget. Keep `reason` to ONE short sentence (≤200 chars).',

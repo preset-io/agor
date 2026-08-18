@@ -17,6 +17,8 @@ Widgets are a primitive. v1 ships one widget type (`env_vars`) as the canonical 
 
 This is the widget the agent calls when it needs an environment variable it doesn't have. Typical use: an MCP integration needs `HUBSPOT_API_KEY` and the agent doesn't want to fail with "please go to Settings".
 
+> **Agents should prefer the widget over Settings instructions.** Agor's system prompt and the credential-related tool descriptions (e.g. `agor_repos_get`) tell agents that when a task needs a secret the user hasn't set, the correct move is to **call `agor_widgets_request_env_vars`** — not to write "open Settings → Environment Variables" or ask the user to paste a value into chat. A written Settings instruction is only a last-resort fallback for when the widget tools are unavailable.
+
 ### What the agent does
 
 The agent calls the MCP tool `agor_widgets_request_env_vars`:
@@ -25,10 +27,16 @@ The agent calls the MCP tool `agor_widgets_request_env_vars`:
 {
   "names": ["HUBSPOT_API_KEY"],
   "reason": "Needed to call the Hubspot Private Apps API.",
-  "instructions": "Get a key at https://app.hubspot.com/private-apps. Make sure the **CRM > contacts > read** scope is enabled.",
-  "default_scope": "global"
+  "variable_metadata": {
+    "HUBSPOT_API_KEY": {
+      "description": "Create one under Private Apps with the CRM > contacts > read scope.",
+      "format_hint": "Starts with pat-"
+    }
+  }
 }
 ```
+
+The scope (Session / Global) is the user's choice in the form — the agent does not set it.
 
 The tool returns within milliseconds. The agent ends its turn voluntarily. **No HTTP timeout, no executor pause, no daemon-side await.**
 
@@ -38,13 +46,13 @@ A small form renders inline in the transcript:
 
 - The variable name(s) the agent is asking for
 - A short reason
-- An optional instructions block (rendered as sanitized markdown, with links and emphasis only, no scripts)
-- A password input per variable
+- Optional per-variable `description` and `format_hint` text (from `variable_metadata`)
+- A password input per variable (or `text` / `textarea`, per `input_type`)
 - A scope selector (Session / Global)
-- **Dismiss** and **Save & continue** buttons
-- A disclaimer: *"Type values here, never paste them into chat."*
+- **Dismiss** and **Save** buttons
+- The security posture is conveyed by the lock/shield chrome — never paste values into chat
 
-When you hit **Save & continue**, the value goes **directly from the form to the daemon** via `POST /widgets/:widget_id/submit`. It does not traverse the model. The daemon writes it through the same encrypted-at-rest path as `Settings → Environment Variables` (AES-256-GCM via the daemon's master secret).
+When you hit **Save**, the value goes **directly from the form to the daemon** via `POST /widgets/:widget_id/submit`. It does not traverse the model. The daemon writes it through the same encrypted-at-rest path as `Settings → Environment Variables` (AES-256-GCM via the daemon's master secret).
 
 ### What the agent sees next
 
@@ -80,18 +88,18 @@ If you hit **Dismiss**, the widget marks itself dismissed and queues an explicit
 
 The widget primitive has one hard requirement: **submitted values never enter the LLM's context.** Triple-checked:
 
-| Path | Carries values? |
-|---|---|
-| Agent → MCP tool call | **No**, input schema only accepts names + reason + instructions |
-| Widget message row | **No**, the row stores params (names, reason, ...) and lifecycle state |
-| MCP tool return value | **No**, returns `{ widget_id, status }` only |
-| Browser → daemon submit | **Yes**, direct HTTP, authenticated, never traverses the agent |
-| Daemon → users service | **Yes**, encrypted at the boundary, never logged |
-| Auto-resume prompt to agent | **No**, built from sanitized `result_meta` (just names + scope) |
-| `widget:resolved` WebSocket event | **No**, same sanitized payload |
-| Transcript reload | **No**, the row never held values |
+| Path                              | Carries values?                                                        |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| Agent → MCP tool call             | **No**, input schema only accepts names + reason + variable_metadata   |
+| Widget message row                | **No**, the row stores params (names, reason, ...) and lifecycle state |
+| MCP tool return value             | **No**, returns `{ widget_id, status }` only                           |
+| Browser → daemon submit           | **Yes**, direct HTTP, authenticated, never traverses the agent         |
+| Daemon → users service            | **Yes**, encrypted at the boundary, never logged                       |
+| Auto-resume prompt to agent       | **No**, built from sanitized `result_meta` (just names + scope)        |
+| `widget:resolved` WebSocket event | **No**, same sanitized payload                                         |
+| Transcript reload                 | **No**, the row never held values                                      |
 
-The disclaimer text on the form (*"Type values here, never paste them into chat"*) is there for one specific reason: if the agent goes off-script and asks you to type a value into chat instead of into the widget, **don't**. The widget is the only path that preserves the no-LLM-context guarantee.
+The disclaimer text on the form (_"Type values here, never paste them into chat"_) is there for one specific reason: if the agent goes off-script and asks you to type a value into chat instead of into the widget, **don't**. The widget is the only path that preserves the no-LLM-context guarantee.
 
 For the full security analysis, see `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
 
