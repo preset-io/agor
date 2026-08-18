@@ -24,7 +24,7 @@ import type { MessagesService, SessionsPatchClient, TasksService } from '../base
 import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
 import { AWAIT_TIMEOUT, awaitWithTimeout } from './bounded-await.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
-import { setupQuery } from './query-builder.js';
+import { type InterruptibleQuery, setupQuery } from './query-builder.js';
 import { aggregateClaudeResults } from './result-aggregation.js';
 
 export interface PromptResult {
@@ -65,6 +65,32 @@ export class ClaudePromptService {
    * snapshot rather than wedge the query. */
   static readonly CONTEXT_USAGE_TIMEOUT_MS = 15_000;
 
+  /**
+   * Upper bound on SDK silence while a successful turn is held open for
+   * background tasks.
+   *
+   * The `await-background-tasks` disposition deliberately keeps the query
+   * generator open past the model's `end_turn` so a background Agent or
+   * Workflow can wake another turn on the same query. That wait had no
+   * deadline, so a task ID that never received a terminal signal wedged the
+   * turn forever: the Task stayed `running`, the executor kept heartbeating,
+   * and everything queued behind it — including cross-session callbacks —
+   * never drained.
+   *
+   * This is a *silence* budget, not a total one: every message the query yields
+   * re-arms it, so a background task still streaming progress, subagent
+   * output, or its own turns is never cut short. Only a stream that has gone
+   * completely quiet — the shape every observed hang had — is force-settled,
+   * and a background shell that is designed to outlive the turn settles the
+   * turn instead of owning it.
+   *
+   * 10 minutes sits well past the longest gap healthy background work produces
+   * (the SDK emits `tool_progress` while a single tool call is in flight, and
+   * forwards subagent tool_use/tool_result blocks as they land) while still
+   * letting a wedged session — and everything queued behind it — recover
+   * inside a working session rather than never. */
+  static readonly BACKGROUND_TASK_SILENCE_TIMEOUT_MS = 10 * 60_000;
+
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
 
@@ -85,6 +111,38 @@ export class ClaudePromptService {
     private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
+  }
+
+  /**
+   * Close out a turn: take a bounded context snapshot, then release the input
+   * stream the SDK is holding stdin open for.
+   *
+   * Shared by the ordinary terminal result and the force-settle path below, so
+   * `releaseInput()` can never be skipped on a path that ends the turn.
+   */
+  private async *finalizeTurn(query: InterruptibleQuery): AsyncGenerator<ProcessedEvent> {
+    try {
+      // Bounded: a subprocess that never answers this control request
+      // must not wedge the query generator open (Task stuck running).
+      const contextUsage = await awaitWithTimeout(
+        query.getContextUsage(),
+        ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS
+      );
+      if (contextUsage === AWAIT_TIMEOUT) {
+        console.warn(
+          `⚠️  getContextUsage() did not respond within ${ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS}ms; settling turn without a context snapshot`
+        );
+      } else {
+        yield { type: 'context_usage', contextUsage };
+      }
+    } catch (error) {
+      console.warn(
+        `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      // Release the held input iterable so the SDK can close stdin
+      query.releaseInput();
+    }
   }
 
   /**
@@ -240,8 +298,42 @@ If you continue to see authentication errors, please contact your Agor administr
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
 
+    const iterator = result[Symbol.asyncIterator]();
+    // Set once a successful result is held back for background tasks. From
+    // that point the query is alive only on their behalf, so every read is
+    // bounded — the model has already finished responding.
+    let awaitingBackgroundTasks = false;
+    // A force-settled query is presumed wedged; do not block teardown on it.
+    let queryIsWedged = false;
+
     try {
-      for await (const msg of result) {
+      while (true) {
+        const next = awaitingBackgroundTasks
+          ? await awaitWithTimeout(
+              iterator.next(),
+              ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS
+            )
+          : await iterator.next();
+
+        if (next === AWAIT_TIMEOUT) {
+          console.warn(
+            `⚠️  No SDK activity for ${ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS}ms with ` +
+              `${backgroundTasks.activeTaskCount} background task(s) still unsettled ` +
+              `[${backgroundTasks.activeTaskIds.join(', ')}]; force-settling the turn`
+          );
+          // Same escape hatch a non-success result already takes: stop
+          // deferring, settle what the turn produced, and let the SDK close.
+          clearBackgroundTaskActivity();
+          queryIsWedged = true;
+          yield* this.finalizeTurn(result);
+          if (sdkResults.length > 0) {
+            yield { type: 'result', raw_sdk_message: aggregateClaudeResults(sdkResults) };
+          }
+          break;
+        }
+        if (next.done) break;
+        const msg = next.value;
+
         reportSdkActivity(onActivity, 'claude-code', msg.type);
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
@@ -258,7 +350,9 @@ If you continue to see authentication errors, please contact your Agor administr
           onActivity?.('progress', 'background_task.start');
         }
         if (lifecycleTransition.taskTransition === 'settled') {
-          onActivity?.('progress', 'background_task.complete');
+          for (let index = 0; index < (lifecycleTransition.settledTaskCount ?? 1); index++) {
+            onActivity?.('progress', 'background_task.complete');
+          }
         }
         // Process message through processor
         const events = await processor.process(msg);
@@ -289,33 +383,14 @@ If you continue to see authentication errors, please contact your Agor administr
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
             if (resultDisposition === 'await-background-tasks') {
+              awaitingBackgroundTasks = true;
               console.log(
-                `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
+                `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active ` +
+                  `[${backgroundTasks.activeTaskIds.join(', ')}]; keeping SDK query alive`
               );
             } else {
               event.raw_sdk_message = aggregateClaudeResults(sdkResults);
-              try {
-                // Bounded: a subprocess that never answers this control request
-                // must not wedge the query generator open (Task stuck running).
-                const contextUsage = await awaitWithTimeout(
-                  result.getContextUsage(),
-                  ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS
-                );
-                if (contextUsage === AWAIT_TIMEOUT) {
-                  console.warn(
-                    `⚠️  getContextUsage() did not respond within ${ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS}ms; settling turn without a context snapshot`
-                  );
-                } else {
-                  yield { type: 'context_usage', contextUsage } as ProcessedEvent;
-                }
-              } catch (error) {
-                console.warn(
-                  `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
-                );
-              } finally {
-                // Release the held input iterable so the SDK can close stdin
-                result.releaseInput();
-              }
+              yield* this.finalizeTurn(result);
             }
           }
 
@@ -325,7 +400,7 @@ If you continue to see authentication errors, please contact your Agor administr
               continue;
             }
             console.log(`🏁 Conversation ended: ${event.reason}`);
-            break; // Exit for-await loop
+            break; // Stop draining this batch of processor events
           }
 
           // Yield all events including result (for token usage capture)
@@ -379,6 +454,13 @@ If you continue to see authentication errors, please contact your Agor administr
         stderr: stderrOutput || '(no stderr output)',
       });
       throw enhancedError;
+    } finally {
+      // `for await` used to close the query on break or on an abandoned
+      // consumer; keep doing that explicitly now that iteration is manual, so
+      // the subprocess is still torn down. A force-settled query already has a
+      // read in flight that will never resolve, so its close is not awaited.
+      const closed = Promise.resolve(iterator.return?.(undefined)).catch(() => {});
+      if (!queryIsWedged) await closed;
     }
   }
 

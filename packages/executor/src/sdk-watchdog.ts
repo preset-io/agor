@@ -102,7 +102,10 @@ interface WatchdogState {
   firstProgressAt?: number;
   idleAnchor?: number;
   pausedAt?: number;
+  /** Foreground tool calls in flight — these fully suspend the policy. */
   activeToolCount: number;
+  /** SDK background tasks in flight — these only relax it (see below). */
+  activeBackgroundTaskCount: number;
   unknownCount: number;
   unknownReported: boolean;
 }
@@ -138,10 +141,17 @@ function inspectSdkWatchdog(
   }
 
   if (tool === 'claude-code' && config.claude_idle_timeout_ms !== null) {
-    const idleDeadline =
-      (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
     const silenceDeadline =
       (state.lastRawAt ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
+    // A background task relaxes the idle policy down to plain SDK silence
+    // instead of suspending it: task_progress and forwarded subagent traffic
+    // keep a healthy background task alive, while a task ID that leaked (no
+    // terminal signal, so it is never accounted as complete) can no longer
+    // disarm the one check that would notice the resulting hang.
+    const idleDeadline =
+      state.activeBackgroundTaskCount > 0
+        ? silenceDeadline
+        : (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
     if (now >= idleDeadline) {
       if (now >= silenceDeadline) return { reason: 'progress_stalled' };
       if (!state.unknownReported && state.unknownCount > 0) {
@@ -158,6 +168,7 @@ function inspectSdkWatchdog(
 export class SdkWatchdog {
   private state: WatchdogState = {
     activeToolCount: 0,
+    activeBackgroundTaskCount: 0,
     unknownCount: 0,
     unknownReported: false,
   };
@@ -204,11 +215,16 @@ export class SdkWatchdog {
     if (kind === 'progress') {
       this.state.firstProgressAt ??= now;
       this.state.idleAnchor = now;
-      if (detail === 'tool.start' || detail === 'background_task.start') {
-        this.state.activeToolCount++;
-      }
-      if (detail === 'tool.complete' || detail === 'background_task.complete') {
+      if (detail === 'tool.start') this.state.activeToolCount++;
+      if (detail === 'tool.complete') {
         this.state.activeToolCount = Math.max(0, this.state.activeToolCount - 1);
+      }
+      if (detail === 'background_task.start') this.state.activeBackgroundTaskCount++;
+      if (detail === 'background_task.complete') {
+        this.state.activeBackgroundTaskCount = Math.max(
+          0,
+          this.state.activeBackgroundTaskCount - 1
+        );
       }
     }
     this.check();

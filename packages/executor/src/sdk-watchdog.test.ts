@@ -124,14 +124,32 @@ describe('SdkWatchdog', () => {
     expect(decisions[0]?.reason).toBe('progress_stalled');
   });
 
-  it('pauses Claude idle policy while an SDK background task is active', () => {
+  it('keeps Claude idle policy disarmed while an SDK background task still reports activity', () => {
     const { watchdog, decisions } = harness({}, 'claude-code');
     watchdog.record('sdk_started');
     watchdog.record('progress', 'assistant');
     watchdog.record('progress', 'background_task.start');
-    vi.advanceTimersByTime(10_000);
+    // A live background task keeps the stream busy with system frames
+    // (task_progress, forwarded subagent traffic) that are not model progress.
+    for (let tick = 0; tick < 5; tick++) {
+      vi.advanceTimersByTime(1_500);
+      watchdog.record('sdk_started', 'system');
+    }
     expect(decisions).toEqual([]);
     watchdog.record('progress', 'background_task.complete');
+    vi.advanceTimersByTime(1_999);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('progress_stalled');
+  });
+
+  it('lets a leaked background task stall out instead of disarming the watchdog forever', () => {
+    const { watchdog, decisions } = harness({}, 'claude-code');
+    watchdog.record('sdk_started');
+    watchdog.record('progress', 'assistant');
+    // The task never reports a terminal signal, so background_task.complete
+    // never arrives and the counter stays above zero for the rest of the query.
+    watchdog.record('progress', 'background_task.start');
     vi.advanceTimersByTime(1_999);
     expect(decisions).toEqual([]);
     vi.advanceTimersByTime(1);

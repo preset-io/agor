@@ -1,11 +1,60 @@
 import type { SDKMessage } from '@agor/core/sdk';
 
 type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
-const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped']);
+
+type TaskNotificationMessage = Extract<SDKMessage, { subtype: 'task_notification' }>;
+type TaskUpdatedMessage = Extract<SDKMessage, { subtype: 'task_updated' }>;
+type AssistantMessage = Extract<SDKMessage, { type: 'assistant' }>;
+
+/**
+ * The two documented terminal signals carry *different* status enums, so one
+ * shared set misreads both: `task_updated.patch.status` can be `killed` — which
+ * a set built for notifications never matched, leaking the task ID forever —
+ * and can never be `stopped`, which only `task_notification.status` reports.
+ *
+ * Each enum is written out exhaustively as a `Record` keyed by the SDK type, so
+ * a status the SDK adds or renames is a compile error here instead of a turn
+ * that waits forever for a signal that can no longer arrive.
+ */
+const NOTIFICATION_STATUS_IS_TERMINAL: Record<TaskNotificationMessage['status'], boolean> = {
+  completed: true,
+  failed: true,
+  stopped: true,
+};
+
+const UPDATED_STATUS_IS_TERMINAL: Record<
+  NonNullable<TaskUpdatedMessage['patch']['status']>,
+  boolean
+> = {
+  completed: true,
+  failed: true,
+  killed: true,
+  paused: false,
+  pending: false,
+  running: false,
+};
+
+function terminalStatuses(table: Record<string, boolean>): ReadonlySet<string> {
+  return new Set(
+    Object.entries(table)
+      .filter(([, isTerminal]) => isTerminal)
+      .map(([status]) => status)
+  );
+}
+
+const TERMINAL_NOTIFICATION_STATUSES = terminalStatuses(NOTIFICATION_STATUS_IS_TERMINAL);
+const TERMINAL_UPDATED_STATUSES = terminalStatuses(UPDATED_STATUS_IS_TERMINAL);
 
 export interface ClaudeQueryLifecycleTransition {
   resultDisposition: ResultDisposition;
   taskTransition?: 'started' | 'settled';
+  /**
+   * How many tracked tasks this one message settled. Always 1 for the
+   * documented terminal signals; a single message can retire several tasks only
+   * on the nested-launch path below. Watchdog accounting needs the real count
+   * so every `background_task.start` gets its matching completion.
+   */
+  settledTaskCount?: number;
 }
 
 /**
@@ -14,12 +63,24 @@ export interface ClaudeQueryLifecycleTransition {
  * emit task notifications and wake another model turn on the same query.
  */
 export class ClaudeBackgroundTaskLifecycle {
-  private readonly activeTaskIds = new Set<string>();
+  /** Task ID -> the tool_use block that launched it (when the SDK reports one). */
+  private readonly activeTasks = new Map<string, string | undefined>();
+  /** tool_use IDs observed inside a subagent's own messages (see `observeToolUses`). */
+  private readonly nestedToolUseIds = new Set<string>();
 
   observe(message: SDKMessage): ClaudeQueryLifecycleTransition {
+    // Only a task launched by the top-level turn can settle on this stream, so
+    // learn which tool_use blocks belong to a subagent's conversation instead.
+    if (message.type === 'assistant' && message.parent_tool_use_id !== null) {
+      return this.observeNestedToolUses(message);
+    }
+
     if (message.type === 'system' && message.subtype === 'task_started') {
-      const wasActive = this.activeTaskIds.has(message.task_id);
-      this.activeTaskIds.add(message.task_id);
+      if (message.tool_use_id !== undefined && this.nestedToolUseIds.has(message.tool_use_id)) {
+        return { resultDisposition: 'not-result' };
+      }
+      const wasActive = this.activeTasks.has(message.task_id);
+      this.activeTasks.set(message.task_id, message.tool_use_id);
       return {
         resultDisposition: 'not-result',
         taskTransition: wasActive ? undefined : 'started',
@@ -27,7 +88,7 @@ export class ClaudeBackgroundTaskLifecycle {
     }
 
     if (message.type === 'system' && message.subtype === 'task_notification') {
-      if (!TERMINAL_TASK_STATUSES.has(message.status)) {
+      if (!TERMINAL_NOTIFICATION_STATUSES.has(message.status)) {
         return { resultDisposition: 'not-result' };
       }
       return this.settleTask(message.task_id);
@@ -41,7 +102,7 @@ export class ClaudeBackgroundTaskLifecycle {
       message.type === 'system' &&
       message.subtype === 'task_updated' &&
       typeof message.patch.status === 'string' &&
-      TERMINAL_TASK_STATUSES.has(message.patch.status)
+      TERMINAL_UPDATED_STATUSES.has(message.patch.status)
     ) {
       return this.settleTask(message.task_id);
     }
@@ -53,25 +114,56 @@ export class ClaudeBackgroundTaskLifecycle {
     if (message.subtype !== 'success') return { resultDisposition: 'terminal' };
 
     return {
-      resultDisposition: this.activeTaskIds.size > 0 ? 'await-background-tasks' : 'terminal',
+      resultDisposition: this.activeTasks.size > 0 ? 'await-background-tasks' : 'terminal',
     };
   }
 
   get activeTaskCount(): number {
-    return this.activeTaskIds.size;
+    return this.activeTasks.size;
+  }
+
+  /** IDs still waiting on a terminal signal — the evidence a leak needs. */
+  get activeTaskIds(): string[] {
+    return [...this.activeTasks.keys()];
   }
 
   clearActiveTasks(): number {
-    const count = this.activeTaskIds.size;
-    this.activeTaskIds.clear();
+    const count = this.activeTasks.size;
+    this.activeTasks.clear();
     return count;
   }
 
+  /**
+   * A subagent's own `tool_use` blocks are forwarded on the parent stream with
+   * `parent_tool_use_id` set. A task launched from one of those blocks is
+   * nested (spawn depth >= 2): the SDK announces its `task_started` here but
+   * routes its terminal signal to the subagent that owns it, so tracking it
+   * would hold the query open for a settlement that never arrives. The
+   * ancestor task we do track already covers the nested task's whole lifetime,
+   * so dropping it costs no protection.
+   *
+   * Either ordering is safe: a nested `task_started` seen after its launch site
+   * is never tracked, and one seen before is settled here.
+   */
+  private observeNestedToolUses(message: AssistantMessage): ClaudeQueryLifecycleTransition {
+    const content = message.message?.content;
+    if (!Array.isArray(content)) return { resultDisposition: 'not-result' };
+    let settledTaskCount = 0;
+    for (const block of content) {
+      if (block.type !== 'tool_use') continue;
+      this.nestedToolUseIds.add(block.id);
+      for (const [taskId, toolUseId] of this.activeTasks) {
+        if (toolUseId !== block.id) continue;
+        this.activeTasks.delete(taskId);
+        settledTaskCount++;
+      }
+    }
+    if (settledTaskCount === 0) return { resultDisposition: 'not-result' };
+    return { resultDisposition: 'not-result', taskTransition: 'settled', settledTaskCount };
+  }
+
   private settleTask(taskId: string): ClaudeQueryLifecycleTransition {
-    const settled = this.activeTaskIds.delete(taskId);
-    return {
-      resultDisposition: 'not-result',
-      taskTransition: settled ? 'settled' : undefined,
-    };
+    if (!this.activeTasks.delete(taskId)) return { resultDisposition: 'not-result' };
+    return { resultDisposition: 'not-result', taskTransition: 'settled', settledTaskCount: 1 };
   }
 }

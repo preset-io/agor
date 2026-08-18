@@ -214,6 +214,123 @@ describe('ClaudePromptService background task query lifetime', () => {
     }
   });
 
+  it('force-settles a turn whose background task never reports a terminal signal', async () => {
+    vi.useFakeTimers();
+    try {
+      // The production hang: `end_turn` arrives, one task ID never settles, and
+      // the query then goes silent forever instead of waking another turn.
+      const query = fakeQuery(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'task-1',
+          description: 'Explore',
+          uuid: 'start',
+          session_id: 'sdk-session',
+        };
+        yield sdkResult('parent-result');
+        await new Promise(() => {});
+      });
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+      const activity = vi.fn();
+
+      const events: Array<{ type: string }> = [];
+      const drained = (async () => {
+        for await (const event of service().promptSessionStreaming(
+          sessionId,
+          'prompt',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          activity
+        )) {
+          events.push(event);
+        }
+      })();
+
+      await vi.advanceTimersByTimeAsync(
+        ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS + 10
+      );
+      await drained;
+
+      // The turn settles on the aggregated result instead of staying `running`.
+      expect(events.at(-1)?.type).toBe('result');
+      expect(query.releaseInput).toHaveBeenCalledTimes(1);
+      // Watchdog accounting is balanced again, so the next query is not born
+      // with a permanently suppressed stall check.
+      expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps waiting while the query is still producing messages', async () => {
+    vi.useFakeTimers();
+    try {
+      const query = fakeQuery(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'task-1',
+          description: 'Explore',
+          uuid: 'start',
+          session_id: 'sdk-session',
+        };
+        yield sdkResult('parent-result');
+        // Background progress well past the silence budget: the wait is a
+        // silence budget, so a task that is still working is never cut short.
+        for (let tick = 0; tick < 3; tick++) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS - 1_000)
+          );
+          yield {
+            type: 'system',
+            subtype: 'task_progress',
+            task_id: 'task-1',
+            uuid: `progress-${tick}`,
+            session_id: 'sdk-session',
+          };
+        }
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'task-1',
+          status: 'completed',
+          output_file: '/tmp/task-1',
+          summary: 'done',
+          uuid: 'notification',
+          session_id: 'sdk-session',
+        };
+        yield sdkResult('continuation-result');
+      });
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+
+      const events: Array<{ type: string }> = [];
+      const drained = (async () => {
+        for await (const event of service().promptSessionStreaming(sessionId, 'prompt')) {
+          events.push(event);
+        }
+      })();
+
+      await vi.advanceTimersByTimeAsync(3 * ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS);
+      await drained;
+
+      expect(events.filter((event) => event.type === 'result')).toHaveLength(2);
+      expect(query.releaseInput).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases input and balances watchdog activity when cancellation interrupts a task', async () => {
     const query = fakeQuery(async function* () {
       yield {
