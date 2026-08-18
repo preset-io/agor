@@ -100,6 +100,7 @@ describe('MarkdownRenderer', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/acme/repo/pull/1');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+    expect(getComputedStyle(link).cursor).toBe('pointer');
 
     fireEvent.click(link);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

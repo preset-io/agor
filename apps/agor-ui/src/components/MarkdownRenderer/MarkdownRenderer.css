@@ -4,6 +4,12 @@
  * Reduces heading sizes, margins, and ensures content doesn't blow up layout
  */
 
+/* Streamdown links are native anchors; make their interactive affordance
+   explicit so it remains stable inside canvas no-drag regions. */
+[data-streamdown="link"] {
+  cursor: pointer;
+}
+
 .markdown-compact h1 {
   font-size: 1.2em;
   margin-top: 0.5em;

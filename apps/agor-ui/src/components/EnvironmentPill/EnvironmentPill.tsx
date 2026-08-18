@@ -71,30 +71,44 @@ export function EnvironmentPill({
 
   // Case 1: No config at all - show grayed discovery pill
   if (!hasConfig) {
+    const tag = (
+      <Tag
+        color="default"
+        style={{
+          cursor: onEdit ? 'pointer' : 'default',
+          userSelect: 'none',
+          opacity: 0.6,
+        }}
+      >
+        <Space size={4}>
+          <GlobalOutlined style={{ fontSize: 12 }} />
+          <span style={{ fontFamily: token.fontFamilyCode }}>env</span>
+          <EditOutlined style={{ fontSize: 12 }} />
+        </Space>
+      </Tag>
+    );
+
     return (
       <Tooltip title="Click to configure environment (optional)">
-        <Tag
-          color="default"
+        <button
+          type="button"
+          aria-label="Configure environment"
+          disabled={!onEdit}
           style={{
             cursor: onEdit ? 'pointer' : 'default',
-            userSelect: 'none',
-            opacity: 0.6,
+            padding: 0,
+            border: 0,
+            background: 'transparent',
+            color: 'inherit',
+            font: 'inherit',
           }}
-          onClick={
-            onEdit
-              ? (e) => {
-                  e.stopPropagation();
-                  onEdit();
-                }
-              : undefined
-          }
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit?.();
+          }}
         >
-          <Space size={4}>
-            <GlobalOutlined style={{ fontSize: 12 }} />
-            <span style={{ fontFamily: token.fontFamilyCode }}>env</span>
-            <EditOutlined style={{ fontSize: 12 }} />
-          </Space>
-        </Tag>
+          {tag}
+        </button>
       </Tooltip>
     );
   }
