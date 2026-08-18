@@ -753,8 +753,44 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
 }
 
 /**
- * Strip secret-bearing MCP server fields from anything on its way out to an
- * external caller.
+ * Redact every MCP server row in a service payload, whatever shape it arrived
+ * in. Pure — callers decide what to do with the copy.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactMCPServerPayload(result: any): any {
+  if (Array.isArray(result)) return result.map(redactMCPServerSecrets);
+  if (result?.data && Array.isArray(result.data)) {
+    return { ...result, data: result.data.map(redactMCPServerSecrets) };
+  }
+  if (result?.mcp_server_id) return redactMCPServerSecrets(result);
+  return result;
+}
+
+/**
+ * Strip secret-bearing MCP server fields from anything on its way out.
+ *
+ * `result` and `dispatch` answer different questions and get different
+ * answers:
+ *
+ * - `context.result` is what the CALLER receives. An in-process call or the
+ *   executor's service account legitimately needs raw values to start servers
+ *   and resolve templates, which is what `shouldExposeMCPServerSecrets`
+ *   decides.
+ * - `context.dispatch` is what EVERYONE ELSE receives — Feathers builds the
+ *   channel broadcast from `dispatch ?? result`, and `mcp-servers` events go
+ *   to the tenant-wide authenticated channel. Its audience is by definition
+ *   not the caller, so no fact about the caller can entitle it to secrets.
+ *   Redacting it is therefore unconditional.
+ *
+ * Without that split, an internal or service-account write fanned the raw row
+ * out to every connected socket precisely because the caller was trusted.
+ *
+ * Only set for methods Feathers actually emits an event for — `context.event`
+ * is `created`/`updated`/`patched`/`removed` there and `null` for find/get.
+ * Keying off it rather than a hard-coded method list keeps this from drifting
+ * out of step with what gets broadcast, and leaves find/get alone: those emit
+ * nothing, so a redacted `dispatch` there would only strip the values out of
+ * the executor's own socket reads and break execution.
  *
  * Module scope rather than a closure inside `registerHooks` so tests can drive
  * the real hook against a real service instead of reproducing its body — a
@@ -763,15 +799,13 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
  * separately in `register-hooks.mcp-headers-redaction.test.ts`.
  */
 export const redactMCPServerSecretFields = async (context: HookContext) => {
+  if (context.event) {
+    context.dispatch = redactMCPServerPayload(context.result);
+  }
+
   if (shouldExposeMCPServerSecrets(context.params)) return context;
 
-  if (Array.isArray(context.result)) {
-    context.result = context.result.map(redactMCPServerSecrets);
-  } else if (context.result?.data && Array.isArray(context.result.data)) {
-    context.result.data = context.result.data.map(redactMCPServerSecrets);
-  } else if (context.result?.mcp_server_id) {
-    context.result = redactMCPServerSecrets(context.result);
-  }
+  context.result = redactMCPServerPayload(context.result);
 
   return context;
 };

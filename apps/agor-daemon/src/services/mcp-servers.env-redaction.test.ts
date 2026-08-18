@@ -77,15 +77,38 @@ async function buildDaemon() {
   const app = feathers();
   app.use('mcp-servers', createMCPServersService(db));
 
+  /**
+   * A direct service call resolves to `context.result`, but a socket client
+   * receives `returnedCtx.dispatch || returnedCtx.result`
+   * (@feathersjs/transport-commons socket/utils.js). Recording the finished
+   * context lets the assertions below use the transport's formula instead of
+   * the in-process one — without it, a `dispatch` set where it should not be
+   * is invisible to every test.
+   */
+  let lastContext: { dispatch?: unknown; result?: unknown } = {};
+  const recordFinishedContext = async (context: { dispatch?: unknown; result?: unknown }) => {
+    lastContext = context;
+    return context;
+  };
+
   // The real production hook, not a reproduction of it. Which methods it is
   // registered on is pinned in `register-hooks.mcp-headers-redaction.test.ts`.
   app.service('mcp-servers').hooks({
     after: {
-      find: [redactMCPServerSecretFields],
-      get: [redactMCPServerSecretFields],
-      remove: [redactMCPServerSecretFields],
+      find: [redactMCPServerSecretFields, recordFinishedContext],
+      get: [redactMCPServerSecretFields, recordFinishedContext],
+      create: [redactMCPServerSecretFields, recordFinishedContext],
+      patch: [redactMCPServerSecretFields, recordFinishedContext],
+      update: [redactMCPServerSecretFields, recordFinishedContext],
+      remove: [redactMCPServerSecretFields, recordFinishedContext],
     },
   } as never);
+
+  /** What a socket client would receive as the response to the last call. */
+  const overSocket = async <T>(call: Promise<unknown>): Promise<T> => {
+    await call;
+    return (lastContext.dispatch ?? lastContext.result) as T;
+  };
 
   // The shape a REST request from a signed-in member arrives with.
   const memberParams = {
@@ -106,11 +129,32 @@ async function buildDaemon() {
       app.service('mcp-servers').patch(shared.mcp_server_id, data, params) as Promise<MCPServer>,
     remove: (params: AuthenticatedParams) =>
       app.service('mcp-servers').remove(shared.mcp_server_id, params) as Promise<MCPServer>,
-    /** Payloads Feathers broadcasts to subscribed connections. */
-    captureRemovedEvents: () => {
-      const events: MCPServer[] = [];
-      app.service('mcp-servers').on('removed', (payload: MCPServer) => events.push(payload));
-      return events;
+    create: (data: Record<string, unknown>, params: AuthenticatedParams) =>
+      app.service('mcp-servers').create(data, params) as Promise<MCPServer>,
+    getOverSocket: (params: AuthenticatedParams) =>
+      overSocket<MCPServer>(app.service('mcp-servers').get(shared.mcp_server_id, params)),
+    findOverSocket: (params: AuthenticatedParams) =>
+      overSocket<{ data: MCPServer[] }>(app.service('mcp-servers').find(params)),
+    update: (data: Record<string, unknown>, params: AuthenticatedParams) =>
+      app.service('mcp-servers').update(shared.mcp_server_id, data, params) as Promise<MCPServer>,
+    /**
+     * What the socket transport would actually put on the wire for each
+     * emitted event.
+     *
+     * Feathers emits `(element, context)` where `element` comes from
+     * `context.result`, but @feathersjs/transport-commons sends
+     * `channel.dataFor(connection) || context.dispatch || context.result`.
+     * Asserting on `element` would therefore miss a raw `dispatch` entirely —
+     * which is exactly how the privileged-caller broadcast stayed invisible.
+     */
+    captureBroadcasts: (event: 'created' | 'updated' | 'patched' | 'removed') => {
+      const sent: MCPServer[] = [];
+      app
+        .service('mcp-servers')
+        .on(event, (_element: MCPServer, hook: { dispatch?: MCPServer; result?: MCPServer }) => {
+          sent.push((hook.dispatch ?? hook.result) as MCPServer);
+        });
+      return sent;
     },
     storedEnv: async () =>
       (await repo.findById(shared.mcp_server_id as string))?.env as Record<string, string>,
@@ -173,7 +217,7 @@ describe('a member reading a shared MCP server', () => {
     // to the tenant-wide authenticated channel, so an unredacted one hands
     // the credentials to every connected member at once.
     const daemon = await buildDaemon();
-    const broadcast = daemon.captureRemovedEvents();
+    const broadcast = daemon.captureBroadcasts('removed');
 
     await daemon.remove(daemon.memberParams);
 
@@ -189,6 +233,101 @@ describe('a member reading a shared MCP server', () => {
     const server = await daemon.get(daemon.memberParams);
 
     expect(server.env?.TEMPLATED_TOKEN).toBe('{{ user.env.PERSONAL_TOKEN }}');
+  });
+});
+
+/**
+ * The broadcast audience is not the caller, so nothing about the caller can
+ * entitle it to secrets. These are the cases the member-perspective tests
+ * above sail straight past: when the writer is trusted, `context.result`
+ * stays raw by design, and the event is built from it unless `dispatch` says
+ * otherwise.
+ */
+describe('a privileged write still broadcasts a redacted row', () => {
+  const INTERNAL = undefined as unknown as AuthenticatedParams;
+  const SERVICE_ACCOUNT = {
+    provider: 'socketio',
+    authenticated: true,
+    user: { user_id: 'executor', role: 'service', _isServiceAccount: true },
+  } as unknown as AuthenticatedParams;
+
+  const PRIVILEGED: Array<[string, AuthenticatedParams]> = [
+    ['an internal in-process call', INTERNAL],
+    ['the executor service account', SERVICE_ACCOUNT],
+  ];
+
+  describe.each(PRIVILEGED)('%s', (_label, params) => {
+    it('removing broadcasts a redacted row while the caller keeps the real one', async () => {
+      const daemon = await buildDaemon();
+      const broadcast = daemon.captureBroadcasts('removed');
+
+      const returnedToCaller = await daemon.remove(params);
+
+      expect(broadcast).toHaveLength(1);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_TOKEN);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_API_KEY);
+      // The caller's own entitlement is untouched — this is what keeps
+      // session scoping and stdio startup working.
+      expect(returnedToCaller.env?.GITHUB_TOKEN).toBe(REAL_TOKEN);
+    });
+
+    it('patching broadcasts a redacted row', async () => {
+      const daemon = await buildDaemon();
+      const broadcast = daemon.captureBroadcasts('patched');
+
+      await daemon.patch({ display_name: 'GitHub (prod)' }, params);
+
+      expect(broadcast).toHaveLength(1);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_TOKEN);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_API_KEY);
+    });
+
+    it('updating broadcasts a redacted row', async () => {
+      const daemon = await buildDaemon();
+      const broadcast = daemon.captureBroadcasts('updated');
+
+      await daemon.update({ name: 'github', transport: 'stdio', command: 'npx' }, params);
+
+      expect(broadcast).toHaveLength(1);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_TOKEN);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_API_KEY);
+    });
+
+    it('creating broadcasts a redacted row', async () => {
+      const daemon = await buildDaemon();
+      const broadcast = daemon.captureBroadcasts('created');
+
+      await daemon.create(
+        {
+          name: 'second',
+          transport: 'stdio',
+          command: 'npx',
+          env: { OTHER_TOKEN: REAL_TOKEN },
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+        },
+        params
+      );
+
+      expect(broadcast).toHaveLength(1);
+      expect(JSON.stringify(broadcast)).not.toContain(REAL_TOKEN);
+    });
+  });
+
+  it('leaves find and get alone, since neither emits anything to redact for', async () => {
+    // `dispatch` is also what the socket transport hands back to the caller
+    // of a method. On a non-emitting method it would buy no broadcast safety
+    // and would strip the values out of the executor's own reads — which is
+    // how the executor loads MCP config. Asserted through the transport's
+    // formula, so a `dispatch` set here is not invisible.
+    const daemon = await buildDaemon();
+
+    const viaGet = await daemon.getOverSocket(SERVICE_ACCOUNT);
+    const viaFind = await daemon.findOverSocket(SERVICE_ACCOUNT);
+
+    expect(viaGet.env?.GITHUB_TOKEN).toBe(REAL_TOKEN);
+    expect(viaFind.data[0].env?.GITHUB_TOKEN).toBe(REAL_TOKEN);
   });
 });
 
