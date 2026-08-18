@@ -183,18 +183,31 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
       return entry;
     },
   } as never);
-  // Flipped by a test to make the step after the install fail, which is the
-  // only way to observe what a connect leaves behind when it does not finish.
+  // Flipped by a test to make a step fail, which is the only way to observe
+  // what a connect leaves behind when it does not finish.
   let sessionCreateFailure: Error | undefined;
+  let attachFailure: Error | undefined;
+
+  // A store, so "did the cleanup run" is answerable. The real `sessions`
+  // service needs a branch, a repo and a worktree that decide nothing here.
+  const sessionRows: Array<{ session_id: string }> = [];
 
   app.use('sessions', {
     async create(data: Record<string, unknown>) {
       if (sessionCreateFailure) throw sessionCreateFailure;
-      return { ...data, session_id: 'session-1' };
+      const session = { ...data, session_id: `session-${sessionRows.length + 1}` };
+      sessionRows.push(session as { session_id: string });
+      return session;
+    },
+    async remove(id: string) {
+      const at = sessionRows.findIndex((row) => row.session_id === id);
+      if (at >= 0) sessionRows.splice(at, 1);
+      return { session_id: id };
     },
   } as never);
   app.use('/sessions/:id/mcp-servers', {
     async create(data: unknown) {
+      if (attachFailure) throw attachFailure;
       return data;
     },
   } as never);
@@ -235,6 +248,15 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     failSessionCreate: (error: Error) => {
       sessionCreateFailure = error;
     },
+    failAttach: (error: Error) => {
+      attachFailure = error;
+    },
+    clearFailures: () => {
+      sessionCreateFailure = undefined;
+      attachFailure = undefined;
+    },
+    /** Sessions still standing, past any cleanup. */
+    sessions: () => [...sessionRows],
   };
 }
 
@@ -345,6 +367,31 @@ describe('an API-key install, end to end', () => {
     expect(rows).toHaveLength(1);
     // The install is exactly as its owner had it: working, with the key it
     // already held. The caller was told the connect failed, and it did.
+    expect(rows[0]?.auth?.token).toBe(WORKING_KEY);
+    // Only the session from the connect that succeeded — the failed attempt
+    // added none for a retry to duplicate.
+    expect(daemon.sessions()).toHaveLength(1);
+  });
+
+  it('leaves no session behind when the attachment is refused, and a retry converges', async () => {
+    // Four writes, three services, no transaction — so the question is not
+    // whether a window exists but whether a second attempt lands where the
+    // first meant to. Before this, each failed attempt left a session nobody
+    // could reach and the retry made another.
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('alice@agor.live');
+
+    daemon.failAttach(new Error('forbidden'));
+    await expect(daemon.connectAs(alice, WORKING_KEY)).rejects.toThrow(/forbidden/);
+    expect(daemon.sessions()).toHaveLength(0);
+
+    daemon.clearFailures();
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    expect(daemon.sessions()).toHaveLength(1);
+    // And exactly one install, holding the key from the attempt that worked.
+    const rows = await daemon.stored();
+    expect(rows).toHaveLength(1);
     expect(rows[0]?.auth?.token).toBe(WORKING_KEY);
   });
 

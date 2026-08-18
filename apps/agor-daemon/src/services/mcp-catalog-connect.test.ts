@@ -100,6 +100,7 @@ function buildApp(
   const refreshed: string[] = [];
   const resourceLookups: string[] = [];
   const patched: Array<{ id: string; data: Record<string, unknown> }> = [];
+  const removedSessions: string[] = [];
   const services: Record<string, unknown> = {
     'mcp-catalog': { get: vi.fn(async () => entry) },
     '/mcp-servers/oauth-refresh': {
@@ -116,8 +117,12 @@ function buildApp(
         )
       ),
       create: vi.fn(async (data: Record<string, unknown>) => {
-        created.mcpServers.push(data);
-        return { ...data, mcp_server_id: 'server-1' };
+        // Recorded with the id the service assigned, so `remove` below can
+        // actually take it back — otherwise "what is left behind" is a question
+        // the stub cannot answer.
+        const row = { ...data, mcp_server_id: 'server-1' };
+        created.mcpServers.push(row);
+        return row;
       }),
       remove: vi.fn(async (id: string) => {
         created.mcpServers = created.mcpServers.filter(
@@ -139,9 +144,20 @@ function buildApp(
       }),
     },
     sessions: {
+      // A store rather than a recorder, because convergence is a claim about
+      // what is left behind: a cleanup that never ran and a cleanup that ran
+      // look identical to a stub that only counts calls.
       create: vi.fn(async (data: Record<string, unknown>) => {
-        created.sessions.push(data);
-        return { ...data, session_id: 'session-1' };
+        const session = { ...data, session_id: `session-${created.sessions.length + 1}` };
+        created.sessions.push(session);
+        return session;
+      }),
+      remove: vi.fn(async (id: string) => {
+        created.sessions = created.sessions.filter(
+          (session) => (session as { session_id?: string }).session_id !== id
+        );
+        removedSessions.push(id);
+        return { session_id: id };
       }),
       remove: vi.fn(async (id: string) => {
         removedSessions.push(id);
@@ -189,6 +205,16 @@ const request = {
   agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: CURATED.permission_disclosure as string,
 };
+
+/** Typed access to the stub services a test needs to make fail. */
+type StubFn = ReturnType<typeof vi.fn>;
+const serversOf = (app: { service: (p: string) => unknown }) =>
+  app.service('mcp-servers') as { create: StubFn; patch: StubFn; remove: StubFn };
+const sessionsOf = (app: { service: (p: string) => unknown }) =>
+  app.service('sessions') as { create: StubFn; remove: StubFn };
+const attachOf = (app: { service: (p: string) => unknown }) =>
+  app.service('/sessions/:id/mcp-servers') as { create: StubFn };
+const services = serversOf;
 
 describe('mcp-catalog/connect', () => {
   beforeEach(() => {
@@ -1763,5 +1789,141 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
     // Nothing the caller planted is anywhere on the row.
     expect(JSON.stringify(row)).not.toContain('planted');
     expect(JSON.stringify(row)).not.toContain('attacker');
+  });
+});
+
+/**
+ * What a failure at each write leaves behind, and whether retrying converges.
+ *
+ * Four writes across three services and no transaction, so every ordering
+ * leaves some window: moving the rotation to the end closed the one where a
+ * failed connect had already replaced a working key, and opened one where a
+ * failed rotation left a session and an attachment behind. Ordering alone
+ * cannot close both. What a user actually meets is not the window but the
+ * accumulation — a second attempt adding a second session while the first
+ * stayed pinned to the old-key server — so these assert the absence of the
+ * leftovers rather than the presence of the error.
+ *
+ * Reuse is deliberately not the answer for a session, which is why these expect
+ * removal: connecting the same entry twice is an ordinary success that reuses
+ * the install and opens a *second* session, so there is no stable key to match
+ * a previous one on, and matching one would hand back somebody's earlier
+ * conversation.
+ */
+describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
+  const KEY_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'credentials' };
+  const NEW_KEY = 'fake-new-key-3333';
+
+  const keyInstallOf = (overrides: Record<string, unknown> = {}) =>
+    installOf({
+      auth: { type: 'bearer', token: MCP_HEADER_REDACTED_SENTINEL },
+      owner_user_id: ALICE,
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('none');
+    probeRemoteApiKey.mockReset();
+    probeRemoteApiKey.mockResolvedValue('accepted');
+  });
+
+  it('leaves nothing when the server row cannot be created', async () => {
+    const { app, created } = buildApp(CURATED);
+    (services(app).create as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('policy'));
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /policy/
+    );
+
+    expect(created.mcpServers).toHaveLength(0);
+    expect(created.sessions).toHaveLength(0);
+  });
+
+  it('takes back the server row when the session cannot be created', async () => {
+    const { app, created, removed } = buildApp(CURATED);
+    sessionsOf(app).create.mockRejectedValue(new Error('branch not found'));
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /branch not found/
+    );
+
+    expect(removed).toEqual(['server-1']);
+    expect(created.mcpServers).toHaveLength(0);
+    expect(created.sessions).toHaveLength(0);
+  });
+
+  it('takes back the session as well when the attachment is refused', async () => {
+    // The window that was always here and nobody had closed: before this, the
+    // server row was reclaimed and the session was not, so every retry after a
+    // refused attachment left one more orphan.
+    const { app, created, removed, removedSessions } = buildApp(CURATED);
+    attachOf(app).create.mockRejectedValue(new Error('forbidden'));
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /forbidden/
+    );
+
+    expect(removedSessions).toEqual(['session-1']);
+    expect(removed).toEqual(['server-1']);
+    expect(created.sessions).toHaveLength(0);
+  });
+
+  it('takes back the session when the key rotation fails, and keeps the install', async () => {
+    // The window the reordering opened. The reused row is somebody's existing
+    // state and stays exactly as they had it, working with the key it already
+    // held; the session this request made does not outlive the request.
+    probeRemoteAuthType.mockResolvedValue('credentials');
+    const { app, created, removed, removedSessions } = buildApp(KEY_ENTRY, [keyInstallOf()]);
+    serversOf(app).patch.mockRejectedValue(new Error('patch failed'));
+
+    await expect(
+      createMCPCatalogConnectService(app).create({ ...request, api_key: NEW_KEY }, params)
+    ).rejects.toThrow(/patch failed/);
+
+    expect(removedSessions).toEqual(['session-1']);
+    // The install was not created by this request, so it is not taken back.
+    expect(removed).toEqual([]);
+    expect(created.sessions).toHaveLength(0);
+  });
+
+  it('converges on one session when a retry follows a failed attempt', async () => {
+    // The property all of the above exist for. Two attempts, the first failing
+    // after the session was written — the user ends up with exactly one
+    // session, not one per attempt.
+    const { app, created } = buildApp(CURATED);
+    attachOf(app).create.mockRejectedValueOnce(new Error('forbidden'));
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /forbidden/
+    );
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.sessions).toHaveLength(1);
+    expect(result.session.session_id).toBe(
+      (created.sessions[0] as { session_id: string }).session_id
+    );
+  });
+
+  it('reports the original failure even when the cleanup also fails', async () => {
+    // The documented floor. A compensating write can itself fail, and when it
+    // does the caller still learns why the connect failed rather than why the
+    // undo did — the orphan is logged with its id for an operator to find.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { app, created } = buildApp(CURATED);
+    attachOf(app).create.mockRejectedValue(new Error('forbidden'));
+    sessionsOf(app).remove.mockRejectedValue(new Error('cleanup exploded'));
+
+    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
+      /forbidden/
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Left session session-1 behind'),
+      expect.anything()
+    );
+    // Honest about the residual: the session really is still there.
+    expect(created.sessions).toHaveLength(1);
+    warn.mockRestore();
   });
 });

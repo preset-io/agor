@@ -847,17 +847,22 @@ export function createMCPCatalogConnectService(
       // private to the caller — an install is theirs whatever the tenant's
       // `mcp_member_policy` says. See `McpCatalogInstallParams`.
       const mcpServer =
-        existing ??
+        existing?.server ??
         ((await service('mcp-servers').create(createInput, {
           ...params,
           mcpCatalogInstall: { entry_name: entry.name },
         })) as MCPServer);
 
       // Four writes across three services, so there is no transaction to lean
-      // on. A server nobody can see is the worst thing to leave behind — it is
-      // configuration the user never asked to keep and cannot find to remove —
-      // so a failure after this point takes back the row this request created.
-      // A reused install is somebody's existing state and is left alone.
+      // on. What this request created, it takes back on failure: a server or a
+      // session nobody can see is configuration the user never asked to keep
+      // and cannot find to remove, and a retry that leaves one behind each time
+      // is worse than the failure it followed. A reused install is somebody's
+      // existing state and is left alone — see the `catch`.
+      // Held outside the `try` so the cleanup below can see it. A failure at
+      // the attachment or the rotation happens after this exists, and what is
+      // left behind is the difference between a retry that converges and one
+      // that adds a session each time.
       let session: Session | undefined;
       try {
         session = (await service('sessions').create(
@@ -912,6 +917,33 @@ export function createMCPCatalogConnectService(
               : undefined,
         };
       } catch (error) {
+        // Take back everything this request created, so a retry lands where the
+        // first attempt meant to rather than beside it.
+        //
+        // Ordering the writes cannot fix this on its own. There are four writes
+        // across three services and no transaction, so every ordering leaves
+        // some window open — moving the rotation to the end closed the one where
+        // a failed connect had already replaced a working key, and opened one
+        // where a failed rotation left a session and an attachment the caller
+        // was told they did not get. The second attempt then made another, and
+        // the first stayed pinned to the old-key server. Accumulation, not a
+        // window, is the thing a user actually meets.
+        //
+        // Deleting is right here and reuse is not, which is worth saying plainly
+        // because reuse is what the server row does. A session is deliberately
+        // *not* deduplicated: connecting the same entry twice is an ordinary
+        // success that reuses the install and opens a second session, so there
+        // is no stable key to match a previous one on, and matching one would
+        // hand the caller somebody's earlier conversation. What this removes is
+        // a session created seconds ago by this request, never returned to
+        // anyone, holding no messages — the same argument the server row below
+        // already makes, applied to the other row this method creates.
+        //
+        // The session goes first: `session_mcp_servers.session_id` is
+        // `onDelete: 'cascade'`, so removing it takes the attachment with it and
+        // there is no third thing to undo. Internal params, because this is the
+        // daemon undoing its own write moments later rather than a new request
+        // to authorize.
         if (session) {
           try {
             await service('sessions').remove(session.session_id, {
@@ -920,7 +952,7 @@ export function createMCPCatalogConnectService(
             });
           } catch (cleanupError) {
             console.warn(
-              `[mcp-catalog/connect] Left session ${session.session_id} behind after attachment failed:`,
+              `[mcp-catalog/connect] Left session ${session.session_id} behind after a failed connect:`,
               cleanupError instanceof Error ? cleanupError.message : cleanupError
             );
           }
@@ -938,6 +970,12 @@ export function createMCPCatalogConnectService(
             );
           }
         }
+
+        // A compensating write can itself fail, and these two are the last
+        // chance to notice. Both are logged with the id rather than swallowed,
+        // because the residual — an orphan session or an orphan server row — is
+        // then something an operator can find and remove by hand. That is the
+        // documented floor: no ordering removes it, only a transaction would.
         throw error;
       }
     },
