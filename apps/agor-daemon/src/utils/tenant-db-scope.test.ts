@@ -4,12 +4,14 @@ import {
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  TenantWriteGateActiveError,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import {
+  createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
   deferWithTenantDatabaseScope,
@@ -34,6 +36,63 @@ function signRuntimeJwt(secret: string, payload: Record<string, unknown>) {
     expiresIn: '5m',
   });
 }
+
+describe('createFreshTenantWriteDatabaseRunner', () => {
+  it('leaves an inherited DB scope and opens a new short tenant transaction', async () => {
+    let transactionNumber = 0;
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        transactionNumber += 1;
+        return callback({
+          execute: vi.fn(async () => []),
+          marker: `tx-${transactionNumber}`,
+        });
+      }),
+    };
+    const runMutation = createFreshTenantWriteDatabaseRunner(db as never, 'tenant-a');
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
+      expect(getCurrentTenantDatabaseScope()?.db).toMatchObject({ marker: 'tx-1' });
+      await runMutation(async () => {
+        expect(getCurrentTenantId()).toBe('tenant-a');
+        expect(getCurrentTenantDatabaseScope()?.db).toMatchObject({ marker: 'tx-2' });
+      });
+      expect(getCurrentTenantDatabaseScope()?.db).toMatchObject({ marker: 'tx-1' });
+    });
+
+    expect(db.transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('checks the tenant write gate inside the fresh transaction before mutation work', async () => {
+    const work = vi.fn(async () => undefined);
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            value_text: JSON.stringify({
+              generation: 'gate-generation',
+              acquiredAt: '2026-08-18T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const runMutation = createFreshTenantWriteDatabaseRunner(db as never, 'tenant-frozen');
+
+    await expect(runMutation(work)).rejects.toBeInstanceOf(TenantWriteGateActiveError);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when no trusted tenant identity is available', () => {
+    expect(() => createFreshTenantWriteDatabaseRunner({} as never, undefined)).toThrow(
+      'Missing tenant context'
+    );
+  });
+});
 
 describe('createTenantDatabaseScopeAroundHook', () => {
   it('uses the configured static tenant for the hook and database scope', async () => {

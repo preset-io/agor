@@ -20,6 +20,7 @@ import {
 
 const taskId = '018f0000-0000-7000-8000-000000000001';
 const sessionId = '018f0000-0000-7000-8000-000000000002';
+const runInFreshTenantWriteDatabase = <T>(work: () => Promise<T>): Promise<T> => work();
 
 function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) {
   return { task_id: taskId, session_id: sessionId, status, created_at: '2026-01-01', ...extra };
@@ -109,6 +110,7 @@ function request(app: never, cause: 'user_stop' | 'sdk_health_failure' | 'heartb
     taskId,
     cause,
     errorMessage: cause === 'user_stop' ? 'Stopped by user' : `${cause} failure`,
+    runInFreshTenantWriteDatabase,
   });
 }
 
@@ -176,6 +178,7 @@ describe('termination coordinator', () => {
       cause: 'user_stop',
       errorMessage: 'Stopped by user',
       cooperativeGraceMs: 100,
+      runInFreshTenantWriteDatabase,
     });
     setTimeout(() => {
       state.markExecutorQuiesced();
@@ -315,6 +318,7 @@ describe('termination coordinator', () => {
         cause: 'heartbeat_lost',
         errorMessage: 'heartbeat_lost failure',
         absenceVerified: true,
+        runInFreshTenantWriteDatabase,
       })
     ).resolves.toMatchObject({
       status: 'terminal',
@@ -344,6 +348,7 @@ describe('termination coordinator', () => {
       taskId,
       cause: 'sdk_health_failure',
       errorMessage: 'SDK stalled',
+      runInFreshTenantWriteDatabase,
     });
 
     expect(requested.status).toBe(TaskStatus.STOPPING);
@@ -364,6 +369,7 @@ describe('termination coordinator', () => {
       cause: 'heartbeat_lost',
       errorMessage: 'Heartbeat lost',
       cooperativeGraceMs: 40_000,
+      runInFreshTenantWriteDatabase,
     });
 
     expect(state.claimTerminationCoordination).toHaveBeenCalledWith(
@@ -397,6 +403,7 @@ describe('termination coordinator', () => {
       taskId,
       cause: 'sdk_health_failure',
       errorMessage: 'SDK stalled',
+      runInFreshTenantWriteDatabase,
     });
 
     expect(result.status).toBe(TaskStatus.COMPLETED);
@@ -419,6 +426,7 @@ describe('termination coordinator', () => {
       taskId,
       cause: 'sdk_health_failure',
       errorMessage: 'SDK stalled',
+      runInFreshTenantWriteDatabase,
     });
     const stop = request(state.app, 'user_stop');
     await vi.waitFor(() => expect(state.claimTermination).toHaveBeenCalledTimes(2));

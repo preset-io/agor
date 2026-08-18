@@ -205,6 +205,7 @@ import {
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
+import { createFreshTenantWriteDatabaseRunner } from './utils/tenant-db-scope.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -973,8 +974,10 @@ function createExecuteHandler(
     );
 
     const taskId = data.taskId;
-    const withTerminationTenantDatabase = <T>(work: () => Promise<T>): Promise<T> =>
-      runWithTenantDatabaseScope(db, tenantId, () => work());
+    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+      db,
+      tenantId
+    );
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the session OWNER's effective filesystem access to
@@ -1274,7 +1277,7 @@ function createExecuteHandler(
           if (disposition !== 'authoritative') {
             if (disposition === 'ambiguous') {
               try {
-                await withTerminationTenantDatabase(() =>
+                await runInFreshTerminationTenantWriteDatabase(() =>
                   (
                     app.service('tasks') as unknown as TasksServiceImpl
                   ).recordExecutorStartupWarning(
@@ -1313,7 +1316,7 @@ function createExecuteHandler(
               tool: session.agentic_tool,
               termination: 'requested',
             },
-            withTenantDatabase: withTerminationTenantDatabase,
+            runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             // A remote executor may connect while its launcher is exiting.
             // Resolve that race only at the row-locked claim.
             ...(spawnContext.mode === 'templated'

@@ -5,13 +5,18 @@ describe('executor exit termination tenant scope', () => {
   it('gives launcher-exit durable operations fresh tenant database units', () => {
     const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
     const executor = source.slice(
-      source.indexOf('const withTerminationTenantDatabase'),
-      source.indexOf('if (openCodeLaunch)', source.indexOf('const withTerminationTenantDatabase'))
+      source.indexOf('const runInFreshTerminationTenantWriteDatabase'),
+      source.indexOf(
+        'if (openCodeLaunch)',
+        source.indexOf('const runInFreshTerminationTenantWriteDatabase')
+      )
     );
 
-    expect(executor).toContain('withTenantDatabase: withTerminationTenantDatabase');
+    expect(executor).toContain(
+      'runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase'
+    );
     expect(executor).toMatch(
-      /withTerminationTenantDatabase\(\(\) =>\s+\(\s+app\.service\('tasks'\)/
+      /runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+\(\s+app\.service\('tasks'\)/
     );
   });
 });

@@ -6,7 +6,6 @@ import {
   jitterDelay,
 } from '@agor/core/coordination';
 import {
-  assertTenantWritable,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -20,6 +19,7 @@ import { TaskStatus } from '@agor/core/types';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
 import { requestExecutorTermination } from '../termination-coordinator.js';
+import { createFreshTenantWriteDatabaseRunner } from '../utils/tenant-db-scope.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =
   'Executor heartbeat lost; the executor may have crashed or disconnected.';
@@ -213,7 +213,7 @@ export class TaskRuntimeReconciler {
     return runWithTenantContext(tenantId, async () => {
       const params = tenantParams(tenantId);
       const tasks = this.options.app.service('tasks') as unknown as TasksServiceImpl;
-      const task = await this.withTenantDatabase(tenantId, () =>
+      const task = await this.runInFreshTenantWriteDatabase(tenantId, () =>
         tasks.get(candidate.task_id, params)
       );
       switch (candidate.kind) {
@@ -227,11 +227,11 @@ export class TaskRuntimeReconciler {
     });
   }
 
-  private withTenantDatabase<T>(tenantId: TenantID | string, work: () => Promise<T>): Promise<T> {
-    return runWithTenantDatabaseScope(this.options.db, tenantId, async (scopedDb) => {
-      await assertTenantWritable(scopedDb, tenantId);
-      return work();
-    });
+  private runInFreshTenantWriteDatabase<T>(
+    tenantId: TenantID | string,
+    work: () => Promise<T>
+  ): Promise<T> {
+    return createFreshTenantWriteDatabaseRunner(this.options.db, tenantId)(work);
   }
 
   private async reconcileDispatchTimeout(
@@ -241,7 +241,7 @@ export class TaskRuntimeReconciler {
     if (task.status !== TaskStatus.DISPATCHING || task.executor_connected_at) return false;
     if (task.executor_mode === 'templated') {
       const tasks = this.options.app.service('tasks') as unknown as TasksServiceImpl;
-      const warned = await this.withTenantDatabase(params.tenant!.tenant_id, () =>
+      const warned = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
         tasks.recordExecutorStartupWarning(
           task.task_id,
           'Remote executor has not connected within the configured startup window; still waiting.',
@@ -250,7 +250,7 @@ export class TaskRuntimeReconciler {
       );
       return !!warned;
     }
-    const session = await this.withTenantDatabase(params.tenant!.tenant_id, () =>
+    const session = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
       this.options.app.service('sessions').get(task.session_id, params)
     );
     const result = await requestExecutorTermination({
@@ -267,7 +267,8 @@ export class TaskRuntimeReconciler {
         tool: session.agentic_tool,
         termination: 'requested',
       },
-      withTenantDatabase: (work) => this.withTenantDatabase(params.tenant!.tenant_id, work),
+      runInFreshTenantWriteDatabase: (work) =>
+        this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, work),
     });
     return result.status !== 'condition_changed';
   }
@@ -288,7 +289,7 @@ export class TaskRuntimeReconciler {
     // Discovery is routing-only. If a fresh heartbeat won before the tenant
     // reload, do not turn that new fact into a new stale-termination claim.
     if (task.last_executor_heartbeat_at !== candidate.executor_heartbeat_at) return false;
-    const session = await this.withTenantDatabase(params.tenant!.tenant_id, () =>
+    const session = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
       this.options.app.service('sessions').get(task.session_id, params)
     );
     const result = await requestExecutorTermination({
@@ -308,7 +309,8 @@ export class TaskRuntimeReconciler {
         last_pulse: task.latest_executor_pulse,
         termination: 'requested',
       },
-      withTenantDatabase: (work) => this.withTenantDatabase(params.tenant!.tenant_id, work),
+      runInFreshTenantWriteDatabase: (work) =>
+        this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, work),
     });
     return result.status !== 'condition_changed';
   }
@@ -338,7 +340,8 @@ export class TaskRuntimeReconciler {
           }
         : {}),
       sdkFailure: task.sdk_failure,
-      withTenantDatabase: (work) => this.withTenantDatabase(params.tenant!.tenant_id, work),
+      runInFreshTenantWriteDatabase: (work) =>
+        this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, work),
     });
     return result.status !== 'condition_changed';
   }

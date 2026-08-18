@@ -17,9 +17,12 @@ describe('Stop route transaction scope', () => {
     );
 
     expect(stop).toContain('resolveSessionPromptAccess({');
-    expect(stop).toContain('withTenantDatabase: inCurrentTenantDatabaseScope');
+    expect(stop).toContain('body.force_unverified !== true');
+    expect(stop).toContain(
+      'runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase'
+    );
     expect(stop).toMatch(
-      /const failedTask = await inCurrentTenantDatabaseScope\(\(\) =>\s+forceFailUnverifiedTask\(\{/
+      /const failedTask = await runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+forceFailUnverifiedTask\(\{/
     );
   });
 

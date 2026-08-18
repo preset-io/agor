@@ -71,7 +71,10 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import {
+  createFreshTenantWriteDatabaseRunner,
+  deferWithTenantContext,
+} from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -1361,7 +1364,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: ExecutorTerminationCompleteInput,
     params?: TaskParams
   ): Promise<Task> {
-    const task = await this.taskRepo.recordExecutorQuiescence(data);
+    const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+      this.db,
+      terminationTenantId
+    );
+    const task = await runInFreshTerminationTenantWriteDatabase(() =>
+      this.taskRepo.recordExecutorQuiescence(data)
+    );
     if (!task?.termination_request) {
       throw new Conflict(
         `Task ${shortId(data.task_id)} has no matching active termination request`
@@ -1383,7 +1393,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // transaction commits and outside its ALS database scope; the durable
     // quiescence timestamp makes the deferred recovery restart/retry safe.
     const coordinatorParams = { ...(params ?? {}), provider: undefined };
-    const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
     deferWithTenantContext(
       params,
       () => {
@@ -1397,12 +1406,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           cause: terminationRequest.cause,
           errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
           params: coordinatorParams,
-          withTenantDatabase: (work) => {
-            if (!terminationTenantId) {
-              throw new Error('Missing tenant context for executor termination settlement');
-            }
-            return runWithTenantDatabaseScope(this.db, terminationTenantId, () => work());
-          },
+          runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
         }).then(() => undefined);
       },
       (error) =>
@@ -1500,6 +1504,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       throw new BadRequest('sdk_version must be a bounded identifier');
     }
 
+    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+      this.db,
+      getCurrentTenantId() ?? params?.tenant?.tenant_id
+    );
+
     const current = await this.get(data.task_id, params);
     const mode = current.sdk_watchdog_mode ?? 'observe';
     if (mode === 'disabled') throw new Conflict('SDK watchdog is disabled for this Task');
@@ -1536,7 +1545,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       termination: action === 'enforced' ? 'requested' : 'not_requested',
     };
     if (action === 'would_fire') {
-      const observed = await this.taskRepo.recordSdkHealthObservation(data.task_id, failure);
+      const observed = await runInFreshTerminationTenantWriteDatabase(() =>
+        this.taskRepo.recordSdkHealthObservation(data.task_id, failure)
+      );
       if (!observed) throw new Conflict(`Task ${shortId(data.task_id)} is no longer active`);
       emitServiceEvent(this.app, {
         path: 'tasks',
@@ -1556,6 +1567,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params,
       signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
       sdkFailure: failure,
+      runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
     });
   }
 

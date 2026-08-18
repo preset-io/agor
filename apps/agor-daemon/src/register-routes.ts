@@ -179,6 +179,7 @@ import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
+  createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
@@ -2696,6 +2697,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+        const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+          db,
+          getCurrentTenantId()
+        );
         const session = await inCurrentTenantDatabaseScope(() =>
           app.service('sessions').get(id, params)
         );
@@ -2703,8 +2708,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Stop is process control and must use the same authorization policy as
         // prompting the target session. A session-tier collaborator may view a
         // teammate's session but must not stop an executor running with that
-        // teammate's identity and credentials.
+        // teammate's identity and credentials. Force-fail deliberately skips
+        // this check and applies its narrower owner-or-admin policy below.
         if (
+          body.force_unverified !== true &&
           branchRbacEnabled &&
           params.provider &&
           !(params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
@@ -2781,7 +2788,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   stopRouteRepositories.branchRepo.isOwner(branchId, userId),
               });
             });
-            const failedTask = await inCurrentTenantDatabaseScope(() =>
+            const failedTask = await runInFreshTerminationTenantWriteDatabase(() =>
               forceFailUnverifiedTask({
                 app,
                 taskId: target.task.task_id,
@@ -2811,7 +2818,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 inCurrentTenantDatabaseScope(() =>
                   findActiveTasksForSession(stopApp, sessionId, stopParams)
                 ),
-              withTenantDatabase: inCurrentTenantDatabaseScope,
+              runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             },
             id as SessionID,
             params,

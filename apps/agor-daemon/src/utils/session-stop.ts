@@ -26,11 +26,11 @@ export interface StopSessionDeps {
   findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
   /**
-   * Opens one short tenant database unit for each durable termination step.
-   * The Stop route itself deliberately has no route-wide database transaction
-   * because it may wait for executor quiescence.
+   * Opens one fresh, write-gated tenant database unit for each durable
+   * termination step. The Stop route itself deliberately has no route-wide
+   * database transaction because it may wait for executor quiescence.
    */
-  withTenantDatabase?: TerminationInput['withTenantDatabase'];
+  runInFreshTenantWriteDatabase: TerminationInput['runInFreshTenantWriteDatabase'];
 }
 
 /**
@@ -129,7 +129,7 @@ export async function stopSessionPreserveQueue(
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
     params,
-    withTenantDatabase: deps.withTenantDatabase,
+    runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });
   if (termination.status !== 'terminal') {
     return {
