@@ -60,9 +60,40 @@ function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) 
     releaseInput,
     getContextUsage,
     interrupt: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn(),
     return: closed,
     closed,
   });
+}
+
+/**
+ * A query wedged the way production wedges it.
+ *
+ * The stream simply stops, and `interrupt()` — which in the shipped SDK is only
+ * `await this.request({subtype: 'interrupt'})`, a control request over that same
+ * stopped transport — never answers. `close()` is the structurally different
+ * one: `spawnAbort()`, `processStdin.end()`, abort-handler teardown, all local.
+ * So only `close()` can release the generator here, and `teardown.ran` records
+ * whether the generator's own `finally` ever got to run at all.
+ */
+function wedgedQuery() {
+  let unwedge = () => {};
+  const wedge = new Promise<void>((resolve) => {
+    unwedge = resolve;
+  });
+  const teardown = { ran: false };
+  const query = fakeQuery(async function* () {
+    try {
+      yield taskStarted('task-1');
+      yield sdkResult('parent-result');
+      await wedge;
+    } finally {
+      teardown.ran = true;
+    }
+  });
+  query.interrupt.mockReturnValue(new Promise(() => {}));
+  query.close.mockImplementation(() => unwedge());
+  return { query, teardown };
 }
 
 function service() {
@@ -143,12 +174,22 @@ const userMessage = (uuid: string): SDKMessage =>
     session_id: 'sdk-session',
   }) as SDKMessage;
 
-const statusMessage = (status: string): SDKMessage =>
+const statusMessage = (status: string | null): SDKMessage =>
   ({
     type: 'system',
     subtype: 'status',
     status,
     uuid: `status-${status}`,
+    session_id: 'sdk-session',
+  }) as SDKMessage;
+
+const apiRetry = (retryDelayMs: unknown): SDKMessage =>
+  ({
+    type: 'system',
+    subtype: 'api_retry',
+    retry_delay_ms: retryDelayMs,
+    attempt: 1,
+    uuid: 'api-retry',
     session_id: 'sdk-session',
   }) as SDKMessage;
 
@@ -647,15 +688,167 @@ describe('ClaudePromptService background task query lifetime', () => {
     // reproduce that overflow clamp.
     const now = 1_700_000_000_000;
     const epochMsMistake = rateLimitEvent('rejected', now); // seconds field holding ms
-    expect(announcedQuietUntil(epochMsMistake, now)).toBe(now + MAX_ANNOUNCED_QUIET_MS);
+    expect(announcedQuietUntil(epochMsMistake, now)).toEqual({
+      source: 'rate_limit',
+      until: now + MAX_ANNOUNCED_QUIET_MS,
+    });
     // The clamp is itself under the overflow threshold, so no budget built from
     // it can ever reach the inverting path.
     expect(MAX_ANNOUNCED_QUIET_MS).toBeLessThan(2 ** 31 - 1);
     // A real seven-day reset is far under the clamp and passes through intact.
     const sevenDay = rateLimitEvent('rejected', Math.floor(now / 1_000) + 7 * 24 * 60 * 60);
-    expect(announcedQuietUntil(sevenDay, now)).toBe(now + 7 * 24 * 60 * 60 * 1_000);
+    expect(announcedQuietUntil(sevenDay, now)).toEqual({
+      source: 'rate_limit',
+      until: now + 7 * 24 * 60 * 60 * 1_000,
+    });
     // An already-elapsed reset grants nothing.
     expect(announcedQuietUntil(rateLimitEvent('rejected', 1), now)).toBeUndefined();
+  });
+
+  it('grants nothing for an announced wait that is not a finite number', () => {
+    // NaN defeats every guard here: `typeof NaN === 'number'` is true,
+    // `NaN <= 0` is false, and `NaN > MAX_ANNOUNCED_QUIET_MS` is false — so it
+    // would flow out as a grant, and `setTimeout(fn, NaN)` coerces to 1ms.
+    // Every held result for the life of that query would force-settle at once,
+    // discarding all background work: a full regression of #1852 out of the
+    // guard written to prevent it.
+    const now = 1_700_000_000_000;
+    expect(announcedQuietUntil(rateLimitEvent('rejected', Number.NaN), now)).toBeUndefined();
+    expect(announcedQuietUntil(apiRetry(Number.NaN), now)).toBeUndefined();
+    // Infinities are refused rather than clamped: a seven-day allowance built
+    // out of a value that is plainly garbage is the "unbounded in practice"
+    // hazard, and the tier still applies when nothing is granted.
+    expect(
+      announcedQuietUntil(rateLimitEvent('rejected', Number.POSITIVE_INFINITY), now)
+    ).toBeUndefined();
+    expect(
+      announcedQuietUntil(rateLimitEvent('rejected', Number.NEGATIVE_INFINITY), now)
+    ).toBeUndefined();
+    // A non-numeric delay off the wire is refused the same way.
+    expect(announcedQuietUntil(apiRetry('60000'), now)).toBeUndefined();
+    // The healthy shapes still grant.
+    expect(announcedQuietUntil(apiRetry(60_000), now)).toEqual({
+      source: 'api_retry',
+      until: now + 60_000,
+    });
+  });
+
+  it('force-settles on the plain tier when the announced reset is unparseable', async () => {
+    await withFakeTimers(async () => {
+      // The behavioural half of the guard above: a NaN grant used to poison the
+      // allowance permanently (`Math.max` is absorbing), so the turn settled on
+      // the next tick instead of on its budget.
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield rateLimitEvent('rejected', Number.NaN);
+        await never();
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_MS - 1_000);
+      expect(run.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_010);
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
+  });
+
+  it('keeps a still-valid compaction allowance when a rate limit clears', async () => {
+    await withFakeTimers(async () => {
+      // The allowance used to be one scalar, so clearing the rate limit zeroed
+      // it — discarding a compaction grant that had nothing to do with the
+      // limit and was still in force.
+      const resetsAt = Math.floor(Date.now() / 1_000) + 5 * 60 * 60;
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield taskNotification('task-1'); // nothing outstanding: the 2m tier
+        yield statusMessage('compacting');
+        yield rateLimitEvent('rejected', resetsAt);
+        yield rateLimitEvent('allowed');
+        await never();
+      });
+      const run = drain(query);
+
+      // Well past the bare grace: without the surviving compaction grant this
+      // turn would already have been force-settled mid-compaction.
+      await vi.advanceTimersByTimeAsync(GRACE_MS + 60_000);
+      expect(run.settled()).toBe(false);
+      // And it is still bounded — by the compaction allowance, not by the
+      // five-hour reset the cleared limit had bought.
+      await vi.advanceTimersByTimeAsync(GRACE_MS + 11 * 60_000);
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
+  });
+
+  it('retires the announced waits once the model is producing again', async () => {
+    await withFakeTimers(async () => {
+      // A grant outlives the wait it was made for unless something drops it. A
+      // resumed top-level turn is proof the SDK is not sitting out a limit
+      // reset, a retry backoff or a compaction, so it drops all of them —
+      // otherwise the allowance would still be inflating the budget of the
+      // *next* held turn.
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield statusMessage('requesting');
+        yield sdkResult('parent-result');
+        yield assistantMessage('resumed');
+        yield sdkResult('second-result');
+        yield taskNotification('task-1'); // nothing outstanding: the 2m tier
+        await never();
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(GRACE_MS - 1_000);
+      expect(run.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_010);
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
+  });
+
+  it('settles the turn even if the wedged query throws out of close()', async () => {
+    await withFakeTimers(async () => {
+      // Teardown is the last thing a force-settled turn does; an SDK that
+      // throws from `close()` (or does not have it) must not turn an
+      // already-settled turn into a crash out of the `finally` block.
+      const { query } = wedgedQuery();
+      query.close.mockImplementation(() => {
+        throw new Error('transport already gone');
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
+      await expect(run.done).resolves.toBeUndefined();
+      expect(run.events.at(-1)?.type).toBe('result');
+    });
+  });
+
+  it('drops the busy allowance as soon as the SDK reports it is no longer busy', async () => {
+    await withFakeTimers(async () => {
+      // `requesting` grants a ten-minute allowance, and one almost always
+      // precedes the parent turn's final result — so leaving it standing would
+      // put a ~10 minute tail on the first bounded read and make the configured
+      // grace non-binding. `status: null` is the SDK's own end-of-busy signal.
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield taskNotification('task-1');
+        yield statusMessage('requesting');
+        yield statusMessage(null);
+        await never();
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(GRACE_MS - 1_000);
+      expect(run.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_010);
+      // On the configured grace, not on the grace plus the retired allowance.
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
   });
 
   it('emits one completion per task when a launch site retires several at once', async () => {
@@ -684,26 +877,32 @@ describe('ClaudePromptService background task query lifetime', () => {
     });
   });
 
-  it('closes the query on every exit and cancels a wedged one', async () => {
+  it('closes the query on every exit and tears down a wedged one', async () => {
     await withFakeTimers(async () => {
-      const wedged = fakeQuery(async function* () {
-        yield taskStarted('task-1');
-        yield sdkResult('parent-result');
-        await never();
-      });
+      const { query: wedged, teardown } = wedgedQuery();
       const wedgedRun = drain(wedged);
       await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
       await wedgedRun.done;
-      // A pending read means `return()` can never run the SDK's own teardown,
-      // so the wedged path has to cancel rather than only abandon.
+      // Flush the microtasks the teardown resumes the generator on.
+      await vi.advanceTimersByTimeAsync(0);
+
+      // `interrupt()` is attempted, and here — as in production on this path —
+      // it never resolves. If it were the thing being relied on, the read would
+      // stay pending, `return()` would queue behind it forever, and the SDK
+      // generator's `finally` would never run.
       expect(wedged.interrupt).toHaveBeenCalledTimes(1);
+      expect(wedged.close).toHaveBeenCalledTimes(1);
+      expect(teardown.ran).toBe(true);
       expect(wedged.closed).toHaveBeenCalledTimes(1);
 
       const healthy = fakeQuery([sdkResult('only-result')]);
       const healthyRun = drain(healthy);
       await healthyRun.done;
+      // A query that ended on its own is closed by `return()` alone: nothing is
+      // wedged, so neither the interrupt nor the forced close is warranted.
       expect(healthy.closed).toHaveBeenCalledTimes(1);
       expect(healthy.interrupt).not.toHaveBeenCalled();
+      expect(healthy.close).not.toHaveBeenCalled();
     });
   });
 

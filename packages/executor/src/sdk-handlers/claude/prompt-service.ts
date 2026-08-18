@@ -94,11 +94,31 @@ export const MAX_ANNOUNCED_QUIET_MS = 7 * 24 * 60 * 60 * 1_000;
  * via `system/status`. Both are the SDK working, not waiting on us, and both
  * emit nothing until they finish — auto-compaction of a near-full context can
  * outlast the settled grace on its own.
+ *
+ * This is a ceiling, not the expected duration: `status: null` is the SDK's own
+ * "no longer busy" signal and drops the grant as soon as it arrives, so the
+ * extension normally tracks the announced window rather than this bound.
  */
 const SDK_BUSY_STATUS_QUIET_MS = 10 * 60_000;
 
 /**
- * How long the SDK has told us it intends to be quiet, as an absolute epoch ms.
+ * Independently-cleared sources of an announced silence.
+ *
+ * Kept apart rather than pooled into one `Math.max` scalar because they begin
+ * and end independently. Pooled, clearing a rate limit discarded a still-valid
+ * retry backoff or compaction grant, while those two — having no `Math.max`
+ * clear of their own — were never dropped at all.
+ */
+export type AnnouncedQuietSource = 'rate_limit' | 'api_retry' | 'sdk_busy';
+
+export interface AnnouncedQuiet {
+  source: AnnouncedQuietSource;
+  /** Absolute epoch ms the SDK has announced it will be silent until. */
+  until: number;
+}
+
+/**
+ * How long the SDK has told us it intends to be quiet, and on whose account.
  *
  * A rejected rate limit, an API retry, and a compaction are all waits the SDK
  * announces once and then sits out in silence — `SDKRateLimitEvent` is
@@ -109,9 +129,55 @@ const SDK_BUSY_STATUS_QUIET_MS = 10 * 60_000;
  * going to resume on its own, and a five-hour limit reset would do it every
  * time.
  */
-export function announcedQuietUntil(message: SDKMessage, now: number): number | undefined {
-  const target = announcedQuietTarget(message, now);
-  if (target === undefined) return undefined;
+export function announcedQuietUntil(message: SDKMessage, now: number): AnnouncedQuiet | undefined {
+  let source: AnnouncedQuietSource;
+  let target: number;
+
+  if (message.type === 'rate_limit_event') {
+    const info = message.rate_limit_info;
+    if (info?.status !== 'rejected') return undefined;
+    // resetsAt is seconds since epoch. Finite, not merely `typeof number`:
+    // `NaN` is a number and survives every later guard — `NaN <= 0` and
+    // `NaN > MAX_ANNOUNCED_QUIET_MS` are both false — after which `Math.max`
+    // is absorbing, so one unparseable timestamp would pin the allowance at
+    // `NaN` for the life of the query, and `setTimeout(fn, NaN)` coerces to
+    // 1ms. That force-settles every held result immediately: the exact
+    // regression this extension exists to prevent, from its own guard.
+    if (typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt)) {
+      source = 'rate_limit';
+      target = info.resetsAt * 1_000;
+    } else {
+      // A rejection we cannot date is the one remaining false-kill window: the
+      // budget still applies, so say so where a force-settle can be traced to it.
+      console.warn(
+        `⚠️  Rate limit rejected with no usable resetsAt (type: ${info.rateLimitType ?? 'unknown'}, ` +
+          `resetsAt: ${String(info.resetsAt)}); a held turn stays bound by the background-task silence budget`
+      );
+      return undefined;
+    }
+  } else if (message.type === 'system' && message.subtype === 'api_retry') {
+    // Same finiteness reasoning as `resetsAt` above: this value is parsed off
+    // the wire, and `NaN` would invert the budget rather than extend it.
+    if (typeof message.retry_delay_ms !== 'number' || !Number.isFinite(message.retry_delay_ms)) {
+      console.warn(
+        `⚠️  system/api_retry carried an unusable retry_delay_ms (${String(message.retry_delay_ms)}); ` +
+          `granting no quiet allowance for it`
+      );
+      return undefined;
+    }
+    source = 'api_retry';
+    target = now + message.retry_delay_ms;
+  } else if (
+    message.type === 'system' &&
+    message.subtype === 'status' &&
+    (message.status === 'compacting' || message.status === 'requesting')
+  ) {
+    source = 'sdk_busy';
+    target = now + SDK_BUSY_STATUS_QUIET_MS;
+  } else {
+    return undefined;
+  }
+
   const requested = target - now;
   if (requested <= 0) return undefined;
   if (requested > MAX_ANNOUNCED_QUIET_MS) {
@@ -119,36 +185,42 @@ export function announcedQuietUntil(message: SDKMessage, now: number): number | 
       `⚠️  SDK announced an implausible ${requested}ms quiet period on ${message.type}; ` +
         `clamping to ${MAX_ANNOUNCED_QUIET_MS}ms (check the timestamp units)`
     );
-    return now + MAX_ANNOUNCED_QUIET_MS;
+    return { source, until: now + MAX_ANNOUNCED_QUIET_MS };
   }
-  return target;
+  return { source, until: target };
 }
 
-function announcedQuietTarget(message: SDKMessage, now: number): number | undefined {
-  if (message.type === 'rate_limit_event') {
-    const info = message.rate_limit_info;
-    if (info?.status !== 'rejected') return undefined;
-    // resetsAt is seconds since epoch.
-    if (typeof info.resetsAt === 'number') return info.resetsAt * 1_000;
-    // A rejection we cannot date is the one remaining false-kill window: the
-    // budget still applies, so say so where a force-settle can be traced to it.
+/**
+ * Furthest-out live grant, as milliseconds from `now`.
+ *
+ * Every stored `until` is finite and in the future when granted, so no
+ * unparseable value can reach this and poison the maximum; an expired grant
+ * simply contributes nothing.
+ */
+function announcedQuietRemainingMs(
+  grants: ReadonlyMap<AnnouncedQuietSource, number>,
+  now: number
+): number {
+  let remaining = 0;
+  for (const until of grants.values()) remaining = Math.max(remaining, until - now);
+  return Math.max(0, remaining);
+}
+
+/**
+ * `close()`, best-effort.
+ *
+ * This is the last thing a force-settled turn does, so an SDK that lacks the
+ * method or throws from it must not replace an already-settled turn with a
+ * crash out of the `finally` block.
+ */
+function closeQuietly(query: InterruptibleQuery): void {
+  try {
+    query.close();
+  } catch (error) {
     console.warn(
-      `⚠️  Rate limit rejected with no resetsAt (type: ${info.rateLimitType ?? 'unknown'}); ` +
-        `a held turn stays bound by the background-task silence budget`
+      `⚠️  query.close() failed during force-settle teardown: ${error instanceof Error ? error.message : String(error)}`
     );
-    return undefined;
   }
-  if (message.type === 'system' && message.subtype === 'api_retry') {
-    return now + message.retry_delay_ms;
-  }
-  if (
-    message.type === 'system' &&
-    message.subtype === 'status' &&
-    (message.status === 'compacting' || message.status === 'requesting')
-  ) {
-    return now + SDK_BUSY_STATUS_QUIET_MS;
-  }
-  return undefined;
 }
 
 export class ClaudePromptService {
@@ -209,17 +281,21 @@ export class ClaudePromptService {
    *   and the query sits on zero work. All that legitimately remains here is
    *   local scheduling plus the first message of the next turn.
    *
-   * A wait the SDK announced (rate-limit reset, API retry backoff) is added on
-   * top of whichever tier applies, so an expected silence is never mistaken for
-   * a wedge. A rejected rate limit with no `resetsAt` gets no extension — the
-   * tier still applies — which is the one remaining false-kill window.
+   * A wait the SDK announced (rate-limit reset, API retry backoff, compaction)
+   * is added on top of whichever tier applies, so an expected silence is never
+   * mistaken for a wedge — the longest grant still live wins. A rejected rate
+   * limit with no `resetsAt` gets no extension — the tier still applies — which
+   * is the one remaining false-kill window.
    */
-  private nextReadTimeoutMs(activeTaskCount: number, quietUntil: number): number {
+  private nextReadTimeoutMs(
+    activeTaskCount: number,
+    announcedQuiet: ReadonlyMap<AnnouncedQuietSource, number>
+  ): number {
     const tierMs =
       activeTaskCount > 0
         ? this.backgroundTasksConfig.silence_timeout_ms
         : this.backgroundTasksConfig.settled_grace_ms;
-    return tierMs + Math.max(0, quietUntil - Date.now());
+    return tierMs + announcedQuietRemainingMs(announcedQuiet, Date.now());
   }
 
   /**
@@ -412,8 +488,9 @@ If you continue to see authentication errors, please contact your Agor administr
     // resumed. Reads are bounded exclusively inside that window: it is the one
     // state in which nothing is left to wait for but background work.
     let turnHeldForBackgroundTasks = false;
-    // Absolute epoch ms the SDK has announced it will be silent until.
-    let quietUntil = 0;
+    // Absolute epoch ms each announced wait runs until, kept per source so that
+    // one of them clearing never discards another that is still in force.
+    const announcedQuiet = new Map<AnnouncedQuietSource, number>();
     // Pulse detail while the session is blocked on a rate limit, so the pulse
     // says "blocked", not "hung", and so the pause gets its matching resume.
     let rateLimitDetail: string | undefined;
@@ -430,7 +507,7 @@ If you continue to see authentication errors, please contact your Agor administr
         if (rateLimitDetail !== undefined) onActivity?.('waiting', rateLimitDetail);
 
         const timeoutMs = turnHeldForBackgroundTasks
-          ? this.nextReadTimeoutMs(backgroundTasks.activeTaskCount, quietUntil)
+          ? this.nextReadTimeoutMs(backgroundTasks.activeTaskCount, announcedQuiet)
           : undefined;
         const next =
           timeoutMs === undefined
@@ -450,10 +527,10 @@ If you continue to see authentication errors, please contact your Agor administr
           // deferring, settle what the turn produced, and let the SDK close.
           clearBackgroundTaskActivity();
           queryIsWedged = true;
-          // Actively cancel rather than just abandoning: the pending read means
-          // `iterator.return()` queues behind it and never runs the generator's
-          // teardown, and `releaseInput()` only closes stdin. Not awaited — a
-          // wedged subprocess may never answer this control request either.
+          // Ask nicely first, and never wait on the answer: `interrupt()` is a
+          // control request that round-trips over the transport that just went
+          // silent, so on this path it may well never resolve. The teardown
+          // that actually ends the subprocess is `close()`, in the `finally`.
           void Promise.resolve(result.interrupt()).catch(() => {});
           yield* this.finalizeTurn(result);
           if (sdkResults.length > 0) {
@@ -476,8 +553,23 @@ If you continue to see authentication errors, please contact your Agor administr
         // Without this, a resumed turn that thinks for a long time or makes one
         // long silent tool call would be force-settled mid-flight.
         const modelResumed = resumesTopLevelTurn(msg);
-        if (modelResumed) turnHeldForBackgroundTasks = false;
-        quietUntil = Math.max(quietUntil, announcedQuietUntil(msg, Date.now()) ?? 0);
+        if (modelResumed) {
+          turnHeldForBackgroundTasks = false;
+          // The model is producing again, so nothing the SDK announced it was
+          // waiting on is still in force. Dropping the grants here is what
+          // stops one from outliving its wait into a later held turn.
+          announcedQuiet.clear();
+        }
+        // `status: null` is the SDK's own "no longer busy" signal, and it is
+        // what keeps the busy allowance honest. A `requesting` frame almost
+        // always precedes the final result of a turn, so without this clear the
+        // first bounded read after a held result would carry most of a
+        // ten-minute tail — silently making the configured grace non-binding.
+        if (msg.type === 'system' && msg.subtype === 'status' && msg.status === null) {
+          announcedQuiet.delete('sdk_busy');
+        }
+        const announced = announcedQuietUntil(msg, Date.now());
+        if (announced) announcedQuiet.set(announced.source, announced.until);
 
         reportSdkActivity(onActivity, 'claude-code', msg.type);
         const rateLimit = msg.type === 'rate_limit_event' ? msg.rate_limit_info : undefined;
@@ -492,12 +584,13 @@ If you continue to see authentication errors, please contact your Agor administr
           // watchdog until something explicitly lifts it.
           rateLimitDetail = undefined;
           onActivity?.('sdk_started', ExecutorPulseDetail.RATE_LIMIT_RESOLVED);
-          // Drop the allowance the block bought. It is monotonic and decays only
-          // by wall clock, so a `seven_day` reset would otherwise leave every
-          // later read in this query bounded by "tier + six days" — unbounded in
-          // any practical sense, which is the hang this whole path exists to
-          // prevent.
-          quietUntil = 0;
+          // Drop the allowance this block bought, and only it. The grant decays
+          // only by wall clock, so a `seven_day` reset would otherwise leave
+          // every later read in this query bounded by "tier + six days" —
+          // unbounded in any practical sense, which is the hang this whole path
+          // exists to prevent. A compaction or retry backoff running alongside
+          // keeps its own grant.
+          announcedQuiet.delete('rate_limit');
         }
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
@@ -625,10 +718,19 @@ If you continue to see authentication errors, please contact your Agor administr
       if (rateLimitDetail !== undefined) {
         onActivity?.('sdk_started', ExecutorPulseDetail.RATE_LIMIT_RESOLVED);
       }
+      // A force-settled query is presumed wedged, and `iterator.return()` alone
+      // cannot recover it: the read that timed out is still pending, so the
+      // return queues behind it and the SDK generator's own `finally` never
+      // runs. `close()` is the one teardown that does not round-trip through
+      // that transport — it aborts the spawn, ends stdin and drops the abort
+      // handler locally — so it is what actually stops the subprocess, and the
+      // background agents still mutating the worktree behind it.
+      if (queryIsWedged) closeQuietly(result);
       // `for await` used to close the query on break or on an abandoned
       // consumer; keep doing that explicitly now that iteration is manual, so
-      // the subprocess is still torn down. A force-settled query already has a
-      // read in flight that will never resolve, so its close is not awaited.
+      // the subprocess is still torn down. Not awaited on the wedged path: the
+      // close above should unstick it, but a turn that has already settled must
+      // not be made to wait on a query that has stopped answering.
       const closed = Promise.resolve(iterator.return?.(undefined)).catch(() => {});
       if (!queryIsWedged) await closed;
     }

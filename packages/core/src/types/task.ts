@@ -72,8 +72,10 @@ export const ExecutorPulseDetail = {
 export function isRateLimitBlockPulse(
   pulse?: { kind: ExecutorPulseKind; detail?: string } | null
 ): boolean {
-  if (pulse?.kind !== ExecutorPulseKind.WAITING) return false;
-  return pulse.detail?.startsWith(ExecutorPulseDetail.RATE_LIMIT_PREFIX) ?? false;
+  return (
+    pulse?.kind === ExecutorPulseKind.WAITING &&
+    (pulse.detail?.startsWith(ExecutorPulseDetail.RATE_LIMIT_PREFIX) ?? false)
+  );
 }
 
 export interface RuntimeTelemetryInput {

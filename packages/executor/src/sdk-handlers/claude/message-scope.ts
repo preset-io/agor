@@ -38,8 +38,3 @@ export function classifyTurnScope(message: SDKMessage): TurnScope {
   }
   return 'unknown';
 }
-
-/** Test seam: the unknown-shape warning is deliberately once per process. */
-export function resetTurnScopeWarningForTests(): void {
-  warnedUnknownScope = false;
-}

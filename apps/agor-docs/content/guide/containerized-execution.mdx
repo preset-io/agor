@@ -914,11 +914,15 @@ not specific to containerized or delegated runtimes.
 
 Both bound only that held-open window, and only while the stream is quiet. Any
 SDK message re-arms them, a resumed top-level turn lifts them entirely until the
-next held result, and a wait the SDK announces — a rate-limit reset, an API
-retry backoff, a compaction — extends them by the declared duration. They are
-not a model-thinking timeout: a turn that has resumed is never force-settled,
-however long it then runs. Raise `silence_timeout_ms` if you run background
-agents that stay quiet on the parent stream for longer than half an hour.
+next held result, and a wait the SDK announces extends them for as long as it
+said it would be silent. Each announced wait is tracked separately and dropped
+when that particular wait ends, so the configured tier is what applies the rest
+of the time: a rate-limit reset or an API retry backoff extends by the delay the
+SDK reported, and a compaction or in-flight request extends by up to ten minutes
+but is dropped the moment the SDK reports it is no longer busy. They are not a
+model-thinking timeout: a turn that has resumed is never force-settled, however
+long it then runs. Raise `silence_timeout_ms` if you run background agents that
+stay quiet on the parent stream for longer than half an hour.
 
 When a bound does expire, Agor settles the turn on the accumulated parent
 result: the Task completes rather than fails, because the model had already
