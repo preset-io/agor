@@ -76,6 +76,17 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  it('uses an Ant Design button for the unconfigured environment action', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        repo={{ repo_id: 'repo-unconfigured', slug: 'preset-io/unconfigured' } as Repo}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Configure environment' })).toHaveTextContent('env');
+  });
+
   it('shows a pointer only when the environment label links to a running app', () => {
     const { rerender } = render(
       <EnvironmentPill
