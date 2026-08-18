@@ -48,6 +48,9 @@ multi_tenancy:
   mode: static
   static_tenant_id: default
 daemon:
+  # Stable identity shared by both replicas in the checked-in disposable
+  # Compose deployment. Production deployments must supply their own UUID.
+  deployment_id: 019c83b2-1f53-7e51-8e04-1f2df20d25de
   host: 0.0.0.0
   port: 3030
   trust_proxy_hops: 1

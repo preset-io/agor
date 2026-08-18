@@ -45,6 +45,7 @@ describe('TasksService executor termination report', () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     Reflect.set(service, 'taskRepo', { recordExecutorQuiescence });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'db', {});
 
     await expect(
       service.reportTerminationComplete(
@@ -74,6 +75,7 @@ describe('TasksService executor termination report', () => {
         taskId: task.task_id,
         cause: 'user_stop',
         params: expect.objectContaining({ provider: undefined }),
+        withTenantDatabase: expect.any(Function),
       })
     );
   });

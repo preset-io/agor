@@ -1383,6 +1383,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // transaction commits and outside its ALS database scope; the durable
     // quiescence timestamp makes the deferred recovery restart/retry safe.
     const coordinatorParams = { ...(params ?? {}), provider: undefined };
+    const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
     deferWithTenantContext(
       params,
       () => {
@@ -1396,6 +1397,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           cause: terminationRequest.cause,
           errorMessage: terminationRequest.error_message ?? 'Executor stopped cooperatively.',
           params: coordinatorParams,
+          withTenantDatabase: (work) => {
+            if (!terminationTenantId) {
+              throw new Error('Missing tenant context for executor termination settlement');
+            }
+            return runWithTenantDatabaseScope(this.db, terminationTenantId, () => work());
+          },
         }).then(() => undefined);
       },
       (error) =>

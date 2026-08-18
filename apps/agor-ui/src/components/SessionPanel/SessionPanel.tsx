@@ -1115,7 +1115,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     setStopRequestInFlight(true);
     try {
-      await client.service(`sessions/${session.session_id}/stop`).create({});
+      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
+        success?: boolean;
+        reason?: string;
+      };
+      if (result.success === false) {
+        showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
+      }
     } catch (error) {
       console.error('Failed to stop execution:', error);
       showError('Failed to stop execution. You can try again.');

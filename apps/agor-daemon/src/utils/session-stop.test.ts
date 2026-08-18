@@ -149,7 +149,11 @@ describe('stopSessionPreserveQueue', () => {
         throw new Error(`unexpected service ${name}`);
       },
     };
-    const requestTermination = vi.fn(async () => ({ status: 'terminal', task: runningTask }));
+    const withTenantDatabase = vi.fn(async (work: () => Promise<unknown>) => work());
+    const requestTermination = vi.fn(async (input) => {
+      await input.withTenantDatabase(async () => 'scoped');
+      return { status: 'terminal', task: runningTask };
+    });
     const params = { provider: 'rest' };
 
     const result = await stopSessionPreserveQueue(
@@ -159,6 +163,7 @@ describe('stopSessionPreserveQueue', () => {
         findActiveTasks: findActiveTasks as never,
         sessionsService: sessionsService as never,
         requestTermination: requestTermination as never,
+        withTenantDatabase,
       },
       sessionId as never,
       params,
@@ -172,8 +177,13 @@ describe('stopSessionPreserveQueue', () => {
       queuedTasksPreserved: 1,
     });
     expect(requestTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: runningTask.task_id, cause: 'user_stop' })
+      expect.objectContaining({
+        taskId: runningTask.task_id,
+        cause: 'user_stop',
+        withTenantDatabase,
+      })
     );
+    expect(withTenantDatabase).toHaveBeenCalledOnce();
   });
 
   it('stops an awaiting_input task when the session is awaiting input', async () => {

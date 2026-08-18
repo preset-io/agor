@@ -147,6 +147,68 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     expect(onOpenTerminal.mock.calls[0][0]).not.toContain(branch.path);
   });
 
+  it('surfaces an initial Stop request failure as retryable', async () => {
+    reactive.tasks = [
+      {
+        task_id: '018f0000-0000-7000-8000-000000000010',
+        session_id: session.session_id,
+        status: 'running',
+      } as Task,
+    ];
+    const create = vi.fn().mockRejectedValue(new Error('database scope missing'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderPanel({
+      client: {
+        service: () => ({
+          create,
+          find: vi.fn().mockResolvedValue({ data: [] }),
+          on: vi.fn(),
+          off: vi.fn(),
+        }),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({}));
+    expect(await screen.findByText('Failed to stop execution. You can try again.')).toBeVisible();
+  });
+
+  it('distinguishes accepted-but-pending Stop from an initial request failure', async () => {
+    reactive.tasks = [
+      {
+        task_id: '018f0000-0000-7000-8000-000000000011',
+        session_id: session.session_id,
+        status: 'running',
+      } as Task,
+    ];
+    const create = vi.fn().mockResolvedValue({
+      success: false,
+      reason: 'Waiting for the daemon that owns the local executor process handle.',
+    });
+    renderPanel({
+      client: {
+        service: () => ({
+          create,
+          find: vi.fn().mockResolvedValue({ data: [] }),
+          on: vi.fn(),
+          off: vi.fn(),
+        }),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
+
+    expect(
+      await screen.findByText('Waiting for the daemon that owns the local executor process handle.')
+    ).toBeVisible();
+    expect(
+      screen.queryByText('Failed to stop execution. You can try again.')
+    ).not.toBeInTheDocument();
+  });
+
   it('surfaces force-fail errors', async () => {
     reactive.tasks = [
       {
