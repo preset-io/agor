@@ -39,6 +39,7 @@ import type {
   CreateMCPServerInput,
   MCPAuth,
   MCPCatalogConnectData,
+  MCPCatalogConnectErrorData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
@@ -345,7 +346,12 @@ async function resolveAuthRequirement(
       throw new BadRequest(
         `${catalogDisplayName(entry)} is not asking for an API key${
           probed === 'oauth' ? '; it signs you in with your own account' : ''
-        }. Connect it again without one.`
+        }. Connect it again without one.`,
+        // The client asked with a key because the entry said to. Telling it
+        // what the endpoint actually wants is what lets the form drop the
+        // field and the user retry, rather than being held at a button that
+        // submits something the daemon will refuse again.
+        { api_key_requirement: 'not_accepted' } satisfies MCPCatalogConnectErrorData
       );
     }
     return probed === 'none' ? { type: 'none' } : catalogOAuthConfig(entry);
@@ -388,13 +394,25 @@ async function resolveApiKeyAuth(
 ): Promise<MCPAuth> {
   const name = catalogDisplayName(entry);
   if (apiKey === undefined) {
-    throw new BadRequest(`${name} needs an API key; paste one to connect it`);
+    throw new BadRequest(
+      `${name} needs an API key; paste one to connect it`,
+      // The mirror of the `not_accepted` case: the client asked without a key
+      // because the entry said none was needed, and the endpoint disagreed.
+      // Without this the drawer has no field to offer and the sentence above is
+      // an instruction the user cannot follow.
+      { api_key_requirement: 'required' } satisfies MCPCatalogConnectErrorData
+    );
   }
 
   const verdict = await probeRemoteApiKey(entry.remote_url, apiKey);
   if (verdict === 'accepted') return { type: 'bearer', token: apiKey };
   if (verdict === 'rejected') {
-    throw new BadRequest(`${name} did not accept that API key; check it and try again`);
+    // Still `required` — the endpoint wants a key, this one was just wrong. A
+    // client that has already revealed the field keeps it revealed, which is
+    // what lets a typo be corrected in place.
+    throw new BadRequest(`${name} did not accept that API key; check it and try again`, {
+      api_key_requirement: 'required',
+    } satisfies MCPCatalogConnectErrorData);
   }
   throw new BadRequest(
     `${name} did not answer as an MCP server when that API key was tried, so it was not connected`

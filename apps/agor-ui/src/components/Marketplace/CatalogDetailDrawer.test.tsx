@@ -9,7 +9,7 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogEntry } from '@agor/core/types';
+import type { Branch, MCPCatalogApiKeyRequirement, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -144,7 +144,11 @@ const SENTRY = {
 
 function renderWithConnect(entry: MCPCatalogEntry) {
   const onConnect = vi.fn();
-  const props = (shown: MCPCatalogEntry, open = true) => ({
+  const props = (
+    shown: MCPCatalogEntry,
+    open = true,
+    apiKeyRequirement: MCPCatalogApiKeyRequirement | null = null
+  ) => ({
     entry: shown,
     open,
     onClose: vi.fn(),
@@ -154,6 +158,7 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     defaultBranchId: 'branch-1',
     connecting: false,
     connectError: null,
+    apiKeyRequirement,
     onConnect,
   });
   const view = render(<CatalogDetailDrawer {...props(entry)} />);
@@ -164,6 +169,9 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     // closing it is a prop change rather than an unmount — which is exactly why
     // state on it outlives the interaction unless something clears it.
     setOpen: (open: boolean) => view.rerender(<CatalogDetailDrawer {...props(entry, open)} />),
+    /** What `CatalogTab` does after a refusal that named a requirement. */
+    answerFromEndpoint: (requirement: MCPCatalogApiKeyRequirement) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
   };
 }
 
@@ -258,6 +266,70 @@ describe('CatalogDetailDrawer API key', () => {
 
     const link = screen.getByRole('link', { name: /Where to find it/ });
     expect(link).toHaveAttribute('href', DATADOG.website_url);
+  });
+
+  it('reveals the field when the endpoint asks for a key the entry did not', () => {
+    // `curated.yaml` says `none`; the vendor has since put the endpoint behind
+    // an account. Before this, the daemon answered "paste one to connect" and
+    // the drawer had nowhere to paste — a dead end reachable from nothing worse
+    // than an out-of-date file.
+    const { answerFromEndpoint } = renderWithConnect(DEEPWIKI);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(keyField()).toBeNull();
+
+    answerFromEndpoint('required');
+
+    expect(keyField()).toBeVisible();
+    expect(connectButton()).toBeDisabled();
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('sends the key on the retry the endpoint asked for', () => {
+    // The whole point of one extra round trip: the second attempt carries what
+    // the first was refused for lacking.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(DEEPWIKI);
+    fireEvent.click(screen.getByRole('checkbox'));
+    answerFromEndpoint('required');
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'fake-key-1111' }));
+  });
+
+  it('drops the requirement when the endpoint says it wants no key', () => {
+    // The other direction: the entry says `credentials`, the vendor has opened
+    // the endpoint up, and the daemon refuses every keyed request. The button
+    // was unreachable because it demanded a key that guaranteed refusal.
+    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    answerFromEndpoint('not_accepted');
+
+    expect(keyField()).toBeNull();
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('does not send — or keep — a key the endpoint refused to take', () => {
+    // Hiding the field while still holding what was typed in it would be the
+    // retention bug one state further along, and submitting it would repeat the
+    // refusal the retry exists to escape.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ apiKey: expect.anything() })
+    );
+    // And the discarded key is not waiting in the field if the requirement
+    // flips back.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
   });
 
   it('offers no key field for an entry that does not need one', () => {

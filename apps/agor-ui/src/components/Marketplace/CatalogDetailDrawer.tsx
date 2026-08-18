@@ -8,7 +8,12 @@
  * is a gate rather than a panel.
  */
 
-import type { AgenticToolName, Branch, MCPCatalogEntry } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  Branch,
+  MCPCatalogApiKeyRequirement,
+  MCPCatalogEntry,
+} from '@agor/core/types';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -52,6 +57,18 @@ export interface CatalogDetailDrawerProps {
   connecting: boolean;
   connectError: string | null;
   /**
+   * What the live endpoint said it wanted, if a previous connect was refused
+   * over the API key. Overrides the entry's `auth_type` for deciding whether
+   * the field is shown and required.
+   *
+   * The entry is a record of what was true when `curated.yaml` was last edited;
+   * this is what the endpoint answered seconds ago. Where they disagree the
+   * endpoint is right, and the form has to follow it — otherwise a stale entry
+   * leaves the user holding a button that submits something the daemon will
+   * refuse every time.
+   */
+  apiKeyRequirement?: MCPCatalogApiKeyRequirement | null;
+  /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
    *
@@ -78,6 +95,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   defaultBranchId,
   connecting,
   connectError,
+  apiKeyRequirement,
   onConnect,
 }) => {
   const { token } = theme.useToken();
@@ -125,7 +143,15 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   // endpoint. Pairing it with the entry it was typed for means the field is
   // empty for any entry it was not.
   const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
-  const needsApiKey = connect?.readiness === 'api-key';
+
+  // The endpoint's answer beats the catalog file's claim. `auth_type` decides
+  // what the card promises before anything is dialled, which is all it can do;
+  // once a connect has actually been refused, the daemon has told us what the
+  // server asked for at that moment, and that is the thing to build the form
+  // from. Absent — the ordinary case, including every first attempt — the entry
+  // decides as before.
+  const needsApiKey =
+    apiKeyRequirement != null ? apiKeyRequirement === 'required' : connect?.readiness === 'api-key';
   const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
   const apiKey = keyField.trim();
 
@@ -143,10 +169,15 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   // A successful connect closes the drawer, so it clears here too rather than
   // needing its own path. A failed one deliberately does not: the drawer stays
   // open, and a user who mistyped one character should not have to find the key
-  // again to correct it.
+  // again to correct it — unless the endpoint has just said it wants no key at
+  // all, which ends the need for that particular secret as surely as closing
+  // the drawer does. Hiding the field while still holding what was typed in it
+  // would be the retention bug again, one state further along.
   useEffect(() => {
-    setPastedKey((held) => (open && held !== null && held.entryId === entryId ? held : null));
-  }, [open, entryId]);
+    setPastedKey((held) =>
+      open && needsApiKey && held !== null && held.entryId === entryId ? held : null
+    );
+  }, [open, entryId, needsApiKey]);
 
   const canConnect = Boolean(
     !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || apiKey)

@@ -6,7 +6,13 @@
  * renders one page at a time; only the round trip per page is gone.
  */
 
-import type { AgenticToolName, MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  MCPCatalogApiKeyRequirement,
+  MCPCatalogCategory,
+  MCPCatalogEntry,
+} from '@agor/core/types';
+import { readApiKeyRequirement } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
@@ -100,6 +106,11 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // What the live endpoint said it wanted, when a refusal contradicted the
+  // catalog entry the drawer built its form from. Held here rather than in the
+  // drawer because it arrives with the connect response, which is this
+  // component's to make.
+  const [keyRequirement, setKeyRequirement] = useState<MCPCatalogApiKeyRequirement | null>(null);
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
@@ -137,10 +148,13 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
 
   const openEntry = useCallback((entry: MCPCatalogEntry) => {
     setConnectError(null);
+    // A requirement learned about one entry says nothing about the next.
+    setKeyRequirement(null);
     setSelected(entry);
   }, []);
 
   const closeDrawer = useCallback(() => {
+    setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);
   }, []);
@@ -201,6 +215,14 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
+        // The catalog file is presentational; the endpoint decides. When those
+        // disagree the daemon says so on the refusal, and taking it here is
+        // what turns a dead end — a form demanding a key the endpoint no longer
+        // wants, or offering none where it now does — into one more attempt.
+        // Left alone when the refusal carries no requirement, so an unrelated
+        // failure does not reshape the form.
+        const requirement = readApiKeyRequirement(err);
+        if (requirement) setKeyRequirement(requirement);
       } finally {
         setConnecting(false);
       }
@@ -293,6 +315,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         defaultBranchId={getLastConnectBranchId()}
         connecting={connecting}
         connectError={connectError}
+        apiKeyRequirement={keyRequirement}
         onConnect={handleConnect}
       />
     </Flex>

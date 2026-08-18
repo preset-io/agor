@@ -6,6 +6,7 @@
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPAuth, MCPCatalogEntry, UserID } from '@agor/core/types';
+import { readApiKeyRequirement } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 
@@ -1412,6 +1413,65 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
       message
     );
     expect(created.mcpServers).toHaveLength(0);
+  });
+
+  it('tells a client refused for want of a key that the endpoint wants one', async () => {
+    // `logProbeDisagreement` already records a stale `auth_type`, but a warn
+    // line is addressed to whoever maintains `curated.yaml`. This is the same
+    // fact addressed to the person at the form: without it the drawer built
+    // from a stale `none` has no field to offer and the message above is an
+    // instruction the user cannot follow.
+    const { app } = buildApp({ ...KEY_ENTRY, auth_type: 'none' });
+
+    const error = await createMCPCatalogConnectService(app)
+      .create(request, params)
+      .catch((caught: Error) => caught);
+
+    expect(readApiKeyRequirement(error)).toBe('required');
+  });
+
+  it('keeps saying required when the key was merely wrong', async () => {
+    // A client that has already revealed the field keeps it revealed, which is
+    // what lets a typo be corrected in place rather than resetting the form.
+    probeRemoteApiKey.mockResolvedValue('rejected');
+    const { app } = buildApp(KEY_ENTRY);
+
+    const error = await createMCPCatalogConnectService(app)
+      .create(keyRequest, params)
+      .catch((caught: Error) => caught);
+
+    expect(readApiKeyRequirement(error)).toBe('required');
+  });
+
+  it.each(['none', 'oauth'] as const)(
+    'tells a client refused for sending a key that %s endpoint wants none',
+    async (probed) => {
+      // The other direction: the entry says `credentials`, the vendor has since
+      // opened the endpoint up, and the drawer is holding a key the daemon will
+      // refuse forever. Saying so is what lets the field be dropped.
+      probeRemoteAuthType.mockResolvedValue(probed);
+      const { app } = buildApp(KEY_ENTRY);
+
+      const error = await createMCPCatalogConnectService(app)
+        .create(keyRequest, params)
+        .catch((caught: Error) => caught);
+
+      expect(readApiKeyRequirement(error)).toBe('not_accepted');
+    }
+  );
+
+  it('says nothing about a key requirement on refusals that are not about one', async () => {
+    // A client must not read a missing field as `not_accepted` — and nothing
+    // may put one on a refusal that had no requirement in question, or an
+    // unreachable endpoint would silently reshape the form.
+    probeRemoteAuthType.mockResolvedValue('unreachable');
+    const { app } = buildApp(KEY_ENTRY);
+
+    const error = await createMCPCatalogConnectService(app)
+      .create(keyRequest, params)
+      .catch((caught: Error) => caught);
+
+    expect(readApiKeyRequirement(error)).toBeUndefined();
   });
 
   it('reads a whitespace-only key as no key at all', async () => {

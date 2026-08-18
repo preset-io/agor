@@ -409,3 +409,57 @@ export interface MCPCatalogConnectResult {
   /** Effective, secret-free OAuth compatibility policy for the attached row. */
   effective_oauth_policy?: NonNullable<MCPServer['oauth_compatibility_policy']>;
 }
+
+/**
+ * What the live endpoint turned out to want, on a connect refused over the API
+ * key.
+ *
+ * The catalog file is presentational and the endpoint decides — which is the
+ * right layering, and is exactly what strands a client that built its form from
+ * the file. A drawer showing a key field because the entry says `credentials`
+ * cannot submit when the endpoint has since opened up, because the daemon
+ * refuses every keyed request; a drawer showing no field because the entry says
+ * `none` cannot submit when the endpoint has since closed, because the daemon
+ * demands a key there is nowhere to type. Both are dead ends, and both are
+ * reachable from a `curated.yaml` nobody has got round to correcting.
+ *
+ * `logProbeDisagreement` already records the disagreement, but a `warn` line is
+ * addressed to whoever maintains the file. This is the same fact addressed to
+ * the person standing in front of the form, in a shape a client can act on
+ * without parsing prose: the daemon knows what the endpoint asked for at the
+ * moment it refuses, so it says so, and the refusal becomes one extra round trip
+ * instead of an impasse.
+ *
+ * Two values rather than a boolean, because "no requirement was in question"
+ * has to stay distinguishable from both — every other refusal carries none of
+ * this, and a client must not read a missing field as `not_accepted`.
+ */
+export const MCP_CATALOG_API_KEY_REQUIREMENTS = ['required', 'not_accepted'] as const;
+
+export type MCPCatalogApiKeyRequirement = (typeof MCP_CATALOG_API_KEY_REQUIREMENTS)[number];
+
+/** The machine-readable half of a connect refusal. Rides on `error.data`. */
+export interface MCPCatalogConnectErrorData {
+  api_key_requirement: MCPCatalogApiKeyRequirement;
+}
+
+/**
+ * The endpoint's key requirement carried by a failed connect, if it stated one.
+ *
+ * Lives beside the type it reads rather than in the browser bundle, so the
+ * daemon that writes this field and the drawer that reacts to it are looking at
+ * one definition. The alternative — a client-side `err.data.api_key_requirement`
+ * spelled out at the call site — is a string literal that no longer matches the
+ * moment anybody renames the field, and it fails by silently doing nothing,
+ * which is indistinguishable from the endpoint not having stated a requirement.
+ *
+ * Defensive about its input because it is handed whatever a `catch` caught:
+ * a Feathers error, a `TypeError` from a dropped socket, or a string.
+ */
+export function readApiKeyRequirement(error: unknown): MCPCatalogApiKeyRequirement | undefined {
+  const data = (error as { data?: unknown } | null | undefined)?.data;
+  const requirement = (data as MCPCatalogConnectErrorData | undefined)?.api_key_requirement;
+  return MCP_CATALOG_API_KEY_REQUIREMENTS.includes(requirement as MCPCatalogApiKeyRequirement)
+    ? (requirement as MCPCatalogApiKeyRequirement)
+    : undefined;
+}
