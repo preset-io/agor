@@ -21,8 +21,14 @@
  * ```
  */
 
-import { CheckOutlined, CloseCircleOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
-import { App, Button, Space } from 'antd';
+import {
+  CheckOutlined,
+  CloseCircleOutlined,
+  CloseOutlined,
+  CopyOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { App, Button, Space, theme } from 'antd';
 import type { ArgsProps, ConfigOptions, MessageInstance } from 'antd/es/message/interface';
 import React, { useCallback, useMemo } from 'react';
 import { copyToClipboard } from './clipboard';
@@ -52,27 +58,47 @@ function createErrorMessageKey(): string {
  * Shows an inline confirmation icon (check on success, X on failure) for
  * ~1.5s after click — otherwise there's no way for the user to tell whether
  * the copy worked, which reads as "the button is broken".
+ *
+ * When `onTroubleshoot` is supplied (error toasts raised via
+ * `useTroubleshootError().showErrorWithTroubleshoot`), a small "Troubleshoot"
+ * button is rendered next to the copy icon that hands the error off to an
+ * agent session. Plain toasts never pass it, so they look unchanged.
  */
-interface MessageContentProps {
+export interface MessageContentProps {
   children: React.ReactNode;
   textContent: string;
   kind?: 'error' | 'message';
   onDismiss?: () => void;
   returnFocusTo?: HTMLElement | null;
+  /**
+   * Optional handler that spins up an agent session seeded with this error.
+   * May be async — the button shows a loading spinner until it settles. The
+   * handler owns its own success/failure feedback.
+   */
+  onTroubleshoot?: () => Promise<void> | void;
+  troubleshootLabel?: string;
 }
 
-const MessageContent: React.FC<MessageContentProps> = ({
+export const MessageContent: React.FC<MessageContentProps> = ({
   children,
   textContent,
   kind = 'message',
   onDismiss,
   returnFocusTo,
+  onTroubleshoot,
+  troubleshootLabel = 'Troubleshoot',
 }) => {
+  const { token } = theme.useToken();
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
+  const [troubleshooting, setTroubleshooting] = React.useState(false);
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The toast auto-dismisses (~6s) and clicking Troubleshoot navigates away,
+  // so this node can unmount mid-flight; guard the post-await setState.
+  const mountedRef = React.useRef(true);
 
   React.useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, []);
@@ -83,6 +109,17 @@ const MessageContent: React.FC<MessageContentProps> = ({
     setCopyState(ok ? 'copied' : 'failed');
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => setCopyState('idle'), 1500);
+  };
+
+  const handleTroubleshoot = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onTroubleshoot || troubleshooting) return;
+    try {
+      setTroubleshooting(true);
+      await onTroubleshoot();
+    } finally {
+      if (mountedRef.current) setTroubleshooting(false);
+    }
   };
 
   const handleDismiss = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -136,6 +173,19 @@ const MessageContent: React.FC<MessageContentProps> = ({
     >
       <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{children}</span>
       <Space size="small">
+        {onTroubleshoot && (
+          <Button
+            type="link"
+            size="small"
+            icon={<ThunderboltOutlined />}
+            loading={troubleshooting}
+            onClick={handleTroubleshoot}
+            style={{ paddingInline: token.paddingXXS, fontSize: token.fontSizeSM }}
+            title="Hand this error to an agent to troubleshoot"
+          >
+            {troubleshootLabel}
+          </Button>
+        )}
         <Button
           type="text"
           size="small"
@@ -166,7 +216,7 @@ const MessageContent: React.FC<MessageContentProps> = ({
 /**
  * Extract text content from React nodes for clipboard copying
  */
-function extractTextContent(content: React.ReactNode): string {
+export function extractTextContent(content: React.ReactNode): string {
   if (typeof content === 'string') {
     return content;
   }
