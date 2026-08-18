@@ -144,9 +144,9 @@ const SENTRY = {
 
 function renderWithConnect(entry: MCPCatalogEntry) {
   const onConnect = vi.fn();
-  const props = (shown: MCPCatalogEntry) => ({
+  const props = (shown: MCPCatalogEntry, open = true) => ({
     entry: shown,
-    open: true,
+    open,
     onClose: vi.fn(),
     branches: BRANCHES,
     branchesLoading: false,
@@ -160,6 +160,10 @@ function renderWithConnect(entry: MCPCatalogEntry) {
   return {
     onConnect,
     show: (next: MCPCatalogEntry) => view.rerender(<CatalogDetailDrawer {...props(next)} />),
+    // The Marketplace keeps this component mounted and toggles `open`, so
+    // closing it is a prop change rather than an unmount — which is exactly why
+    // state on it outlives the interaction unless something clears it.
+    setOpen: (open: boolean) => view.rerender(<CatalogDetailDrawer {...props(entry, open)} />),
   };
 }
 
@@ -217,6 +221,34 @@ describe('CatalogDetailDrawer API key', () => {
 
     expect(keyField()).toHaveValue('');
     expect(connectButton()).toBeDisabled();
+  });
+
+  it('does not repopulate the field with a key discarded by closing the drawer', () => {
+    // `destroyOnHidden` unmounts the drawer's *contents* — the input and its
+    // reveal toggle — but this component stays mounted for as long as the
+    // Marketplace is open. Without an explicit discard the pasted key sat in
+    // React state indefinitely and came back, revealable, on reopening.
+    const { setOpen } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    setOpen(false);
+    setOpen(true);
+
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('keeps the key while a failed connect is still on screen', () => {
+    // The other half of the rule. A connect that failed leaves the drawer open,
+    // and a user who mistyped one character should not have to find the key
+    // again to fix it.
+    renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    expect(keyField()).toHaveValue('fake-datadog-key');
+    expect(connectButton()).toBeEnabled();
   });
 
   it('points at the vendor’s own page for where to get a key', () => {

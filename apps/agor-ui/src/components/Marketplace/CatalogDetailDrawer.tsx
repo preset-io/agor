@@ -129,6 +129,25 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
   const apiKey = keyField.trim();
 
+  // Discard the key when the interaction that needed it ends — the drawer
+  // closing, or a different entry being shown.
+  //
+  // The keying above decides what renders; this decides what is held. They are
+  // not the same question, and answering only the first left a secret in React
+  // state for the rest of the page's life. `destroyOnHidden` does not cover it:
+  // it unmounts the drawer's *contents* — the `Input.Password` and its reveal
+  // toggle — while this component stays mounted for as long as the Marketplace
+  // is open, so a key pasted and then abandoned came back, visible, on
+  // reopening the same entry.
+  //
+  // A successful connect closes the drawer, so it clears here too rather than
+  // needing its own path. A failed one deliberately does not: the drawer stays
+  // open, and a user who mistyped one character should not have to find the key
+  // again to correct it.
+  useEffect(() => {
+    setPastedKey((held) => (open && held !== null && held.entryId === entryId ? held : null));
+  }, [open, entryId]);
+
   const canConnect = Boolean(
     !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || apiKey)
   );

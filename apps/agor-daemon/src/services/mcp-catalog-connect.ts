@@ -33,6 +33,7 @@
 import { BadRequest, NotFound } from '@agor/core/feathers';
 import { probeRemoteApiKey, probeRemoteAuthType } from '@agor/core/mcp-catalog';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   CreateMCPServerInput,
@@ -420,7 +421,39 @@ function readApiKey(value: unknown, entry: MCPCatalogEntry): string | undefined 
     throw new BadRequest(`api_key must be a string to connect ${catalogDisplayName(entry)}`);
   }
   const trimmed = value.trim();
-  return trimmed === '' ? undefined : trimmed;
+  if (trimmed === '') return undefined;
+
+  // The redaction sentinel is not a key. It is what a read path puts where a
+  // key was, so a request carrying it is a client echoing back the absence of
+  // a value — never a value.
+  //
+  // This is the rule #2374 enforces on the write path, at the boundary it does
+  // not cover. There it is a stale edit form resubmitting what it was shown;
+  // here it is a paste out of a redacted response. Both end the same way: the
+  // row authenticates with a literal `••••••••`, and — the part that makes it
+  // worse than an ordinary bad key — every later read of that row shows the
+  // sentinel too, so a credential that cannot work is indistinguishable on
+  // screen from a real one that is being correctly hidden. Nothing in the
+  // product could tell the user which they have.
+  //
+  // Refused before the probe rather than left to it, because a probe is a fact
+  // about the endpoint: a server that accepts any syntactically-present bearer
+  // on `initialize` would answer `accepted` and the sentinel would be stored as
+  // the credential. The rule does not depend on how strict a vendor happens to
+  // be.
+  //
+  // {@link MCP_HEADER_REDACTED_SENTINEL} is imported rather than restated, so
+  // this boundary and #2374's cannot come to disagree about what the sentinel
+  // is. There is no shared predicate to reuse — #2374 adds none, comparing
+  // against the same exported constant inline — so the constant is the whole of
+  // what the two sides share, and it is enough.
+  if (trimmed === MCP_HEADER_REDACTED_SENTINEL) {
+    throw new BadRequest(
+      `That is the placeholder Agor shows in place of a hidden key, not a key. Paste the real ${catalogDisplayName(entry)} API key.`
+    );
+  }
+
+  return trimmed;
 }
 
 export interface MCPCatalogConnectService {
@@ -726,6 +759,12 @@ export function createMCPCatalogConnectService(
    * have offered it otherwise — and the after hook redacts what comes back, so
    * the key does not travel out on the reply. It also means a patch the tenant's
    * policy refuses fails here rather than half-installing.
+   *
+   * Called last, once the session and the attachment have both succeeded. This
+   * is the only write here that overwrites something a previous connect left
+   * behind, so it is also the only one whose failure cannot be compensated by a
+   * further write — see the call site for why ordering is the answer rather
+   * than a rollback.
    */
   const rotateInstalledKey = async (
     server: MCPServer,
@@ -789,20 +828,14 @@ export function createMCPCatalogConnectService(
       // one path that can produce one. Saying so is also what makes the row
       // private to the caller — an install is theirs whatever the tenant's
       // `mcp_member_policy` says. See `McpCatalogInstallParams`.
-      //
-      // A reused install that keeps a credential takes the key from this
-      // connect, so re-connecting is how a key is rotated rather than a way to
-      // keep using the old one. See {@link rotateInstalledKey}.
-      const mcpServer = existing
-        ? carriesRowLevelSecret(auth)
-          ? await rotateInstalledKey(existing, auth, params)
-          : existing
-        : ((await service('mcp-servers').create(createInput, {
-            ...params,
-            mcpCatalogInstall: { entry_name: entry.name },
-          })) as MCPServer);
+      const mcpServer =
+        existing ??
+        ((await service('mcp-servers').create(createInput, {
+          ...params,
+          mcpCatalogInstall: { entry_name: entry.name },
+        })) as MCPServer);
 
-      // Three writes across three services, so there is no transaction to lean
+      // Four writes across three services, so there is no transaction to lean
       // on. A server nobody can see is the worst thing to leave behind — it is
       // configuration the user never asked to keep and cannot find to remove —
       // so a failure after this point takes back the row this request created.
@@ -824,8 +857,30 @@ export function createMCPCatalogConnectService(
           { ...params, route: { id: session.session_id } }
         );
 
+        // Rotation is last, after everything that can fail has succeeded.
+        //
+        // It is the one write in this method that changes state a *previous*
+        // connect established, and it is not undoable in any way worth trusting:
+        // there is no transaction here, so undoing it means a second write that
+        // can itself fail. Ordering removes the need. Done earlier, a connect
+        // whose session or attachment then failed told the caller it had failed
+        // while having already replaced their working key — every session still
+        // relying on the old one broken, and nothing anywhere saying so.
+        //
+        // Nothing between here and the top needs the new key: the session is a
+        // row, the attachment is a pair of ids, and neither opens the server's
+        // transport. So the only thing later ordering costs is the case where
+        // this patch itself fails — and that leaves the install exactly as its
+        // owner had it, working with the key it already held, beside a session
+        // the caller was told they did not get. That is a state the product can
+        // survive and a user can retry out of, which the alternative is not.
+        const installed =
+          existing && carriesRowLevelSecret(auth)
+            ? await rotateInstalledKey(existing, auth, params)
+            : mcpServer;
+
         return {
-          mcp_server: mcpServer,
+          mcp_server: installed,
           session,
           starter_prompt: entry.starter_prompt,
           reused_existing_server: Boolean(existing),

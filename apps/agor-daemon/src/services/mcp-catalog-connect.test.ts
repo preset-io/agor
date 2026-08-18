@@ -1437,6 +1437,55 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
     expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'bearer', token: PASTED_KEY } });
   });
 
+  it('refuses the redaction sentinel as a key, before probing with it', async () => {
+    // The sentinel is what a read path puts where a key was, so a request
+    // carrying it is a client echoing back the absence of a value. #2374
+    // enforces this on the write path; this is the same rule at the input
+    // boundary, and it names the same exported constant so the two cannot come
+    // to disagree about what the sentinel is.
+    //
+    // Refused ahead of the probe rather than left to it: a server that accepts
+    // any syntactically-present bearer on `initialize` would answer `accepted`,
+    // and the sentinel would be stored as the credential. The rule cannot
+    // depend on how strict a vendor happens to be.
+    const { app, created } = buildApp(KEY_ENTRY);
+
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, api_key: MCP_HEADER_REDACTED_SENTINEL },
+        params
+      )
+    ).rejects.toThrow(/placeholder Agor shows in place of a hidden key/);
+    expect(probeRemoteApiKey).not.toHaveBeenCalled();
+    expect(created.mcpServers).toHaveLength(0);
+  });
+
+  it('refuses the sentinel however it is padded', async () => {
+    const { app, created } = buildApp(KEY_ENTRY);
+
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, api_key: `  ${MCP_HEADER_REDACTED_SENTINEL}\n` },
+        params
+      )
+    ).rejects.toThrow(/placeholder Agor shows/);
+    expect(created.mcpServers).toHaveLength(0);
+  });
+
+  it('never lets the sentinel become a stored credential', async () => {
+    // The invariant the two cases above are instances of, and the reason it is
+    // worse than an ordinary bad key: every later read of the row shows the
+    // sentinel too, so a credential that cannot work would be indistinguishable
+    // on screen from a real one being correctly hidden.
+    const { app, created } = buildApp(KEY_ENTRY);
+
+    await createMCPCatalogConnectService(app)
+      .create({ ...request, api_key: MCP_HEADER_REDACTED_SENTINEL }, params)
+      .catch(() => {});
+
+    expect(JSON.stringify(created.mcpServers)).not.toContain(MCP_HEADER_REDACTED_SENTINEL);
+  });
+
   it('refuses a key that is not a string rather than coercing it', async () => {
     // `String({})` is `[object Object]`, which is a credential-shaped thing
     // nobody typed.
@@ -1509,6 +1558,21 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     ]);
     // What comes back to the caller is the patched row, redacted.
     expect(result.mcp_server.auth?.token).toBe(MCP_HEADER_REDACTED_SENTINEL);
+  });
+
+  it('does not patch the key when a later step of the connect fails', async () => {
+    // The unit-level half of the ordering rule; the state it protects is
+    // asserted against a real database in `mcp-catalog-connect.api-key.test.ts`.
+    const { app, services, patched } = buildApp(KEY_ENTRY, [keyInstallOf()]);
+    (services.sessions as { create: ReturnType<typeof vi.fn> }).create.mockRejectedValue(
+      new Error('branch not found')
+    );
+
+    await expect(createMCPCatalogConnectService(app).create(keyRequest, params)).rejects.toThrow(
+      /branch not found/
+    );
+
+    expect(patched).toEqual([]);
   });
 
   it('does not hand the caller a key-bearing row somebody else owns', async () => {

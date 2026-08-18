@@ -183,8 +183,13 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
       return entry;
     },
   } as never);
+  // Flipped by a test to make the step after the install fail, which is the
+  // only way to observe what a connect leaves behind when it does not finish.
+  let sessionCreateFailure: Error | undefined;
+
   app.use('sessions', {
     async create(data: Record<string, unknown>) {
+      if (sessionCreateFailure) throw sessionCreateFailure;
       return { ...data, session_id: 'session-1' };
     },
   } as never);
@@ -227,6 +232,9 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     },
     /** The row as it actually sits in the database, past every hook. */
     stored: () => repo.findAll({}),
+    failSessionCreate: (error: Error) => {
+      sessionCreateFailure = error;
+    },
   };
 }
 
@@ -317,6 +325,27 @@ describe('an API-key install, end to end', () => {
     expect(broadcast).toHaveLength(1);
     expect(JSON.stringify(broadcast)).not.toContain(ROTATED_KEY);
     expect(JSON.stringify(broadcast)).not.toContain(WORKING_KEY);
+  });
+
+  it('leaves the stored key alone when a connect that would rotate it fails', async () => {
+    // Rotation overwrites what a previous connect established, and there is no
+    // transaction here to undo it with. Done before the session and the
+    // attachment, a connect that then failed told the caller it had failed
+    // while having already replaced their working key — every session still
+    // using the old one broken, and nothing saying so. Ordering is the fix;
+    // a compensating write would be a second thing that can fail.
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('alice@agor.live');
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    daemon.failSessionCreate(new Error('branch not found'));
+    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/branch not found/);
+
+    const rows = await daemon.stored();
+    expect(rows).toHaveLength(1);
+    // The install is exactly as its owner had it: working, with the key it
+    // already held. The caller was told the connect failed, and it did.
+    expect(rows[0]?.auth?.token).toBe(WORKING_KEY);
   });
 
   it('rotates the stored key in place rather than piling up rows', async () => {
