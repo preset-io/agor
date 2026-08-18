@@ -391,7 +391,6 @@ export default class Init extends Command {
       if (freshState) {
         if (
           (flags.force || this.nonInteractive) &&
-          process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1' &&
           this.requestedAgenticTools === undefined &&
           !(await this.pathExists(getConfigPath()))
         ) {
@@ -769,7 +768,9 @@ export default class Init extends Command {
             'agentic_tools.installed is deployment-owned in config.yaml. Edit it explicitly instead of passing --agentic-tools.'
           );
         }
-        return declared;
+        if (this.requestedAgenticTools) return this.requestedAgenticTools;
+        if (skipPrompts) return declared;
+        return await this.promptForAgenticTools(declared);
       }
 
       const policy = await resolveAgenticToolSelectionPolicy(existing);
@@ -791,7 +792,6 @@ export default class Init extends Command {
       return selected;
     }
     if (this.requestedAgenticTools) return this.requestedAgenticTools;
-    if (process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return [];
     if (skipPrompts) {
       throw new Error(
         'Fresh noninteractive initialization requires an explicit agentic-tool policy. Pass `--agentic-tools <comma-separated-list|all|none>` (or set AGOR_AGENTIC_TOOLS).'

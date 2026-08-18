@@ -94,20 +94,23 @@ function createInitEnvironment(
 
 async function runInteractiveInit(
   home: string,
-  fixtureBin: string
+  fixtureBin: string,
+  managedTools = true
 ): Promise<{
   exitCode: number;
   output: string;
 }> {
   const cliRoot = join(import.meta.dirname, '..', '..');
   const tsxCli = fileURLToPath(import.meta.resolve('tsx/cli'));
+  const env = createInitEnvironment(home, {
+    PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}`,
+  });
+  if (!managedTools) delete env.AGOR_MANAGED_AGENTIC_TOOLS;
   const terminal = spawnPty(process.execPath, [tsxCli, join(cliRoot, 'bin', 'dev.ts'), 'init'], {
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: createInitEnvironment(home, {
-      PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}`,
-    }),
+    env,
   });
 
   let output = '';
@@ -391,7 +394,9 @@ describe('initial agentic tool selection', () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-reinit-pty-'));
     temporaryDirectories.push(root);
     const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
     await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
 
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -416,7 +421,7 @@ describe('initial agentic tool selection', () => {
         await readFile(join(home, '.agor', 'config.yaml'), 'utf8')
       ) as { daemon?: { deployment_id?: string; jwtSecret?: string } };
 
-      const refused = await runInteractiveReinit(home);
+      const refused = await runInteractiveReinit(home, fixtureBin);
       expect(refused.exitCode, refused.output).toBe(2);
       expect(refused.output).toContain('The Agor daemon is running');
       expect(refused.output).toContain('agor daemon stop');
@@ -426,7 +431,7 @@ describe('initial agentic tool selection', () => {
       await writeFile(join(home, '.agor', 'agor.db-wal'), 'stale WAL fixture');
       await writeFile(join(home, '.agor', 'agor.db-shm'), 'stale SHM fixture');
 
-      const reinitialized = await runInteractiveReinit(home);
+      const reinitialized = await runInteractiveReinit(home, fixtureBin);
       expect(reinitialized.exitCode, reinitialized.output).toBe(0);
       expect(reinitialized.output).toContain('Migrations complete');
       expect(reinitialized.output).toContain('Agor initialized successfully');
@@ -440,7 +445,7 @@ describe('initial agentic tool selection', () => {
         agentic_tools?: { installed?: string[] };
         daemon?: { deployment_id?: string; jwtSecret?: string };
       };
-      expect(config.agentic_tools?.installed).toEqual([]);
+      expect(config.agentic_tools?.installed).toEqual(['codex']);
       expect(config.daemon?.deployment_id).toBeTruthy();
       expect(config.daemon?.deployment_id).not.toBe(originalConfig.daemon?.deployment_id);
       expect(config.daemon?.jwtSecret).not.toBe(originalConfig.daemon?.jwtSecret);
@@ -484,6 +489,24 @@ describe('initial agentic tool selection', () => {
       if (previousToolsDirectory === undefined) delete process.env.AGOR_AGENTIC_TOOLS_DIR;
       else process.env.AGOR_AGENTIC_TOOLS_DIR = previousToolsDirectory;
     }
+  }, 35_000);
+
+  it('always shows the tool selector for an interactive source/development init', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-source-tools-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const result = await runInteractiveInit(home, fixtureBin, false);
+
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Which agentic tools should this deployment support?');
+    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(config.agentic_tools?.installed).toEqual(['codex']);
   }, 35_000);
 
   it('prompts an upgraded local install for tools before destructive re-initialization', async () => {
