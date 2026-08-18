@@ -1,3 +1,5 @@
+import type { UserPreferences } from '@agor-live/client';
+
 /**
  * Canonical onboarding goal cards.
  *
@@ -108,17 +110,17 @@ export const DEFAULT_MCP_REC_IDS = ['slack', 'github', 'linear', 'notion'];
  * The six onboarding goal cards. Card copy is locked product copy — do not
  * rewrite. Selection order matters: first-picked = primary, second = secondary.
  *
- * Known gap: "Get my own personal teammate" promises reading inbox/news, but no
- * email/news MCP connector exists yet — only the Slack part is real today.
+ * Descriptions must only promise capabilities supported by today's connector
+ * set; future inbox/news support is intentionally not advertised here.
  */
 export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'personal-teammate',
     title: 'Get my own personal teammate',
-    description: "Reads your inbox, Slack, and news so you don't have to.",
+    description: 'Keeps up with Slack and recurring updates so you don’t have to.',
     mcpRecs: ['slack'],
     bootstrapLine:
-      "Wants a daily brief across scattered sources. Ask what's overwhelming them most (Slack, industry news) and propose a recurring digest as the first win.",
+      'Desired outcome: a useful recurring brief from connected sources. A first win is a Slack digest based on the channels they care about.',
   },
   {
     id: 'status-updates',
@@ -126,7 +128,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     description: 'Meeting notes, action items, and project updates — drafted for you.',
     mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
     bootstrapLine:
-      'Drowning in status-chasing. Ask about their current project or last meeting, offer to draft the recap + action items as the first win.',
+      'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
   },
   {
     id: 'ship-without-busywork',
@@ -134,7 +136,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     description: 'PRs, bug triage, release notes — handled.',
     mcpRecs: ['github', 'sentry', 'datadog'],
     bootstrapLine:
-      'Wants execution handled. Ask which repo, offer to scan open issues/PRs for a quick win.',
+      'Desired outcome: less shipping busywork. A first win is scanning the relevant repo for an actionable issue or pull request.',
   },
   {
     id: 'team-teammate',
@@ -142,7 +144,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     description: "One helper who knows everyone's Slack, docs, and boards — not just yours.",
     mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
     bootstrapLine:
-      'Wants a shared teammate for the team. Ask what the team repeats manually across people, propose seeding a shared teammate onto the team board.',
+      'Desired outcome: a shared teammate for repeated team work. A first win is identifying one repeated workflow to run from the team board.',
   },
   {
     id: 'hand-off-build',
@@ -150,7 +152,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     description: 'A working app, dashboard, or prototype — live on your board, ready to use.',
     mcpRecs: ['github', 'figma'],
     bootstrapLine:
-      'Wants a working thing built, not a spec. Ask what they want built (a prototype, an internal tool, a dashboard) and start building something live on the board as the first win.',
+      'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
   },
   {
     id: 'dig-into-anything',
@@ -158,12 +160,41 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     description: 'Ask a question, get real research back — competitors, markets, data.',
     mcpRecs: ['amplitude', 'hubspot'],
     bootstrapLine:
-      "Wants active research/analysis on demand, not a scheduled digest (that's goal 1's job). Ask what they want dug into (a competitor, a market, a dataset) and deliver one real finding as the first win, not a to-do list.",
+      'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
   },
 ];
 
 /** Max goals a user may select in onboarding. */
 export const MAX_ONBOARDING_GOALS = 2;
+
+export interface CompletedOnboardingPreferencesInput {
+  boardId: string;
+  branchId: string;
+  path: 'teammate' | 'own-repo';
+  goals?: string[];
+}
+
+/**
+ * Merge completion into the freshest available preference snapshot. Goals are
+ * deliberately materialized as [] when skipped instead of leaving an older
+ * selection behind.
+ */
+export function buildCompletedOnboardingPreferences(
+  latest: UserPreferences | undefined,
+  result: CompletedOnboardingPreferencesInput
+): UserPreferences {
+  return {
+    ...latest,
+    mainBoardId: result.boardId || latest?.mainBoardId,
+    onboarding: {
+      ...latest?.onboarding,
+      path: result.path,
+      branchId: result.branchId,
+      boardId: result.boardId,
+      goals: result.goals ?? [],
+    },
+  };
+}
 
 export function findOnboardingGoal(id?: string | null): OnboardingGoal | undefined {
   return id ? ONBOARDING_GOALS.find((goal) => goal.id === id) : undefined;
@@ -220,9 +251,9 @@ export function mergeGoalMcpRecs(goalIds: string[]): McpRecommendation[] {
  *
  * - 0 goals: a single line telling the teammate to follow the user's lead.
  * - 1 goal: that goal's bootstrap line.
- * - 2 goals: both bootstrap lines plus a bridging line — open with a concrete
- *   action on the primary (first-picked) goal, then surface the secondary once
- *   the first win is underway, without asking which matters more.
+ * The returned lines describe outcomes and candidate wins. The shared prompt
+ * owns the one canonical executable opening strategy, so these lines never
+ * compete with it using goal-specific "ask" versus "act" commands.
  */
 export function buildGoalBootstrapGuidance(goalIds: string[]): string[] {
   const goals = goalIds
@@ -243,6 +274,6 @@ export function buildGoalBootstrapGuidance(goalIds: string[]): string[] {
   return [
     primary.bootstrapLine,
     secondary.bootstrapLine,
-    `Treat "${primary.title}" as the primary goal: open your first message with a concrete action on it, not a question. Once that first win is delivered or clearly underway, proactively offer to also help with "${secondary.title}". Do not ask which matters more — the user picked both.`,
+    `Treat "${primary.title}" as primary. Once its first win is delivered or clearly underway, proactively offer "${secondary.title}" too; do not ask which matters more because the user picked both.`,
   ];
 }

@@ -14,6 +14,8 @@ export interface TeammateBootstrapPromptInput {
   goals?: string[] | null;
   /** Goal-tailored MCP integration names surfaced in the onboarding wizard. */
   suggestedIntegrations?: string[] | null;
+  /** Whether this user can manage workspace MCP integrations. */
+  canManageIntegrations?: boolean;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -28,12 +30,8 @@ export interface TeammateBootstrapPromptContext {
   };
   /** Goal-driven guidance lines; present when goals were supplied. */
   goalGuidance?: string[];
-  /**
-   * True only when the user actually picked at least one goal. Gates the
-   * "act on the primary goal" opener — a skip (empty goals) or a non-onboarding
-   * teammate (no goals) has no primary goal to reference.
-   */
-  leadWithPrimaryGoal?: boolean;
+  hasPrimaryGoal?: boolean;
+  canManageIntegrations?: boolean;
   suggestedIntegrations?: string[];
   firstSession: true;
 }
@@ -82,19 +80,19 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     'Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user using the supplied context and live Agor state.'
   );
   lines.push('');
+  lines.push('Canonical opening strategy:');
   lines.push(
-    context.leadWithPrimaryGoal
-      ? 'Open with a concrete first win rather than interviewing the user — take the primary goal above and act on it.'
-      : // No goal was picked (skip / non-onboarding teammate): there is no primary
-        // goal to act on, so nudge toward an early win without overriding the
-        // follow-the-user guidance above or referencing a goal that is not there.
-        'Open with a concrete first step toward an early win, and keep any questions to the single most useful one.'
+    context.hasPrimaryGoal
+      ? '- Start on the primary goal. If live context is sufficient, perform one concrete first-win action now and report the result. If essential context is missing, ask exactly one specific question, then act immediately on the answer. Do not conduct an interview.'
+      : '- Do not assume a goal. Ask exactly one specific question about what the user is working on now, then take the first concrete action their answer enables. Do not conduct an interview.'
   );
   if (context.suggestedIntegrations?.length) {
     // CP-11: the recommended integrations must be actively proposed, not just
     // listed as context, or the teammate silently ignores them.
     lines.push(
-      'When one of the suggested integrations above would unlock that win, proactively propose connecting it — name the integration, say what it unlocks, and point the user to Settings → MCP. Do not wait to be asked.'
+      context.canManageIntegrations
+        ? 'When a suggested integration would unlock that win, name it, say what it unlocks, and direct the user to Marketplace to connect it. Do not wait to be asked.'
+        : 'When a suggested integration would unlock that win, name it and say what it unlocks, but explain that a workspace admin must connect it. Do not direct this user to an admin-only setup screen.'
     );
   }
 
@@ -109,6 +107,7 @@ export function buildTeammateBootstrapPromptContext({
   userEmail,
   goals,
   suggestedIntegrations,
+  canManageIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
@@ -135,7 +134,8 @@ export function buildTeammateBootstrapPromptContext({
     ...(goals ? { goalGuidance: buildGoalBootstrapGuidance(goals) } : {}),
     // Only lead with the primary-goal opener when a goal actually resolves — an
     // empty (skip) or all-unknown goals array has no primary goal to act on.
-    ...(goals?.some((id) => findOnboardingGoal(id)) ? { leadWithPrimaryGoal: true } : {}),
+    ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
+    ...(canManageIntegrations !== undefined ? { canManageIntegrations } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };

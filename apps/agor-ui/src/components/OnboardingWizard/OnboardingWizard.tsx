@@ -16,6 +16,7 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -171,8 +172,6 @@ const LLM_OPTIONS: LlmOption[] = [
     keyLinkLabel: null,
   },
 ];
-
-const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
 
 // Why an unselected goal card is disabled once two are picked. Surfaced both as
 // an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
@@ -349,6 +348,8 @@ export interface OnboardingWizardProps {
     agent?: AgenticToolName | null;
     /** Goal-tailored MCP integration names to seed into the bootstrap prompt. */
     suggestedIntegrations?: string[];
+    /** Whether this user can manage the workspace's MCP integrations. */
+    canManageIntegrations?: boolean;
     /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
      * skipped), threaded straight through so the completion handler never has
      * to wait on the async preference save. */
@@ -779,16 +780,14 @@ export function OnboardingWizard({
   // ─── Handlers ────────────────────────────────────────────────────────────
 
   const saveOnboardingProgress = useCallback(
-    (updates: Record<string, unknown>) => {
+    async (updates: Record<string, unknown>) => {
       if (!user) return;
       const current = (user.preferences?.onboarding ?? {}) as Record<string, unknown>;
       const prefs: UserPreferences = {
         ...user.preferences,
         onboarding: { ...current, ...updates },
       } as UserPreferences;
-      onUpdateUser(user.user_id, { preferences: prefs }).catch((e) => {
-        console.warn('onboarding progress save failed', e);
-      });
+      await onUpdateUser(user.user_id, { preferences: prefs });
     },
     [onUpdateUser, user]
   );
@@ -822,6 +821,9 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (currentStep === 'done') return;
+    // Skip means "decide later", even if the user experimented with a card
+    // first. Do not silently submit a selection they explicitly skipped.
+    if (currentStep === 'goals') setSelectedGoals([]);
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
     // and completion reads a non-null agent as "there is a model to run on" —
@@ -838,9 +840,9 @@ export function OnboardingWizard({
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
       case 'goals': {
-        if (selectedGoals.length > 0) {
-          saveOnboardingProgress({ goals: selectedGoals });
-        }
+        // Goals are persisted once, authoritatively and awaited, by the
+        // completion handler. An intermediate whole-preferences write here can
+        // race later onboarding saves and resurrect stale data.
         goToStep('llm');
         break;
       }
@@ -926,7 +928,7 @@ export function OnboardingWizard({
             await client
               .service('boards')
               .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
-            if (user) saveOnboardingProgress({ boardId: createdBoardId });
+            if (user) await saveOnboardingProgress({ boardId: createdBoardId });
             goToStep('integrations');
           } catch (err) {
             setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
@@ -958,7 +960,7 @@ export function OnboardingWizard({
             return;
           }
           setCreatedBoardId(newBoardId);
-          if (user) saveOnboardingProgress({ boardId: newBoardId });
+          if (user) await saveOnboardingProgress({ boardId: newBoardId });
           goToStep('integrations');
         } catch (err) {
           setBoardError(err instanceof Error ? err.message : 'Failed to create board');
@@ -990,6 +992,7 @@ export function OnboardingWizard({
             teammateEmoji,
             agent: selectedAgent,
             suggestedIntegrations,
+            canManageIntegrations: hasMinimumRole(user?.role, ROLES.ADMIN),
             goals: selectedGoals,
           });
         } finally {
@@ -1644,6 +1647,7 @@ export function OnboardingWizard({
 
   const renderIntegrations = () => {
     const recs: McpRecommendation[] = mergeGoalMcpRecs(selectedGoals);
+    const canManageIntegrations = hasMinimumRole(user?.role, ROLES.ADMIN);
     return (
       <div>
         {renderStepBadge('Recommended tools')}
@@ -1657,11 +1661,13 @@ export function OnboardingWizard({
             lineHeight: 1.6,
           }}
         >
-          These are the tools we recommend for your work. You can connect any of them via MCP — just
-          ask your AI teammate to help set them up.
+          These are the tools we recommend for your work.{' '}
+          {canManageIntegrations
+            ? 'Connect them from Marketplace, or ask your AI teammate to help set them up.'
+            : 'A workspace admin can connect them for your team.'}
         </div>
 
-        {/* Persona-curated MCP recommendations — informational list, no selection */}
+        {/* Goal-curated MCP recommendations — informational list, no selection */}
         <List
           dataSource={recs}
           renderItem={(rec) => (

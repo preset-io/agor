@@ -21,6 +21,8 @@ export interface SeedOnboardingTeammateInput {
   agent?: AgenticToolName | null;
   /** Goal-tailored MCP integration names to suggest in the onboarding prompt. */
   suggestedIntegrations?: string[];
+  /** Whether the onboarding user can manage workspace MCP integrations. */
+  canManageIntegrations?: boolean;
   /** Onboarding goal ids (order-preserving, primary first); [] when skipped. */
   goals?: string[];
   user?: { name?: string | null; email?: string | null } | null;
@@ -114,6 +116,7 @@ export async function seedOnboardingTeammate(
           userEmail: input.user?.email,
           goals: input.goals,
           suggestedIntegrations: input.suggestedIntegrations,
+          canManageIntegrations: input.canManageIntegrations,
         }),
       },
       onCreateSession: input.onCreateSession,

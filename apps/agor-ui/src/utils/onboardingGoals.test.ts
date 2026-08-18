@@ -1,10 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCompletedOnboardingPreferences,
   buildGoalBootstrapGuidance,
   findOnboardingGoal,
   mergeGoalMcpRecs,
   ONBOARDING_GOALS,
 } from './onboardingGoals';
+
+describe('buildCompletedOnboardingPreferences', () => {
+  it('preserves fresh unrelated preferences and authoritatively persists an explicit skip', () => {
+    expect(
+      buildCompletedOnboardingPreferences(
+        {
+          use_slack_avatar: false,
+          onboarding: { goals: ['stale-goal'], repoId: 'repo-1' },
+        },
+        { boardId: 'board-1', branchId: '', path: 'teammate', goals: [] }
+      )
+    ).toEqual({
+      use_slack_avatar: false,
+      mainBoardId: 'board-1',
+      onboarding: {
+        goals: [],
+        repoId: 'repo-1',
+        boardId: 'board-1',
+        branchId: '',
+        path: 'teammate',
+      },
+    });
+  });
+});
 
 const names = (goalIds: string[]) => mergeGoalMcpRecs(goalIds).map((rec) => rec.name);
 
@@ -109,7 +134,6 @@ describe('buildGoalBootstrapGuidance', () => {
     // Bridging line names the primary as the concrete opener and the secondary as the follow-up.
     expect(lines[2]).toContain('"Hand off the build"');
     expect(lines[2]).toContain('"Dig into anything"');
-    expect(lines[2]).toMatch(/concrete action/i);
     expect(lines[2]).toMatch(/do not ask which matters more/i);
   });
 });

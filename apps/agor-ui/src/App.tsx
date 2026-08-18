@@ -76,6 +76,7 @@ import { cloneErrorHint } from './utils/cloneErrorHint';
 import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
+import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import { getRouterBasename } from './utils/uiRoutes';
@@ -712,6 +713,7 @@ function AppContent() {
     teammateEmoji?: string;
     agent?: AgenticToolName | null;
     suggestedIntegrations?: string[];
+    canManageIntegrations?: boolean;
     goals?: string[];
   }) => {
     // The wizard awaits this and stays open in a loading state until it
@@ -723,27 +725,20 @@ function AppContent() {
       return;
     }
 
-    // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
-    // Non-critical — if the preference save fails the wizard just re-opens on next login.
-    // Marked complete up front so a slow/failed teammate bootstrap below never
-    // strands the user back in onboarding.
-    handleUpdateUser(
+    // Persist completion authoritatively before starting best-effort teammate
+    // setup. Read the latest store snapshot to minimize whole-preferences lost
+    // updates, and always write goals — including [] for an explicit Skip.
+    const latestPreferences =
+      agorStore.getState().userById.get(currentUser.user_id)?.preferences ??
+      currentUser.preferences;
+    await handleUpdateUser(
       currentUser.user_id,
       {
         onboarding_completed: true,
-        preferences: {
-          ...currentUser.preferences,
-          mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
-          onboarding: {
-            ...currentUser.preferences?.onboarding,
-            path: result.path,
-            branchId: result.branchId,
-            boardId: result.boardId,
-          },
-        },
+        preferences: buildCompletedOnboardingPreferences(latestPreferences, result),
       },
       { silent: true }
-    ).catch(() => {});
+    );
 
     // Seed the user's first AI teammate on the board they just named. The
     // framework repo has been cloning in the background since the wizard opened
@@ -780,6 +775,7 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
+      canManageIntegrations: result.canManageIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
       goals: result.goals,

@@ -146,7 +146,7 @@ describe('OnboardingWizard', () => {
     ).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
-  it('starts on the goals step; selecting a goal advances to LLM and saves onboarding progress', async () => {
+  it('starts on the goals step; selecting a goal advances without saving partial progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
@@ -160,16 +160,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(onUpdateUser).toHaveBeenCalledWith(
-        'user-1',
-        expect.objectContaining({
-          preferences: expect.objectContaining({
-            onboarding: expect.objectContaining({ goals: ['ship-without-busywork'] }),
-          }),
-        })
-      );
-    });
+    expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
   it('renders goal cards as title + description only, with no emoji icon', () => {
@@ -244,7 +235,7 @@ describe('OnboardingWizard', () => {
 
   it('is multi-select, order-preserving, and caps at two goals', async () => {
     const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'goals' });
+    const { boardsService } = renderWizard({ onComplete, initialStep: 'goals' });
 
     // First-picked = primary, second-picked = secondary (order preserved).
     clickButton('Dig into anything');
@@ -260,11 +251,13 @@ describe('OnboardingWizard', () => {
     fireEvent.click(thirdCard as HTMLButtonElement);
     expect(thirdCard).toHaveAttribute('aria-pressed', 'false');
 
-    // Advance straight to done via skips to inspect the emitted goals + merged recs.
+    // Advance through the required workspace/tools steps to inspect the emitted
+    // goals + merged recommendations.
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i); // llm
-    clickButton(/skip for now/i); // workspace
-    clickButton(/skip for now/i); // integrations
+    clickButton(/^continue →/i); // workspace
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+    await findAndClickButton(/^continue →/i); // integrations
     clickButton(/open my board/i);
 
     expect(onComplete).toHaveBeenCalledWith(
@@ -272,6 +265,28 @@ describe('OnboardingWizard', () => {
         goals: ['dig-into-anything', 'ship-without-busywork'],
         // Merge: first two of primary (dig) then first two of secondary (ship).
         suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
+      })
+    );
+  });
+
+  it('treats Skip on the goals step as authoritative after a selection', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({ onComplete });
+
+    clickButton('Ship without the busywork');
+    clickButton(/skip for now/i);
+    await findAndClickButton(/skip for now/i); // llm
+
+    clickButton(/^continue →/i); // required workspace
+    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
+    await findAndClickButton(/^continue →/i); // required tools
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: [],
+        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
       })
     );
   });
@@ -593,8 +608,18 @@ describe('OnboardingWizard', () => {
     // No goal chosen — falls back to the default rec set.
     expect(screen.getByText('Slack')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
-    // Recommendations only: nothing is connected here; the AI teammate does it later.
-    expect(screen.getByText(/ask your AI teammate to help set them up/i)).toBeInTheDocument();
+    // Recommendations only: nothing is connected here. Members get an honest
+    // capability-aware path instead of being sent to an admin-only screen.
+    expect(screen.getByText(/workspace admin can connect them for your team/i)).toBeInTheDocument();
+  });
+
+  it('directs admins to Marketplace for recommended integrations', () => {
+    renderWizard({
+      initialStep: 'integrations',
+      user: makeUser({ role: 'admin' } as Partial<User>),
+    });
+
+    expect(screen.getByText(/connect them from marketplace/i)).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
@@ -643,6 +668,7 @@ describe('OnboardingWizard', () => {
       // the goals threaded to the completion handler are empty.
       suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
       goals: [],
+      canManageIntegrations: false,
     });
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
