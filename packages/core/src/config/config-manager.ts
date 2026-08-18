@@ -12,6 +12,7 @@ import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
 import type { AgenticToolName } from '../types';
+import { normalizeHttpBaseUrl } from '../utils/url';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
@@ -1404,7 +1405,9 @@ export async function getDaemonUrl(): Promise<string> {
 
 /** Resolve the internal daemon URL from an already processed config snapshot. */
 export function resolveDaemonUrl(config: AgorConfig): string {
-  return process.env.DAEMON_URL || constructDaemonLocalUrl(config);
+  return process.env.DAEMON_URL
+    ? normalizeHttpBaseUrl(process.env.DAEMON_URL, 'DAEMON_URL')
+    : constructDaemonLocalUrl(config);
 }
 
 /**

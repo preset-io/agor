@@ -1436,6 +1436,20 @@ describe('getDaemonUrl', () => {
     const url = await getDaemonUrl();
     expect(url).toBe('https://custom-daemon.example.com:8443');
   });
+
+  it('normalizes DAEMON_URL before any config consumer receives it', async () => {
+    process.env.DAEMON_URL = ' HTTPS://Example.com:443/agor/// ';
+    await expect(getDaemonUrl()).resolves.toBe('https://example.com/agor');
+  });
+
+  it.each([
+    'https://user:secret@example.com',
+    'https://example.com/?target=other',
+    'https://example.com/#other',
+  ])('rejects an unsafe DAEMON_URL override: %s', async (value) => {
+    process.env.DAEMON_URL = value;
+    await expect(getDaemonUrl()).rejects.toThrow('DAEMON_URL must not include');
+  });
 });
 
 // =============================================================================
