@@ -37,7 +37,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Fixes
 
-- **Remote user listing honors the active login** — `agor user list` now uses the shared authenticated daemon client instead of opening the local database. CLI architecture regressions prevent connection commands from bypassing that client boundary.
+- **Remote user listing honors the active login** — `agor user list` now uses the shared authenticated daemon client instead of opening the local database. CLI architecture regressions prevent connection commands from bypassing that client boundary. ([#2391](https://github.com/preset-io/agor/pull/2391))
 
 ### Chores
 
