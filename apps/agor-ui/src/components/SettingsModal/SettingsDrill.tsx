@@ -182,10 +182,35 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
     });
   }, [onBack, confirmLeaveIfDirty, closeDrill]);
 
+  // Keep the latest callbacks/title in refs and register through STABLE wrappers,
+  // so re-registration is driven only by the footer's display values
+  // (dirty/saving/saveLabel/hasOnSave). Editors routinely pass a fresh
+  // onSave/onBack/title identity every render (e.g. BranchModal's non-memoized
+  // handleSave); without this, the effect re-runs each render → setController →
+  // the owner re-renders the editor → new identities → infinite loop (the
+  // Branches drill-in crash). Wrappers read the refs so Save/Back stay current.
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+  const backRef = useRef(back);
+  backRef.current = back;
+  const titleRef = useRef(title);
+  titleRef.current = title;
+  const stableOnSave = useCallback(() => onSaveRef.current?.(), []);
+  const stableBack = useCallback(() => backRef.current(), []);
+  const hasOnSave = onSave != null;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: title read via ref on purpose (footer doesn't display it)
   useEffect(() => {
-    registerController({ title, dirty, saving, onSave, saveLabel, onBack: back });
+    registerController({
+      title: titleRef.current,
+      dirty,
+      saving,
+      saveLabel,
+      onSave: hasOnSave ? stableOnSave : undefined,
+      onBack: stableBack,
+    });
     return () => registerController(null);
-  }, [registerController, title, dirty, saving, onSave, saveLabel, back]);
+  }, [registerController, dirty, saving, saveLabel, hasOnSave, stableOnSave, stableBack]);
 
   return (
     <Flex vertical style={{ height: '100%' }}>
