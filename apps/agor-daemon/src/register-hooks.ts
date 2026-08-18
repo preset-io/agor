@@ -541,6 +541,8 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
   ['codex-auth/device', 'codexDeviceAuth'],
   ['codex-auth/import', 'codexAuth'],
   ['codex-auth/logout', 'codexAuth'],
+  // No longer process-affine — attempt state is durable — but still gated on
+  // the executor home, so the entry stays and `claudeOAuth` decides.
   ['claude-auth/oauth', 'claudeOAuth'],
   ['claude-auth/logout', 'claudeAuth'],
   ['opencode-auth', 'openCodeAuth'],

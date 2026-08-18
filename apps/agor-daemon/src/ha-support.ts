@@ -12,7 +12,7 @@ export const HA_UNSUPPORTED_FEATURES = {
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
   codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
   claudeAuth: 'Claude credential-file logout without a consistent executor user home',
-  claudeOAuth: 'Claude subscription OAuth sign-in without durable attempt ownership',
+  claudeOAuth: 'Claude subscription OAuth sign-in without a consistent executor user home',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -37,7 +37,13 @@ export function isHaFeatureUnavailable(
   feature: HaUnsupportedFeature
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
-  if (feature === 'codexAuth' || feature === 'claudeAuth')
+  // Claude subscription sign-in keeps its attempt state in PostgreSQL, sealed
+  // and claimed one-shot, so any replica can finish an attempt another one
+  // started — HA already requires both PostgreSQL and an AGOR_MASTER_SECRET, so
+  // that store is always available here. What remains is the same condition the
+  // credential-file operations have: the executor home the credential is
+  // written to must be the one every replica's sessions read.
+  if (feature === 'codexAuth' || feature === 'claudeAuth' || feature === 'claudeOAuth')
     return !deployment.capabilities.codexCredentialFiles;
   return true;
 }

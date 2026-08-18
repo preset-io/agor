@@ -127,7 +127,10 @@ describe('constrained HA support profile', () => {
   });
 
   it('admits Codex/Claude auth-file operations only with a consistent executor home', () => {
-    for (const feature of ['codexAuth', 'claudeAuth'] as const) {
+    // claudeOAuth joins these now that its attempt state is durable: HA always
+    // supplies PostgreSQL and a master secret, so the executor home is the only
+    // remaining precondition.
+    for (const feature of ['codexAuth', 'claudeAuth', 'claudeOAuth'] as const) {
       expect(isHaFeatureUnavailable(ha, feature)).toBe(false);
       expect(
         isHaFeatureUnavailable(
@@ -138,9 +141,10 @@ describe('constrained HA support profile', () => {
     }
   });
 
-  it('always gates the in-memory device / OAuth attempt flows in constrained HA', () => {
+  it('still gates the process-local Codex device flow in constrained HA', () => {
+    // Codex device auth polls OpenAI from the replica that started it and has
+    // no durable attempt ownership yet, so it stays unavailable.
     expect(isHaFeatureUnavailable(ha, 'codexDeviceAuth')).toBe(true);
-    expect(isHaFeatureUnavailable(ha, 'claudeOAuth')).toBe(true);
   });
 
   it('does not change standalone behavior', () => {
