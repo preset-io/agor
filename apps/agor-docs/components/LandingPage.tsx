@@ -336,8 +336,8 @@ const busItems: Array<{
     rippleDelays: [0, 600, 1200, 1800, 2400],
   },
   {
-    title: 'Unix-level isolation',
-    desc: 'Progressive isolation modes that open the canvas to the whole org without handing out the keys.',
+    title: 'Execution isolation',
+    desc: 'Application RBAC paired with fail-closed local sandboxing or a reviewed delegated runtime.',
     rippleSize: 24,
     rippleDelays: [0, 600, 1200, 1800, 2400],
   },

@@ -85,7 +85,7 @@ export const blogPosts: BlogPost[] = [
     slug: 'agor-cloud',
     title: 'Agor Cloud — Opening a Private Beta',
     description:
-      'Fully managed Agor with Unix-level isolation, analytics dashboards, policy controls, and enterprise observability.',
+      'Fully managed Agor with tenant-scoped execution isolation, analytics dashboards, policy controls, and enterprise observability.',
     author: 'Maxime Beauchemin',
     date: '2025-11-23',
     image: '/images/blog/agor-cloud.png',

@@ -271,7 +271,7 @@ template instead of passing a literal or empty tenant value. In
 `required_from_auth` mode, every executor launch requires an active tenant
 context, whether or not its template uses the placeholder.
 
-`{unix_user}` is validated against the Unix-username format and Agor refuses
+`{unix_user}` is validated against the delegated home-key format and Agor refuses
 to execute the template when the value is malformed — it is rendered into a
 `sh -c` command and commonly used as a path segment for per-user home mounts.
 In `unix_user_mode: delegated` it carries the session user's `unix_username`;
@@ -933,6 +933,6 @@ Create a branch and run an agent session through the UI.
 
 ## Related Documentation
 
-- [Full Multiplayer Mode](/guide/multiplayer-unix-isolation) - Unix isolation and RBAC
+- [Multiplayer Execution Isolation](/guide/multiplayer-unix-isolation) - RBAC, local sandboxing, and delegated execution
 - [Environments](/guide/environment-configuration) - Branch environment templates
 - [Architecture](/guide/architecture) - System design overview

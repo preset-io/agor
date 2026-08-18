@@ -587,7 +587,7 @@ export function AgorCloudLanding() {
               <img
                 className={styles.trustShot}
                 src="/screenshots/security-review-fanout.png"
-                alt="A security-review branch in Agor, with sub-sessions fanned out across RBAC, secrets management, Unix isolation, dependency supply chain, and more"
+                alt="A security-review branch in Agor, with sub-sessions fanned out across RBAC, secrets management, execution isolation, dependency supply chain, and more"
                 loading="lazy"
               />
             </div>

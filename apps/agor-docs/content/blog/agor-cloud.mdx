@@ -1,6 +1,6 @@
 ---
 title: 'Agor Cloud - Opening a Private Beta'
-description: 'Fully managed Agor: bring your own API keys, pen-tested and hardened for public-internet use (mobile included), same-day security patching, Unix-level user isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
+description: 'Fully managed Agor: bring your own API keys, pen-tested and hardened for public-internet use (mobile included), same-day security patching, tenant-scoped execution isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
 author: 'Maxime Beauchemin'
 date: 2025-11-23
 image: '/images/blog/agor-cloud.png'
@@ -94,7 +94,7 @@ The default public Agor Cloud is a managed single-tenant instance per team, host
 - **Bring-your-own-cloud deployments.** We deploy and manage Agor inside your own AWS or GCP account. Data and compute stay in your tenancy.
 - **Private network peering.** Reach internal git servers, private APIs, staging databases, and ticketing systems over your VPC. Nothing exposed to the public internet.
 - **VPN-fronted access.** Sit Agor behind your existing VPN if your security policy requires it.
-- **Bring back the shared, fat dev server.** MPC unlocks the "team works on one beefy dev box" model, with the Unix-level isolation above keeping users from stepping on each other. It's how multi-user systems were designed to work, before everyone moved to laptops. Not part of the default Cloud offering; ask about it if it fits your team.
+- **Bring back the shared, fat dev server.** MPC unlocks the "team works on one beefy dev box" model, with tenant-scoped runtime, storage, home, and credential boundaries keeping users from stepping on each other. Not part of the default Cloud offering; ask about it if it fits your team.
 
 Network topology is a conversation, not a checkbox. Tell us what your security team needs and we'll work out the shape.
 
@@ -173,7 +173,7 @@ We're not trying to sell you something you don't need. We're looking for teams w
 - **Dedicated Agor instance** with your team's repos and worktrees
 - **Bring-your-own-key** for Claude, Codex, Gemini. No proxy, no markup, no cut
 - **Pen-tested and public-internet hardened.** Use from anywhere, mobile included, no VPN required
-- **Unix-level user isolation** as defense-in-depth
+- **Tenant-scoped execution isolation** as defense-in-depth
 - **Private network access** to your VPC, VPN, or own-cloud account (Managed Private Cloud)
 - **Audit log + multi-cast metrics** integrated with your existing observability stack
 - **CI-ready agent sessions** that persist and stay visible on your board

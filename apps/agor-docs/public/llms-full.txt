@@ -83,7 +83,7 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 - **Local**: npm install, single command startup
 - **Docker**: Docker Compose
 - **Kubernetes**: Containerized execution with shared storage
-- **Multiplayer Mode**: RBAC + Unix-level isolation for teams
+- **Execution Isolation**: RBAC with fail-closed local sandboxing or delegated execution for teams
 
 ## Documentation
 
@@ -109,7 +109,7 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 - [SDK Comparison](https://agor.live/guide/sdk-comparison): Claude Code vs Codex vs Gemini vs Copilot vs OpenCode feature matrix
 - [One-Time Launch Auth](https://agor.live/guide/one-time-launch-auth): Launch-code handoff from trusted external apps
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor
-- [Multiplayer Mode](https://agor.live/guide/multiplayer-unix-isolation): RBAC and Unix isolation
+- [Execution Isolation](https://agor.live/guide/multiplayer-unix-isolation): RBAC, local sandboxing, and delegated execution
 - [Containerized Execution](https://agor.live/guide/containerized-execution): Kubernetes/Docker deployment
 - [API Reference](https://agor.live/api-reference): REST API documentation
 - [WebSocket Events](https://agor.live/api-reference/websockets): Real-time event reference
