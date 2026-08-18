@@ -888,9 +888,10 @@ const GatewayAgentConfigurationFields: React.FC<{
 
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
- * and navigation lives in the unified modal footer. Selections drive a live
- * manifest preview + derived scope/event list via {@link buildSlackManifest} /
- * {@link requiredBotScopes}, so the user never adds a scope by hand.
+ * and navigation lives in the unified modal footer. Selections drive the derived
+ * scope/event list on the Options step ({@link requiredBotScopes}) and the
+ * copyable manifest on the Create app step ({@link buildSlackManifest}), so the
+ * user never adds a scope by hand.
  */
 const SlackSetupWizard: React.FC<{
   client: AgorClient | null;
