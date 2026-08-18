@@ -4,6 +4,7 @@
  * Reduces boilerplate by providing common functionality like daemon connection checking.
  */
 
+import { normalizeHttpBaseUrl } from '@agor/core/utils/url';
 import type { AgorClient } from '@agor-live/client';
 import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 import { Command } from '@oclif/core';
@@ -37,7 +38,7 @@ export abstract class BaseCommand extends Command {
     const environmentTarget =
       apiKey && process.env.DAEMON_URL && process.env.AGOR_DEPLOYMENT_ID
         ? {
-            url: process.env.DAEMON_URL.replace(/\/$/, ''),
+            url: normalizeHttpBaseUrl(process.env.DAEMON_URL, 'DAEMON_URL'),
             origin: new URL(process.env.DAEMON_URL).origin,
             deploymentId: process.env.AGOR_DEPLOYMENT_ID,
           }

@@ -285,6 +285,21 @@ export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): s
   }
 }
 
+/** Normalize a required HTTP(S) service base URL for safe path composition. */
+export function normalizeHttpBaseUrl(value: unknown, fieldName = 'base URL'): string {
+  const normalized = normalizeOptionalHttpUrl(value, fieldName);
+  if (!normalized) throw new Error(`${fieldName} is required`);
+  const parsed = new URL(normalized);
+  if (parsed.username || parsed.password) {
+    throw new Error(`${fieldName} must not include credentials`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${fieldName} must not include a query string or fragment`);
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return `${parsed.origin}${path === '' ? '' : path}`;
+}
+
 /**
  * Parse an IPv4 literal in any form `inet_aton` accepts.
  *

@@ -8,7 +8,7 @@ import {
   getAgenticToolSelectionManifestPath,
   inspectManagedAgenticToolAlignment,
 } from '@agor/core/agentic-integrations';
-import { load as loadYaml } from '@agor/core/yaml';
+import { dump as dumpYaml, load as loadYaml } from '@agor/core/yaml';
 import { spawn as spawnPty } from '@lydell/node-pty';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -213,7 +213,10 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
   );
 }
 
-async function runInteractiveReinit(home: string): Promise<{
+async function runInteractiveReinit(
+  home: string,
+  fixtureBin?: string
+): Promise<{
   exitCode: number;
   output: string;
 }> {
@@ -223,12 +226,15 @@ async function runInteractiveReinit(home: string): Promise<{
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: createInitEnvironment(home),
+    env: createInitEnvironment(home, {
+      ...(fixtureBin ? { PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}` } : {}),
+    }),
   });
 
   let output = '';
   let confirmedDeletion = false;
   let skippedAdmin = false;
+  let selectedTools = false;
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       terminal.kill();
@@ -246,6 +252,11 @@ async function runInteractiveReinit(home: string): Promise<{
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
         terminal.write('n\r');
+      }
+      if (!selectedTools && plain.includes('Which agentic tools should this deployment support?')) {
+        selectedTools = true;
+        // Move from Claude Code to Codex, select it, then submit.
+        terminal.write('\u001B[B \r');
       }
     });
     terminal.onExit(({ exitCode }) => {
@@ -447,6 +458,39 @@ describe('initial agentic tool selection', () => {
       else process.env.AGOR_AGENTIC_TOOLS_DIR = previousToolsDirectory;
     }
   }, 35_000);
+
+  it('prompts an upgraded local install for tools before destructive re-initialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-reinit-tools-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const firstInit = await runInitWithoutPty(home, [
+      '--non-interactive',
+      '--agentic-tools',
+      'none',
+    ]);
+    expect(firstInit.exitCode, firstInit.output).toBe(0);
+
+    const configPath = join(home, '.agor', 'config.yaml');
+    const legacyConfig = loadYaml(await readFile(configPath, 'utf8')) as Record<string, unknown>;
+    delete legacyConfig.agentic_tools;
+    await writeFile(configPath, dumpYaml(legacyConfig), 'utf8');
+
+    const result = await runInteractiveReinit(home, fixtureBin);
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Which agentic tools should this deployment support?');
+    expect(result.output).toContain('Configured: codex');
+
+    const preservedConfig = loadYaml(await readFile(configPath, 'utf8')) as Record<string, unknown>;
+    expect(preservedConfig.agentic_tools).toBeUndefined();
+    const manifest = JSON.parse(
+      await readFile(join(home, '.agor', 'agentic-tools', 'selection.json'), 'utf8')
+    ) as { installed: string[] };
+    expect(manifest.installed).toEqual(['codex']);
+  }, 60_000);
 
   it('preserves the declarative choice and prints one recovery command when install fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-pty-failure-'));

@@ -11,6 +11,7 @@ import {
   requireDeploymentId,
   resolveDaemonUrl,
 } from '@agor/core/config';
+import { normalizeHttpBaseUrl } from '@agor/core/utils/url';
 import { createRestClient } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -50,7 +51,7 @@ export default class Login extends Command {
     let localSelected = flags.local;
     const localConfig = hasLocalConfig ? await loadConfig() : null;
     let daemonUrl = flags.url
-      ? normalizeDaemonUrl(flags.url)
+      ? normalizeHttpBaseUrl(flags.url, 'Daemon URL')
       : localConfig
         ? resolveDaemonUrl(localConfig)
         : '';
@@ -79,7 +80,7 @@ export default class Login extends Command {
             validate: (value: string) => Boolean(value.trim()),
           },
         ]);
-        daemonUrl = normalizeDaemonUrl(answer.url);
+        daemonUrl = normalizeHttpBaseUrl(answer.url, 'Daemon URL');
       } else {
         localSelected = true;
       }
@@ -171,7 +172,7 @@ export default class Login extends Command {
       await saveToken({
         version: 2,
         target: {
-          url: normalizeDaemonUrl(daemonUrl),
+          url: normalizeHttpBaseUrl(daemonUrl, 'Daemon URL'),
           origin: new URL(daemonUrl).origin,
           deploymentId: probe.deploymentId,
         },
@@ -221,12 +222,4 @@ export default class Login extends Command {
       this.error(chalk.red(`✗ Authentication failed: ${errorMessage}`));
     }
   }
-}
-
-function normalizeDaemonUrl(value: string): string {
-  const url = new URL(value);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Daemon URL must use http:// or https://');
-  }
-  return url.href.replace(/\/$/, '');
 }

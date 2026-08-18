@@ -10,6 +10,7 @@ import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integrations';
 import {
   type AgorConfig,
   createInitialConfig,
@@ -44,6 +45,7 @@ import {
   normalizeAgenticToolName,
   resolveManagedAgenticToolVersion,
   validateInteractiveAgenticToolSelection,
+  writeAgenticToolSelectionManifest,
 } from '../lib/agentic-tool-integrations.js';
 import { getDaemonPid, getManagedDaemonIdentity } from '../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../lib/daemon-probe.js';
@@ -114,6 +116,7 @@ export default class Init extends Command {
     daemon: { ...getDefaultConfig().daemon, deployment_id: this.deploymentId },
   };
   private requestedAgenticTools: InstallableAgenticTool[] | undefined;
+  private selectedAgenticTools: InstallableAgenticTool[] | undefined;
   private nonInteractive = false;
   static description =
     'Create the Agor config/database and install the agentic tools selected for first use';
@@ -337,6 +340,17 @@ export default class Init extends Command {
       return;
     }
 
+    // Fail before any onboarding/destructive prompts. This also catches a
+    // partially initialized legacy install whose database is missing while
+    // its daemon still owns open database/WAL handles.
+    try {
+      await this.assertDaemonStoppedBeforeReinit();
+    } catch (error) {
+      this.error(
+        `Failed to initialize Agor: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
     if (!flags.force && !this.nonInteractive && (!process.stdin.isTTY || !process.stdout.isTTY)) {
       this.error(
         'Interactive `agor init` requires a TTY. For headless setup, use `agor init --non-interactive --agentic-tools <comma-separated-list|all|none>`.'
@@ -431,7 +445,7 @@ export default class Init extends Command {
 
       // If --force, skip prompts and nuke everything
       if (flags.force) {
-        await this.assertDaemonStoppedBeforeReinit();
+        await this.prepareAgenticToolSelection(true);
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
         await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
         await this.performInit(baseDir, dbPath, true);
@@ -453,10 +467,9 @@ export default class Init extends Command {
         return;
       }
 
-      // A live daemon owns the SQLite database and its WAL/SHM sidecars. Check
-      // only after the user chooses reset: re-running init must still offer the
-      // intended reset UX, but must never unlink a live database.
-      await this.assertDaemonStoppedBeforeReinit();
+      // Resolve upgraded-install tool policy before deleting anything. A
+      // missing headless policy or a cancelled selector must leave data intact.
+      await this.prepareAgenticToolSelection(false);
 
       // User confirmed - clean up and reinitialize
       await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
@@ -511,7 +524,7 @@ export default class Init extends Command {
     // Make the deployment choice before creating any state so rejecting the
     // empty selection (or cancelling the prompt) does not strand a partial DB.
     const configAlreadyExists = await this.pathExists(getConfigPath());
-    const selectedTools = await this.selectInitialAgenticTools(skipPrompts);
+    const selectedTools = await this.prepareAgenticToolSelection(skipPrompts);
 
     // Create directory structure
     this.log('');
@@ -632,8 +645,8 @@ export default class Init extends Command {
       }
     }
 
-    this.initialConfig.agentic_tools = { installed: selectedTools };
     if (!configAlreadyExists) {
+      this.initialConfig.agentic_tools = { installed: selectedTools };
       await this.persistDuringInitialCreation(this.initialConfig);
     }
     if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
@@ -729,7 +742,36 @@ export default class Init extends Command {
     if (await this.pathExists(getConfigPath())) {
       const existing = await loadConfig();
       this.initialConfig = existing;
-      return existing.agentic_tools?.installed ?? [];
+      const declared = existing.agentic_tools?.installed;
+      if (declared !== undefined) {
+        if (
+          this.requestedAgenticTools &&
+          this.requestedAgenticTools.join(',') !== declared.join(',')
+        ) {
+          throw new Error(
+            'agentic_tools.installed is deployment-owned in config.yaml. Edit it explicitly instead of passing --agentic-tools.'
+          );
+        }
+        return declared;
+      }
+
+      const policy = await resolveAgenticToolSelectionPolicy(existing);
+      if (this.requestedAgenticTools) {
+        await writeAgenticToolSelectionManifest(this.requestedAgenticTools);
+        return this.requestedAgenticTools;
+      }
+      if (skipPrompts) {
+        if (policy.source === 'missing-manifest') {
+          throw new Error(
+            'This upgraded install has no agentic-tool selection. Pass --agentic-tools <comma-separated-list|all|none> before re-initializing.'
+          );
+        }
+        return [...policy.selected];
+      }
+
+      const selected = await this.promptForAgenticTools(policy.selected);
+      await writeAgenticToolSelectionManifest(selected);
+      return selected;
     }
     if (this.requestedAgenticTools) return this.requestedAgenticTools;
     if (process.env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return [];
@@ -739,12 +781,26 @@ export default class Init extends Command {
       );
     }
 
+    return await this.promptForAgenticTools();
+  }
+
+  private async prepareAgenticToolSelection(
+    skipPrompts: boolean
+  ): Promise<InstallableAgenticTool[]> {
+    this.selectedAgenticTools ??= await this.selectInitialAgenticTools(skipPrompts);
+    return this.selectedAgenticTools;
+  }
+
+  private async promptForAgenticTools(
+    previouslySelected: readonly InstallableAgenticTool[] = []
+  ): Promise<InstallableAgenticTool[]> {
     const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
+    const checked = new Set(previouslySelected);
     this.log('');
     this.log(chalk.bold('Agentic tool packages'));
     this.log(
       chalk.dim(
-        `Selected packages will be downloaded with npm, installed at ${agorVersion}, and recorded once in config.yaml.`
+        `Selected packages will be downloaded with npm, installed at ${agorVersion}, and recorded as this deployment's tool policy.`
       )
     );
     this.log(
@@ -762,6 +818,7 @@ export default class Init extends Command {
         choices: Object.entries(AGENTIC_TOOL_INTEGRATIONS).map(([tool, definition]) => ({
           name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
           value: tool,
+          checked: checked.has(tool as InstallableAgenticTool),
         })),
         validate: validateInteractiveAgenticToolSelection,
       },
