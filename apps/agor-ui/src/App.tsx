@@ -715,6 +715,7 @@ function AppContent() {
     path: 'teammate' | 'own-repo';
     teammateName?: string;
     teammateEmoji?: string;
+    sourceBranch?: string;
     agent?: AgenticToolName | null;
     suggestedIntegrations?: string[];
     canManageIntegrations?: boolean;
@@ -777,6 +778,7 @@ function AppContent() {
       boardId: result.boardId,
       teammateName: result.teammateName,
       teammateEmoji: result.teammateEmoji,
+      sourceBranch: result.sourceBranch,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
       canManageIntegrations: result.canManageIntegrations,

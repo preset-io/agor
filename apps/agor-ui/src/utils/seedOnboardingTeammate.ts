@@ -14,9 +14,15 @@ export interface SeedOnboardingTeammateInput {
   teammateName?: string;
   teammateEmoji?: string;
   /**
+Framework source branch from the chosen gallery template. Undefined falls
+   * back to the framework repo's default branch (createTeammateBranch). A
+   * missing template branch on the remote surfaces as a non-fatal warning
+   * rather than blocking completion.
+   */
+  sourceBranch?: string;
+  /**
    * Agent chosen in the LLM step. `null`/`undefined` means the user skipped that
-   * step and has no credentials, so no bootstrap session is started — see the
-   * skip handling in `seedOnboardingTeammate`.
+   * step and has no credentials, so no bootstrap session is started.
    */
   agent?: AgenticToolName | null;
   /** Goal-tailored MCP integration names to suggest in the onboarding prompt. */
@@ -69,6 +75,7 @@ export async function seedOnboardingTeammate(
         displayName: teammateName,
         emoji: input.teammateEmoji,
         repoId: input.frameworkRepo.repo_id,
+        sourceBranch: input.sourceBranch,
         boardId: input.boardId,
         createdViaOnboarding: true,
       },

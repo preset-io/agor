@@ -141,6 +141,22 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
+  it('forwards the template source branch to createTeammateBranch', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+
+    const { input } = setup({ sourceBranch: 'template/legal-analyst' });
+    await seedOnboardingTeammate(input);
+
+    expect(createTeammateBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBranch: 'template/legal-analyst' }),
+      expect.anything()
+    );
+  });
+
   it('warns (non-fatal) and returns no session when teammate creation throws', async () => {
     createTeammateBranchMock.mockRejectedValue(new Error('boom'));
     const { input, onWarn } = setup();

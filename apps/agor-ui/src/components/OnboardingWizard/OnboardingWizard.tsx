@@ -1,8 +1,12 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
 /**
- * OnboardingWizard — redesigned 5-step first-run flow.
+ * OnboardingWizard — redesigned 4-step first-run flow.
  *
- * Steps: goals → llm → workspace → integrations → done
+ * Steps: goals → workspace (name + template gallery) → llm → done
+ *
+ * The in-wizard MCP-recommendations step was removed; the goal→MCP logic still
+ * feeds the first-session bootstrap prompt via `suggestedIntegrations` on
+ * completion, so the teammate proposes connections in-session.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -49,14 +53,14 @@ import {
 import { useAgorStore } from '../../store/agorStore';
 import {
   MAX_ONBOARDING_GOALS,
-  type McpRecommendation,
   mergeGoalMcpRecs,
   ONBOARDING_GOALS,
 } from '../../utils/onboardingGoals';
+import { getTeammateTemplate, resolveTemplateSourceBranch } from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
-import { McpLogo } from '../McpLogo';
+import { TeammateGallery } from '../TeammateGallery';
 import { ToolIcon } from '../ToolIcon';
 
 const { Text, Title, Paragraph } = Typography;
@@ -65,7 +69,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'goals' | 'llm' | 'workspace' | 'integrations' | 'done';
+export type WizardStep = 'goals' | 'workspace' | 'llm' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-subscription-token'
@@ -93,7 +97,7 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['goals', 'llm', 'workspace', 'integrations', 'done'];
+const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'done'];
 
 // Prefilled so the required workspace step never blocks on an empty field; the
 // user can rename it. Named the teammate and the board the wizard creates.
@@ -109,10 +113,9 @@ const NO_CLIENT_BOARD_ERROR =
 // skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   goals: { number: 1, label: 'Goals', skippable: true },
-  llm: { number: 2, label: 'AI', skippable: true },
-  workspace: { number: 3, label: 'Workspace', skippable: false },
-  integrations: { number: 4, label: 'Tools', skippable: false },
-  done: { number: 5, label: "You're ready", skippable: false },
+  workspace: { number: 2, label: 'Teammate', skippable: true },
+  llm: { number: 3, label: 'AI', skippable: true },
+  done: { number: 4, label: "You're ready", skippable: false },
 };
 
 const GOALS = ONBOARDING_GOALS;
@@ -344,6 +347,8 @@ export interface OnboardingWizardProps {
     teammateName?: string;
     /** Avatar emoji for the first AI teammate (defaults to 🤖). */
     teammateEmoji?: string;
+    /** Framework source branch from the chosen template; undefined = repo default. */
+    sourceBranch?: string;
     /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
     agent?: AgenticToolName | null;
     /** Goal-tailored MCP integration names to seed into the bootstrap prompt. */
@@ -448,6 +453,9 @@ export function OnboardingWizard({
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
   const [teammateName, setTeammateName] = useState(DEFAULT_TEAMMATE_NAME);
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
+  // Chosen gallery template id (null = nothing picked yet). Sets the default
+  // avatar and the teammate's framework source branch — never the name.
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardError, setBoardError] = useState<string | null>(null);
@@ -456,9 +464,7 @@ export function OnboardingWizard({
   const [verifiedBoard, setVerifiedBoard] = useState<Board | null>(null);
   const [boardVerifying, setBoardVerifying] = useState(false);
 
-  // ── Step 4: integrations ─────────────────────────────────────────────────
-
-  // ── Step 5: completion ────────────────────────────────────────────────────
+  // ── Step 4: completion ────────────────────────────────────────────────────
   // True while the async onComplete (teammate creation + navigation) runs, so
   // the final step shows a spinner + copy instead of vanishing the modal.
   const [completing, setCompleting] = useState(false);
@@ -479,6 +485,7 @@ export function OnboardingWizard({
     setLlmAuthVerified({});
     setTeammateName(DEFAULT_TEAMMATE_NAME);
     setTeammateEmoji('🤖');
+    setSelectedTemplateId(null);
     setCreatedBoardId(null);
     setBoardError(null);
     setBoardCreating(false);
@@ -681,9 +688,7 @@ export function OnboardingWizard({
       }
       case 'workspace':
         if (boardVerifying) return false;
-        return teammateName.trim().length > 0;
-      case 'integrations':
-        return true;
+        return hasExistingBoard || teammateName.trim().length > 0;
       case 'done':
         return true;
     }
@@ -759,9 +764,7 @@ export function OnboardingWizard({
         return 'Connect →';
       }
       case 'workspace':
-        return 'Continue →';
-      case 'integrations':
-        return 'Continue →';
+        return hasExistingBoard ? 'Keep going →' : 'Continue →';
       case 'done':
         return completing ? 'Setting up your AI teammate…' : 'Open my board →';
     }
@@ -812,7 +815,7 @@ export function OnboardingWizard({
   // marking codex verified so the primary button advances to the next step.
   const handleCodexImported = useCallback(() => {
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
-    goToStep('workspace');
+    goToStep('done');
   }, [goToStep]);
 
   const handleBack = useCallback(() => {
@@ -843,13 +846,13 @@ export function OnboardingWizard({
         // Goals are persisted once, authoritatively and awaited, by the
         // completion handler. An intermediate whole-preferences write here can
         // race later onboarding saves and resurrect stale data.
-        goToStep('llm');
+        goToStep('workspace');
         break;
       }
       case 'llm': {
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
-          goToStep('workspace');
+          goToStep('done');
           return;
         }
         // Device sign-in and login-file import both complete inside their own
@@ -859,12 +862,12 @@ export function OnboardingWizard({
           selectedAgent === 'codex' &&
           (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
         ) {
-          if (llmAuthVerified.codex === true) goToStep('workspace');
+          if (llmAuthVerified.codex === true) goToStep('done');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
-          goToStep('workspace');
+          goToStep('done');
           return;
         }
         if (!user || !apiKey.trim()) return;
@@ -903,7 +906,7 @@ export function OnboardingWizard({
               [selectedAgent]: { [keyName]: apiKey.trim() },
             } as UpdateUserInput['agentic_tools'],
           });
-          goToStep('workspace');
+          goToStep('done');
         } catch (err) {
           setLlmError(
             `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
@@ -914,33 +917,8 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        if (!teammateName.trim()) return;
-        // Board created earlier this pass (Back → edit → forward): rename the
-        // same board instead of creating a duplicate.
-        if (createdBoardId) {
-          if (!client) {
-            setBoardError(NO_CLIENT_BOARD_ERROR);
-            return;
-          }
-          setBoardCreating(true);
-          setBoardError(null);
-          try {
-            await client
-              .service('boards')
-              .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
-            if (user) await saveOnboardingProgress({ boardId: createdBoardId });
-            goToStep('integrations');
-          } catch (err) {
-            setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
-          } finally {
-            setBoardCreating(false);
-          }
-          return;
-        }
-        // A board the user already had before onboarding is theirs — carry the
-        // teammate name forward without renaming their board.
-        if (verifiedBoard) {
-          goToStep('integrations');
+        if (hasExistingBoard) {
+          goToStep('llm');
           return;
         }
         if (!client) {
@@ -961,7 +939,7 @@ export function OnboardingWizard({
           }
           setCreatedBoardId(newBoardId);
           if (user) await saveOnboardingProgress({ boardId: newBoardId });
-          goToStep('integrations');
+          goToStep('llm');
         } catch (err) {
           setBoardError(err instanceof Error ? err.message : 'Failed to create board');
         } finally {
@@ -969,14 +947,11 @@ export function OnboardingWizard({
         }
         break;
       }
-      case 'integrations': {
-        goToStep('done');
-        break;
-      }
       case 'done': {
         const boardIdToUse = createdBoardId || verifiedBoard?.board_id || '';
-        // Merged MCP integrations for the chosen goals (same set shown on the
-        // integrations step) — threaded into the teammate's bootstrap prompt.
+        // Merged MCP integrations for the chosen goals, threaded into the
+        // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
+        // this still powers the teammate proposing connections in its first session.
         const suggestedIntegrations = mergeGoalMcpRecs(selectedGoals).map((rec) => rec.name);
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
@@ -990,6 +965,9 @@ export function OnboardingWizard({
             // Naming details for the first AI teammate, seeded on completion.
             teammateName: teammateName.trim() || undefined,
             teammateEmoji,
+            // Framework source branch from the chosen gallery template; undefined
+            // (blank / no pick) falls back to the repo default branch.
+            sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
             agent: selectedAgent,
             suggestedIntegrations,
             canManageIntegrations: hasMinimumRole(user?.role, ROLES.ADMIN),
@@ -1016,6 +994,7 @@ export function OnboardingWizard({
     client,
     teammateName,
     teammateEmoji,
+    selectedTemplateId,
     saveOnboardingProgress,
     createdBoardId,
     verifiedBoard,
@@ -1578,15 +1557,22 @@ export function OnboardingWizard({
     );
   };
 
+  // Selecting a template sets the default avatar (and later the source branch),
+  // but never the name — the name stays personal and user-chosen.
+  const applyTemplate = (templateId: string) => {
+    setSelectedTemplateId(templateId);
+    setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
+  };
+
   const renderWorkspace = () => (
     <div>
       {renderStepBadge('Name your AI teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        An AI teammate is your assistant for getting work done. Each board is recommended to have
-        one primary teammate — give yours a name and an avatar. You can change everything anytime.
+        Name your teammate, then pick a starter template to shape what they do — or start blank. You
+        can change everything anytime.
       </Paragraph>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div>
           <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
             Teammate name
@@ -1614,89 +1600,22 @@ export function OnboardingWizard({
             </Text>
           )}
         </div>
-      </div>
 
-      {/* Glossary — reference text, not interactive */}
-      <Divider titlePlacement="start" plain style={{ margin: '24px 0 12px' }}>
-        <Text
-          style={{
-            color: TEXT_MUTED,
-            fontSize: 11,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-          }}
-        >
-          Quick reference
-        </Text>
-      </Divider>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {[
-          { term: 'Branch', def: 'isolated workspace per task' },
-          { term: 'Session', def: 'conversation with your AI' },
-          { term: 'Board', def: 'kanban view of all branches' },
-        ].map(({ term, def }) => (
-          <Text key={term} style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
+        <div>
+          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}>
+            Start from a template <span style={{ color: TEXT_MUTED }}>(optional)</span>
           </Text>
-        ))}
+          <TeammateGallery
+            goals={selectedGoals}
+            value={selectedTemplateId}
+            onChange={applyTemplate}
+          />
+        </div>
       </div>
 
       {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
     </div>
   );
-
-  const renderIntegrations = () => {
-    const recs: McpRecommendation[] = mergeGoalMcpRecs(selectedGoals);
-    const canManageIntegrations = hasMinimumRole(user?.role, ROLES.ADMIN);
-    return (
-      <div>
-        {renderStepBadge('Recommended tools')}
-
-        {/* General MCP intro — plain helper text, not a card */}
-        <div
-          style={{
-            marginBottom: 16,
-            fontSize: 12,
-            color: TEXT_SECONDARY,
-            lineHeight: 1.6,
-          }}
-        >
-          These are the tools we recommend for your work.{' '}
-          {canManageIntegrations
-            ? 'Connect them from Marketplace, or ask your AI teammate to help set them up.'
-            : 'A workspace admin can connect them for your team.'}
-        </div>
-
-        {/* Goal-curated MCP recommendations — informational list, no selection */}
-        <List
-          dataSource={recs}
-          renderItem={(rec) => (
-            <List.Item style={{ padding: '10px 4px', gap: 12 }}>
-              <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
-                    {rec.name}
-                  </span>
-                  {rec.featured && (
-                    <Tag
-                      color="processing"
-                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
-                    >
-                      Recommended
-                    </Tag>
-                  )}
-                </div>
-                <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
-                  {rec.description}
-                </div>
-              </div>
-            </List.Item>
-          )}
-        />
-      </div>
-    );
-  };
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
@@ -2016,7 +1935,6 @@ export function OnboardingWizard({
             {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
-            {currentStep === 'integrations' && renderIntegrations()}
             {currentStep === 'done' && renderDone()}
           </div>
 
