@@ -120,12 +120,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
         color="default"
         title={badgeTitle}
         style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
-        // antd moves children into a content span once an icon is set, so the
-        // root's `align-items: center` centers that wrapper rather than the
-        // count chip inside it. Left as an inline box, the chip is positioned by
-        // `vertical-align` against the label's baseline and lands off-center;
-        // centering the wrapper's own flex line aligns chip to label
-        // geometrically, independent of the font's ascent/descent metrics.
+        // antd nests children in a content span, so the root's align-items never reaches the chip.
         styles={{ content: { display: 'inline-flex', alignItems: 'center' } }}
       >
         <span>MCP</span>
