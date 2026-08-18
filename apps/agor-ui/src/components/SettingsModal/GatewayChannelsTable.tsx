@@ -1062,8 +1062,8 @@ const SlackSetupWizard: React.FC<{
       {/* Step 0: Options (kept mounted so Form.Items stay registered for validation) */}
       <div style={{ display: step === 0 ? undefined : 'none' }}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          Choose what the bot can do. Your selections build a Slack app manifest below — paste it
-          into Slack in the next step so every scope and event is preconfigured for you.
+          Choose what the bot can do. Your selections become a Slack app manifest you'll paste into
+          Slack on the next step, so every scope and event is preconfigured for you.
         </Typography.Paragraph>
 
         <Form.Item
@@ -1244,9 +1244,8 @@ const SlackSetupWizard: React.FC<{
         )}
 
         <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
-          Manifest preview
+          What this app will be able to do
         </Typography.Text>
-        {manifestPreview}
         {scopeList}
       </div>
 

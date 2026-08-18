@@ -285,11 +285,19 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
   });
 
-  it('updates the manifest preview and scope list as surfaces change', async () => {
+  it('updates the derived scope/event list as surfaces change, without the raw manifest', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
     // Surfaces live on the Options step (step 1).
     await advanceToOptions();
+
+    // The Options step configures; the raw JSON manifest is reserved for the
+    // "Create app" step, where it has a working copy button (issue #2448).
+    const manifestBlocks = Array.from(document.querySelectorAll('pre')).filter((el) =>
+      el.textContent?.includes('display_information')
+    );
+    expect(manifestBlocks).toHaveLength(1);
+    expect(manifestBlocks[0]).not.toBeVisible();
 
     // Public-channel scopes/events are absent until the surface is enabled.
     expect(screen.queryByText('channels:history')).not.toBeInTheDocument();
