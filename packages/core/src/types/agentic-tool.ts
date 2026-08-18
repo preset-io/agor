@@ -1,6 +1,6 @@
 // src/types/agentic-tool.ts
 
-import type { AgenticToolID } from './id';
+import type { AgenticToolID, UUID } from './id';
 import type { EffortLevel } from './session';
 
 /**
@@ -370,4 +370,54 @@ export interface ClaudeOAuthStatus {
   /** Subscription type parsed from the token response after success, when present. */
   subscriptionType?: string;
   hint?: string;
+  /**
+   * Identifies the attempt to the client that started it, so a reconnect landing
+   * on another replica resolves the same attempt. Safe to expose: it is not the
+   * OAuth `state` capability, of which only a SHA-256 fingerprint is stored.
+   */
+  attemptId?: string;
+}
+
+/**
+ * Identifier of one durable Claude OAuth sign-in attempt.
+ *
+ * Echoed to the initiating client for status reads and resumption. Like the MCP
+ * attempt id it is deliberately NOT the OAuth `state`: the durable row keeps
+ * only a fingerprint of that high-entropy one-time value.
+ */
+export type ClaudeOAuthAttemptID = UUID & { readonly __brand: 'ClaudeOAuthAttemptID' };
+
+/** Durable lifecycle of a Claude subscription OAuth attempt. */
+export type ClaudeOAuthAttemptStatus =
+  | 'pending'
+  | 'exchanging'
+  | 'succeeded'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired';
+
+/**
+ * Sealed exchange material for a Claude OAuth attempt.
+ *
+ * Only ever produced/consumed inside the daemon's OAuth authority, sealed with
+ * the deployment master secret and AAD-bound to the row it belongs to. The PKCE
+ * verifier and the raw `state` live here and nowhere else — never in a column,
+ * a log line, a status response, or any agent/LLM context.
+ */
+export interface ClaudeOAuthSealedMaterial {
+  version: 1;
+  attemptId: ClaudeOAuthAttemptID;
+  tenantId: string;
+  userId: string;
+  attemptGeneration: number;
+  /** PKCE verifier; the challenge is rederived from it when rebuilding the URL. */
+  codeVerifier: string;
+  /** Raw one-time OAuth state, of which the row stores only the fingerprint. */
+  state: string;
+  /**
+   * Execution home the credential must land in, fixed when the attempt started.
+   * Re-resolved and compared before the write so a mid-flow identity change
+   * cannot redirect the credential to a different home.
+   */
+  delegatedHomeKey: string | null;
 }

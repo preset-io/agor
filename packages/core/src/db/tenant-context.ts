@@ -32,6 +32,7 @@ export type SystemDatabaseCapability =
   | 'executor_token_maintenance'
   | 'mcp_oauth_callback'
   | 'mcp_oauth_maintenance'
+  | 'claude_oauth_maintenance'
   | 'github_install_state_callback'
   | 'github_install_state_maintenance'
   | 'upload_maintenance';

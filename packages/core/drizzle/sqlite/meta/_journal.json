@@ -624,6 +624,13 @@
       "when": 1787184000000,
       "tag": "0090_knowledge_teammate_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1787270400000,
+      "tag": "0091_claude_oauth_attempts",
+      "breakpoints": true
     }
   ]
 }

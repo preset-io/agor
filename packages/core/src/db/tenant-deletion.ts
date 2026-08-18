@@ -417,6 +417,11 @@ const STRICT_TENANT_POLICY_EXPRESSION =
 // active; otherwise permissive RLS policies would OR the default-tenant arm
 // with the state-hash capability and broaden callback visibility. Keep this as
 // an exact table-specific contract rather than accepting arbitrary predicates.
+//
+// claude_oauth_attempts uses the same guarded expression. It has no callback
+// capability (the user pastes the code back into an authenticated session), but
+// its bounded maintenance capability needs the tenant arm suppressed for the
+// same reason.
 const MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION =
   "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
 
@@ -459,7 +464,8 @@ function normalizePolicyExpression(expression: string | null): string | null {
 function assertSupportedPolicies(relation: CatalogRelation): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
   const expectedTenantPolicyExpression =
-    relation.tableName === 'mcp_oauth_pending_flows'
+    relation.tableName === 'mcp_oauth_pending_flows' ||
+    relation.tableName === 'claude_oauth_attempts'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
       : relation.tableName === 'github_install_states'
         ? STRICT_TENANT_POLICY_EXPRESSION
