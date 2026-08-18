@@ -7,7 +7,11 @@ vi.mock('./query-builder.js', () => ({
   setupQuery: vi.fn(),
 }));
 
-import { ClaudePromptService } from './prompt-service.js';
+import {
+  announcedQuietUntil,
+  ClaudePromptService,
+  MAX_ANNOUNCED_QUIET_MS,
+} from './prompt-service.js';
 import { setupQuery } from './query-builder.js';
 
 const sessionId = 'session-1' as SessionID;
@@ -51,10 +55,13 @@ function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) 
       : (async function* () {
           yield* messages;
         })();
+  const closed = vi.fn(generator.return.bind(generator));
   return Object.assign(generator, {
     releaseInput,
     getContextUsage,
-    interrupt: vi.fn(),
+    interrupt: vi.fn().mockResolvedValue(undefined),
+    return: closed,
+    closed,
   });
 }
 
@@ -74,11 +81,12 @@ function service() {
 const { silence_timeout_ms: SILENCE_MS, settled_grace_ms: GRACE_MS } =
   resolveClaudeBackgroundTaskConfig();
 
-const taskStarted = (taskId: string): SDKMessage =>
+const taskStarted = (taskId: string, toolUseId?: string): SDKMessage =>
   ({
     type: 'system',
     subtype: 'task_started',
     task_id: taskId,
+    tool_use_id: toolUseId,
     description: 'Explore',
     uuid: `start-${taskId}`,
     session_id: 'sdk-session',
@@ -96,11 +104,20 @@ const taskNotification = (taskId: string): SDKMessage =>
     session_id: 'sdk-session',
   }) as SDKMessage;
 
-const assistantMessage = (uuid: string, parentToolUseId: string | null = null): SDKMessage =>
+const assistantMessage = (
+  uuid: string,
+  parentToolUseId: string | null = null,
+  launchedToolUseIds: string[] = []
+): SDKMessage =>
   ({
     type: 'assistant',
     parent_tool_use_id: parentToolUseId,
-    message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    message: {
+      role: 'assistant',
+      content: launchedToolUseIds.length
+        ? launchedToolUseIds.map((id) => ({ type: 'tool_use', id, name: 'Task', input: {} }))
+        : [{ type: 'text', text: 'hi' }],
+    },
     uuid,
     session_id: 'sdk-session',
   }) as SDKMessage;
@@ -114,6 +131,24 @@ const rateLimitEvent = (
     type: 'rate_limit_event',
     rate_limit_info: { status, rateLimitType, resetsAt },
     uuid: `rate-limit-${status}`,
+    session_id: 'sdk-session',
+  }) as SDKMessage;
+
+const userMessage = (uuid: string): SDKMessage =>
+  ({
+    type: 'user',
+    parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] },
+    uuid,
+    session_id: 'sdk-session',
+  }) as SDKMessage;
+
+const statusMessage = (status: string): SDKMessage =>
+  ({
+    type: 'system',
+    subtype: 'status',
+    status,
+    uuid: `status-${status}`,
     session_id: 'sdk-session',
   }) as SDKMessage;
 
@@ -463,7 +498,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     });
   });
 
-  it('pulses the rate-limit block once and leaves it standing for the whole wait', async () => {
+  it('leaves the rate-limit block standing as the latest pulse for the whole wait', async () => {
     await withFakeTimers(async () => {
       const resetsAt = Math.floor(Date.now() / 1_000) + 5 * 60 * 60;
       // The block lands mid-turn, before any result: no held turn, nothing
@@ -481,9 +516,10 @@ describe('ClaudePromptService background task query lifetime', () => {
 
       await vi.advanceTimersByTimeAsync(60_000);
       const waits = activity.mock.calls.filter(([kind]) => kind === 'waiting');
-      expect(waits).toEqual([['waiting', 'rate_limit.five_hour']]);
-      // Nothing after it, so the heartbeat keeps re-sending this pulse and the
-      // session reads as blocked rather than silent, for hours if need be.
+      expect(waits.length).toBeGreaterThan(0);
+      expect(new Set(waits.map(([, detail]) => detail))).toEqual(new Set(['rate_limit.five_hour']));
+      // The heartbeat re-sends whichever pulse came last, so what matters is
+      // that the block is it — for hours, through a stream saying nothing.
       expect(activity.mock.calls.at(-1)).toEqual(['waiting', 'rate_limit.five_hour']);
 
       await vi.advanceTimersByTimeAsync(5 * 60 * 60 * 1_000);
@@ -512,6 +548,176 @@ describe('ClaudePromptService background task query lifetime', () => {
       const [[, detail]] = activity.mock.calls.filter(([kind]) => kind === 'waiting');
       expect(detail).toMatch(/^[A-Za-z0-9._:/-]+$/);
       expect(Buffer.byteLength(detail as string, 'utf8')).toBeLessThanOrEqual(128);
+    });
+  });
+
+  it('stays bounded when only the harness speaks on the held turn', async () => {
+    await withFakeTimers(async () => {
+      // A top-level `user` frame is a tool_result or an injected reminder, not
+      // the model resuming. Treating it as a resume would unbound the query for
+      // good, since the regime only re-arms on the next held result.
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield userMessage('harness-chatter');
+        await never();
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
+  });
+
+  it('does not discard a continuation turn that is compacting', async () => {
+    await withFakeTimers(async () => {
+      // Auto-compaction emits `system/status` and then nothing until the
+      // summarization lands — easily past the settled grace, and the turn it
+      // is compacting for is live work.
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield taskNotification('task-1');
+        yield statusMessage('compacting');
+        await sleep(4 * GRACE_MS);
+        yield assistantMessage('post-compaction');
+        yield sdkResult('continuation-result');
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(5 * GRACE_MS);
+      await run.done;
+
+      expect(run.resultUuids()).toEqual(['parent-result', 'continuation-result']);
+    });
+  });
+
+  it('keeps the rate-limit pulse latest while background tasks keep talking', async () => {
+    await withFakeTimers(async () => {
+      // Every SDK frame overwrites the sticky pulse, so a block that coincides
+      // with a working background task would otherwise read as "Active".
+      const resetsAt = Math.floor(Date.now() / 1_000) + 5 * 60 * 60;
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield rateLimitEvent('rejected', resetsAt);
+        yield {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 'task-1',
+          uuid: 'progress',
+          session_id: 'sdk-session',
+        };
+        yield taskNotification('task-1');
+        await never();
+      });
+      const activity = vi.fn();
+      drain(query, activity);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(activity.mock.calls.at(-1)).toEqual(['waiting', 'rate_limit.five_hour']);
+    });
+  });
+
+  it('clears the announced allowance once the block lifts', async () => {
+    await withFakeTimers(async () => {
+      // A seven-day reset grants a six-day allowance. If it survived the clear,
+      // every later read in this query would be bounded by "tier + six days".
+      const resetsAt = Math.floor(Date.now() / 1_000) + 6 * 24 * 60 * 60;
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        yield rateLimitEvent('rejected', resetsAt, 'seven_day');
+        yield rateLimitEvent('allowed');
+        await never();
+      });
+      const run = drain(query);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
+      expect(run.settled()).toBe(true);
+      await run.done;
+    });
+  });
+
+  it('clamps an implausible announced wait instead of inverting the budget', () => {
+    // setTimeout clamps any delay past 2^31-1ms to *1ms*, so an unclamped
+    // epoch-milliseconds `resetsAt` would force-settle instantly — the exact
+    // opposite of what the extension exists for. Asserted on the function
+    // rather than through a fake-timer run, because fake timers do not
+    // reproduce that overflow clamp.
+    const now = 1_700_000_000_000;
+    const epochMsMistake = rateLimitEvent('rejected', now); // seconds field holding ms
+    expect(announcedQuietUntil(epochMsMistake, now)).toBe(now + MAX_ANNOUNCED_QUIET_MS);
+    // The clamp is itself under the overflow threshold, so no budget built from
+    // it can ever reach the inverting path.
+    expect(MAX_ANNOUNCED_QUIET_MS).toBeLessThan(2 ** 31 - 1);
+    // A real seven-day reset is far under the clamp and passes through intact.
+    const sevenDay = rateLimitEvent('rejected', Math.floor(now / 1_000) + 7 * 24 * 60 * 60);
+    expect(announcedQuietUntil(sevenDay, now)).toBe(now + 7 * 24 * 60 * 60 * 1_000);
+    // An already-elapsed reset grants nothing.
+    expect(announcedQuietUntil(rateLimitEvent('rejected', 1), now)).toBeUndefined();
+  });
+
+  it('emits one completion per task when a launch site retires several at once', async () => {
+    await withFakeTimers(async () => {
+      const query = fakeQuery(async function* () {
+        yield taskStarted('nested-1', 'tool-2');
+        yield taskStarted('nested-2', 'tool-3');
+        yield sdkResult('parent-result');
+        yield assistantMessage('subagent-launch', 'tool-1', ['tool-2', 'tool-3']);
+        await never();
+      });
+      const activity = vi.fn();
+      const run = drain(query, activity);
+
+      await vi.advanceTimersByTimeAsync(GRACE_MS + 1_000);
+      await run.done;
+
+      // Two starts, two completions: anything less leaves the watchdog counter
+      // above zero for the rest of the query.
+      const starts = activity.mock.calls.filter(([, detail]) => detail === 'background_task.start');
+      const completes = activity.mock.calls.filter(
+        ([, detail]) => detail === 'background_task.complete'
+      );
+      expect(starts).toHaveLength(2);
+      expect(completes).toHaveLength(2);
+    });
+  });
+
+  it('closes the query on every exit and cancels a wedged one', async () => {
+    await withFakeTimers(async () => {
+      const wedged = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+        yield sdkResult('parent-result');
+        await never();
+      });
+      const wedgedRun = drain(wedged);
+      await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
+      await wedgedRun.done;
+      // A pending read means `return()` can never run the SDK's own teardown,
+      // so the wedged path has to cancel rather than only abandon.
+      expect(wedged.interrupt).toHaveBeenCalledTimes(1);
+      expect(wedged.closed).toHaveBeenCalledTimes(1);
+
+      const healthy = fakeQuery([sdkResult('only-result')]);
+      const healthyRun = drain(healthy);
+      await healthyRun.done;
+      expect(healthy.closed).toHaveBeenCalledTimes(1);
+      expect(healthy.interrupt).not.toHaveBeenCalled();
+    });
+  });
+
+  it('releases input when the SDK generator ends with tasks outstanding', async () => {
+    await withFakeTimers(async () => {
+      const query = fakeQuery(async function* () {
+        yield taskStarted('task-1');
+      });
+      const activity = vi.fn();
+      const run = drain(query, activity);
+      await run.done;
+
+      expect(query.releaseInput).toHaveBeenCalledTimes(1);
+      expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
     });
   });
 

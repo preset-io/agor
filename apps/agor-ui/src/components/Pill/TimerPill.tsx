@@ -3,7 +3,7 @@ import type {
   SessionStatus as SessionStatusValue,
   TaskStatus as TaskStatusValue,
 } from '@agor-live/client';
-import { SessionStatus, TaskStatus } from '@agor-live/client';
+import { isRateLimitBlockPulse, SessionStatus, TaskStatus } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -49,24 +49,14 @@ const PULSE_LABELS: Record<ExecutorPulse['kind'], string> = {
 };
 
 /**
- * Executor detail prefix for a rate-limit block. The executor emits one
- * `waiting` pulse when the SDK is refused and the heartbeat re-sends it every
- * beat, so this stays true for the whole wait even though the SDK itself is
- * silent throughout.
- */
-const RATE_LIMIT_PULSE_PREFIX = 'rate_limit.';
-
-export function isRateLimitPulse(pulse?: ExecutorPulse | null): boolean {
-  return pulse?.kind === 'waiting' && (pulse.detail?.startsWith(RATE_LIMIT_PULSE_PREFIX) ?? false);
-}
-
-/**
  * A blocked session and a hung one look identical from the outside — both sit
  * in `running` with no output — so the label has to read the detail, not just
- * the kind.
+ * the kind. The executor emits one `waiting` pulse when the SDK is refused and
+ * the heartbeat re-sends it every beat, so this stays true for the whole wait
+ * even though the SDK itself is silent throughout.
  */
 export function pulseLabel(pulse: ExecutorPulse): string {
-  if (isRateLimitPulse(pulse)) return 'Rate limited';
+  if (isRateLimitBlockPulse(pulse)) return 'Rate limited';
   return PULSE_LABELS[pulse.kind];
 }
 
@@ -346,7 +336,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   // working, without inventing a status. The elapsed timer keeps running,
   // which is the useful reading during a multi-hour reset.
   const config =
-    isActive && isRateLimitPulse(latestExecutorPulse)
+    isActive && isRateLimitBlockPulse(latestExecutorPulse)
       ? { ...baseConfig, icon: <PauseCircleOutlined />, color: PILL_COLORS.warning }
       : baseConfig;
   const label = config.label ?? formatDuration(elapsedMs);

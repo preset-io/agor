@@ -1,6 +1,7 @@
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { ResolvedSdkWatchdogConfig } from '@agor/core/config';
 import type { AgenticToolName, ExecutorPulseKind, SdkHealthFailureInput } from '@agor/core/types';
+import { ExecutorPulseDetail } from '@agor/core/types';
 import { hasAgorAbortCause, markAgorAbortCause } from './termination-state.js';
 
 export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot';
@@ -74,16 +75,31 @@ export function boundedDetail(value: string): string {
 }
 
 /**
- * Details that lift a `waiting` pause.
+ * Which wait a pause belongs to.
  *
  * A pause has no clock of its own, so a pause with no matching resume disables
- * the watchdog for the rest of the query. Every producer of a `waiting` pulse
- * therefore owes a resume on the other side of its wait.
+ * the watchdog for the rest of the query — every producer of a `waiting` pulse
+ * owes a resume. Waits are keyed by source rather than pooled into one flag
+ * because they overlap: with a single flag, a rate limit clearing would lift the
+ * pause held by a permission prompt a human has not answered yet (the watchdog
+ * then times out a healthy session, and aborts it under `enforce`), and
+ * `permission.resolved` would lift a live multi-hour rate-limit block.
+ *
+ * `approval` is the catch-all for every pre-existing `waiting` producer —
+ * permission prompts, user-input requests, tool-call confirmations — all of
+ * which are lifted by `permission.resolved` today and keep that behaviour.
  */
-const PAUSE_RESUME_DETAILS = new Set(['permission.resolved', 'rate_limit.resolved']);
+type WaitSource = 'approval' | 'rate_limit';
 
-function liftsWait(kind: ExecutorPulseKind, detail?: string): boolean {
-  return kind === 'sdk_started' && detail !== undefined && PAUSE_RESUME_DETAILS.has(detail);
+function waitSource(detail?: string): WaitSource {
+  return detail?.startsWith(ExecutorPulseDetail.RATE_LIMIT_PREFIX) ? 'rate_limit' : 'approval';
+}
+
+function resumedWaitSource(kind: ExecutorPulseKind, detail?: string): WaitSource | undefined {
+  if (kind !== 'sdk_started') return undefined;
+  if (detail === ExecutorPulseDetail.RATE_LIMIT_RESOLVED) return 'rate_limit';
+  if (detail === ExecutorPulseDetail.PERMISSION_RESOLVED) return 'approval';
+  return undefined;
 }
 
 export function mapSdkActivity(
@@ -122,7 +138,10 @@ interface WatchdogState {
   lastRawAt?: number;
   firstProgressAt?: number;
   idleAnchor?: number;
+  /** When the first still-unlifted wait began; time here is credited back. */
   pausedAt?: number;
+  /** Waits currently holding the pause. The policy resumes only when empty. */
+  pausedBy: Set<WaitSource>;
   /** Foreground tool calls in flight — these fully suspend the policy. */
   activeToolCount: number;
   /** SDK background tasks in flight — these only relax it (see below). */
@@ -188,6 +207,7 @@ function inspectSdkWatchdog(
 
 export class SdkWatchdog {
   private state: WatchdogState = {
+    pausedBy: new Set(),
     activeToolCount: 0,
     activeBackgroundTaskCount: 0,
     unknownCount: 0,
@@ -210,15 +230,23 @@ export class SdkWatchdog {
     if (this.decided || this.options.config.mode === 'disabled') return;
     const now = this.now();
     if (kind === 'waiting') {
-      if (this.state.startedAt !== undefined && this.state.pausedAt === undefined) {
-        this.state.pausedAt = now;
+      if (this.state.startedAt !== undefined) {
+        this.state.pausedBy.add(waitSource(detail));
+        this.state.pausedAt ??= now;
       }
       this.schedule();
       return;
     }
     const pausedAt = this.state.pausedAt;
-    if (pausedAt !== undefined && !liftsWait(kind, detail)) {
-      return;
+    if (pausedAt !== undefined) {
+      const lifted = resumedWaitSource(kind, detail);
+      // Anything that is not this pause's own resume stays suppressed, and a
+      // resume for one wait never lifts another's.
+      if (lifted === undefined || !this.state.pausedBy.delete(lifted)) return;
+      if (this.state.pausedBy.size > 0) {
+        this.schedule();
+        return;
+      }
     }
     const resumed = pausedAt !== undefined;
     if (pausedAt !== undefined) {
@@ -229,7 +257,7 @@ export class SdkWatchdog {
       this.state.pausedAt = undefined;
     }
     this.state.startedAt ??= now;
-    if (!(resumed && liftsWait(kind, detail))) {
+    if (!resumed) {
       this.state.lastRawAt = now;
     }
     if (kind === 'unknown_activity') this.state.unknownCount++;

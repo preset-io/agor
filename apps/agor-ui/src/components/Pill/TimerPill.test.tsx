@@ -1,8 +1,8 @@
-import { TaskStatus } from '@agor-live/client';
+import { isRateLimitBlockPulse, TaskStatus } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isRateLimitPulse, TimerPill } from './TimerPill';
+import { TimerPill } from './TimerPill';
 
 vi.mock('antd', () => ({
   Popover: ({ children, content }: { children: ReactNode; content: ReactNode }) => (
@@ -109,7 +109,7 @@ describe('TimerPill pulse diagnostics', () => {
 
   it('reports a rate-limit block from the pulse alone', () => {
     expect(
-      isRateLimitPulse({
+      isRateLimitBlockPulse({
         sequence: 1,
         kind: 'waiting',
         detail: 'rate_limit.five_hour',
@@ -119,7 +119,7 @@ describe('TimerPill pulse diagnostics', () => {
     // Not every wait is a block, and not every rate-limit detail is a wait:
     // the resume signal rides the same prefix on a different kind.
     expect(
-      isRateLimitPulse({
+      isRateLimitBlockPulse({
         sequence: 2,
         kind: 'waiting',
         detail: 'permission.request',
@@ -127,13 +127,13 @@ describe('TimerPill pulse diagnostics', () => {
       })
     ).toBe(false);
     expect(
-      isRateLimitPulse({
+      isRateLimitBlockPulse({
         sequence: 3,
         kind: 'sdk_started',
         detail: 'rate_limit.resolved',
         observed_at: '2026-07-18T22:47:24.000Z',
       })
     ).toBe(false);
-    expect(isRateLimitPulse(null)).toBe(false);
+    expect(isRateLimitBlockPulse(null)).toBe(false);
   });
 });

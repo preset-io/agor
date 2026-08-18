@@ -93,18 +93,49 @@ describe('SdkWatchdog', () => {
   });
 
   it.each([
-    ['permission.resolved', 'permission wait'],
-    ['rate_limit.resolved', 'rate-limit block'],
-  ])('resumes from a %s that ends a %s', (resumeDetail) => {
+    ['permission.request', 'permission.resolved'],
+    ['rate_limit.five_hour', 'rate_limit.resolved'],
+  ])('lifts a %s pause on its own %s', (waitDetail, resumeDetail) => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(400);
-    watchdog.record('waiting');
+    watchdog.record('waiting', waitDetail);
     // A pause has no clock of its own, so without a resume the watchdog would
     // stay disarmed for the rest of the query.
     vi.advanceTimersByTime(60_000);
     expect(decisions).toEqual([]);
     watchdog.record('sdk_started', resumeDetail);
+    vi.advanceTimersByTime(599);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('no_first_progress');
+  });
+
+  it.each([
+    ['permission.request', 'rate_limit.resolved'],
+    ['rate_limit.five_hour', 'permission.resolved'],
+  ])('does not lift a %s pause with an unrelated %s', (waitDetail, resumeDetail) => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(400);
+    watchdog.record('waiting', waitDetail);
+    // Cross-lifting would time out a human still reading a permission prompt,
+    // or a session legitimately parked on a multi-hour limit reset.
+    watchdog.record('sdk_started', resumeDetail);
+    vi.advanceTimersByTime(60_000);
+    expect(decisions).toEqual([]);
+  });
+
+  it('stays paused until every overlapping wait is lifted', () => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(400);
+    watchdog.record('waiting', 'permission.request');
+    watchdog.record('waiting', 'rate_limit.five_hour');
+    watchdog.record('sdk_started', 'permission.resolved');
+    vi.advanceTimersByTime(60_000);
+    expect(decisions).toEqual([]);
+    watchdog.record('sdk_started', 'rate_limit.resolved');
     vi.advanceTimersByTime(599);
     expect(decisions).toEqual([]);
     vi.advanceTimersByTime(1);

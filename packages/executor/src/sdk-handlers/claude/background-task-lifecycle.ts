@@ -1,4 +1,6 @@
 import type { SDKMessage } from '@agor/core/sdk';
+import { getSdkActivityVersion } from '../../sdk-watchdog.js';
+import { classifyTurnScope } from './message-scope.js';
 
 type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
 
@@ -34,16 +36,10 @@ const UPDATED_STATUS_IS_TERMINAL: Record<
   running: false,
 };
 
-function terminalStatuses(table: Record<string, boolean>): ReadonlySet<string> {
-  return new Set(
-    Object.entries(table)
-      .filter(([, isTerminal]) => isTerminal)
-      .map(([status]) => status)
-  );
+/** Wire data can carry a status newer than the checked-in types; treat it as non-terminal. */
+function isTerminal(table: Record<string, boolean>, status: unknown): boolean {
+  return typeof status === 'string' && table[status] === true;
 }
-
-const TERMINAL_NOTIFICATION_STATUSES = terminalStatuses(NOTIFICATION_STATUS_IS_TERMINAL);
-const TERMINAL_UPDATED_STATUSES = terminalStatuses(UPDATED_STATUS_IS_TERMINAL);
 
 export interface ClaudeQueryLifecycleTransition {
   resultDisposition: ResultDisposition;
@@ -71,12 +67,19 @@ export class ClaudeBackgroundTaskLifecycle {
   observe(message: SDKMessage): ClaudeQueryLifecycleTransition {
     // Only a task launched by the top-level turn can settle on this stream, so
     // learn which tool_use blocks belong to a subagent's conversation instead.
-    if (message.type === 'assistant' && message.parent_tool_use_id !== null) {
+    // A message we cannot place is deliberately not treated as a subagent's:
+    // mislabelling one top-level turn that way would drop every task it
+    // launched and close the query on live background work.
+    if (message.type === 'assistant' && classifyTurnScope(message) === 'subagent') {
       return this.observeNestedToolUses(message);
     }
 
     if (message.type === 'system' && message.subtype === 'task_started') {
       if (message.tool_use_id !== undefined && this.nestedToolUseIds.has(message.tool_use_id)) {
+        console.log(
+          `[claude.background_task] event=nested_task_excluded task_id=${message.task_id} ` +
+            `tool_use_id=${message.tool_use_id} sdk=${getSdkActivityVersion('claude-code')}`
+        );
         return { resultDisposition: 'not-result' };
       }
       const wasActive = this.activeTasks.has(message.task_id);
@@ -88,7 +91,7 @@ export class ClaudeBackgroundTaskLifecycle {
     }
 
     if (message.type === 'system' && message.subtype === 'task_notification') {
-      if (!TERMINAL_NOTIFICATION_STATUSES.has(message.status)) {
+      if (!isTerminal(NOTIFICATION_STATUS_IS_TERMINAL, message.status)) {
         return { resultDisposition: 'not-result' };
       }
       return this.settleTask(message.task_id);
@@ -101,8 +104,7 @@ export class ClaudeBackgroundTaskLifecycle {
     if (
       message.type === 'system' &&
       message.subtype === 'task_updated' &&
-      typeof message.patch.status === 'string' &&
-      TERMINAL_UPDATED_STATUSES.has(message.patch.status)
+      isTerminal(UPDATED_STATUS_IS_TERMINAL, message.patch.status)
     ) {
       return this.settleTask(message.task_id);
     }

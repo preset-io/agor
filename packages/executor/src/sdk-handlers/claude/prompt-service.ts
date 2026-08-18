@@ -11,6 +11,7 @@ import {
 } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKMessage, SDKResultMessage } from '@agor/core/sdk';
+import { ExecutorPulseDetail } from '@agor/core/types';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -28,6 +29,7 @@ import type { MessagesService, SessionsPatchClient, TasksService } from '../base
 import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
 import { AWAIT_TIMEOUT, awaitWithTimeout } from './bounded-await.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
+import { classifyTurnScope } from './message-scope.js';
 import { type InterruptibleQuery, setupQuery } from './query-builder.js';
 import { aggregateClaudeResults } from './result-aggregation.js';
 
@@ -57,35 +59,72 @@ export interface PromptResult {
  * Whether a message proves the *top-level* model turn resumed, as opposed to
  * background noise arriving while it stays finished.
  *
- * Only these lift the bounded-read regime below, and only at the top level:
- * traffic forwarded from a subagent (`parent_tool_use_id` set) means background
- * work is progressing, not that the model started thinking again, and must keep
- * the silence budget armed so a background agent that dies mid-flight is still
- * contained.
+ * Only these lift the bounded-read regime below, and only at the top level.
+ * Traffic forwarded from a subagent means background work is progressing, not
+ * that the model started thinking again, and must keep the silence budget armed
+ * so a background agent that dies mid-flight is still contained. A message
+ * whose scope cannot be established counts as background for the same reason.
+ *
+ * `user` is excluded on purpose even though it carries the same scope field:
+ * a top-level `user` frame is the harness speaking — a tool_result, an injected
+ * reminder, a queued-input replay — not the model. A genuinely resumed turn
+ * always emits `assistant` or `stream_event` first, so the narrower set loses
+ * nothing and closes the hole where harness chatter permanently unbounds a
+ * query that then wedges.
  */
 function resumesTopLevelTurn(message: SDKMessage): boolean {
-  if (message.type !== 'assistant' && message.type !== 'user' && message.type !== 'stream_event') {
-    return false;
-  }
-  return message.parent_tool_use_id === null || message.parent_tool_use_id === undefined;
+  if (message.type !== 'assistant' && message.type !== 'stream_event') return false;
+  return classifyTurnScope(message) === 'top-level';
 }
+
+/**
+ * Longest silence the SDK is ever allowed to announce for itself.
+ *
+ * `resetsAt` is parsed from an external source and flows into `setTimeout`,
+ * which silently clamps any delay past 2^31-1 ms to *1 ms* — so a unit-confused
+ * value (a future SDK sending epoch milliseconds) would force-settle the turn
+ * immediately, the exact opposite of what the extension is for. This is a
+ * sanity bound on parsed input, not the policy ceiling we deliberately rejected:
+ * a real `seven_day` wait is two orders of magnitude under it.
+ */
+export const MAX_ANNOUNCED_QUIET_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/**
+ * Quiet allowance for a compaction or an in-flight API request the SDK reports
+ * via `system/status`. Both are the SDK working, not waiting on us, and both
+ * emit nothing until they finish — auto-compaction of a near-full context can
+ * outlast the settled grace on its own.
+ */
+const SDK_BUSY_STATUS_QUIET_MS = 10 * 60_000;
 
 /**
  * How long the SDK has told us it intends to be quiet, as an absolute epoch ms.
  *
- * A rejected rate limit and an API retry are both waits the SDK announces once
- * and then sits out in complete silence — `SDKRateLimitEvent` is documented as
- * firing only "when rate limit info changes", and `system/api_retry` fires once
- * per attempt with the delay it is about to sleep. Without this the silence
- * budget would kill a turn that was going to resume on its own, and a five-hour
- * limit reset would do it every time.
+ * A rejected rate limit, an API retry, and a compaction are all waits the SDK
+ * announces once and then sits out in silence — `SDKRateLimitEvent` is
+ * documented as firing only "when rate limit info changes", `system/api_retry`
+ * fires once per attempt with the delay it is about to sleep, and
+ * `system/status` reports `compacting` / `requesting` with no follow-up until
+ * the work lands. Without this the silence budget would kill a turn that was
+ * going to resume on its own, and a five-hour limit reset would do it every
+ * time.
  */
-/** Prefix marking a pulse detail as a rate-limit block, for the UI to key off. */
-export const RATE_LIMIT_PULSE_PREFIX = 'rate_limit.';
-/** Resume signal that lifts the watchdog pause the block pulse installs. */
-export const RATE_LIMIT_RESOLVED_DETAIL = 'rate_limit.resolved';
+export function announcedQuietUntil(message: SDKMessage, now: number): number | undefined {
+  const target = announcedQuietTarget(message, now);
+  if (target === undefined) return undefined;
+  const requested = target - now;
+  if (requested <= 0) return undefined;
+  if (requested > MAX_ANNOUNCED_QUIET_MS) {
+    console.warn(
+      `⚠️  SDK announced an implausible ${requested}ms quiet period on ${message.type}; ` +
+        `clamping to ${MAX_ANNOUNCED_QUIET_MS}ms (check the timestamp units)`
+    );
+    return now + MAX_ANNOUNCED_QUIET_MS;
+  }
+  return target;
+}
 
-function announcedQuietUntil(message: SDKMessage, now: number): number | undefined {
+function announcedQuietTarget(message: SDKMessage, now: number): number | undefined {
   if (message.type === 'rate_limit_event') {
     const info = message.rate_limit_info;
     if (info?.status !== 'rejected') return undefined;
@@ -101,6 +140,13 @@ function announcedQuietUntil(message: SDKMessage, now: number): number | undefin
   }
   if (message.type === 'system' && message.subtype === 'api_retry') {
     return now + message.retry_delay_ms;
+  }
+  if (
+    message.type === 'system' &&
+    message.subtype === 'status' &&
+    (message.status === 'compacting' || message.status === 'requesting')
+  ) {
+    return now + SDK_BUSY_STATUS_QUIET_MS;
   }
   return undefined;
 }
@@ -368,14 +414,21 @@ If you continue to see authentication errors, please contact your Agor administr
     let turnHeldForBackgroundTasks = false;
     // Absolute epoch ms the SDK has announced it will be silent until.
     let quietUntil = 0;
-    // Whether the session is currently blocked on a rate limit, so the pulse
+    // Pulse detail while the session is blocked on a rate limit, so the pulse
     // says "blocked", not "hung", and so the pause gets its matching resume.
-    let rateLimitBlocked = false;
+    let rateLimitDetail: string | undefined;
     // A force-settled query is presumed wedged; do not block teardown on it.
     let queryIsWedged = false;
 
     try {
       while (true) {
+        // Re-assert the block immediately before every read. `reportSdkActivity`
+        // and background-task accounting both overwrite the latest pulse, and
+        // the pulse the heartbeat re-sends is whichever came last — so without
+        // this a block that coincides with a still-working background task
+        // would read as "Active" in the UI for its whole duration.
+        if (rateLimitDetail !== undefined) onActivity?.('waiting', rateLimitDetail);
+
         const timeoutMs = turnHeldForBackgroundTasks
           ? this.nextReadTimeoutMs(backgroundTasks.activeTaskCount, quietUntil)
           : undefined;
@@ -397,13 +450,25 @@ If you continue to see authentication errors, please contact your Agor administr
           // deferring, settle what the turn produced, and let the SDK close.
           clearBackgroundTaskActivity();
           queryIsWedged = true;
+          // Actively cancel rather than just abandoning: the pending read means
+          // `iterator.return()` queues behind it and never runs the generator's
+          // teardown, and `releaseInput()` only closes stdin. Not awaited — a
+          // wedged subprocess may never answer this control request either.
+          void Promise.resolve(result.interrupt()).catch(() => {});
           yield* this.finalizeTurn(result);
           if (sdkResults.length > 0) {
             yield { type: 'result', raw_sdk_message: aggregateClaudeResults(sdkResults) };
           }
           break;
         }
-        if (next.done) break;
+        if (next.done) {
+          // The SDK generator finished without an `end` event. Rare, but it
+          // still ends the turn, so it owes the same teardown every other
+          // turn-ending path does.
+          clearBackgroundTaskActivity();
+          result.releaseInput();
+          break;
+        }
         const msg = next.value;
 
         // The model is producing again, so the turn is no longer merely parked
@@ -415,25 +480,24 @@ If you continue to see authentication errors, please contact your Agor administr
         quietUntil = Math.max(quietUntil, announcedQuietUntil(msg, Date.now()) ?? 0);
 
         reportSdkActivity(onActivity, 'claude-code', msg.type);
-        // Emitted after the generic activity pulse so it wins as the sticky
-        // latest pulse: the heartbeat re-sends that pulse every beat, which is
-        // the only reason a block stays visible through a wait the SDK spends
-        // in complete silence.
         const rateLimit = msg.type === 'rate_limit_event' ? msg.rate_limit_info : undefined;
         if (rateLimit?.status === 'rejected') {
-          if (!rateLimitBlocked) {
-            rateLimitBlocked = true;
-            onActivity?.(
-              'waiting',
-              boundedDetail(`${RATE_LIMIT_PULSE_PREFIX}${rateLimit.rateLimitType ?? 'unknown'}`)
-            );
-          }
-        } else if (rateLimitBlocked && (rateLimit !== undefined || modelResumed)) {
+          rateLimitDetail = boundedDetail(
+            `${ExecutorPulseDetail.RATE_LIMIT_PREFIX}${rateLimit.rateLimitType ?? 'unknown'}`
+          );
+          onActivity?.('waiting', rateLimitDetail);
+        } else if (rateLimitDetail !== undefined && (rateLimit !== undefined || modelResumed)) {
           // The limit lifted, or the model started producing again. Both end the
           // block; the resume is mandatory because a `waiting` pulse pauses the
           // watchdog until something explicitly lifts it.
-          rateLimitBlocked = false;
-          onActivity?.('sdk_started', RATE_LIMIT_RESOLVED_DETAIL);
+          rateLimitDetail = undefined;
+          onActivity?.('sdk_started', ExecutorPulseDetail.RATE_LIMIT_RESOLVED);
+          // Drop the allowance the block bought. It is monotonic and decays only
+          // by wall clock, so a `seven_day` reset would otherwise leave every
+          // later read in this query bounded by "tier + six days" — unbounded in
+          // any practical sense, which is the hang this whole path exists to
+          // prevent.
+          quietUntil = 0;
         }
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
@@ -555,6 +619,12 @@ If you continue to see authentication errors, please contact your Agor administr
       });
       throw enhancedError;
     } finally {
+      // Every `waiting` pulse owes a resume, or the watchdog stays paused for
+      // whatever is left of this task. Teardown — force-settle, generator end,
+      // error, Stop — must pay it too, not just the in-band clear.
+      if (rateLimitDetail !== undefined) {
+        onActivity?.('sdk_started', ExecutorPulseDetail.RATE_LIMIT_RESOLVED);
+      }
       // `for await` used to close the query on break or on an abandoned
       // consumer; keep doing that explicitly now that iteration is manual, so
       // the subprocess is still torn down. A force-settled query already has a

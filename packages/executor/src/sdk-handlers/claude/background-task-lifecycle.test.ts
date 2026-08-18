@@ -26,6 +26,15 @@ const launches = (toolUseIds: string[], parentToolUseId: string | null) =>
     },
   });
 
+/** The same turn with the scope field absent, as an omitted JSON key arrives. */
+const launchesWithoutScope = (toolUseIds: string[]) =>
+  message({
+    type: 'assistant',
+    message: {
+      content: toolUseIds.map((id) => ({ type: 'tool_use', id, name: 'Task', input: {} })),
+    },
+  });
+
 describe('ClaudeBackgroundTaskLifecycle', () => {
   it('keeps a Workflow alive across its parent result until its completion turn', () => {
     const lifecycle = new ClaudeBackgroundTaskLifecycle();
@@ -170,6 +179,18 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     expect(lifecycle.activeTaskIds).toEqual(['agent-1']);
     lifecycle.observe(settled('agent-1'));
     expect(lifecycle.observe(result()).resultDisposition).toBe('terminal');
+  });
+
+  // parent_tool_use_id crosses a JSON boundary, so an omitted key arrives as
+  // undefined however the .d.ts declares it. Reading that as "subagent" would
+  // put every top-level Task launch into the nested set, drop every task, and
+  // close the query on live background work — #1852 verbatim.
+  it('keeps tracking tasks when the message scope cannot be established', () => {
+    const lifecycle = new ClaudeBackgroundTaskLifecycle();
+    lifecycle.observe(launchesWithoutScope(['tool-1']));
+    expect(lifecycle.observe(started('agent-1', 'agent', 'tool-1')).taskTransition).toBe('started');
+    expect(lifecycle.activeTaskIds).toEqual(['agent-1']);
+    expect(lifecycle.observe(result()).resultDisposition).toBe('await-background-tasks');
   });
 
   it('releases nested tasks announced before their launch site is forwarded', () => {

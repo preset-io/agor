@@ -909,13 +909,24 @@ execution:
     settled_grace_ms: 120000 # 2m: nothing outstanding, waiting for the next turn
 ```
 
+These bounds apply to Claude execution in every mode — they are executor-side,
+not specific to containerized or delegated runtimes.
+
 Both bound only that held-open window, and only while the stream is quiet. Any
 SDK message re-arms them, a resumed top-level turn lifts them entirely until the
-next held result, and a rate-limit reset or API retry the SDK announces extends
-them by the wait it declared. They are not a model-thinking timeout: a turn that
-has resumed is never force-settled, however long it then runs. Raise
-`silence_timeout_ms` if you run background agents that stay quiet on the parent
-stream for longer than half an hour.
+next held result, and a wait the SDK announces — a rate-limit reset, an API
+retry backoff, a compaction — extends them by the declared duration. They are
+not a model-thinking timeout: a turn that has resumed is never force-settled,
+however long it then runs. Raise `silence_timeout_ms` if you run background
+agents that stay quiet on the parent stream for longer than half an hour.
+
+When a bound does expire, Agor settles the turn on the accumulated parent
+result: the Task completes rather than fails, because the model had already
+finished responding. **Background work that had not finished by then is
+discarded** — its output never reaches the model, and the session is not woken
+again for it. The executor logs the unsettled task IDs at that point, and a
+session blocked on a rate limit shows "Rate limited" on its pulse rather than
+appearing hung.
 
 SDK activity facts share the existing executor heartbeat transport. Disabling
 `execution.executor_heartbeat.enabled` therefore disables persisted pulse
