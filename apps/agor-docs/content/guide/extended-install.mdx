@@ -68,9 +68,11 @@ Agor. It installs missing packages and removes unselected or stale versions with
 file. If an init-time npm operation fails, the config and any completed atomic package installs
 remain in place; fix npm registry/proxy/permission issues and run exactly `agor install --sync`.
 
-Stop the daemon before accepting destructive re-initialization. `agor init` refuses to remove a live
-daemon's SQLite database; after shutdown it closes its own inspection handle and removes the database
-plus WAL/SHM sidecars before migrating the replacement.
+Stop the daemon before re-initializing. `agor init` refuses to replace an installation while its
+daemon is live. Interactive re-init recommends moving the entire `~/.agor` directory intact to a
+timestamped `~/.agor.bkp.YYYYMMDD-HHmmss` backup before starting normal fresh initialization. You
+can instead choose to delete the entire directory, including its config, database sidecars, logs,
+repositories, worktrees, and installed tools.
 
 Configurations created before this onboarding contract may omit `agentic_tools.installed`. Those
 installations retain the backward-compatible host-local manifest mode: run `agor install` once to
