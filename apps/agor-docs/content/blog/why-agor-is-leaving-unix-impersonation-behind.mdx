@@ -3,9 +3,13 @@ title: 'Why Agor Is Leaving Unix Impersonation Behind'
 description: 'We tried mapping Agor RBAC onto Unix users, groups, ACLs, and homes. It was an attractive design, but the wrong foundation for where Agor is going.'
 author: 'Maxime Beauchemin'
 date: 2026-08-17
+image: '/images/blog/leaving-unix-impersonation.png'
+imageAlt: 'A tangled identity graph passes through a clean boundary and becomes three isolated execution environments.'
+imageWidth: 1600
+imageHeight: 900
 ---
 
-**tl;dr:** Agor is retiring its experimental `strict` and `insulated` Unix execution modes. They
+**tl;dr:** Agor has retired its experimental `strict` and `insulated` Unix execution modes. They
 tried to turn an Agor server into a coherent multi-user Unix box: one host account per person,
 POSIX groups for branches, filesystem permissions derived from RBAC, and homes that also worked over
 SSH. The idea was appealing. The implementation became a growing pile of privileged reconciliation
@@ -95,7 +99,7 @@ groups and collaborators accumulated supplemental group memberships.
 
 Eventually, `id` prints a wall of groups. Processes approach operating-system and runtime limits on
 supplemental memberships. Operators start tuning host parameters and debugging why one process has
-fresh memberships while another long-lived process does not. Agor uses `sudo -u` in places not to
+fresh memberships while another long-lived process does not. Agor used `sudo -u` in places not to
 change identity, but simply to force a fresh group calculation.
 
 When a product-level permission change requires OS-group creation, membership reconciliation,
@@ -148,7 +152,7 @@ For continuity, Agor still has a tenant-local per-user home key and an optional 
 home path. The legacy field may still be named `unix_username` for a while, but in the new local
 model it is not a host account. It is a stable selector for an execution home. We would rather
 remove the dangerous machinery now and improve the naming in a smaller follow-up than combine two
-migrations under a one-week security deadline.
+migrations into one risky release.
 
 ## What about macOS and trusted local use?
 
@@ -191,11 +195,10 @@ not fulfill its promises.
 Keeping `strict` and `insulated` around would not be conservative. It would ask users and security
 reviewers to reason about sudoers rules, host accounts, password synchronization, POSIX groups,
 ACL inheritance, recursive repair, stale memberships, and storage-specific behavior, even though
-our own production deployment has moved to sandboxing and our future architecture no longer relies
-on any of it.
+our future architecture no longer relies on any of it.
 
-We plan to preserve a final transition release containing the migration scripts and documentation,
-then make the next minor line intentionally breaking. The practical migration is:
+We preserved a final 0.24 transition release containing the migration scripts and documentation,
+then made 0.25 intentionally breaking. The practical migration is:
 
 1. back up the database, configuration, and storage;
 2. drain work and stop Agor;
@@ -203,7 +206,7 @@ then make the next minor line intentionally breaking. The practical migration is
 4. make repositories, branches, and homes accessible to the daemon account, typically by changing
    owner/group in a controlled, mount-bounded migration;
 5. enable sandbox mode and verify home continuity, Git writes, branch RBAC, and secret masking;
-6. upgrade to the release that no longer contains strict/insulated machinery.
+6. upgrade to 0.25 or later, which no longer contains strict/insulated machinery.
 
 The existing migration scripts are a reference implementation, not a promise that Agor can infer
 the safe ownership operation for every host. Automatic cleanup of old users and groups would be

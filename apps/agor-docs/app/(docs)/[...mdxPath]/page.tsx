@@ -162,7 +162,7 @@ export default async function Page(props: PageProps) {
         // biome-ignore lint/performance/noImgElement: Static blog hero image
         <img
           src={frontMatter.image}
-          alt=""
+          alt={typeof frontMatter.imageAlt === 'string' ? frontMatter.imageAlt : ''}
           style={{
             width: '100%',
             borderRadius: '8px',

@@ -31,6 +31,7 @@ export type FrontMatterLike = {
   date?: string | number | Date;
   heroImage?: string;
   image?: string;
+  imageAlt?: string;
   imageHeight?: number | string;
   imageWidth?: number | string;
   noindex?: boolean;
