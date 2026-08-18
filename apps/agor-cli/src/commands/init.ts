@@ -624,11 +624,17 @@ export default class Init extends Command {
       resolveManagedAgenticToolVersion(this.config.version) as string
     );
     for (const tool of tools) {
-      const marker = tool.status === 'ready' ? chalk.green('✓') : chalk.yellow('○');
+      const isConfigured = configured.has(tool.id);
+      const marker =
+        tool.status === 'ready'
+          ? chalk.green('✓')
+          : isConfigured
+            ? chalk.yellow('⚠')
+            : chalk.dim('○');
       const detail =
         tool.status === 'ready'
           ? (tool.version ?? tool.path ?? 'ready')
-          : configured.has(tool.id)
+          : isConfigured
             ? 'installation incomplete'
             : 'not selected by this deployment';
       this.log(`   ${marker} ${tool.name}: ${detail}`);
@@ -636,7 +642,11 @@ export default class Init extends Command {
     let missingTools = tools.filter((tool) => tool.status !== 'ready');
     missingTools = missingTools.filter((tool) => configured.has(tool.id));
     if (missingTools.length > 0) {
-      this.log(chalk.dim(`   ${missingTools.length} optional agentic tool(s) are not installed.`));
+      this.log(
+        chalk.yellow(
+          `   ${missingTools.length} selected agentic tool(s) need installation or repair.`
+        )
+      );
       this.log(chalk.dim('   Repair the configured package set with: agor install --sync'));
       this.log(chalk.dim('   Recheck at any time with: agor doctor'));
     }
