@@ -115,7 +115,6 @@ async function runInteractiveInit(
 
   let output = '';
   let skippedAdmin = false;
-  let declinedSandbox = false;
   let rejectedEmptySelection = false;
   let selectedTools = false;
   return await new Promise((resolve, reject) => {
@@ -128,12 +127,6 @@ async function runInteractiveInit(
       const plain = stripTerminalControl(output);
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
-        terminal.write('n\r');
-      }
-      // Fresh init offers the OS-level executor sandbox (single y/N) before tool
-      // selection. Decline it here to keep this fixture's assertions focused.
-      if (!declinedSandbox && plain.includes('Sandbox agents')) {
-        declinedSandbox = true;
         terminal.write('n\r');
       }
       if (
@@ -237,7 +230,6 @@ async function runInteractiveReinit(
   let output = '';
   let selectedReinitAction = false;
   let skippedAdmin = false;
-  let declinedSandbox = false;
   let selectedTools = false;
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -256,10 +248,6 @@ async function runInteractiveReinit(
       }
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
-        terminal.write('n\r');
-      }
-      if (!declinedSandbox && plain.includes('Sandbox agents')) {
-        declinedSandbox = true;
         terminal.write('n\r');
       }
       if (!selectedTools && plain.includes('Which agentic tools should this deployment support?')) {
@@ -487,6 +475,7 @@ describe('initial agentic tool selection', () => {
     expect(result.output).toContain('Agentic tool packages');
     expect(result.output).toContain('Provider credentials are configured after the daemon starts.');
     expect(result.output).toContain('Use ↑/↓ to move, Space to select, and Enter to continue.');
+    expect(result.output).not.toContain("Sandbox agents' filesystem access");
     expect(result.output).toContain('Select at least one agentic tool, or press Ctrl+C to exit.');
     expect(result.output).toContain('Configured: codex');
     expect(result.output).toContain('Codex installed');

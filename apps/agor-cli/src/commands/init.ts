@@ -593,42 +593,6 @@ export default class Init extends Command {
       // Explicit hard opt-out intentionally omits it.
       await this.saveTelemetryPreference(false, true);
     }
-    // Offer the OS-level executor sandbox (SRT). Single y/N — no complex form.
-    // Only on a fresh config (initialConfig is what gets persisted below).
-    if (!skipPrompts && !configAlreadyExists) {
-      const { enableSandbox } = await inquirer.prompt<{ enableSandbox: boolean }>([
-        {
-          type: 'confirm',
-          name: 'enableSandbox',
-          message:
-            "Sandbox agents' filesystem access with sensible defaults? " +
-            '(branch + temp stay writable; ~/.agor secrets and other branches are hidden. ' +
-            'Recommended for shared/production hosts; needs bubblewrap on Linux.)',
-          default: false,
-        },
-      ]);
-      if (enableSandbox) {
-        this.initialConfig.execution = {
-          ...this.initialConfig.execution,
-          sandbox: { ...this.initialConfig.execution?.sandbox, enabled: true },
-        };
-        this.log(
-          `${chalk.green('   ✓')} Executor sandbox enabled (execution.sandbox.enabled: true)`
-        );
-        this.log(
-          chalk.dim(
-            '     Tune it in ~/.agor/config.yaml; run `agor doctor` to verify dependencies.'
-          )
-        );
-      } else {
-        this.log(
-          chalk.dim(
-            '   ○ Sandbox off. Agents have open filesystem access; tool approval flows still apply.'
-          )
-        );
-      }
-    }
-
     if (!configAlreadyExists) {
       this.initialConfig.agentic_tools = { installed: selectedTools };
       await this.persistDuringInitialCreation(this.initialConfig);
