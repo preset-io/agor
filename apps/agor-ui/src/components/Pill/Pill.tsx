@@ -937,8 +937,8 @@ interface BoardPillProps extends BasePillProps {
   board: {
     name: string;
   };
-  /** Pre-resolved primary-assistant emoji (see `getBoardEmoji`); falls back to
-   * the neutral board glyph when absent — never a stored board icon. */
+  /** Pre-resolved board emoji (see `getBoardEmoji`); falls back to the neutral
+   * board glyph when the board has neither an icon nor a teammate fallback. */
   emoji?: string | null;
   compact?: boolean;
   title?: string;
