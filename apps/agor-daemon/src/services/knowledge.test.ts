@@ -436,6 +436,8 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(created.uri).toBe('agor://kb/mcp-style/guide.md');
       expect(created.icon_emoji).toBe('📘');
 
+      const assistantSessionId = generateId();
+
       const updated = await service.putDocument(
         {
           namespace_slug: namespace.slug,
@@ -443,10 +445,17 @@ describe('KnowledgeDocumentsService permissions', () => {
           content_text: '# Guide\n\nUpdated',
           expected_version: 1,
         },
-        params(owner)
+        {
+          user: owner,
+          knowledgeWriteAttribution: { sessionId: assistantSessionId, agenticTool: 'codex' },
+        } as never
       );
       expect(updated.document_id).toBe(created.document_id);
       expect(updated.icon_emoji).toBe('📘');
+      expect(updated).toMatchObject({
+        updated_by_session_id: assistantSessionId,
+        updated_by_agentic_tool: 'codex',
+      });
 
       const iconOnlyUpdate = await service.putDocument(
         {
@@ -458,6 +467,26 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(iconOnlyUpdate.document_id).toBe(created.document_id);
       expect(iconOnlyUpdate.icon_emoji).toBe('🧭');
       expect(iconOnlyUpdate.current_version_id).toBe(updated.current_version_id);
+      expect(iconOnlyUpdate).toMatchObject({
+        updated_by_session_id: null,
+        updated_by_agentic_tool: null,
+      });
+
+      const assistantIconUpdate = await service.putDocument(
+        {
+          document_id: created.document_id,
+          icon_emoji: '🤖',
+        },
+        {
+          user: owner,
+          knowledgeWriteAttribution: { sessionId: assistantSessionId, agenticTool: 'codex' },
+        } as never
+      );
+      expect(assistantIconUpdate.current_version_id).toBe(updated.current_version_id);
+      expect(assistantIconUpdate).toMatchObject({
+        updated_by_session_id: assistantSessionId,
+        updated_by_agentic_tool: 'codex',
+      });
 
       const hydrated = await service.getDocument(
         { namespace_slug: namespace.slug, path: 'guide.md', include_content: true },

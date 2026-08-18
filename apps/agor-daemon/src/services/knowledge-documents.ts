@@ -545,7 +545,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
             namespace_slug: undefined,
             path: path ?? existing.path,
             updated_by: this.attributionUserId(params, data.updated_by),
-            ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
+            ...assistantAttribution(params),
           },
           existing
         )
@@ -688,7 +688,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
-      ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
+      ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
       result,
@@ -732,7 +732,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
-      ...(typeof data.content_text === 'string' ? assistantAttribution(params) : {}),
+      ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
       result,
