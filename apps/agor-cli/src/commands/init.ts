@@ -387,8 +387,15 @@ export default class Init extends Command {
       const repos = reposExist ? await this.listDirs(reposDir) : [];
       const branches = branchesExist ? await this.listDirs(branchesDir) : [];
 
-      // Show what will be deleted
-      this.log(chalk.bold.red('⚠  Re-initialization will delete:'));
+      // The action applies to the directory as one deployment boundary, not
+      // only to the well-known paths we can summarize below.
+      this.log(chalk.bold.yellow('⚠  Re-initialization affects the entire installation:'));
+      this.log(`${chalk.cyan('  Directory:')} ${baseDir}`);
+      this.log(
+        chalk.dim(
+          '    Backup moves it intact. Delete permanently removes everything in it, including config.yaml, database sidecars, logs, repositories, worktrees, and installed tools.'
+        )
+      );
       this.log('');
 
       if (dbExists) {

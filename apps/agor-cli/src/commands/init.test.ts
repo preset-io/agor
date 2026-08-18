@@ -550,6 +550,8 @@ describe('initial agentic tool selection', () => {
 
     expect(result.exitCode, result.output).toBe(0);
     expect(result.output).toContain('Backing up existing installation');
+    expect(result.output).toContain('Re-initialization affects the entire installation');
+    expect(result.output).toContain('including config.yaml');
     const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
       agentic_tools?: { installed?: string[] };
     };
