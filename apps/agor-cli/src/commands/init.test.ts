@@ -292,6 +292,7 @@ describe('safe init state detection', () => {
     expect(
       isFreshInitState({
         baseExists: true,
+        configExists: false,
         databaseExists: false,
         reposExist: false,
         branchesExist: false,
@@ -303,9 +304,22 @@ describe('safe init state detection', () => {
     expect(
       isFreshInitState({
         baseExists: true,
+        configExists: true,
         databaseExists: true,
         reposExist: true,
         branchesExist: true,
+      })
+    ).toBe(false);
+  });
+
+  it('treats a config-only directory as an existing deployment boundary', () => {
+    expect(
+      isFreshInitState({
+        baseExists: true,
+        configExists: true,
+        databaseExists: false,
+        reposExist: false,
+        branchesExist: false,
       })
     ).toBe(false);
   });
@@ -513,6 +527,34 @@ describe('initial agentic tool selection', () => {
     };
     expect(config.agentic_tools?.installed).toEqual(['codex']);
   }, 35_000);
+
+  it('backs up a config-only install so interactive tool changes persist in a fresh config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-config-only-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const firstInit = await runInitWithoutPty(home, [
+      '--non-interactive',
+      '--agentic-tools',
+      'none',
+    ]);
+    expect(firstInit.exitCode, firstInit.output).toBe(0);
+    await rm(join(home, '.agor', 'agor.db'), { force: true });
+    await rm(join(home, '.agor', 'repos'), { recursive: true, force: true });
+    await rm(join(home, '.agor', 'worktrees'), { recursive: true, force: true });
+
+    const result = await runInteractiveReinit(home, fixtureBin);
+
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Backing up existing installation');
+    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(config.agentic_tools?.installed).toEqual(['codex']);
+  }, 60_000);
 
   it('prompts an upgraded local install for tools before destructive re-initialization', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-reinit-tools-'));

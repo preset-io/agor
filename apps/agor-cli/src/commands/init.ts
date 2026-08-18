@@ -52,11 +52,15 @@ import { probeAgorDaemon } from '../lib/daemon-probe.js';
 
 export function isFreshInitState(state: {
   baseExists: boolean;
+  configExists: boolean;
   databaseExists: boolean;
   reposExist: boolean;
   branchesExist: boolean;
 }): boolean {
-  return !state.baseExists || (!state.databaseExists && !state.reposExist && !state.branchesExist);
+  return (
+    !state.baseExists ||
+    (!state.configExists && !state.databaseExists && !state.reposExist && !state.branchesExist)
+  );
 }
 
 export function createInstallTelemetryConfig(config: AgorConfig, instanceId: string): AgorConfig {
@@ -341,11 +345,13 @@ export default class Init extends Command {
 
       // Check if already initialized
       const alreadyExists = await this.pathExists(baseDir);
+      const configExists = await this.pathExists(join(baseDir, 'config.yaml'));
       const dbExists = await this.pathExists(dbPath);
       const reposExist = await this.pathExists(reposDir);
       const branchesExist = await this.pathExists(branchesDir);
       const freshState = isFreshInitState({
         baseExists: alreadyExists,
+        configExists,
         databaseExists: dbExists,
         reposExist,
         branchesExist,
