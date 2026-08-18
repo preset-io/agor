@@ -1,7 +1,8 @@
 # Enabling Codex and Claude subscription OAuth sign-in in HA
 
 Status: **design proposal, not implemented.** August 2026.
-Revision 2 — corrects a refuted claim in revision 1; see [Revision history](#revision-history).
+Revision 3 — PRECONDITION A resolved by infra; two new EFS-derived requirements
+verified against the code. See [Revision history](#revision-history).
 
 Scope: make the two provider subscription sign-in flows — Codex device auth
 (`codex-auth/device`) and Claude subscription OAuth (`claude-auth/oauth`, added
@@ -24,10 +25,14 @@ been established and must be before the corresponding phase ships.
 1. The blocking mechanism is the **in-memory `attempts` map** that holds
    per-attempt secret material between requests
    (`codex-device-auth.ts:263`; `claude-oauth.ts:292` on #2317).
-2. Credential-file visibility is **solved for the checked-in `shared-local`
-   topology** and is a **declared, unverified contract** for `external` / Cloud.
-   It is not a second implementation blocker, but it is an open deployment
-   precondition (§1.6, §3).
+2. Credential-file visibility is **solved in both topologies**. PRECONDITION A is
+   **RESOLVED**: prod HA runs a shared-EFS RWX PVC with
+   `user_home: persistent-per-user` and per-tenant/per-user `subPath` isolation
+   (§1.6). Consequence: **Claude subscription OAuth in HA is not limited to an
+   affinity-scoped stopgap** — the only remaining blocker for Claude is durable
+   attempt state (Phase 2), in the general topology.
+   Two new EFS-derived requirements apply (§1.10): persistent identity on both
+   the credential-write and session-run paths, and fsync-before-rename.
 3. `processAffineAuth` has **zero consumers** — declared, assigned `false`, one
    test fixture. It is not a switch. **Delete it**; do not rehabilitate it.
 4. Redis is fanout-only and auth paths are explicitly denied the relay.
@@ -36,11 +41,12 @@ been established and must be before the corresponding phase ships.
    atomic one-shot claim, tenant scope, TTL/prune. Reuse the primitives.
    **Do not** assume one generic table serves both providers: Codex's flow has a
    materially different external-call shape and needs its own state machine (§2.3).
-6. **Recommended: Phase 1 = minimal affinity-scoped enablement for `shared-local`;
-   Phase 2 = durable PostgreSQL attempt state serving `external` too. Codex
-   poll-lease *resumption* stays gated behind proving provider semantics
-   (PRECONDITION B); until proven, owner death in the approval window is
-   `ambiguous` and the user restarts.**
+6. **Recommended: go straight to Phase 2 — durable PostgreSQL attempt state,
+   serving the general topology.** With A resolved, Phase 1's affinity-scoped
+   stopgap buys only a few days of earlier `shared-local` availability and is now
+   optional. Codex poll-lease *resumption* still stays gated behind proving
+   provider semantics (PRECONDITION B); until proven, owner death in the approval
+   window is `ambiguous` and the user restarts.
 
 ---
 
@@ -162,13 +168,46 @@ the target home (`sandbox-context.ts:108-124`), passes `CODEX_HOME`
 | Topology | Status |
 | --- | --- |
 | `shared-local` (checked-in Compose HA stack) | **VERIFIED working.** `docker-compose.ha.yml:47,157` mounts named volume `agor-ha-user-home` at `/home/agor` on both daemons; `docker/ha/config.yaml:31` declares `user_home: shared`. The config comment states this "makes auth-file import/logout and Tasks replica-consistent". |
-| `external` / Cloud (`persistent-per-user`) | **PRECONDITION A — declared, not demonstrated.** `AgorExecutorStorageSettings` is explicitly a *"Declarative execution-substrate storage contract"* (`packages/core/src/config/types.ts:728-739`); `persistent-per-user` is described as *"the only mode suitable for user credential homes in a multi-tenant external executor fleet"*. That is a statement of what the operator must supply, **not evidence that any deployment supplies it.** No concrete provisioning of a durable, replica-consistent per-user home was located in this repo. |
+| `external` / Cloud (`persistent-per-user`) | **PRECONDITION A — RESOLVED.** See below. `AgorExecutorStorageSettings` is a *"Declarative execution-substrate storage contract"* (`packages/core/src/config/types.ts:728-739`); infra has now confirmed the substrate that satisfies it. |
 
-**Reconciling this with "one blocker":** the *implementation* blocker is the
-attempt map — no new credential mechanism needs to be built. But Phase 2/3
-enablement for `external` is **gated on PRECONDITION A**, which is a deployment
-fact this repo cannot settle. Revision 1's "already solved" was too strong; it
-was true of the smoke stack and asserted of Cloud.
+#### PRECONDITION A — resolved (infra, both prod Cells)
+
+Reported by the infra owners. **These facts are external to this repo and were
+not independently verified here** — `apps/manager-api/` does not exist in this
+tree (`apps/` holds only `agor-cli`, `agor-daemon`, `agor-docs`, `agor-ui`), so
+the `runtimeInternal.ts` line references below are recorded as supplied.
+
+| Property | Confirmed state |
+| --- | --- |
+| Shared filesystem | One RWX PVC on StorageClass `efs-sc` (provisioner `efs.csi.aws.com`), mounted as `agor-home` on **every** executor pod — same filesystem on any node/replica, **not** replica-local (`runtimeInternal.ts:1341`) |
+| Consistency | AWS EFS read-after-write — **guaranteed on `write()`+`close()`/fsync, not per buffered write**. Drives §1.10 R2. |
+| Durability | PersistentVolume, StorageClass reclaim policy `Retain`, decoupled from pod lifecycle; survives reschedule, termination, autoscale |
+| Config | `executor_storage.user_home: persistent-per-user`, `branch_workspace: persistent-per-branch`; `multi_tenancy: { mode: required_from_auth, filesystem_isolation_enabled: true }` |
+| Isolation | `subPath: tenants/<tenantId>/home/<userSegment>` mounted at `/home/<userSegment>` (`runtimeInternal.ts:1310-1313`) — satisfies `hasTenantSafeExecutorCredentialHome()` (`executor-credential-storage.ts:8-15`), which requires exactly `user_home === 'persistent-per-user'` under `required_from_auth` |
+| Eviction | None on the homes. Only `ttlSecondsAfterFinished: 3600` on the executor Job (`runtimeInternal.ts:1358`) and `uploads.max_age_days` on uploads. Volume 20Gi, `ALLOWVOLUMEEXPANSION=false` → the risk is **exhaustion (write failure), not deletion** |
+
+**Consequence.** The credential home is replica-consistent in the *general*
+topology, not only under affinity. So:
+
+- **Claude subscription OAuth in HA is no longer stopgap-shaped.** Its only
+  remaining blocker is durable attempt state (§2.4). Once that lands it works on
+  `external` with no affinity dependency.
+- **Codex** likewise gets its credential side unblocked; its remaining
+  constraint is the poller/approval-window semantics (PRECONDITION B, §2.3) —
+  which limits *resumption*, not enablement.
+- Phase 3 as originally written (a blocked scoping exercise) **collapses into
+  Phase 2** for the credential side; see §8.
+
+**Attempt state does not touch this volume.** The durable attempt record lives in
+PostgreSQL (§2.2), so the 20Gi/no-expansion exhaustion risk applies only to the
+credential files and workspaces, not to sign-in state. Worth stating because it
+means a full volume degrades the *final write*, not the OAuth handshake — the
+failure surfaces as a persist error the user can retry after cleanup, not as a
+corrupted or half-committed attempt.
+
+**Revision 1's "already solved" was still too strong at the time** — it was true
+of the smoke stack and merely asserted of Cloud. It is now true of both, on
+evidence.
 
 ### 1.7 Redis is fanout-only and explicitly denied to auth paths
 
@@ -271,7 +310,115 @@ certification surface smaller. That is a genuine argument for it being easier to
 activate. It is **not** an argument that MCP is technically blocked and sign-in
 is not.
 
-### 1.10 Ingress affinity is already mandatory
+### 1.10 Two requirements the EFS substrate imposes (VERIFIED against our code)
+
+Resolving A introduces two hard requirements. Both were traced through this
+repo; results below.
+
+#### R1 — Persistent identity is mandatory on *both* paths
+
+Infra gates persistence on `hasPersistentIdentity` (`runtimeInternal.ts:1199`,
+as supplied): a run with no `userId` / `runtimeUserId` / sanitized unix user
+lands on `anonymous-home`, an **emptyDir that dies with the pod**
+(`runtimeInternal.ts:1343`). So the sign-in **credential write** and the later
+**session runs** must *both* carry a resolved persistent identity, or the
+credential is written somewhere that evaporates — or, worse, written to a real
+home and then read from a different one.
+
+**Verification result: both paths carry identity, and `delegated` mode fails
+closed. One divergence hazard found.**
+
+*Credential-write path — SAFE.*
+- `resolveCodexCredentialRoute()` returns `ok: false, reason: 'resolve-failed'`
+  when `userId` is absent: *"Codex credential routing requires an authenticated
+  user identity."* (`apps/agor-daemon/src/services/codex-auth-shared.ts:153-159`).
+- Under `delegated` it additionally requires a `unix_username`, returning
+  `missing-username` otherwise (`:124-143`), resolved from the **caller's** user
+  row (`UsersRepository.findById(userId)`, `:131-135`).
+- `credentialExecutorOptions()` always forwards `user_id: routing.userId` and
+  `unix_user: routing.reportedUnixUser ?? undefined`
+  (`apps/agor-daemon/src/utils/executor-credential-auth.ts`, and on `main`
+  `utils/executor-codex-auth.ts:27-30`).
+
+*Session-run path — SAFE in `delegated`, softer elsewhere.*
+- `register-services.ts:1215-1219` forwards `session_id`, `task_id`,
+  `branch_id`, and `user_id: userId`.
+- But `userId` is typed optional — `(params as AuthenticatedParams).user?.user_id
+  as UserID | undefined` (`register-services.ts:930`).
+- `resolveDelegatedHomeKey()` **throws** in `delegated` mode when the home key is
+  missing (`packages/core/src/unix/delegated-home-key.ts:60-65`) and again on a
+  malformed key (`:66-68`). Since prod is `required_from_auth` + delegated-style
+  external execution, a missing identity is a hard failure, **not** a silent
+  drop to `anonymous-home`. That is the reassuring result.
+- Residual sharp edge: `substituteTemplateVariables()` only substitutes defined
+  values (`utils/spawn-executor.ts:271-282`). An `undefined` `user_id` therefore
+  leaves the **literal `{user_id}` in the rendered command** rather than failing
+  or emptying it. Validation only runs when the value is defined
+  (`:249-255`). In any topology whose template consumes `{user_id}` without
+  `{unix_user}`, that is precisely the anonymous-home path.
+
+**HAZARD — identity source divergence (flag for the implementation phase).**
+The two paths resolve the home key from **different rows**:
+
+| Path | Home-key source |
+| --- | --- |
+| Credential write | the **caller's** `users.unix_username` (`codex-auth-shared.ts:131-135`) |
+| Session run | the **session's** `session.unix_username` (`register-services.ts:1064,1066-1069`) |
+
+Both are non-empty in `delegated` mode, but nothing constrains them to be the
+**same value**. When they diverge, the credential is written into user A's home
+and the session reads user B's — a silent "signed in, but the agent still says
+unauthenticated". This is not hypothetical: `dangerously_allow_session_sharing`
+exists precisely so a child session can inherit `parent.created_by` rather than
+the caller (see CLAUDE.md), and a session's `unix_username` is stamped at
+creation and can drift from the user's current value.
+
+**Required for HA (design):** before enabling, assert that the credential-write
+home key and the run home key resolve to the same value for the target user, and
+fail closed with an actionable message when they don't. Do not paper over it by
+writing to both.
+
+#### R2 — fsync/close before rename (EFS close-consistency)
+
+EFS cross-client visibility holds on `write()`+`close()`, not per buffered
+write. Our credential write is temp-file → rename.
+
+**Verification result: `close()` happens; `fsync()` does not.**
+
+The shared helper introduced by #2317
+(`packages/executor/src/commands/credential-file-io.ts`, and the equivalent
+inline sequence on `main` at `packages/executor/src/commands/codex-auth-file.ts:79-86`):
+
+```ts
+await writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
+await chmod(temporary, 0o600);
+await rename(temporary, target);
+```
+
+- `fs/promises.writeFile` opens, writes, and **closes** the descriptor, so the
+  EFS close-to-open *visibility* contract is satisfied for the temp file before
+  the rename. This is the good news and it is why the current code mostly works.
+- There is **no `fsync` on the temp file** and **no `fsync` on the containing
+  directory** after the rename. So the bytes and the new directory entry are not
+  forced durable. A pod killed (or a node lost) between the rename and the
+  server-side flush can leave the credential file absent or truncated *after the
+  daemon has already reported success and flipped the user's auth method* — the
+  exact split-brain the §2.5 fencing is otherwise designed to prevent.
+- The code already anticipates this class of problem: the helper's own doc
+  comment says the read-back *"is retried once because some networked/overlay
+  filesystems briefly surface a rename before the new bytes are visible"*, and it
+  re-reads the target and compares against what it wrote
+  (`codex-auth-file.ts:88-100` on `main`). That read-back is a real mitigation
+  for visibility, but it is a **same-client** read and does not establish
+  durability.
+
+**Required change for HA on EFS (implementation phase, not now):** open the temp
+file explicitly, `write` → `fsync(fd)` → `close(fd)`, then `rename`, then
+`fsync` the containing directory. Keep the existing read-back verification.
+Because both providers now share `writeCredentialFileAtomically()`, this is
+**one fix in one function** covering Codex and Claude.
+
+### 1.11 Ingress affinity is already mandatory
 
 - HA refuses to boot without it (`deployment.ts:349-353`).
 - Resolved topology types it literally `ingressAffinity: true` in both variants
@@ -468,12 +615,15 @@ superseded microseconds earlier. Defined behavior:
 
 ### Option A — shared / per-user executor credential home (RECOMMENDED)
 
-Nothing to build for `shared-local` (§1.6, VERIFIED). For `external` the
-requirement is already enforced at boot (`deployment.ts:375-380`), but the
-backing store is **PRECONDITION A** — a declarative contract
-(`types.ts:728-739`), not demonstrated provisioning. Must be confirmed with the
-deployment owner before Phase 3 is scoped: durable, replica-consistent,
-per-tenant/per-user home at a stable path (RWX PVC / NFS / per-user volume).
+Nothing to build for `shared-local` (§1.6, VERIFIED). For `external`, the
+requirement is enforced at boot (`deployment.ts:375-380`) **and the backing store
+is now confirmed** — shared-EFS RWX PVC, `persistent-per-user`, per-tenant/user
+`subPath` isolation (§1.6, PRECONDITION A resolved).
+
+Two implementation obligations follow from that substrate rather than from the
+config contract, both detailed in §1.10: **R1** identity must resolve on the
+credential-write *and* session-run paths (with the divergence assertion), and
+**R2** the atomic write must `fsync` before rename.
 
 ### Option B — credentials in encrypted DB, materialized per session
 
@@ -580,6 +730,16 @@ about the key, the backups, or the decrypt window.
       `mcp-oauth-pending-flow-authority.postgres.test.ts:228-293`.
 - [ ] Credential write targets the caller's own resolved home; `required_from_auth`
       + non-`persistent-per-user` stays refused at boot.
+- [ ] **R1** — both the credential write and the session run resolve a persistent
+      identity, and the two home keys are asserted equal before enabling
+      (§1.10 R1). A run that cannot resolve one fails closed rather than
+      rendering an unsubstituted `{user_id}` (`spawn-executor.ts:271-282`).
+- [ ] **R2** — `fsync` the temp file before `rename` and `fsync` the directory
+      after, in `writeCredentialFileAtomically()` (§1.10 R2). Keep the read-back
+      verification.
+- [ ] Credential-home volume exhaustion (20Gi, no expansion) surfaces as an
+      explicit persist failure the user can retry, never as a partial write that
+      is reported as success. Attempt state is in PostgreSQL and is unaffected.
 
 ### 5.4 Lifecycle, revocation, rollout
 
@@ -642,6 +802,20 @@ be covered — the two-pool PostgreSQL harness in
 **Isolation**
 - [ ] Cross-tenant claim rejection; cross-user claim rejection within a tenant.
 
+**Shared credential home (EFS)**
+- [ ] Sign in on replica A, run a session on replica B → the session sees the
+      credential. This is the test that PRECONDITION A actually buys the general
+      topology, and it must run on the real substrate, not Compose.
+- [ ] Credential-write home key and session-run home key diverge → fails closed
+      with an actionable message, not a silent "still unauthenticated" (§1.10 R1).
+- [ ] A run with no resolvable user identity fails closed; assert no rendered
+      command ever contains a literal `{user_id}` or `{unix_user}`.
+- [ ] Kill the pod between `rename` and read-back → the credential is either
+      fully present or absent, never truncated, and the user's auth method is not
+      flipped on a write that did not survive (§1.10 R2).
+- [ ] Full volume (simulated ENOSPC) → explicit persist failure, retryable; the
+      attempt row is unaffected.
+
 **Integration**
 - [ ] Kill a replica mid-flow on the Compose HA stack for each crash window.
 - [ ] Phase 1 only: reconnect to a replica holding a stale attempt for the same
@@ -651,22 +825,25 @@ be covered — the two-pool PostgreSQL harness in
 
 ## 7. Recommendation
 
-**Phase 1 = minimal affinity-scoped enablement for `shared-local`. Phase 2 =
-durable PostgreSQL attempt state, which also serves `external`. Codex
-resumable-lease stays gated behind PRECONDITION B.**
+**Go to Phase 2 — durable PostgreSQL attempt state — and treat Phase 1 as
+optional. Codex resumable-lease stays gated behind PRECONDITION B.**
 
-Phase 1 is genuinely small — sticky Socket.IO already does the routing, so it is
-capability wiring plus an `attempt_id` echo plus a "start over" message. It keeps
-the verifier in-process, preserving today's security contract exactly. It cannot
-serve `external`, and it trades an honest 503 for a silent dependence on ingress
-config, so it is a stopgap and should be labelled one.
+Resolving PRECONDITION A changed the calculus. Previously Phase 1 was the only
+thing that could ship soon, because `external` was blocked on an unknown
+credential substrate. Now the credential home is confirmed replica-consistent in
+the general topology, so **durable attempt state is the single remaining blocker
+for Claude**, and it unblocks `external` directly. Phase 1 would buy a few days
+of earlier `shared-local` availability at the cost of code that Phase 2 deletes,
+plus a documented dependence on ingress config the daemon cannot verify. Ship it
+only if `shared-local` availability is independently urgent.
 
-Phase 2 is the design the support matrix already asked for. It reuses shipped,
-race-tested primitives, survives replica loss and rolling deploys, and is the
-only option that works for `external`. Its cost is a real change in blast radius
-(§5.2) and a migration/rollout.
+Phase 2 reuses shipped, race-tested primitives, survives replica loss and rolling
+deploys, and now needs no topology caveat. Its cost is the blast-radius change
+(§5.2), a migration/rollout, and the two §1.10 obligations — of which R2 is one
+fix in one shared function.
 
-If only one phase can be funded, do Phase 2.
+Codex is not held back by the credential side either; its remaining constraint is
+approval-window semantics, which limits *resumption*, not enablement.
 
 **Push-back on one review point.** The review asked to drop the boot-ID protocol
 and drain machinery entirely. Agreed on both — but *not* on dropping attempt
@@ -686,7 +863,10 @@ dropped.
 Claude sign-in and its `claudeAuth`/`claudeOAuth` keys on `main`. No HA behavior
 change; both fail closed. Ideally also lands the §5.1 Redis-denied-paths fix.
 
-### Phase 1 — affinity-scoped `shared-local` (~1-2 days)
+### Phase 1 — affinity-scoped `shared-local` (~1-2 days) — **OPTIONAL**
+Superseded in value by PRECONDITION A's resolution; ship only if early
+`shared-local` availability is independently urgent. Phase 2 deletes most of it.
+
 Capability widening + computation; delete `processAffineAuth`; rename to
 `executorCredentialFiles`; `attempt_id` echo; "start over" UX; update
 `ha-support.test.ts` / `deployment.test.ts` / `register-hooks.test.ts`; negative
@@ -703,9 +883,16 @@ SQLite/standalone as MCP OAuth does; §6 test matrix.
 **Risk: medium-high** — migration, rollout ordering, blast-radius change.
 Requires §5 signed off and a fleet-shared `AGOR_MASTER_SECRET`.
 
-### Phase 3 — `external` / Cloud (blocked on PRECONDITION A)
-Confirm Cloud's real `persistent-per-user` backing store, then validate the
-credential write path end-to-end. Cannot be scoped from this repo alone.
+### Phase 3 — `external` / Cloud — **collapsed into Phase 2**
+PRECONDITION A is resolved (§1.6), so this is no longer a separate blocked
+scoping exercise. What remains are the two §1.10 obligations, which belong inside
+Phase 2:
+- **R2 fsync-before-rename** in `writeCredentialFileAtomically()` — one function,
+  covers both providers. Do this first; it is small and independently correct.
+- **R1 identity assertion** — credential-write and session-run home keys must
+  resolve equal, failing closed otherwise.
+- End-to-end validation on the real EFS substrate (sign in on replica A, run on
+  replica B), which Compose cannot exercise.
 
 ### Phase 4 — Codex resumable polling (blocked on PRECONDITION B)
 Only after provider poll semantics are established. Until then, owner death in
@@ -721,9 +908,20 @@ different capabilities — prefer an offline cutover to a rolling one.
 
 ## 9. Preconditions and open questions
 
-- **PRECONDITION A — Cloud's `persistent-per-user` backing store.** Declared
-  contract (`types.ts:728-739`), no demonstrated provisioning found in-repo. Must
-  verify with the deployment owner **before enabling `external`**. (§1.6, §3)
+- **PRECONDITION A — RESOLVED.** Prod HA (both Cells) runs a shared-EFS RWX PVC,
+  `user_home: persistent-per-user`, per-tenant/user `subPath` isolation, `Retain`
+  reclaim, no home eviction. Supplied by infra and recorded in §1.6; the
+  `manager-api` line references were **not** independently verified here because
+  that repo is not in this tree. Two obligations follow (§1.10 R1/R2).
+- **Residual from A — volume headroom.** 20Gi with
+  `ALLOWVOLUMEEXPANSION=false` means the failure mode is exhaustion, not
+  deletion. Credential writes must fail loudly on ENOSPC rather than reporting
+  success. Attempt state is in PostgreSQL and is not exposed to this.
+- **New — identity-source divergence.** The credential write resolves the home
+  key from the caller's `users.unix_username`; the session run resolves it from
+  `session.unix_username`. Nothing constrains them to match, and
+  `dangerously_allow_session_sharing` makes divergence reachable. Needs the
+  equality assertion in §1.10 R1. (Design flag; no code change now.)
 - **PRECONDITION B — Codex device-poll semantics.** Whether observing approval
   consumes the authorization code, and whether re-polling reproduces it, is
   unverified. **Must verify before enabling resumable polling.** Until then,
@@ -757,7 +955,19 @@ lands:
 
 ## Revision history
 
-- **r2** (this revision) — Corrected the refuted MCP/DCR claim (§1.9): the durable
+- **r3** (this revision) — **PRECONDITION A resolved** by infra: prod HA runs a
+  shared-EFS RWX PVC with `persistent-per-user` and per-tenant/user `subPath`
+  isolation (§1.6). Consequence: Claude sign-in in HA is no longer stopgap-shaped
+  — durable attempt state is its only remaining blocker, in the general topology.
+  Phase 3 collapses into Phase 2; Phase 1 becomes optional; the recommendation
+  changes to "go straight to Phase 2". Added §1.10 with two EFS-derived
+  requirements **verified against our code**: R1 persistent identity on both the
+  credential-write and session-run paths (both carry it; `delegated` fails closed;
+  found an identity-source **divergence hazard** between `users.unix_username` and
+  `session.unix_username`), and R2 fsync-before-rename (**`close()` happens via
+  `writeFile`, `fsync` does not** — required change for EFS durability). Added
+  shared-credential-home test cases and the volume-exhaustion note.
+- **r2** — Corrected the refuted MCP/DCR claim (§1.9): the durable
   MCP row seals `clientId`/`clientSecret`; MCP is gated pending separate
   activation, not by process-local DCR state. Added the Codex fenced state machine
   (§2.3) and durable logout/replacement fencing (§2.5). Made `state` hash-only and
