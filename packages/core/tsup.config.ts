@@ -16,7 +16,6 @@ export default defineConfig({
     'git/pure': 'src/git/pure.ts',
     'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
-    'claude/index': 'src/claude/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
     'config/index': 'src/config/index.ts',
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
@@ -57,21 +56,23 @@ export default defineConfig({
     'client/claude-system-suppression': 'src/client/claude-system-suppression.ts', // Browser-safe Claude system event suppression rules
     'tools/mcp/http-headers': 'src/tools/mcp/http-headers.ts', // MCP custom HTTP header utilities
     'tools/mcp/auth-secrets': 'src/tools/mcp/auth-secrets.ts', // MCP auth secret redaction/restoration utilities
+    'tools/mcp/env-secrets': 'src/tools/mcp/env-secrets.ts', // MCP env secret redaction/restoration utilities
     'tools/mcp/jwt-auth': 'src/tools/mcp/jwt-auth.ts', // MCP JWT authentication utilities
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
+    'tools/mcp/grant-entitlement': 'src/tools/mcp/grant-entitlement.ts', // MCP OAuth grant subject entitlement, enforced at the write
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
-    'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
-    'local-actions/index': 'src/local-actions/index.ts', // Shared host-local admin actions
-    'local-actions/identity': 'src/local-actions/identity.ts', // Daemon host identity/group actions only
+    'unix/index': 'src/unix/index.ts', // Sandbox and delegated-home compatibility utilities
+    'local-actions/index': 'src/local-actions/index.ts', // Shared host-local maintenance actions
     'mcp/index': 'src/mcp/index.ts', // MCP template resolution utilities
     'mcp/member-policy': 'src/mcp/member-policy.ts', // Browser-safe mcp_member_policy predicates (no scoping deps)
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
-    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: registry mirror, curation, probe
+    'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: the checked-in file, and the connect probe
+    'mcp-catalog/query': 'src/mcp-catalog/query.ts', // Browser-safe catalog filtering/ordering (no loader, no fs)
   },
   format: ['cjs', 'esm'],
   dts: false,
@@ -103,8 +104,7 @@ export default defineConfig({
 
     // Copy template files to dist so they're available at runtime
     cpSync('src/templates/agor-system-prompt.md', 'dist/templates/agor-system-prompt.md');
-    // Executor processes can run as a different Unix user. Do not preserve the
-    // group-private mode inherited from an ACL-managed development worktree.
+    // Published templates must not preserve a restrictive development-worktree mode.
     chmodSync('dist/templates/agor-system-prompt.md', 0o644);
     console.log('✅ Copied agor-system-prompt.md template to dist/');
 

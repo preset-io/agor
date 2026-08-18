@@ -5,7 +5,6 @@ import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
-import { buildSpawnArgs } from '@agor/core/unix';
 
 export interface ExecutorContainmentIdentity {
   sessionId: string;
@@ -14,7 +13,6 @@ export interface ExecutorContainmentIdentity {
   pgid: number;
   startIdentity?: string;
   bootIdentity?: string;
-  asUser?: string;
   leaderExited: boolean;
 }
 
@@ -134,7 +132,6 @@ function parseStoredContainmentFence(value: unknown): StoredContainmentFence | u
     executor.pgid <= 0 ||
     (executor.startIdentity !== undefined && typeof executor.startIdentity !== 'string') ||
     (executor.bootIdentity !== undefined && typeof executor.bootIdentity !== 'string') ||
-    (executor.asUser !== undefined && typeof executor.asUser !== 'string') ||
     typeof executor.leaderExited !== 'boolean'
   ) {
     return undefined;
@@ -176,25 +173,11 @@ function readBootIdentity(): string | undefined {
 }
 
 type GroupInspection = 'present' | 'absent' | 'unverified';
-type GroupInspector = (
-  pgid: number,
-  signal?: 0 | NodeJS.Signals,
-  asUser?: string
-) => GroupInspection;
+type GroupInspector = (pgid: number, signal?: 0 | NodeJS.Signals) => GroupInspection;
 
-function inspectGroup(
-  pgid: number,
-  signal: 0 | NodeJS.Signals = 0,
-  asUser?: string
-): GroupInspection {
+function inspectGroup(pgid: number, signal: 0 | NodeJS.Signals = 0): GroupInspection {
   try {
-    if (asUser) {
-      const signalArg = signal === 0 ? '-0' : `-${signal}`;
-      const { cmd, args } = buildSpawnArgs('/bin/kill', [signalArg, '--', String(-pgid)], asUser);
-      execFileSync(cmd, args, { stdio: 'pipe' });
-    } else {
-      process.kill(-pgid, signal);
-    }
+    process.kill(-pgid, signal);
     return 'present';
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -209,15 +192,14 @@ async function waitForAbsence(
   pgid: number,
   timeoutMs: number,
   pollMs: number,
-  asUser?: string,
   inspect: GroupInspector = inspectGroup
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (inspect(pgid, 0, asUser) === 'absent') return true;
+    if (inspect(pgid, 0) === 'absent') return true;
     await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
   }
-  return inspect(pgid, 0, asUser) === 'absent';
+  return inspect(pgid, 0) === 'absent';
 }
 
 export function trackExecutorProcess(
@@ -225,7 +207,6 @@ export function trackExecutorProcess(
     sessionId: string;
     taskId: string;
     pid: number;
-    asUser?: string;
   },
   owner?: object
 ): void {
@@ -285,35 +266,24 @@ async function containExecutorIdentity(
     return { status: 'verified_absent' };
   }
   const inspect = options.inspectGroupForTest ?? inspectGroup;
-  let inspection = inspect(tracked.pgid, 0, tracked.asUser);
+  let inspection = inspect(tracked.pgid, 0);
   if (inspection === 'absent') return { status: 'verified_absent' };
 
-  // A strict-mode executor runs below a root-owned sudo wrapper in the same
-  // process group. After the scoped executor acknowledges quiescence, its
-  // user may temporarily get EPERM while that wrapper unwinds. Honor the
-  // cooperative grace before treating this transient inspection as durable
-  // uncertainty; absence must still be observed explicitly.
+  // Honor a cooperative grace before signaling the process group; absence
+  // must still be observed explicitly.
   if (options.preSignalGraceMs) {
     if (
-      await waitForAbsence(
-        tracked.pgid,
-        options.preSignalGraceMs,
-        options.pollMs ?? 50,
-        tracked.asUser,
-        inspect
-      )
+      await waitForAbsence(tracked.pgid, options.preSignalGraceMs, options.pollMs ?? 50, inspect)
     ) {
       return { status: 'verified_absent' };
     }
-    inspection = inspect(tracked.pgid, 0, tracked.asUser);
+    inspection = inspect(tracked.pgid, 0);
   }
 
   if (inspection === 'unverified') {
     return {
       status: 'unverified',
-      reason: tracked.asUser
-        ? `Executor process-group presence could not be checked as ${tracked.asUser}.`
-        : 'Executor process-group presence is unverified.',
+      reason: 'Executor process-group presence is unverified.',
     };
   }
   if (options.recovered && tracked.leaderExited) {
@@ -339,7 +309,7 @@ async function containExecutorIdentity(
   }
 
   const signal = (value: NodeJS.Signals): ContainmentResult | undefined => {
-    const result = inspect(tracked.pgid, value, tracked.asUser);
+    const result = inspect(tracked.pgid, value);
     if (result === 'present') return undefined;
     if (result === 'absent') return { status: 'verified_absent' };
     return { status: 'unverified', reason: `${value} process-group signal was not authorized.` };
@@ -355,7 +325,6 @@ async function containExecutorIdentity(
       tracked.pgid,
       options.termGraceMs ?? DEFAULT_EXECUTOR_TERM_GRACE_MS,
       options.pollMs ?? 50,
-      tracked.asUser,
       inspect
     )
   ) {
@@ -370,7 +339,6 @@ async function containExecutorIdentity(
       tracked.pgid,
       options.killGraceMs ?? DEFAULT_EXECUTOR_KILL_GRACE_MS,
       options.pollMs ?? 50,
-      tracked.asUser,
       inspect
     )
   ) {

@@ -156,33 +156,12 @@ Client                          Executor
        "result":{"pong":true,...}} │
 ```
 
-## Next Steps (Phase 2)
+## Execution model
 
-### Remaining Implementation
-
-1. **Daemon Integration**
-   - Create `ExecutorPool` service in daemon
-   - Implement subprocess spawning with sudo
-   - Add `ExecutorClient` (daemon-side IPC client)
-   - Add config flag: `execution.run_as_unix_user`
-
-2. **SDK Execution**
-   - Implement `execute_prompt` handler in executor
-   - Implement `get_api_key` request (executor → daemon)
-   - Implement `request_permission` request
-   - Implement `report_message` notification
-   - Modify `/sessions/:id/prompt` endpoint to use executor
-
-3. **Terminal Integration**
-   - Implement `spawn_terminal` handler
-   - PTY file descriptor passing
-   - Terminal I/O forwarding
-
-4. **Security Hardening**
-   - Session token expiration
-   - Rate limiting
-   - Audit logging
-   - Security tests
+The daemon launches this executor directly in trusted `simple` mode, inside the
+local bubblewrap filesystem policy in `sandbox` mode, or through the configured
+external command template in `delegated` mode. The executor does not manage host
+Unix accounts or provide a sudo impersonation boundary.
 
 ### Files to Create (Phase 2)
 

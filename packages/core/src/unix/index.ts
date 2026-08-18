@@ -1,32 +1,13 @@
 /**
- * Unix User Mode Integration
+ * Execution Substrate Compatibility
  *
- * Utilities and services for Unix-level isolation and permission management.
- *
- * @see context/guides/rbac-and-unix-isolation.md
+ * Bubblewrap capability, environment safety, and the transitional delegated
+ * execution-home key stored under the legacy `unix_username` name.
  */
 
-// Command execution abstraction (for admin CLI commands)
-export * from './command-executor.js';
+// bubblewrap capability probes (executor sandbox availability)
+export * from './bwrap.js';
+// Delegated execution-home compatibility
+export * from './delegated-home-key.js';
 // Env command deny-list (defence-in-depth)
 export * from './environment-command-deny-list.js';
-// Branch group management
-export * from './group-manager.js';
-// Explicit legacy group-name migration (never used by normal sync)
-export * from './group-uuid-migration.js';
-// ID lookup utilities
-export * from './id-lookups.js';
-// Central command execution as another user (preferred API)
-export * from './run-as-user.js';
-// Secret-aware env classification / redaction
-export * from './secret-env.js';
-// Symlink management
-export * from './symlink-manager.js';
-// System queries (read-only OS state + pure logic helpers)
-export * from './system-queries.js';
-// Main orchestration service
-export * from './unix-integration-service.js';
-// 0600 env-file primitive + impersonation-env helpers
-export * from './user-env-file.js';
-// Unix user management
-export * from './user-manager.js';

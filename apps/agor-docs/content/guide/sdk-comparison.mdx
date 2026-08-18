@@ -17,7 +17,6 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | --------------------------- | --------------- | ------------------ | ---------------- | --------------- | ------------------ | --------------------------------------------------------------------------------------------- |
 | **Streaming responses**     | ✅ Text + tools | ⚠️ Tools only      | ✅ Text + tools  | ✅ Text + tools | ✅ Text + tools    | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
 | **Stop mid-execution**      | ✅ Yes          | ⚠️ Limited         | ⚠️ Limited       | ⚠️ Limited      | ⚠️ Limited         | Claude has `interrupt()`, others may lose partial work                                        |
-| **Session import/export**   | ✅ Yes          | ❌ No              | ❌ No            | ❌ No           | ❌ No              | Only Claude Code stores sessions as JSONL transcripts                                         |
 | **Session forkable**        | ✅ SDK-native   | ✅ App Server fork | ❌ Not yet       | ❌ Not yet      | ❌ Not yet         | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar    |
 | **MCP integration**         | ✅ Native       | ✅ Native          | ✅ Native        | ✅ Native       | ✅ Native          | All agents support MCP with Agor's built-in self-access server                                |
 | **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ⚠️ Basic         | ✅ Interactive  | ✅ Interactive     | OpenCode routes permission decisions through Agor and honors session permission mode          |
@@ -120,42 +119,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 
 ---
 
-### 3. Session Import/Export
-
-**Claude Code:** ✅ **Full support**
-
-- Sessions stored as JSONL transcript files in `~/.claude/projects/`
-- Rich metadata (git state, tool uses, timestamps)
-- Agor can parse and replay transcripts
-- Enables session portability
-
-**Codex:** ❌ **Not supported**
-
-- No native session persistence format
-- Agor stores sessions in own database
-- Cannot import external Codex sessions
-
-**Gemini:** ❌ **Not supported**
-
-- Has checkpoint system but format undocumented
-- Agor stores sessions in own database
-- Cannot import external Gemini sessions
-
-**Copilot:** ❌ **Not supported**
-
-- No native session export format
-- Agor stores sessions in own database
-- Cannot import external Copilot sessions
-
-**OpenCode:** ❌ **Not supported**
-
-- No native session export format
-- Agor stores sessions in own database via `sdk_session_id` mapping
-- Cannot import external OpenCode sessions
-
----
-
-### 4. Session Forking
+### 3. Session Forking
 
 Forking creates a sibling session that inherits the parent's full conversation history at the fork point, then diverges. The mechanism is SDK-native where the agent supports it.
 
@@ -179,7 +143,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 ---
 
-### 5. MCP Integration
+### 4. MCP Integration
 
 **Claude Code:** ✅ **Native support**
 
@@ -223,7 +187,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 ---
 
-### 6. Permission Requests
+### 5. Permission Requests
 
 **Claude Code:** ✅ **Rich permission system**
 
@@ -270,7 +234,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 ---
 
-### 7. Project Instructions
+### 6. Project Instructions
 
 **Claude Code:** ✅ **CLAUDE.md auto-loading**
 
@@ -308,7 +272,7 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 
 ---
 
-### 8. Tool Execution & Visualization
+### 7. Tool Execution & Visualization
 
 **Claude Code:** ✅ **Rich tool metadata**
 
@@ -354,7 +318,7 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 
 ---
 
-### 9. Session Continuity
+### 8. Session Continuity
 
 **Claude Code:** ✅ **SDK-managed conversation**
 
@@ -393,7 +357,7 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 
 ---
 
-### 10. Token Usage Tracking
+### 9. Token Usage Tracking
 
 **Claude Code:** ✅ **Comprehensive token tracking**
 
@@ -442,7 +406,7 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 
 ---
 
-### 11. Context Window Tracking
+### 10. Context Window Tracking
 
 **Claude Code:** 🟡 **Estimated (conversation size only)**
 
@@ -742,12 +706,6 @@ When expanded:
 - Displayed in task metadata pills
 - No manual git querying needed
 
-**Session Import/Export:**
-
-- Parse Claude Code JSONL transcripts from `~/.claude/projects/`
-- Replay sessions in Agor
-- Full fidelity preservation of tool uses, timestamps, git state
-
 **MCP Integration (all agents):**
 
 - First-class MCP server support across Claude Code, Codex, Gemini, and Copilot
@@ -793,7 +751,6 @@ Copilot supports multiple underlying models selectable via the SDK:
 - You need rich project instructions (CLAUDE.md)
 - MCP server integration is required
 - You want detailed tool execution visualization
-- Session import/export is important
 - You need the best permission request UX
 - Token usage tracking and cost monitoring is important
 
@@ -866,7 +823,6 @@ OpenCode supports MCP servers via its REST API:
 ### Limitations
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
-- **Session import/export** not available
 - **Execution is local-only.** Agor must be able to contain the native writer process safely.
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
 

@@ -20,6 +20,20 @@ describe('register-hooks MCP server secret redaction', () => {
     );
   });
 
+  it('redacts every mcp-servers method that returns a row, remove included', () => {
+    // `remove` is the easy one to forget: it is a write, but the adapter
+    // returns the deleted row and that object is also the `removed`
+    // broadcast. Behaviour is covered in
+    // `services/mcp-servers.env-redaction.test.ts`; this pins the wiring.
+    const block = source.slice(source.indexOf("safeService('mcp-servers')?.hooks({"));
+    const afterBlock = block.slice(block.indexOf('after:'), block.indexOf('safeService', 1));
+    for (const method of ['find', 'get', 'create', 'patch', 'update', 'remove']) {
+      expect(afterBlock, `${method} is missing redaction`).toMatch(
+        new RegExp(`${method}:\\s*\\[[^\\]]*redactMCPServerSecretFields`)
+      );
+    }
+  });
+
   it('keeps full MCP server replacements behind the write gate', () => {
     // PUT replaces the whole row, so it must clear the same gate as the other
     // writes rather than the `all` chain alone. That gate is no longer a role

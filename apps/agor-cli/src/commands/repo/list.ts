@@ -55,7 +55,7 @@ export default class RepoList extends BaseCommand {
         this.log('');
         this.log(
           `Add one with: ${chalk.cyan('agor repo add <git-url>')} or ${chalk.cyan(
-            'agor repo add-local <path>'
+            'agor local add-repo <path>'
           )}`
         );
         this.log('');

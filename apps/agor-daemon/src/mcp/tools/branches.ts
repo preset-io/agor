@@ -23,7 +23,7 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -365,8 +365,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         },
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',
-          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
+          delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveDelegatedExecutionHomeKey(
+              db,
+              ctx.authenticatedUser.user_id,
+              ctx.app.get('config')
+            )
           ),
         }
       );

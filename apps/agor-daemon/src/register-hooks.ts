@@ -26,7 +26,6 @@ import {
   BoardRepository,
   type BranchRepository,
   getCurrentTenantDatabaseScope,
-  getCurrentTenantId,
   isPostgresDatabaseHandle,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -60,6 +59,7 @@ import {
   branchQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
   taskQueryValidator,
@@ -70,17 +70,13 @@ import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
-  BoardID,
   Branch,
-  BranchID,
   DeepReadonly,
-  GroupID,
   HookContext,
   MCPServer,
   MessageID,
   Paginated,
   Params,
-  RepoID,
   Session,
   Task,
   User,
@@ -96,12 +92,6 @@ import {
   SCHEDULE_PATCH_WRITE_FIELDS,
   TaskStatus,
 } from '@agor/core/types';
-import {
-  generateBranchGroupName,
-  generateRepoGroupName,
-  resolveBranchGroupName,
-  resolveRepoGroupName,
-} from '@agor/core/unix';
 import {
   executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
@@ -119,6 +109,7 @@ import {
   protectExternalProviderFailureMetadata,
 } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
+import { validateMessageCreate } from './hooks/validate-message-create.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
@@ -179,6 +170,10 @@ import {
 } from './utils/realtime-access-cache.js';
 import { configureRealtimePublish } from './utils/realtime-publish.js';
 import {
+  resolveSandboxProtectedDataRoots,
+  validateFilesystemHomeOverride,
+} from './utils/sandbox-context.js';
+import {
   ensureCurrentScheduleLoaded,
   ensureScheduleRunsAsCaller,
   recomputeNextRunAt,
@@ -191,16 +186,8 @@ import {
   sessionCanStartTask,
 } from './utils/session-task-state.js';
 import {
-  createServiceToken,
-  getDaemonUrl,
-  serviceTokenScopeForCurrentTenant,
-  spawnExecutorFireAndForget,
-} from './utils/spawn-executor.js';
-import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
-import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
-  resolveTenantIdForDeferredScope,
 } from './utils/tenant-db-scope.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 import { protectExternalWidgetMessageWrites } from './widgets/message-boundary.js';
@@ -421,7 +408,6 @@ export interface RegisterHooksContext {
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   jwtSecret: string;
-  branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   superadminOpts: { allowSuperadmin: boolean };
   realtimeRelay?: Pick<RedisRealtimeRuntime, 'relay' | 'setRelayHandler'>;
@@ -617,72 +603,6 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   return context;
 }
 
-type ManagedUnixGroupKind = 'branch' | 'repo';
-
-/**
- * Keep `unix_group` server-owned and validate every trusted write.
- *
- * Executor service accounts may perform the one normal transport write: stamp
- * the canonical group on a row whose field is still absent. Explicit legacy
- * migration writes directly through the local database after global checks.
- */
-export function protectServerManagedUnixGroupWrites(kind: ManagedUnixGroupKind) {
-  return async (context: HookContext): Promise<HookContext> => {
-    const data =
-      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
-        ? (context.data as Record<string, unknown>)
-        : undefined;
-    if (!data || !Object.hasOwn(data, 'unix_group')) return context;
-
-    const value = data.unix_group;
-    const id =
-      typeof context.id === 'string'
-        ? context.id
-        : typeof data[`${kind}_id`] === 'string'
-          ? (data[`${kind}_id`] as string)
-          : undefined;
-
-    if (value !== null && value !== undefined) {
-      if (typeof value !== 'string' || !id) {
-        throw new BadRequest(`A valid ${kind} id is required to validate unix_group`);
-      }
-      if (kind === 'branch') {
-        resolveBranchGroupName(id as BranchID, value);
-      } else {
-        resolveRepoGroupName(id as RepoID, value);
-      }
-    }
-
-    if (!context.params.provider) return context;
-    if (!context.params.user?._isServiceAccount) {
-      throw new Forbidden('unix_group is server-managed');
-    }
-
-    // A transported executor may only stamp an absent field with the row's
-    // canonical name. It cannot clear, rename, or migrate an existing stamp.
-    if (context.method !== 'patch' || !id || typeof value !== 'string') {
-      throw new Forbidden('Executor unix_group writes must stamp one existing row');
-    }
-    const canonical =
-      kind === 'branch'
-        ? generateBranchGroupName(id as BranchID)
-        : generateRepoGroupName(id as RepoID);
-    if (value !== canonical) {
-      throw new Forbidden('Executor unix_group writes must use the canonical group name');
-    }
-
-    const existing = (await context.service.get(id, {
-      ...context.params,
-      provider: undefined,
-    })) as { unix_group?: string | null };
-    if (existing.unix_group != null && existing.unix_group !== value) {
-      throw new Forbidden('Persisted unix_group is authoritative and cannot be changed');
-    }
-
-    return context;
-  };
-}
-
 /** Run an identity-only service's database-reading before hooks in one short unit of work. */
 export function createTenantScopedBeforeHookChain(
   db: TenantScopeAwareDatabase,
@@ -711,13 +631,105 @@ export function authorizeUsersGet(context: HookContext): HookContext {
   return context;
 }
 
+/** Protect and canonicalize the admin-owned host path used for sandbox homes. */
+export function protectFilesystemHomeWrite(context: HookContext, config: AgorConfig): HookContext {
+  const records = Array.isArray(context.data) ? context.data : [context.data];
+  const writesFilesystemHome = records.some(
+    (record) => record && Object.hasOwn(record as object, 'filesystem_home')
+  );
+  if (!writesFilesystemHome) return context;
+
+  const params = context.params as AuthenticatedParams;
+  if (params.provider && !hasMinimumRole(params.user?.role, ROLES.ADMIN)) {
+    throw new Forbidden('Only admins can modify filesystem_home');
+  }
+
+  const protectedDataRoots = resolveSandboxProtectedDataRoots(config);
+  for (const record of records) {
+    if (!record || !Object.hasOwn(record as object, 'filesystem_home')) continue;
+    const writable = record as Record<string, unknown>;
+    const value = writable.filesystem_home;
+    if (value === null) continue;
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new BadRequest('filesystem_home must be a non-empty absolute path or null');
+    }
+    try {
+      let validated = value.trim();
+      for (const root of protectedDataRoots) {
+        validated = validateFilesystemHomeOverride(validated, root);
+      }
+      writable.filesystem_home = validated;
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return context;
+}
+
+/**
+ * Redact every MCP server row in a service payload, whatever shape it arrived
+ * in. Pure — callers decide what to do with the copy.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactMCPServerPayload(result: any): any {
+  if (Array.isArray(result)) return result.map(redactMCPServerSecrets);
+  if (result?.data && Array.isArray(result.data)) {
+    return { ...result, data: result.data.map(redactMCPServerSecrets) };
+  }
+  if (result?.mcp_server_id) return redactMCPServerSecrets(result);
+  return result;
+}
+
+/**
+ * Strip secret-bearing MCP server fields from anything on its way out.
+ *
+ * `result` and `dispatch` answer different questions and get different
+ * answers:
+ *
+ * - `context.result` is what the CALLER receives. An in-process call or the
+ *   executor's service account legitimately needs raw values to start servers
+ *   and resolve templates, which is what `shouldExposeMCPServerSecrets`
+ *   decides.
+ * - `context.dispatch` is what EVERYONE ELSE receives — Feathers builds the
+ *   channel broadcast from `dispatch ?? result`, and `mcp-servers` events go
+ *   to the tenant-wide authenticated channel. Its audience is by definition
+ *   not the caller, so no fact about the caller can entitle it to secrets.
+ *   Redacting it is therefore unconditional.
+ *
+ * Without that split, an internal or service-account write fanned the raw row
+ * out to every connected socket precisely because the caller was trusted.
+ *
+ * Only set for methods Feathers actually emits an event for — `context.event`
+ * is `created`/`updated`/`patched`/`removed` there and `null` for find/get.
+ * Keying off it rather than a hard-coded method list keeps this from drifting
+ * out of step with what gets broadcast, and leaves find/get alone: those emit
+ * nothing, so a redacted `dispatch` there would only strip the values out of
+ * the executor's own socket reads and break execution.
+ *
+ * Module scope rather than a closure inside `registerHooks` so tests can drive
+ * the real hook against a real service instead of reproducing its body — a
+ * replica passes whatever the replica does, which is exactly the wrong
+ * property for a redaction gate. Which methods it is registered on is pinned
+ * separately in `register-hooks.mcp-headers-redaction.test.ts`.
+ */
+export const redactMCPServerSecretFields = async (context: HookContext) => {
+  if (context.event) {
+    context.dispatch = redactMCPServerPayload(context.result);
+  }
+
+  if (shouldExposeMCPServerSecrets(context.params)) return context;
+
+  context.result = redactMCPServerPayload(context.result);
+
+  return context;
+};
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
     app,
     config,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     superadminOpts,
     sessionsService,
@@ -951,167 +963,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const createExecutorServiceToken = (scope: Record<string, unknown>): string | undefined => {
-    if (!jwtSecret) return undefined;
-    return createServiceToken(jwtSecret, undefined, {
-      ...scope,
-      ...serviceTokenScopeForCurrentTenant(),
-    });
-  };
-
-  const syncBranchUnixAccess = (
-    branchId: BranchID,
-    logPrefix: string,
-    options?: { delete?: boolean; scope?: Record<string, unknown> }
-  ): void => {
-    if (!executionMode.unixFsIsolationEnabled) return;
-    const serviceToken = createExecutorServiceToken({
-      ...options?.scope,
-      branch_id: branchId,
-      command: 'unix.sync-branch',
-    });
-    if (!serviceToken) return;
-    spawnExecutorFireAndForget(
-      {
-        command: 'unix.sync-branch',
-        sessionToken: serviceToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          branchId,
-          daemonUser: config.daemon?.unix_user,
-          ...(options?.delete ? { delete: true } : {}),
-        },
-      },
-      { logPrefix }
-    );
-  };
-
-  // Session creation can be an internal scheduler admission that deliberately
-  // bypasses the public Feathers create hook pipeline while a schedule row is
-  // locked. Own the Unix side effect as a service event consumer so both paths
-  // share it, and always defer database/process work until after commit.
-  if (executionMode.unixFsIsolationEnabled) {
-    app.service('sessions').on('created', (session: Session, hook?: Partial<HookContext>) => {
-      if (!session.branch_id || !session.unix_username) return;
-      if ((hook?.params as { isBranchOwner?: boolean } | undefined)?.isBranchOwner) return;
-      const tenantId = resolveTenantIdForDeferredScope(hook?.params);
-      deferWithTenantContext(
-        hook?.params,
-        async () => {
-          const activeTenantId = getCurrentTenantId();
-          const branch = await runWithTenantDatabaseScope(db, activeTenantId, () =>
-            branchRepository.findById(session.branch_id)
-          );
-          if (!branch?.others_fs_access || branch.others_fs_access === 'none') return;
-          console.info(
-            formatStructuredLog('[unix-access.sync]', {
-              event: 'scheduled',
-              source: 'session_created',
-              tenant_id: tenantId,
-              branch_id: session.branch_id,
-              session_id: session.session_id,
-            })
-          );
-          syncBranchUnixAccess(branch.branch_id, '[Executor/session.created.unix-group]', {
-            scope: { session_id: session.session_id },
-          });
-        },
-        (error) =>
-          console.error(
-            formatStructuredLog('[unix-access.sync]', {
-              event: 'schedule_failed',
-              source: 'session_created',
-              tenant_id: tenantId,
-              branch_id: session.branch_id,
-              session_id: session.session_id,
-              error_code: structuredLogErrorCode(error),
-            })
-          )
-      );
-    });
-  }
-
-  const syncUnixAccessForBoardAlignedBranches = async (
-    boardId: unknown,
-    logPrefix: string
-  ): Promise<void> => {
-    if (!executionMode.unixFsIsolationEnabled) return;
-    if (typeof boardId !== 'string' || boardId.length === 0) return;
-    const alignedBranches = await branchRepository.findBoardAlignedBranches(boardId as BoardID);
-    if (alignedBranches.length === 0) return;
-    console.log(
-      `[Unix Integration] Queueing board permission sync for ${alignedBranches.length} board-aligned branch(es) on board ${shortId(boardId)}`
-    );
-    for (const branch of alignedBranches) {
-      await invalidateRealtimeBranchAccess(branch.branch_id);
-    }
-
-    const serviceToken = createExecutorServiceToken({
-      board_id: boardId,
-      command: 'unix.sync-board',
-    });
-    if (!serviceToken) return;
-    spawnExecutorFireAndForget(
-      {
-        command: 'unix.sync-board',
-        sessionToken: serviceToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          boardId,
-          daemonUser: config.daemon?.unix_user,
-        },
-      },
-      { logPrefix }
-    );
-  };
-
-  const syncUnixAccessForBoardFromRoute = async (
-    context: HookContext,
-    logPrefix: string
-  ): Promise<HookContext> => {
-    await syncUnixAccessForBoardAlignedBranches(context.params.route?.id, logPrefix);
-    return context;
-  };
-
-  const membershipGroupIdFromContext = (context: HookContext): GroupID | undefined => {
-    const resultGroupId = (context.result as { group_id?: unknown } | undefined)?.group_id;
-    if (typeof resultGroupId === 'string' && resultGroupId.length > 0) {
-      return resultGroupId as GroupID;
-    }
-    const dataGroupId = (context.data as { group_id?: unknown } | undefined)?.group_id;
-    if (typeof dataGroupId === 'string' && dataGroupId.length > 0) return dataGroupId as GroupID;
-    const queryGroupId = context.params.query?.group_id;
-    if (typeof queryGroupId === 'string' && queryGroupId.length > 0) return queryGroupId as GroupID;
-    const routeGroupId = context.params.route?.groupId;
-    if (typeof routeGroupId === 'string' && routeGroupId.length > 0) return routeGroupId as GroupID;
-    return undefined;
-  };
-
-  const syncUnixAccessForGroupGrantedBranches = async (
-    context: HookContext,
-    logPrefix: string
-  ): Promise<HookContext> => {
-    if (!executionMode.unixFsIsolationEnabled) return context;
-    const groupId = membershipGroupIdFromContext(context);
-    if (!groupId) {
-      console.warn(
-        `[Unix Integration] Could not resolve group_id for ${context.path}.${context.method}; skipping group membership permission sync`
-      );
-      return context;
-    }
-
-    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(groupId);
-    if (branchIds.length === 0) return context;
-    console.log(
-      `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
-    );
-    for (const branchId of branchIds) {
-      syncBranchUnixAccess(branchId, logPrefix);
-      await invalidateRealtimeBranchAccess(branchId);
-    }
-    return context;
-  };
-
   const clearRealtimeBranchVisibility = (context: HookContext): HookContext => {
     realtimeAccessCache.clearVisibility();
     return context;
@@ -1119,6 +970,42 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // Helper to get usersService from app
   const usersService = app.service('users');
+
+  /**
+   * Authorization chain shared by the two externally-initiated prompt writes,
+   * `messages.create` and `tasks.create`.
+   *
+   * Two independently configured properties put hooks in here, and each hook
+   * is gated on the one that makes it load-bearing rather than on whichever
+   * flag happens to be nearby:
+   *
+   *  - `branch_rbac` decides whether the caller may prompt in this branch.
+   *  - `unix_user_mode` decides whether the session may execute as the
+   *    execution-home key it was stamped with. Only `delegated` consumes the
+   *    stamp; `simple` and `sandbox` do not. Once the creator's key changes,
+   *    the stamp names an identity the user no longer has and the SDK state
+   *    lives in a home directory this instance cannot reach, so the prompt is
+   *    refused. Branch permissions have no bearing on that: an open-access
+   *    instance can be running delegated, and an RBAC instance can be running
+   *    simple, where refusing would only lock a user out of their own sessions
+   *    over an identity nothing executes as.
+   *
+   * The session load is the precondition of both, and is memoised per request.
+   */
+  const promptWriteGuards = [
+    ...(executionMode.appRbacEnabled || executionMode.requiresExecutionHomeKey
+      ? [resolveSessionContext(), loadSession(sessionsService)]
+      : []),
+    ...(executionMode.requiresExecutionHomeKey
+      ? [validateSessionUnixUsername(usersRepository)]
+      : []),
+    ...(executionMode.appRbacEnabled
+      ? [
+          loadBranchFromSession(branchRepository),
+          ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+        ]
+      : []),
+  ];
 
   // ============================================================================
   // Messages hooks
@@ -1136,15 +1023,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('messages').hooks({
     before: {
-      all: [requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(messageQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
         // across every session/branch by omitting the session_id filter.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1155,18 +1042,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create messages'),
+        validateMessageCreate,
         protectProviderFailureMetadata,
         protectWidgetMessageWrites,
         protectPermissionMessageWrites,
-        ...(branchRbacEnabled
-          ? [
-              resolveSessionContext(),
-              loadSession(sessionsService),
-              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
-              loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
-            ]
-          : []),
+        ...promptWriteGuards,
         // Reclassify executor-scoped credential and narrow provider-credit
         // failures structurally, never by matching arbitrary provider text.
         classifyMissingCredentialFailure(
@@ -1184,7 +1064,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),
         protectProviderFailureMetadata,
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1197,7 +1077,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete messages'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -1260,7 +1140,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
       // board visibility.
-      find: [...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : [])],
+      find: [
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
     },
   });
 
@@ -1282,7 +1164,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [scopeFindToAccessibleBoards(new BoardRepository(db), superadminOpts)]
           : []),
       ],
@@ -1330,7 +1212,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // Scope find() to the branches the caller can access. The service pushes
         // this into SQL as a correlated visibility predicate rather than
         // preloading ids and injecting `branch_id IN (...)`.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
@@ -1568,7 +1450,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // Board comments inherit board visibility for pure board/spatial
         // comments and branch/session/task/message visibility for attached
         // comments. The service pushes the marker into SQL.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
       update: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
@@ -1582,19 +1464,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(repoQueryValidator), requireAuth],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create repositories'),
-        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
-        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update repositories'),
-        protectServerManagedUnixGroupWrites('repo'),
         requireAdminForEnvConfig(),
         validateRepoEnvPolicyHook(config),
       ],
@@ -1611,10 +1490,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadBranch(branchRepository),
               ensureCanView(superadminOpts), // Require 'view' permission to read branch
@@ -1623,51 +1502,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
-        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        protectServerManagedUnixGroupWrites('branch'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadBranch(branchRepository),
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
             ]
           : []),
         // Capture previous others_fs_access for comparison in after Unix sync hook.
-        ...(executionMode.unixFsIsolationEnabled
-          ? [
-              async (context: HookContext) => {
-                const patchData = context.data as Partial<import('@agor/core/types').Branch>;
-                const params = context.params as AuthenticatedParams & {
-                  _skipUnixSync?: boolean;
-                  _previousOthersFsAccess?: string;
-                };
-                if (Object.hasOwn(patchData, 'others_fs_access') && !params._skipUnixSync) {
-                  // Fetch current value to compare in after hook
-                  const branch = await context.service.get(context.id, context.params);
-                  params._previousOthersFsAccess = branch.others_fs_access;
-                }
-                return context;
-              },
-            ]
-          : []),
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
         loadBranch(branchRepository),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               ensureBranchPermission('all', 'delete branches', superadminOpts), // Require 'all' permission to delete
             ]
@@ -1677,7 +1536,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     after: {
       create: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               async (context: HookContext) => {
                 // RBAC: Add the creator as the initial branch owner
@@ -1693,85 +1552,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   `[RBAC] Added creator ${shortId(creatorId)} as owner of branch ${shortId(branch.branch_id)}`
                 );
 
-                // NOTE: unix.sync-branch is NOT spawned here to avoid race conditions.
-                // git.branch.add executor handles Unix group creation synchronously.
-                // unix.sync-branch is only used when owners are added/removed AFTER creation.
-
                 return context;
               },
             ]
           : []),
         invalidateRealtimeBranchFromResult,
       ],
-      patch: [
-        invalidateRealtimeBranchFromResult,
-        ...(executionMode.unixFsIsolationEnabled
-          ? [
-              async (context: HookContext) => {
-                // Unix Integration: Sync branch permissions when others_fs_access changes
-                const params = context.params as AuthenticatedParams & {
-                  _skipUnixSync?: boolean;
-                  _previousOthersFsAccess?: string;
-                };
-
-                // Skip if this is flagged to skip Unix sync
-                if (params._skipUnixSync) {
-                  return context;
-                }
-
-                const patchData = context.data as Partial<import('@agor/core/types').Branch>;
-
-                // Only proceed if others_fs_access was in the patch data
-                if (!Object.hasOwn(patchData, 'others_fs_access')) {
-                  return context;
-                }
-
-                const branch = context.result as import('@agor/core/types').Branch;
-
-                // Check if the value actually changed (avoid unnecessary sync)
-                const previousValue = params._previousOthersFsAccess;
-                if (previousValue === branch.others_fs_access) {
-                  console.log(
-                    `[Unix Integration] Branch ${shortId(branch.branch_id)} others_fs_access unchanged (${previousValue}), skipping`
-                  );
-                  return context;
-                }
-
-                if (!branch.path) {
-                  console.log(
-                    `[Unix Integration] Branch ${shortId(branch.branch_id)} has no path, skipping permission update`
-                  );
-                  return context;
-                }
-
-                // Fire-and-forget sync to executor.
-                // The executor will handle permission changes idempotently.
-                console.log(
-                  `[Unix Integration] Syncing permissions for branch ${shortId(branch.branch_id)} (others_fs_access: ${previousValue} -> ${branch.others_fs_access})`
-                );
-                syncBranchUnixAccess(branch.branch_id, '[Executor/branch.patch]');
-
-                return context;
-              },
-            ]
-          : []),
-      ],
-      remove: [
-        invalidateRealtimeBranchFromResult,
-        ...(executionMode.unixFsIsolationEnabled
-          ? [
-              async (context: HookContext) => {
-                // Unix Integration: Delete Unix group when branch is deleted
-                const branchId = context.id as import('@agor/core/types').BranchID;
-
-                // Fire-and-forget sync with delete flag to executor.
-                syncBranchUnixAccess(branchId, '[Executor/branch.remove]', { delete: true });
-
-                return context;
-              },
-            ]
-          : []),
-      ],
+      patch: [invalidateRealtimeBranchFromResult],
+      remove: [invalidateRealtimeBranchFromResult],
     },
   });
 
@@ -1967,20 +1755,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const redactMCPServerSecretFields = async (context: HookContext) => {
-    if (shouldExposeMCPServerSecrets(context.params)) return context;
-
-    if (Array.isArray(context.result)) {
-      context.result = context.result.map(redactMCPServerSecrets);
-    } else if (context.result?.data && Array.isArray(context.result.data)) {
-      context.result.data = context.result.data.map(redactMCPServerSecrets);
-    } else if (context.result?.mcp_server_id) {
-      context.result = redactMCPServerSecrets(context.result);
-    }
-
-    return context;
-  };
-
   // Writes are decided by `mcp_member_policy` plus ownership, not by role
   // alone — see `authorizeMcpServerWrite`. Reads are narrowed to the servers
   // the caller may use, because a private server is another user's
@@ -2041,14 +1815,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFields],
       patch: [redactMCPServerSecretFields],
       update: [redactMCPServerSecretFields],
+      // `remove` returns the deleted row: the adapter loads it in full before
+      // deleting so it can return it, and that same object becomes the
+      // `removed` payload broadcast to every authenticated connection in the
+      // tenant. Without this it is the one method that hands out raw `env`,
+      // `headers`, and `auth` — a delete is not an exemption from redaction.
+      remove: [redactMCPServerSecretFields],
     },
   });
 
-  // The MCP catalog mirrors a public registry plus a repo-checked-in curation
-  // file — no tenant data, and no writes through this service. Authentication
+  // The MCP catalog is a file checked into this repository — no tenant data, no
+  // database behind it, and no writes through this service. Authentication
   // still gates it so an unauthenticated visitor cannot enumerate the browse
-  // surface, and query validation is also the SQL-injection boundary because
-  // every catalog filter reaches the database.
+  // surface. Query validation no longer guards a query: `find` takes no
+  // parameters, and the empty schema is what strips a stale client's filters
+  // instead of letting them look honoured.
   safeService('mcp-catalog')?.hooks({
     before: {
       all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
@@ -2060,7 +1841,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [
         // RBAC: Scope to sessions the caller can access.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
     },
     after: {
@@ -2295,12 +2076,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Gateway service create (postMessage) authenticates via channel_key, not user auth
   // No hooks needed — auth is handled internally by the service
 
-  safeService('admin/local-actions')?.hooks({
-    before: {
-      create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'run local admin actions')],
-    },
-  });
-
   safeService('context')?.hooks({
     before: {
       all: [requireAuth],
@@ -2317,7 +2092,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // that branch before running git ls-files. If sessionId is missing
         // the service itself returns []; we skip the permission check in that
         // case rather than throwing.
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               createTenantScopedBeforeHookChain(db, async (context: HookContext) => {
                 if (!context.params.provider) return context;
@@ -2345,7 +2120,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'read files'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               createTenantScopedBeforeHookChain(
                 db,
@@ -2397,16 +2172,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('group-memberships')?.hooks(groupMembershipsHooks);
   safeService('group-memberships')?.hooks({
     after: {
-      create: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.create]'),
-      ],
-      remove: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.remove]'),
-      ],
+      create: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
     },
   });
   safeService('branches/:id/owners')?.hooks({
@@ -2417,69 +2184,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
   safeService('branches/:id/group-grants')?.hooks({
     after: {
-      create: [
-        invalidateRealtimeBranchFromRoute,
-        (context: HookContext) => {
-          const branchId = context.params.route?.id;
-          if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.create]');
-          }
-          return context;
-        },
-      ],
-      patch: [
-        invalidateRealtimeBranchFromRoute,
-        (context: HookContext) => {
-          const branchId = context.params.route?.id;
-          if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.patch]');
-          }
-          return context;
-        },
-      ],
-      remove: [
-        invalidateRealtimeBranchFromRoute,
-        (context: HookContext) => {
-          const branchId = context.params.route?.id;
-          if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.remove]');
-          }
-          return context;
-        },
-      ],
+      create: [invalidateRealtimeBranchFromRoute],
+      patch: [invalidateRealtimeBranchFromRoute],
+      remove: [invalidateRealtimeBranchFromRoute],
     },
   });
   safeService('boards/:id/owners')?.hooks({
     after: {
-      create: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForBoardFromRoute(context, '[Executor/board-owners.create]'),
-      ],
-      remove: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForBoardFromRoute(context, '[Executor/board-owners.remove]'),
-      ],
+      create: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
     },
   });
   safeService('boards/:id/group-grants')?.hooks({
     after: {
-      create: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.create]'),
-      ],
-      patch: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.patch]'),
-      ],
-      remove: [
-        clearRealtimeBranchVisibility,
-        (context: HookContext) =>
-          syncUnixAccessForBoardFromRoute(context, '[Executor/board-group-grants.remove]'),
-      ],
+      create: [clearRealtimeBranchVisibility],
+      patch: [clearRealtimeBranchVisibility],
+      remove: [clearRealtimeBranchVisibility],
     },
   });
 
@@ -2518,6 +2238,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       get: [authorizeUsersGet],
       create: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context: HookContext<Board>) => {
           const params = context.params as AuthenticatedParams;
 
@@ -2545,13 +2266,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
+        (context) => protectFilesystemHomeWrite(context, config),
         async (context) => {
           const params = context.params as AuthenticatedParams;
           const userId = context.id as string;
           const callerRole = params.user?.role;
           const callerIsAdmin = hasMinimumRole(callerRole, ROLES.ADMIN);
 
-          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password
+          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password.
+          // filesystem_home is protected and validated by the preceding hook.
           if (!Array.isArray(context.data)) {
             if (context.data?.unix_username !== undefined) {
               if (!callerIsAdmin) {
@@ -2625,54 +2348,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete users')],
     },
     after: {
-      // After user create/patch: optionally ensure Unix user exists and sync password
+      // Refresh derived profile presentation after user creation or update.
       create: [
-        async (context: HookContext) => {
-          // Need Unix integration and JWT secret for executor service tokens.
-          if (!executionMode.unixImpersonationEnabled || !jwtSecret) {
-            return context;
-          }
-
-          const user = context.result as User;
-          if (!user.unix_username) {
-            return context; // No unix_username set, skip Unix operations
-          }
-
-          // Get plaintext password from request data (for password sync)
-          const data = context.data as { password?: string };
-
-          // Respect sync_unix_passwords config (defaults to true)
-          // When false, skip all Unix sync operations (user creation, groups, password)
-          const shouldSync = config.execution?.sync_unix_passwords ?? true;
-
-          if (!shouldSync) {
-            return context;
-          }
-
-          // Fire-and-forget sync to executor
-          console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken({
-            user_id: user.user_id,
-            command: 'unix.sync-user',
-          });
-          if (!serviceToken) return context;
-          spawnExecutorFireAndForget(
-            {
-              command: 'unix.sync-user',
-              sessionToken: serviceToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                userId: user.user_id,
-                password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory:
-                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
-              },
-            },
-            { logPrefix: '[Executor/user.create]' }
-          );
-
-          return context;
-        },
         async (context: HookContext) => {
           if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
             return context;
@@ -2693,57 +2370,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
-        async (context: HookContext) => {
-          // Need Unix integration and JWT secret for executor service tokens.
-          if (!executionMode.unixImpersonationEnabled || !jwtSecret) {
-            return context;
-          }
-
-          const data = context.data as { unix_username?: string; password?: string };
-          const user = context.result as User;
-
-          // Only sync if unix_username or password changed
-          if (!data?.unix_username && !data?.password) {
-            return context;
-          }
-
-          // Skip if user doesn't have unix_username (would fail in executor anyway)
-          if (!user.unix_username) {
-            return context;
-          }
-
-          // Respect sync_unix_passwords config (defaults to true)
-          // When false, skip all Unix sync operations (user creation, groups, password)
-          const shouldSync = config.execution?.sync_unix_passwords ?? true;
-
-          if (!shouldSync) {
-            return context;
-          }
-
-          // Fire-and-forget sync to executor
-          console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createExecutorServiceToken({
-            user_id: user.user_id,
-            command: 'unix.sync-user',
-          });
-          if (!serviceToken) return context;
-          spawnExecutorFireAndForget(
-            {
-              command: 'unix.sync-user',
-              sessionToken: serviceToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                userId: user.user_id,
-                password: data?.password, // Pass through for password sync
-                configureGitSafeDirectory:
-                  resolveExecutionSecurityMode(config).unixImpersonationEnabled, // Configure git when impersonating
-              },
-            },
-            { logPrefix: '[Executor/user.patch]' }
-          );
-
-          return context;
-        },
         async (context: HookContext) => {
           if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
             return context;
@@ -2777,7 +2403,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   configureRealtimePublish({
     app,
     db,
-    branchRbacEnabled,
+    branchRbacEnabled: executionMode.appRbacEnabled,
     branchRepository,
     sessionsRepository,
     accessCache: realtimeAccessCache,
@@ -2793,12 +2419,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // SessionsService.update delegates straight to patch, so both verbs mutate a
   // session the same way and must clear the same authorization chain.
   const sessionWriteGuards = [
-    // created_by and unix_username select the OS identity a session executes as.
-    // The unix_user_mode tiers that make them load-bearing are configured
-    // independently of branch_rbac, so their immutability cannot be conditional
-    // on it — an open-access instance can still be running delegated or strict.
+    // created_by and unix_username bind the immutable principal, execution home,
+    // credentials, and resumable SDK state. Their immutability is independent
+    // of branch RBAC and remains load-bearing for delegated execution.
     ensureSessionImmutability(),
-    ...(branchRbacEnabled
+    ...(executionMode.appRbacEnabled
       ? [
           resolveSessionContext(),
           loadSession(sessionsService),
@@ -2851,10 +2476,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         // RBAC: mark external regular-user finds for SessionsService to compose
         // the shared branch visibility predicate directly into its SQL read.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               // Load session's branch and check permissions
               loadSessionBranch(sessionsService, branchRepository),
@@ -2865,13 +2490,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
         // Stamp session with creator's unix_username (MUST run first). Also
-        // registered without RBAC when the Unix mode (strict/delegated) makes
+        // registered without RBAC when delegated mode makes
         // unix_username load-bearing — otherwise sessions would be stamped
         // null and fail only at prompt time.
-        ...(branchRbacEnabled || executionMode.requiresUserUnixUsername
+        ...(executionMode.appRbacEnabled || executionMode.requiresExecutionHomeKey
           ? [setSessionUnixUsername(usersRepository, executionMode.unixUserMode)]
           : []),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               // Check branch permission BEFORE injecting created_by (need branch_id)
               async (context: HookContext) => {
@@ -2942,7 +2567,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       update: sessionWriteGuards,
       patch: sessionWriteGuards,
       remove: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3073,10 +2698,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(branchRbacEnabled ? [scopeScheduleQuery(scheduleRepository, superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled
+          ? [scopeScheduleQuery(scheduleRepository, superadminOpts)]
+          : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureCanView(superadminOpts),
@@ -3085,7 +2712,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [loadBranch(branchRepository, 'branch_id'), ensureCanCreateSession(superadminOpts)]
           : []),
         enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
@@ -3096,7 +2723,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureCanModifySchedule(superadminOpts),
@@ -3115,7 +2742,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete schedules'),
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               loadScheduleAndBranch(scheduleRepository, branchRepository),
               ensureBranchPermission('all', 'delete schedule', superadminOpts),
@@ -3135,10 +2762,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
       ],
       get: [
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3149,21 +2776,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create tasks'),
-        ...(branchRbacEnabled
-          ? [
-              resolveSessionContext(),
-              loadSession(sessionsService),
-              validateSessionUnixUsername(usersRepository), // Defensive check: session.unix_username must match creator's current unix_username
-              loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
-            ]
-          : []),
+        ...promptWriteGuards,
         protectExternalTaskCreate,
         injectCreatedBy(),
       ],
       patch: [
         protectServerManagedTaskWrites,
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3181,7 +2800,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: deleting a task requires 'all' permission on the branch
         // (mirrors sessions.remove). Without this, any member with 'session'
         // access could delete tasks owned by other users on shared branches.
-        ...(branchRbacEnabled
+        ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
               loadSession(sessionsService),
@@ -3202,7 +2821,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const boardRepository = new BoardRepository(db);
   const ensureBoardAccess = (mode: 'view' | 'mutate', action: string) => {
     return async (context: HookContext) => {
-      if (!branchRbacEnabled || !context.params.provider) return context;
+      if (!executionMode.appRbacEnabled || !context.params.provider) return context;
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
       if (user._isServiceAccount) return context;
@@ -3266,7 +2885,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // RBAC: restrict boards.find to boards the caller created or has a
         // branch on. The service pushes this into the repository query as one
         // SQL predicate, avoiding a preloaded `board_id IN (...)` list.
-        ...(branchRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],

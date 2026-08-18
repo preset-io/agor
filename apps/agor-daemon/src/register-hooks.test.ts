@@ -34,8 +34,8 @@ import {
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
+  protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
-  protectServerManagedUnixGroupWrites,
   type RegisterHooksContext,
   registerHooks,
   shouldDrainQueueAfterSessionPostTurnPatch,
@@ -61,6 +61,52 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectFilesystemHomeWrite', () => {
+  const config = { paths: { data_home: '/srv/agor-data' } };
+  const context = (
+    role: string | undefined,
+    filesystem_home: unknown,
+    provider: string | null = 'rest'
+  ) =>
+    ({
+      data: { filesystem_home },
+      params: {
+        provider,
+        user: role ? { user_id: 'user-1', role } : undefined,
+      },
+    }) as unknown as import('@agor/core/types').HookContext;
+
+  it('rejects a member changing their own host home path', () => {
+    expect(() => protectFilesystemHomeWrite(context('member', '/home/member'), config)).toThrow(
+      'Only admins can modify filesystem_home'
+    );
+  });
+
+  it('allows an admin to set a validated absolute path', () => {
+    const hook = context('admin', '/home/member');
+    expect(protectFilesystemHomeWrite(hook, config)).toBe(hook);
+    expect(hook.data).toEqual({ filesystem_home: '/home/member' });
+  });
+
+  it('validates trusted internal writes against the effective data root', () => {
+    expect(() =>
+      protectFilesystemHomeWrite(context(undefined, '/srv/agor-data/tenants/t1', null), config)
+    ).toThrow(/must not overlap/);
+  });
+
+  it('also rejects homes overlapping a configured external tenants base', () => {
+    expect(() =>
+      protectFilesystemHomeWrite(context('admin', '/mnt/tenants/tenant-a/homes/user-1'), {
+        paths: { data_home: '/srv/agor-data' },
+        multi_tenancy: {
+          filesystem_isolation_enabled: true,
+          tenants_base_folder: '/mnt/tenants',
+        },
+      })
+    ).toThrow(/must not overlap/);
+  });
+});
 
 describe('protectExternalTaskCreate', () => {
   const context = (data: unknown, provider: string | null = 'rest') =>
@@ -223,82 +269,6 @@ describe('protectServerManagedTaskWrites', () => {
   });
 });
 
-describe('protectServerManagedUnixGroupWrites', () => {
-  const branchId = '019ffd3d-2cef-79d1-a1c6-407300000001';
-  const canonicalGroup = 'agor_wt_019ffd3d2cef79d1a1c64073';
-  const legacyGroup = 'agor_wt_019ffd3d';
-  const context = (
-    unixGroup: unknown,
-    options: {
-      provider?: string;
-      serviceAccount?: boolean;
-      existingGroup?: string | null;
-    } = {}
-  ) =>
-    ({
-      path: 'branches',
-      method: 'patch',
-      id: branchId,
-      data: { unix_group: unixGroup },
-      params: {
-        provider: options.provider,
-        user: options.serviceAccount
-          ? {
-              user_id: 'executor',
-              email: 'executor@local',
-              role: 'service',
-              _isServiceAccount: true,
-            }
-          : { user_id: 'member', email: 'member@example.com', role: 'member' },
-      },
-      service: {
-        get: vi.fn(async () => ({ unix_group: options.existingGroup ?? null })),
-      },
-    }) as unknown as HookContext;
-
-  it('rejects unix_group writes from normal transport users', async () => {
-    await expect(
-      protectServerManagedUnixGroupWrites('branch')(context(canonicalGroup, { provider: 'rest' }))
-    ).rejects.toThrow('server-managed');
-  });
-
-  it('allows an executor service account to stamp the canonical name once', async () => {
-    const hook = context(canonicalGroup, { provider: 'rest', serviceAccount: true });
-    await expect(protectServerManagedUnixGroupWrites('branch')(hook)).resolves.toBe(hook);
-  });
-
-  it('rejects executor attempts to migrate an authoritative legacy stamp', async () => {
-    await expect(
-      protectServerManagedUnixGroupWrites('branch')(
-        context(canonicalGroup, {
-          provider: 'rest',
-          serviceAccount: true,
-          existingGroup: legacyGroup,
-        })
-      )
-    ).rejects.toThrow('authoritative');
-  });
-
-  it('rejects valid-looking names that belong to another row', async () => {
-    await expect(
-      protectServerManagedUnixGroupWrites('branch')(
-        context('agor_wt_019ffd3d2cef79d1a1c64074', {
-          provider: 'rest',
-          serviceAccount: true,
-        })
-      )
-    ).rejects.toThrow('Invalid persisted Unix group');
-  });
-
-  it('validates trusted internal legacy writes', async () => {
-    const hook = context(legacyGroup);
-    await expect(protectServerManagedUnixGroupWrites('branch')(hook)).resolves.toBe(hook);
-    await expect(
-      protectServerManagedUnixGroupWrites('branch')(context('developers; groupdel root'))
-    ).rejects.toThrow('Invalid persisted Unix group');
-  });
-});
-
 describe('tenant-owned service registration', () => {
   type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
   type RegisteredHooks = {
@@ -325,9 +295,9 @@ describe('tenant-owned service registration', () => {
       config: {
         database: { dialect: 'postgresql' },
         multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: false },
       } as RegisterHooksContext['config'],
       jwtSecret: 'registration-test-secret',
-      branchRbacEnabled: false,
       requireAuth: async (context) => context,
       superadminOpts: { allowSuperadmin: true },
       sessionsService: {} as RegisterHooksContext['sessionsService'],
@@ -794,9 +764,9 @@ describe('registered file service RBAC database preload', () => {
         config: {
           database: { dialect: 'postgresql' },
           multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' },
+          execution: { branch_rbac: true },
         } as RegisterHooksContext['config'],
         jwtSecret: 'registration-test-secret',
-        branchRbacEnabled: true,
         requireAuth: async (context) => context,
         superadminOpts: { allowSuperadmin: true },
         sessionsService: sessionsService as RegisterHooksContext['sessionsService'],

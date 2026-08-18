@@ -3,7 +3,7 @@
  * can use it.
  *
  * The request names a catalog entry and where the session should live, and
- * nothing else. URL, transport, and auth are read from the catalog row —
+ * nothing else. URL, transport, and auth are read from the catalog entry —
  * accepting them from the client would make this a way to register any server
  * at all without passing the `mcp_member_policy` gate that guards
  * `POST /mcp-servers`.
@@ -11,21 +11,26 @@
  * It also does not re-implement that gate. The server row is created through
  * the `mcp-servers` service and the session through `sessions`, with the
  * caller's own params, so policy, ownership stamping, the remote-transport
- * restriction, branch permissions, and Unix identity all resolve exactly once,
+ * restriction, branch permissions, and execution identity all resolve exactly once,
  * in the places that already own them.
  *
- * Scope: curated entries, remote transport, no authentication. OAuth and
- * API-key entries need the credential model that does not exist yet.
+ * Scope: remote transport. An endpoint that accepts an unauthenticated client
+ * is installed ready to use; one that answers with an OAuth challenge is
+ * installed configured-but-unauthenticated, for the user to complete through
+ * the OAuth flow that already exists in Settings → MCP Servers. An endpoint
+ * wanting an API key still needs a credential model that does not exist.
  */
 
-import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { BadRequest, NotFound } from '@agor/core/feathers';
 import { probeRemoteAuthType } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
   CreateMCPServerInput,
+  MCPAuth,
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogProbedAuthType,
   MCPServer,
   MCPTransport,
   Session,
@@ -61,6 +66,49 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
 }
 
 /**
+ * Auth fields a read of an `mcp_servers` row can carry without anyone having
+ * configured them.
+ *
+ * The OAuth flow never writes to the server row: an access token, its refresh
+ * token, and its expiry belong to one user and live in `user_mcp_oauth_tokens`,
+ * keyed by `(user_id, mcp_server_id)`. But `mcp-servers` has a read hook that
+ * hydrates the caller's own token onto the payload it returns, and
+ * {@link MCPCatalogConnectService} finds existing installs through that service
+ * — so these three arrive on exactly the rows that reuse is most important for,
+ * the ones the caller already authenticated. Comparing them would make every
+ * successful authentication look like drift and mint a second row beside the
+ * working one.
+ */
+const RUNTIME_HYDRATED_AUTH_FIELDS = [
+  'oauth_access_token',
+  'oauth_refresh_token',
+  'oauth_token_expires_at',
+] as const satisfies readonly (keyof MCPAuth)[];
+
+/**
+ * Whether `auth` is the configuration `prescribed` describes, ignoring what the
+ * read hook hydrated.
+ *
+ * Compared by difference rather than field by field: every key on the row that
+ * is not runtime-hydrated must appear in the prescription with the same value,
+ * and vice versa. A named-fields comparison would silently stop covering any
+ * field later added to {@link MCPAuth} — and the fields most worth adding to an
+ * auth block are the ones that route a credential. This way an unrecognised key
+ * on the row is a mismatch, so a new field is excluded from reuse until someone
+ * decides otherwise, rather than being waved through by omission.
+ */
+function isPrescribedAuth(auth: MCPAuth | undefined, prescribed: MCPAuth): boolean {
+  const significant = (value: MCPAuth | undefined): Record<string, unknown> => {
+    const entries = Object.entries(value ?? { type: 'none' }).filter(
+      ([key, field]) =>
+        field !== undefined && !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(key)
+    );
+    return Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  };
+  return JSON.stringify(significant(auth)) === JSON.stringify(significant(prescribed));
+}
+
+/**
  * Whether `server` still carries the configuration the catalog described.
  *
  * The stamp records where a row came from; this asks whether it is still that.
@@ -72,13 +120,20 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
  * where a legitimately stamped row is changed afterwards.
  *
  * What is compared is everything that decides where the session's traffic goes
- * and what it carries: the endpoint, and the credential routing. Connect only
- * serves entries whose probe said `none` and creates them with no headers and
- * `auth: { type: 'none' }`, so any of either means the row is no longer this
- * entry's install. `auth.type` is the load-bearing field — `resolveMCPAuthHeaders`
- * contributes nothing for `none` and switches on it for the rest — so an
- * `oauth` row with a caller-chosen authorization endpoint is exactly the drift
- * that must not be reused.
+ * and what it carries: the endpoint, and the credential routing. `prescribed`
+ * is the auth block this same connect just derived from the entry and the
+ * probe, so the comparison is against what installing right now would produce
+ * rather than against a fixed shape — which is what lets an OAuth entry be
+ * reused at all, and what makes a row whose owner has since pointed
+ * `oauth_token_url` at their own host fail to match. That field, and
+ * `oauth_authorization_url` and `oauth_client_secret` with it, are ones connect
+ * never sets, so on a catalog row their mere presence is the drift: they are
+ * where an authorization code and a client credential get sent.
+ *
+ * It also means an entry whose endpoint has changed sides — installed while it
+ * was open, now answering with an OAuth challenge — does not match its old
+ * unauthenticated row, and the caller gets one configured the way the endpoint
+ * now answers instead of a row that can no longer work.
  *
  * Custom headers are refused wholesale rather than screened for the
  * dangerous-looking ones. Agor redacts every custom header value on read and
@@ -90,24 +145,17 @@ function sameEndpoint(a: string | undefined, b: string): boolean {
  *
  * Genuinely cosmetic fields stay the owner's: name, labels, description, and
  * scope. A second row for a benign edit would be its own bug.
- *
- * NOTE for the credentialed-entry phase: the `auth.type === 'none'` and
- * zero-header conditions below are load-bearing for reuse, not only for safety.
- * They hold because every entry this service can connect today is
- * unauthenticated — connect refuses the others before reaching here. The first
- * catalog entry carrying a credential inverts that: its own install stores an
- * `auth` block, stops matching itself, and every subsequent connect creates a
- * fresh row beside the one the caller already has. Whatever replaces these two
- * conditions has to separate "the configuration this entry prescribes" from "an
- * edit its owner made" — the distinction they stand in for while there is only
- * ever one possible prescription.
  */
-function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: string }): boolean {
+function isInstallOf(
+  server: MCPServer,
+  entry: MCPCatalogEntry & { remote_url: string },
+  prescribed: MCPAuth
+): boolean {
   return (
     server.catalog_entry_name === entry.name &&
     server.transport === toServerTransport(entry) &&
     sameEndpoint(server.url, entry.remote_url) &&
-    (server.auth?.type ?? 'none') === 'none' &&
+    isPrescribedAuth(server.auth, prescribed) &&
     Object.keys(server.headers ?? {}).length === 0
   );
 }
@@ -115,12 +163,9 @@ function isInstallOf(server: MCPServer, entry: MCPCatalogEntry & { remote_url: s
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
   remote_url: string;
 } {
-  if (!entry.curated) {
-    throw new Forbidden(
-      `Only reviewed catalog entries can be connected; ${catalogDisplayName(entry)} has not been reviewed`
-    );
-  }
-  if (!entry.has_remote || !entry.remote_url || entry.transport === 'stdio') {
+  // `has_remote` is derived from `remote_url`, so testing the URL tests both —
+  // and is also what narrows the type.
+  if (!entry.remote_url || entry.transport === 'stdio') {
     throw new BadRequest(
       `${catalogDisplayName(entry)} has no remote endpoint; locally-run MCP servers are configured by an admin`
     );
@@ -140,16 +185,7 @@ function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCat
  * re-read it instead of connecting against the old one.
  */
 function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unknown): void {
-  const stored = (entry.permission_disclosure ?? '').trim();
-  // Curation requires a disclosure on every entry it writes, so this is a
-  // curation gap rather than a caller's mistake — say that, instead of telling
-  // the user prose they never saw has changed.
-  if (!stored) {
-    throw new BadRequest(
-      `${catalogDisplayName(entry)} states nothing about what it can access, so it cannot be connected`
-    );
-  }
-
+  const stored = entry.permission_disclosure.trim();
   const shown = typeof acknowledged === 'string' ? acknowledged.trim() : '';
   if (!shown) {
     throw new BadRequest(
@@ -164,29 +200,114 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
 }
 
 /**
- * The entry's authentication requirement, probing when the catalog has not
- * recorded one yet.
+ * Record an endpoint that answered differently from what its entry states.
  *
- * The stored verdict comes from the registry sync, which an operator may never
- * turn on, so relying on it alone would make connect refuse every curated entry
- * on a default install. `unknown` means "not determined", never "open", so it
- * is resolved rather than assumed.
+ * `auth_type` is authored text about somebody else's server, and connecting is
+ * the only moment anything compares it against that server. Without this the
+ * claim is unfalsifiable: nothing in the running system can ever contradict it,
+ * so an entry that was right when it was written stays "right" long after the
+ * vendor changed the endpoint. The disagreement is a curation defect whose fix
+ * is an edit to `curated.yaml`, so it is a warning and the connect carries on
+ * to whatever the endpoint actually said.
+ *
+ * Only a verdict about credentials counts. `unreachable` and `unknown` mean the
+ * endpoint disclosed nothing about authentication, and reporting those as a
+ * wrong entry would fill the log with claims about hosts nothing was learned
+ * from.
+ */
+function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
+  if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
+  console.warn(
+    '[mcp-catalog/connect] Catalog auth_type disagrees with the endpoint ' +
+      `entry=${entry.name} stated=${entry.auth_type} probed=${probed}`
+  );
+}
+
+/**
+ * The auth block to install an OAuth-challenging entry with.
+ *
+ * Deliberately close to empty. A server implementing the MCP authorization spec
+ * describes its own flow at the moment the flow runs — the `WWW-Authenticate`
+ * challenge names its protected-resource metadata, that names its authorization
+ * server, that publishes its endpoints and its registration endpoint, and
+ * Dynamic Client Registration mints a client — so `oauth-start` needs nothing
+ * from the row beyond `url`, `enabled`, and `auth.type === 'oauth'`. Anything
+ * more stated here would be a copy of something the vendor will hand over
+ * anyway, kept current by nobody.
+ *
+ * The two things it does state are the two the endpoint cannot supply:
+ *
+ * `oauth_mode` is fixed at `per_user`, not taken from the entry. Every
+ * installer authenticates as themselves and gets a grant keyed to their own
+ * user; `shared` would make one person's consent into everybody's access to
+ * their account, which is a product decision nobody has made. Fixing it in code
+ * rather than defaulting it means no catalog edit can turn it into `shared`
+ * either.
+ *
+ * The rest is {@link MCPCatalogEntryOAuth} — the non-secret settings an entry
+ * may state for a server that falls short of the spec. `curated.yaml` states
+ * none of them today; each is spread only when present, so an entry that says
+ * nothing produces the two-key block above and not a row full of `undefined`
+ * that would then have to be compared around.
+ */
+function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
+  const stated = entry.oauth;
+  return {
+    type: 'oauth',
+    oauth_mode: 'per_user',
+    ...(stated?.scope ? { oauth_scope: stated.scope } : {}),
+    ...(stated?.client_id ? { oauth_client_id: stated.client_id } : {}),
+    ...(stated?.dcr_mode ? { oauth_dcr_mode: stated.dcr_mode } : {}),
+    ...(stated?.compatibility_mode ? { oauth_compatibility_mode: stated.compatibility_mode } : {}),
+  };
+}
+
+/**
+ * Decide how the entry's endpoint wants to be talked to, and produce the auth
+ * block to install it with — or refuse.
+ *
+ * Every connectable entry is probed, whatever it states. `auth_type` is a claim
+ * about a third party's endpoint recorded when the file was last edited, and a
+ * vendor can put a server behind an account, or take it out from behind one, at
+ * any time. Believing the claim in either direction goes wrong, and one of the
+ * two directions goes wrong silently and forever: a stale `none` produces an
+ * install that fails on first use, which the user reports, while a stale
+ * `oauth` produces a refusal nothing can contradict. So the file decides what
+ * the marketplace renders, the endpoint decides what gets installed, and
+ * {@link logProbeDisagreement} is what keeps the two from drifting apart
+ * unnoticed.
+ *
+ * The three outcomes are three different questions, and only the last is a
+ * dead end:
+ *
+ * - **A handshake completed.** Nothing is needed; install it open.
+ * - **An OAuth challenge.** Authentication Agor can set up. The row is created
+ *   configured for OAuth and holding no token, which is a state the product
+ *   already has a name and a button for — the user signs in from the same place
+ *   as any other OAuth server. Connect is not the flow and does not start it;
+ *   it produces the row the flow completes.
+ * - **A non-OAuth 401/403.** An API key, which nothing can obtain on the user's
+ *   behalf and which there is nowhere safe to put — the catalog is public and
+ *   shared, and connect takes no input beyond a catalog key. Still refused, and
+ *   the message says which of the two kinds of authentication it is so it does
+ *   not read as the OAuth case being broken.
+ * - **Nothing identifiable answered.** Refused, unchanged.
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string }
-): Promise<void> {
-  const probed =
-    entry.probed_auth_type === 'unknown' || entry.probed_auth_type === undefined
-      ? (await probeRemoteAuthType(entry.remote_url)).probed_auth_type
-      : entry.probed_auth_type;
+): Promise<MCPAuth> {
+  const probed = await probeRemoteAuthType(entry.remote_url);
+  logProbeDisagreement(entry, probed);
 
-  if (probed === 'none') return;
-
-  if (probed === 'oauth' || probed === 'credentials') {
+  if (probed === 'none') return { type: 'none' };
+  if (probed === 'oauth') return catalogOAuthConfig(entry);
+  if (probed === 'credentials') {
     throw new BadRequest(
-      `${catalogDisplayName(entry)} requires authentication, which is not supported yet`
+      `${catalogDisplayName(entry)} needs an API key, which cannot be set up from the marketplace yet`
     );
   }
+
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
   );
@@ -208,11 +329,9 @@ export function createMCPCatalogConnectService(
   /**
    * An install of this entry the caller can already use, if there is one.
    *
-   * Matched on the registry name, so an entry the registry withdrew and
-   * republished — a fresh row for the same server — still recognises the
-   * install the user already has instead of adding a duplicate beside it. Both
-   * sides carry the catalog's own `name` verbatim, which is what the entry is
-   * unique on, so there is no second normalisation to keep in step.
+   * Matched on the catalog name. Both sides carry it verbatim, and it is what
+   * the entry is unique on, so there is no second normalisation to keep in
+   * step and an install survives every edit to the entry except a rename.
    *
    * The name alone does not settle it, though: see {@link isInstallOf}. A row
    * that no longer carries the entry's configuration is passed over rather
@@ -229,6 +348,7 @@ export function createMCPCatalogConnectService(
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
+    prescribed: MCPAuth,
     userId: UserID | undefined,
     params: AuthenticatedParams
   ): Promise<MCPServer | undefined> => {
@@ -238,7 +358,7 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => server.enabled && isInstallOf(server, entry));
+    return servers.find((server) => server.enabled && isInstallOf(server, entry, prescribed));
   };
 
   return {
@@ -259,10 +379,13 @@ export function createMCPCatalogConnectService(
 
       assertConnectableEntry(entry);
       assertDisclosureAcknowledged(entry, data.acknowledged_disclosure);
-      await resolveAuthRequirement(entry);
+      // Derived from the entry and the live endpoint, never from `data`: the
+      // request names a catalog key and nothing else, so there is no input a
+      // caller could supply that reaches a URL or a credential endpoint here.
+      const auth = await resolveAuthRequirement(entry);
 
       const userId = params.user?.user_id as UserID | undefined;
-      const existing = await findExistingInstall(entry, userId, params);
+      const existing = await findExistingInstall(entry, auth, userId, params);
 
       const createInput: CreateMCPServerInput = {
         name: catalogServerSlug(entry.name),
@@ -270,7 +393,7 @@ export function createMCPCatalogConnectService(
         description: entry.benefit ?? entry.description,
         transport: toServerTransport(entry),
         url: entry.remote_url,
-        auth: { type: 'none' },
+        auth,
         // Session scope: an install is for the session it launched, not
         // silently for every session its owner will ever start.
         scope: 'session',

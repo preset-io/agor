@@ -3,9 +3,10 @@
  * (REQ-CAT-2). Splitting them across regions makes the user hunt for the
  * control that is narrowing their results.
  *
- * The search box keeps its own value and publishes a debounced one, so typing
- * re-renders this component and nothing else — the grid below it only re-renders
- * once a query actually changes.
+ * The search box publishes every keystroke. It used to hold a draft and debounce
+ * it, because each change was a request; now narrowing is a pass over an array
+ * the browser already holds, so delaying it only makes the grid feel slower than
+ * it is.
  */
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
@@ -23,7 +24,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo } from 'react';
 import {
   ALL_CATEGORIES,
   CAPABILITY_GROUPS,
@@ -34,8 +35,6 @@ import {
 } from './catalogPresentation';
 
 const { Text } = Typography;
-
-const SEARCH_DEBOUNCE_MS = 250;
 
 const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
   label: group.label,
@@ -48,15 +47,13 @@ const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
 export interface CatalogToolbarProps {
   category?: MCPCatalogCategory;
   capability?: string;
-  reviewedOnly: boolean;
   connectableOnly: boolean;
   sort: MCPCatalogSort;
-  /** Debounced search term, for controlled resets (e.g. "clear filters"). */
+  /** The active search term. */
   search: string;
   onSearchChange: (value: string) => void;
   onCategoryChange: (value?: MCPCatalogCategory) => void;
   onCapabilityChange: (value?: string) => void;
-  onReviewedOnlyChange: (value: boolean) => void;
   onConnectableOnlyChange: (value: boolean) => void;
   onSortChange: (value: MCPCatalogSort) => void;
   /** `null` while the unfiltered catalog size is still unknown. */
@@ -66,34 +63,17 @@ export interface CatalogToolbarProps {
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   category,
   capability,
-  reviewedOnly,
   connectableOnly,
   sort,
   search,
   onSearchChange,
   onCategoryChange,
   onCapabilityChange,
-  onReviewedOnlyChange,
   onConnectableOnlyChange,
   onSortChange,
   matchSummary,
 }) => {
   const { token } = theme.useToken();
-  const [draft, setDraft] = useState(search);
-
-  // Keep the box in step when the term is reset from outside; typing already
-  // owns `draft`, so this only fires on an external change.
-  useEffect(() => {
-    setDraft((current) => (current.trim() === search.trim() ? current : search));
-  }, [search]);
-
-  const publish = useRef(onSearchChange);
-  publish.current = onSearchChange;
-
-  useEffect(() => {
-    const timer = setTimeout(() => publish.current(draft), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [draft]);
 
   return (
     <Card size="small" styles={{ body: { padding: token.padding } }}>
@@ -104,8 +84,8 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           prefix={<SearchOutlined />}
           placeholder="Search MCP servers…"
           aria-label="Search MCP servers"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
         />
         <Segmented<CategoryFilter>
           options={CATEGORY_OPTIONS}
@@ -130,29 +110,22 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           </Col>
           <Col flex="none">
             <Space size={token.marginXS}>
-              <Text type="secondary">Reviewed only</Text>
-              <Switch
-                size="small"
-                checked={reviewedOnly}
-                onChange={onReviewedOnlyChange}
-                aria-label="Show only servers reviewed by Preset"
-              />
-            </Space>
-          </Col>
-          <Col flex="none">
-            <Space size={token.marginXS}>
               {/* Named for what it removes, because what it keeps includes
-                  endpoints nobody has checked yet. */}
-              <Tooltip title="Hides servers Agor knows need an account. Unchecked endpoints stay — connecting is what checks them.">
+                  endpoints nobody has checked yet. Servers that sign the user
+                  in are no longer among the removed: they connect, and the
+                  sign-in happens afterwards. What is left to remove is the
+                  servers wanting an API key, which the marketplace cannot
+                  set up at all. */}
+              <Tooltip title="Hides servers Agor knows need an API key, which cannot be set up here. Servers you sign into stay, and so do endpoints nobody has checked — connecting is what checks them.">
                 <Text type="secondary" style={{ cursor: 'help' }}>
-                  Hide account-only
+                  Hide key-only
                 </Text>
               </Tooltip>
               <Switch
                 size="small"
                 checked={connectableOnly}
                 onChange={onConnectableOnlyChange}
-                aria-label="Hide servers known to need an account"
+                aria-label="Hide servers known to need an API key"
               />
             </Space>
           </Col>

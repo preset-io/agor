@@ -1,5 +1,7 @@
 # Agor Repo Health Audit — 2026-05-15
 
+> **Historical audit record.** Unix impersonation, sudoers, POSIX projection, and related paths cited below were removed in 0.25; file pointers describe the audited revision, not the current tree.
+
 > **Status:** Audit + ~11 of 15 quick wins landed in PR #1199 (this branch).
 > Remaining quick wins, medium efforts, and deep investigations are still
 > the punch list below — implementation worktrees still spawn after review.

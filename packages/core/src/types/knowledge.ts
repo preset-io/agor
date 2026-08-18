@@ -1,3 +1,4 @@
+import type { PersistedAgenticToolName } from './agentic-tool';
 import type {
   ArtifactID,
   BoardID,
@@ -10,6 +11,14 @@ import type {
   UserID,
   UUID,
 } from './id';
+
+/** Trusted assistant attribution derived at the authenticated Knowledge write boundary. */
+export interface KnowledgeWriteAttribution {
+  sessionId: SessionID;
+  agenticTool: PersistedAgenticToolName;
+  /** Teammate display name captured at write time when the Session belongs to one. */
+  teammateName?: string;
+}
 
 export type KnowledgeNamespaceID = UUID;
 export type KnowledgeDocumentID = UUID;
@@ -610,6 +619,11 @@ export interface KnowledgeDocument {
   created_by?: UserID | null;
   created_at: Date;
   updated_by?: UserID | null;
+  /** Trusted Session attribution for the most recent assistant-authored version. */
+  updated_by_session_id?: SessionID | null;
+  updated_by_agentic_tool?: PersistedAgenticToolName | null;
+  /** Teammate display name captured at write time, so attribution survives rename/deletion. */
+  updated_by_teammate_name?: string | null;
   updated_at?: Date | null;
   archived: boolean;
   archived_at?: Date | null;
@@ -635,6 +649,10 @@ export interface KnowledgeDocumentVersion {
   metadata?: Record<string, unknown> | null;
   change_summary?: string | null;
   created_by?: UserID | null;
+  /** Present only when this version was written through a Session-scoped agent request. */
+  created_by_session_id?: SessionID | null;
+  created_by_agentic_tool?: PersistedAgenticToolName | null;
+  created_by_teammate_name?: string | null;
   created_at: Date;
 }
 

@@ -56,8 +56,8 @@ vi.mock('../../utils/upload.js', async (importOriginal) => {
     getUploadDirectory: vi.fn(actual.getUploadDirectory),
   };
 });
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn(async () => undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),

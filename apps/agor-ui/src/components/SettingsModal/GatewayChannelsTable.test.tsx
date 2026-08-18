@@ -191,6 +191,16 @@ function clickButton(text: RegExp) {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
+ * Text of the rendered scope/event Tags. Scoped to `.ant-tag` on purpose: the
+ * Options step's explainer prose names `app_mention` in a `<code>`, so a bare
+ * `queryByText` would match the copy instead of the derived list — passing the
+ * "absent before the surface is enabled" check for the wrong reason.
+ */
+function scopeTagTexts(): string[] {
+  return Array.from(document.querySelectorAll('.ant-tag')).map((el) => el.textContent ?? '');
+}
+
+/**
  * Open the (real) channel-type antd Select and pick a platform by its option
  * label. `getByRole('combobox')` scans the whole antd-modal DOM computing roles
  * (~250ms per call in jsdom, same class of cost as the button-name lookup above)
@@ -285,24 +295,30 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
   });
 
-  it('updates the manifest preview and scope list as surfaces change', async () => {
+  it('updates the derived scope/event list as surfaces change, without the raw manifest', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
     // Surfaces live on the Options step (step 1).
     await advanceToOptions();
 
+    // The Options step configures; the raw JSON manifest is reserved for the
+    // "Create app" step, where it has a working copy button (issue #2448).
+    const manifestBlocks = Array.from(document.querySelectorAll('pre')).filter((el) =>
+      el.textContent?.includes('display_information')
+    );
+    expect(manifestBlocks).toHaveLength(1);
+    expect(manifestBlocks[0]).not.toBeVisible();
+
     // Public-channel scopes/events are absent until the surface is enabled.
-    expect(screen.queryByText('channels:history')).not.toBeInTheDocument();
-    expect(screen.queryByText('app_mention')).not.toBeInTheDocument();
+    expect(scopeTagTexts()).not.toContain('channels:history');
+    expect(scopeTagTexts()).not.toContain('app_mention');
 
     fireEvent.click(screen.getByText('Public channels'));
 
     // Now they appear in the derived scope/event list (Form.useWatch flush).
-    await waitFor(() =>
-      expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0)
-    );
-    expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
-    expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
+    await waitFor(() => expect(scopeTagTexts()).toContain('channels:history'));
+    expect(scopeTagTexts()).toContain('app_mentions:read');
+    expect(scopeTagTexts()).toContain('app_mention');
   });
 
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {

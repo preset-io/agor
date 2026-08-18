@@ -21,15 +21,18 @@ import {
   Badge,
   Button,
   Descriptions,
+  Flex,
   Form,
   Input,
   Modal,
   Popconfirm,
   Space,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
@@ -39,6 +42,12 @@ import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
+import {
+  describeMissingForSave,
+  firstFormErrorMessage,
+  missingMCPFieldLabels,
+  useFormRevision,
+} from '../MCPServer/mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServer/mcp-oauth-utils';
 import {
   allowedMcpScopes,
@@ -50,7 +59,7 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
-import { MCPMemberPolicyCard } from './MCPMemberPolicyCard';
+import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -115,6 +124,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -143,6 +153,19 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const [formRevision, bumpFormRevision] = useFormRevision();
+  // Only ask the form once it is rendered — an unmounted instance warns.
+  const missingRequiredFields = createModalOpen
+    ? missingMCPFieldLabels(createForm.getFieldsValue(true), {
+        mode: 'create',
+        transport,
+        authType,
+      })
+    : [];
+  // Once the row exists the button only dismisses the modal, so nothing about
+  // the form should be able to trap the user behind it.
+  const createBlocked = !createdServerId && missingRequiredFields.length > 0;
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
@@ -203,9 +226,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
       return createdServerId;
     } catch (error) {
-      if (!(error && typeof error === 'object' && 'errorFields' in error)) {
-        showError(error instanceof Error ? error.message : 'Failed to save MCP server');
-      }
+      // Say which field. Swallowing a validation rejection here left the OAuth
+      // button doing nothing at all, with nothing on screen to explain it.
+      showError(
+        firstFormErrorMessage(error) ??
+          (error instanceof Error ? error.message : 'Failed to save MCP server')
+      );
       return null;
     }
   };
@@ -234,10 +260,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       })
       .catch((error) => {
         console.error('Form validation failed:', error);
-        if (error.errorFields && error.errorFields.length > 0) {
-          const firstError = error.errorFields[0];
-          showError(firstError.errors[0] || 'Please fill in required fields');
-        }
+        showError(firstFormErrorMessage(error) || 'Please fill in required fields');
       });
   };
 
@@ -592,35 +615,23 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const canAdd = !policyPending && canAddMcpServer(capability);
 
-  return (
-    <div>
-      <MCPMemberPolicyCard
-        policy={memberPolicy.policy}
-        loading={memberPolicy.loading}
-        saving={memberPolicy.saving}
-        error={memberPolicy.error}
-        editable={capability.isAdmin}
-        onChange={memberPolicy.save}
-      />
-
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
+  const serversPane = (
+    <>
+      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
         <Typography.Text type="secondary">
           Configure Model Context Protocol servers for enhanced AI capabilities.
         </Typography.Text>
-        <Space>
+        {/* Search and add take the ends of their own row, so the caption above
+            keeps its full width instead of being squeezed into four lines by a
+            search box that cannot shrink. The input's cap leaves the slack
+            between them as the gap. */}
+        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
           <Input
             allowClear
             placeholder="Search name, owner, URL, command, tools, transport, or scope"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
+            style={{ flex: '1 1 220px', maxWidth: 360 }}
           />
           {canAdd ? (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
@@ -635,8 +646,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
               </span>
             </Tooltip>
           )}
-        </Space>
-      </div>
+        </Flex>
+      </Flex>
 
       <Table
         dataSource={servers}
@@ -650,13 +661,31 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       <Modal
         title="Add MCP Server"
         open={createModalOpen}
-        onOk={handleCreate}
         onCancel={resetCreateModal}
-        okText={createdServerId ? 'Done' : 'Create'}
         width={600}
         destroyOnHidden
+        footer={
+          <Space>
+            <Button onClick={resetCreateModal}>Cancel</Button>
+            {/* A disabled button can't host a tooltip of its own — hence the span. */}
+            <Tooltip
+              title={createBlocked ? describeMissingForSave(missingRequiredFields) : undefined}
+            >
+              <span>
+                <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
+                  {createdServerId ? 'Done' : 'Create'}
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+        }
       >
-        <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form
+          form={createForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          onValuesChange={bumpFormRevision}
+        >
           <MCPServerFormFields
             mode="create"
             transport={transport}
@@ -672,6 +701,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             testing={testing}
             testResult={testResult}
             onPrepareOAuthStart={prepareOAuthStartForCreate}
+            formRevision={formRevision}
           />
         </Form>
       </Modal>
@@ -804,6 +834,34 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Descriptions>
         )}
       </Modal>
-    </div>
+    </>
+  );
+
+  return (
+    <Tabs
+      // The servers are what the tab is opened for; the policy that governs them
+      // is a pane away rather than a band above them.
+      defaultActiveKey="servers"
+      items={[
+        { key: 'servers', label: 'Servers', children: serversPane },
+        {
+          key: 'policy',
+          // Ungated on purpose: this is the answer to "why is New MCP Server
+          // greyed out for me?", and the member who is refused is the reader who
+          // needs it.
+          label: 'Member policy',
+          children: (
+            <MCPMemberPolicySetting
+              policy={memberPolicy.policy}
+              loading={memberPolicy.loading}
+              saving={memberPolicy.saving}
+              error={memberPolicy.error}
+              editable={capability.isAdmin}
+              onChange={memberPolicy.save}
+            />
+          ),
+        },
+      ]}
+    />
   );
 };

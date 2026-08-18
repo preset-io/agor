@@ -280,7 +280,15 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       .map(([name]) => name)
       .sort();
 
-    expect(uidGidVariants).toEqual(['full', 'postgres', 'postgres-demo', 'sqlite', 'sqlite-demo']);
+    expect(uidGidVariants).toEqual([
+      'full',
+      'postgres',
+      'postgres-demo',
+      'sandbox',
+      'sandbox-peruser',
+      'sqlite',
+      'sqlite-demo',
+    ]);
 
     for (const name of uidGidVariants) {
       const start = env!.variants[name].start;

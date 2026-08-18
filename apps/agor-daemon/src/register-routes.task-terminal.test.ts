@@ -75,6 +75,7 @@ it('does not apply a stale force-fail target to a later unverified Task', () => 
 describe('force-fail route authorization and request fencing', () => {
   const stopping = {
     task_id: 'task-a',
+    session_id: 'session-a',
     status: TaskStatus.STOPPING,
     sdk_failure: { termination: 'unverified' },
     termination_request: { requested_at: '2026-01-01T00:00:00.000Z' },
@@ -88,10 +89,10 @@ describe('force-fail route authorization and request fencing', () => {
   it('authorizes a branch owner and returns the exact Task epoch', async () => {
     await expect(
       authorizeForceFailRoute({
-        session: { branch_id: 'branch-a' as never },
+        session: { session_id: 'session-a' as never, branch_id: 'branch-a' as never },
         params: { user: { user_id: 'user-a', role: 'member' } } as never,
         body,
-        findActiveTasks: async () => [stopping],
+        findTask: async () => stopping,
         isBranchOwner: async () => true,
       })
     ).resolves.toMatchObject({
@@ -102,17 +103,17 @@ describe('force-fail route authorization and request fencing', () => {
   });
 
   it('rejects non-owners before loading active Task state', async () => {
-    const findActiveTasks = vi.fn().mockResolvedValue([stopping]);
+    const findTask = vi.fn().mockResolvedValue(stopping);
     await expect(
       authorizeForceFailRoute({
-        session: { branch_id: 'branch-a' as never },
+        session: { session_id: 'session-a' as never, branch_id: 'branch-a' as never },
         params: { user: { user_id: 'user-b', role: 'member' } } as never,
         body,
-        findActiveTasks,
+        findTask,
         isBranchOwner: async () => false,
       })
     ).rejects.toBeInstanceOf(Forbidden);
-    expect(findActiveTasks).not.toHaveBeenCalled();
+    expect(findTask).not.toHaveBeenCalled();
   });
 
   it('rejects a stale Task epoch instead of selecting a later unverified Task', async () => {
@@ -124,10 +125,10 @@ describe('force-fail route authorization and request fencing', () => {
     const isBranchOwner = vi.fn().mockResolvedValue(false);
     await expect(
       authorizeForceFailRoute({
-        session: { branch_id: 'branch-a' as never },
+        session: { session_id: 'session-a' as never, branch_id: 'branch-a' as never },
         params: { user: { user_id: 'admin-a', role: 'admin' } } as never,
         body,
-        findActiveTasks: async () => [later],
+        findTask: async () => later,
         isBranchOwner,
       })
     ).rejects.toThrow('termination state changed');

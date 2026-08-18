@@ -1,6 +1,6 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: xterm requires an exact ANSI terminal palette
 // biome-ignore-all lint/plugin/noHardcodedColorProperty: xterm requires compound terminal overlay colors
-import type { AgorClient, User, UserID } from '@agor-live/client';
+import type { AgorClient, TerminalAllocatedEvent, User, UserID } from '@agor-live/client';
 import { hasMinimumRole } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { FitAddon } from '@xterm/addon-fit';
@@ -129,6 +129,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     let currentChannel: string | null = null;
     let currentTerminalId: string | null = null;
     let initialCommandsSent = false;
+    const failedTerminalIds = new Set<string>();
     // Monotonic attach generation: each (re)attach bumps it and a disconnect
     // bumps it, so a stale/out-of-order attach resolve can't flip the modal
     // back to connected after the socket has moved on.
@@ -146,12 +147,18 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         socket.off('terminal:exit', handleChannelExit);
         socket.off('terminal:ready', handleChannelReady);
         socket.off('terminal:error', handleChannelError);
+        socket.off('terminal:allocated', handleTerminalAllocated);
         socket.off('connect', handleReconnect);
         socket.off('disconnect', handleDisconnect);
         if (currentChannel) {
           socket.emit('leave', currentChannel);
         }
       }
+    };
+
+    const handleTerminalAllocated = (payload: TerminalAllocatedEvent) => {
+      if (payload.userId !== user?.user_id || payload.branchId !== branchId) return;
+      currentTerminalId = payload.terminalId;
     };
 
     // Channel-based event handlers
@@ -169,6 +176,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     }) => {
       if (!terminalRef.current) return;
       if (payload.userId === user?.user_id && payload.terminalId === currentTerminalId) {
+        failedTerminalIds.add(payload.terminalId);
         terminalRef.current.writeln(`\r\n\r\n[Terminal exited with code ${payload.exitCode}]`);
         terminalRef.current.writeln('[Close and reopen terminal to start a new session]');
         setIsConnected(false);
@@ -182,6 +190,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     // instead of leaving the modal wedged on a blank screen.
     const handleChannelReady = (payload: { userId: string; terminalId: string }) => {
       if (payload.userId !== user?.user_id || payload.terminalId !== currentTerminalId) return;
+      if (failedTerminalIds.has(payload.terminalId)) return;
       setIsConnected(true);
       setReconnecting(false);
       setNeedsReconnect(false);
@@ -193,6 +202,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       message?: string;
     }) => {
       if (payload.userId !== user?.user_id || payload.terminalId !== currentTerminalId) return;
+      failedTerminalIds.add(payload.terminalId);
       if (terminalRef.current) {
         terminalRef.current.writeln(`\r\n[Terminal error: ${payload.message ?? 'attach failed'}]`);
       }
@@ -296,6 +306,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     socket.on('terminal:exit', handleChannelExit);
     socket.on('terminal:ready', handleChannelReady);
     socket.on('terminal:error', handleChannelError);
+    socket.on('terminal:allocated', handleTerminalAllocated);
 
     terminal.onData((data) => {
       if (!currentTerminalId) return;
@@ -349,6 +360,11 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           zellijReused: !result.isNew,
           branchName: result.branchName,
         });
+        // Allocation is delivered before executor startup. If that executor
+        // already failed while the create response was in flight, preserve
+        // its actionable output and do not send terminal I/O into a retired
+        // attachment.
+        if (failedTerminalIds.has(result.terminalId)) return;
         // Only clear for new sessions - reconnections will get screen via redraw
         if (result.isNew) {
           terminal.clear();

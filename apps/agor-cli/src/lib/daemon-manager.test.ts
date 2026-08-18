@@ -2,7 +2,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getLogFilePath, readLogs, rotateDaemonLogIfNeeded } from './daemon-manager.js';
+import {
+  getDaemonIdentityFilePath,
+  getDaemonPid,
+  getLogFilePath,
+  getManagedDaemonIdentity,
+  getManagedDaemonInstanceId,
+  readLogs,
+  rotateDaemonLogIfNeeded,
+} from './daemon-manager.js';
 
 describe('daemon-manager logs', () => {
   let tempHome: string;
@@ -19,6 +27,42 @@ describe('daemon-manager logs', () => {
 
   it('returns "No logs found" when daemon log is missing', () => {
     expect(readLogs(50)).toBe('No logs found');
+  });
+
+  it('reads the CLI-managed daemon identity record', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(getDaemonIdentityFilePath(), ' instance-id\n');
+    expect(getManagedDaemonInstanceId()).toBe('instance-id');
+  });
+
+  it('reads structured identity records while retaining legacy compatibility', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(
+      getDaemonIdentityFilePath(),
+      JSON.stringify({
+        instanceId: 'instance-id',
+        daemonUrl: 'http://127.0.0.1:4040',
+        configPath: '/tmp/custom-agor.yaml',
+      })
+    );
+    expect(getManagedDaemonIdentity()).toEqual({
+      instanceId: 'instance-id',
+      daemonUrl: 'http://127.0.0.1:4040',
+      configPath: '/tmp/custom-agor.yaml',
+    });
+  });
+
+  it('clears both ownership records when the PID is stale', () => {
+    fs.mkdirSync(path.dirname(getDaemonIdentityFilePath()), { recursive: true });
+    fs.writeFileSync(path.join(tempHome, '.agor', 'daemon.pid'), '424242');
+    fs.writeFileSync(getDaemonIdentityFilePath(), 'stale-instance');
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('missing process'), { code: 'ESRCH' });
+    });
+
+    expect(getDaemonPid()).toBeNull();
+    expect(fs.existsSync(path.join(tempHome, '.agor', 'daemon.pid'))).toBe(false);
+    expect(fs.existsSync(getDaemonIdentityFilePath())).toBe(false);
   });
 
   it('returns the last requested lines without reading the whole file', () => {

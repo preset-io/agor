@@ -26,6 +26,7 @@ import {
 } from '../../lib/tenant-portability.js';
 
 export default class TenantImport extends Command {
+  static override summary = 'Restore one tenant from a verified archive';
   static override description =
     'Import (restore) a single tenant from a versioned archive directory into a standalone multi-tenant ' +
     'PostgreSQL runtime. Validates the archive before mutating, requires an empty destination or the ' +

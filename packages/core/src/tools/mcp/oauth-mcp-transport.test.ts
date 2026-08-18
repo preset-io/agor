@@ -899,6 +899,57 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
   });
 
+  it('accepts a confidential client when DCR returns a secret with auth method none/omitted, then uses HTTP Basic on token exchange', async () => {
+    // Reproduces Atlassian's remote MCP: we request a public client
+    // (token_endpoint_auth_method: 'none'), but the provider registers a *confidential* client —
+    // HTTP 201 with a client_secret and no auth method echoed back. This previously failed DCR
+    // validation ("incompatible public-client credentials"); it must now be accepted.
+    const clientSecret = 'atlassian-dcr-secret';
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://auth.reo.dev/oauth/register' && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            client_id: 'dcr-confidential-client',
+            client_secret: clientSecret,
+            redirect_uris: ['http://127.0.0.1:9999/oauth/callback'],
+          }),
+        };
+      }
+      if (url === 'https://auth.reo.dev/oauth/token' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ access_token: 'confidential-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    // DCR no longer rejects the returned secret — the flow starts and carries the secret.
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions);
+    expect(ctx.clientSecret).toBe(clientSecret);
+    expect(new URL(ctx.authorizationUrl).searchParams.get('client_id')).toBe(
+      'dcr-confidential-client'
+    );
+
+    // The secret must flow into the token exchange as HTTP Basic auth (RFC 6749 §2.3.1),
+    // and client_id must NOT be duplicated in the request body.
+    const tokenResponse = await completeMCPOAuthFlow(ctx, 'auth-code', ctx.state, {
+      cacheToken: false,
+    });
+    expect(tokenResponse.access_token).toBe('confidential-token');
+
+    const tokenCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url) === 'https://auth.reo.dev/oauth/token');
+    expect(tokenCall).toBeTruthy();
+    const headers = (tokenCall?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe(
+      `Basic ${Buffer.from(`dcr-confidential-client:${clientSecret}`).toString('base64')}`
+    );
+    expect(String(tokenCall?.[1]?.body)).not.toContain('client_id=');
+  });
+
   it('throws when cacheKey is missing (would silently break token reuse)', async () => {
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
 

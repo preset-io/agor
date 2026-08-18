@@ -39,7 +39,8 @@ Step-by-step implementation guides referenced from code.
 
 - [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
 - [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
-- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC + Unix user modes (referenced from CLI admin commands and unix utilities).
+- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC and simple/sandbox/delegated execution.
+- [`migrate-strict-to-sandbox.md`](guides/migrate-strict-to-sandbox.md) — Operator runbook for moving a deployment from `strict`/`insulated` to `unix_user_mode: sandbox` (uses the `scripts/*sandbox*` migration + pre-flight scripts).
 
 ### `guidelines/` — house rules
 

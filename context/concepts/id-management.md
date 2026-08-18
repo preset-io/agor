@@ -16,7 +16,7 @@ Why: globally unique, sortable by creation time (no separate index on `created_a
 
 Generated via `generateId()` in `lib/ids.ts`, which wraps the `uuid` npm package's `v7()` and passes fresh `randomBytes(16)` per call. This bypasses the library's per-ms monotonic counter (RFC method 1) so we get full per-call entropy (RFC method 3) — necessary because a 24-char short-form prefix needs real random bits, not a counter, to stay collision-safe under same-ms bursts (parent fan-out spawning, etc.).
 
-Trade-off: we give up strict sub-millisecond ordering. Ms-resolution ordering on the timestamp prefix is preserved; nothing in Agor depends on tighter ordering (the one caller that did, `TaskRepository.createMany`, now imposes insertion order explicitly).
+Trade-off: we give up strict sub-millisecond ordering. Ms-resolution ordering on the timestamp prefix is preserved; callers that require a total order add an explicit stable tie-breaker.
 
 ## Short IDs
 

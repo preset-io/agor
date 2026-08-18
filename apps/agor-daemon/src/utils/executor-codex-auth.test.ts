@@ -12,26 +12,37 @@ const runMock = vi.mocked(runExecutorCommand);
 describe('executor Codex auth dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each([null, 'alice'] as const)('dispatches as the resolved identity %s', async (asUser) => {
-    runMock.mockResolvedValue({ success: true, data: { status: 'written', authMode: 'chatgpt' } });
-    await writeCodexAuthViaExecutor('credential-json', asUser);
-    expect(runMock).toHaveBeenCalledWith(
-      {
-        command: 'codex.auth-file',
-        params: { operation: 'write', content: 'credential-json' },
-      },
-      {
-        asUser,
-        sensitiveOutput: true,
-        timeoutMs: 10_000,
-        logPrefix: '[CodexAuthExecutor]',
-      }
-    );
-  });
+  it.each([null, 'alice'] as const)(
+    'dispatches with delegated home key %s',
+    async (delegatedHomeKey) => {
+      runMock.mockResolvedValue({
+        success: true,
+        data: { status: 'written', authMode: 'chatgpt' },
+      });
+      await writeCodexAuthViaExecutor('credential-json', {
+        delegatedHomeKey,
+        userId: 'user-1',
+      });
+      expect(runMock).toHaveBeenCalledWith(
+        {
+          command: 'codex.auth-file',
+          params: { operation: 'write', content: 'credential-json' },
+        },
+        {
+          delegatedHomeKey: delegatedHomeKey ?? undefined,
+          templateVariables: { unix_user: delegatedHomeKey ?? undefined, user_id: 'user-1' },
+          sensitiveOutput: true,
+          timeoutMs: 10_000,
+          logPrefix: '[CodexAuthExecutor]',
+        }
+      );
+    }
+  );
 
   it('maps absent separately from unreadable and never exposes executor errors', async () => {
     runMock.mockResolvedValueOnce({ success: true, data: { status: 'not-found' } });
-    await expect(inspectCodexAuthViaExecutor('alice')).resolves.toEqual({
+    const routing = { delegatedHomeKey: 'alice', userId: 'user-1' };
+    await expect(inspectCodexAuthViaExecutor(routing)).resolves.toEqual({
       ok: false,
       reason: 'not-found',
     });
@@ -39,21 +50,21 @@ describe('executor Codex auth dispatch', () => {
       success: false,
       error: { code: 'FAIL', message: 'credential-json' },
     });
-    await expect(inspectCodexAuthViaExecutor('alice')).resolves.toEqual({
+    await expect(inspectCodexAuthViaExecutor(routing)).resolves.toEqual({
       ok: false,
       reason: 'unreadable',
     });
   });
 
-  it('routes external auth helpers by trusted user and reported Unix identity', async () => {
+  it('routes external auth helpers by trusted user and delegated home key', async () => {
     runMock.mockResolvedValue({ success: true, data: { status: 'deleted' } });
-    await deleteCodexAuthViaExecutor(null, {
-      reportedUnixUser: 'alice',
+    await deleteCodexAuthViaExecutor({
+      delegatedHomeKey: 'alice',
       userId: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
     });
 
     expect(runMock.mock.calls[0]?.[1]).toMatchObject({
-      asUser: null,
+      delegatedHomeKey: 'alice',
       templateVariables: {
         unix_user: 'alice',
         user_id: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
@@ -63,7 +74,8 @@ describe('executor Codex auth dispatch', () => {
 
   it('dispatches idempotent deletion and throws a secret-free failure', async () => {
     runMock.mockResolvedValueOnce({ success: true, data: { status: 'deleted' } });
-    await deleteCodexAuthViaExecutor('alice');
+    const routing = { delegatedHomeKey: 'alice', userId: 'user-1' };
+    await deleteCodexAuthViaExecutor(routing);
     expect(runMock.mock.calls[0]?.[0]).toEqual({
       command: 'codex.auth-file',
       params: { operation: 'delete' },
@@ -73,7 +85,7 @@ describe('executor Codex auth dispatch', () => {
       success: false,
       error: { code: 'FAIL', message: 'top-secret' },
     });
-    const error = await deleteCodexAuthViaExecutor('alice').catch((caught: unknown) => caught);
+    const error = await deleteCodexAuthViaExecutor(routing).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe('Executor credential delete failed');
     expect((error as Error).message).not.toContain('top-secret');

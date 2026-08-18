@@ -57,7 +57,7 @@ import { DrizzleService, type Query } from '../adapters/drizzle.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   detectLegacyFormat,
   envVarPrefixForTemplate,
@@ -503,7 +503,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
           params.user?.user_id,
           this.app.get('config')
@@ -976,7 +976,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.land ${branchId}]`,
-        asUser: await resolveExecutorReadAsUser(
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
           params.user?.user_id,
           this.app.get('config')
@@ -1703,7 +1703,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
           params.user?.user_id,
           this.app.get('config')

@@ -2,7 +2,6 @@
  * Claude Code Tool Implementation
  *
  * Current capabilities:
- * - ✅ Import sessions from transcript files
  * - ✅ Live execution via Anthropic SDK
  * - ❌ Create new sessions (waiting for SDK)
  */
@@ -35,21 +34,16 @@ import {
   type PermissionMode,
   type SessionID,
   type TaskID,
-  TaskStatus,
 } from '../../types.js';
 import { enrichToolResults, registerToolUses } from '../base/diff-enrichment.js';
 import type {
-  ImportOptions,
   ITool,
   MessagesService,
-  SessionData,
   SessionsPatchClient,
   TasksService,
   TasksStreamingService,
   ToolCapabilities,
 } from '../base/index.js';
-import { loadClaudeSession } from './import/load-session.js';
-import { transcriptsToMessages } from './import/message-converter.js';
 import {
   createAssistantMessage,
   createSystemMessage,
@@ -214,7 +208,6 @@ export class ClaudeTool implements ITool {
 
   getCapabilities(): ToolCapabilities {
     return {
-      supportsSessionImport: true, // ✅ We have transcript parsing
       supportsSessionCreate: false, // ❌ Waiting for SDK
       supportsLiveExecution: true, // ✅ Now supported via Anthropic SDK
       supportsSessionFork: false,
@@ -246,35 +239,6 @@ export class ClaudeTool implements ITool {
 
     // Fallback for environments that don't expose /tasks/streaming.
     this.tasksService?.emit(event, data);
-  }
-
-  async importSession(sessionId: string, options?: ImportOptions): Promise<SessionData> {
-    // Load session using existing transcript parser
-    const session = await loadClaudeSession(sessionId, options?.projectDir);
-
-    // Convert messages to Agor format
-    const messages = transcriptsToMessages(session.messages, session.sessionId as SessionID);
-
-    // Extract metadata
-    const metadata = {
-      sessionId: session.sessionId,
-      toolType: this.toolType,
-      status: TaskStatus.COMPLETED, // Historical sessions are always completed
-      createdAt: new Date(session.messages[0]?.timestamp || Date.now()),
-      lastUpdatedAt: new Date(
-        session.messages[session.messages.length - 1]?.timestamp || Date.now()
-      ),
-      workingDirectory: session.cwd || undefined,
-      messageCount: session.messages.length,
-    };
-
-    return {
-      sessionId: session.sessionId,
-      toolType: this.toolType,
-      messages,
-      metadata,
-      workingDirectory: session.cwd || undefined,
-    };
   }
 
   /**
@@ -326,9 +290,12 @@ export class ClaudeTool implements ITool {
       throw new Error('ClaudeTool not initialized with messagesService for live execution');
     }
 
-    // Get next message index
-    const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
-    let nextIndex = existingMessages.length;
+    // Hydrate only this Task while deriving the append position from one row.
+    const [existingMessages, sessionNextIndex] = await Promise.all([
+      taskId ? this.messagesRepo.findInitialUserMessagesByTaskId(taskId) : Promise.resolve([]),
+      this.messagesRepo.getNextIndexBySessionId(sessionId),
+    ]);
+    let nextIndex = sessionNextIndex;
 
     // Create user message (or reuse the daemon's pre-write — see Alt D in
     // docs/never-lose-prompt-design.md). When the row is reused, advance
@@ -341,7 +308,7 @@ export class ClaudeTool implements ITool {
       this.messagesService!,
       { messageSource, existingMessages }
     );
-    nextIndex = userMessage.index + 1;
+    nextIndex = Math.max(nextIndex, userMessage.index + 1);
 
     // Execute prompt via Agent SDK with streaming
     const assistantMessageIds: MessageID[] = [];
@@ -1035,9 +1002,12 @@ export class ClaudeTool implements ITool {
       throw new Error('ClaudeTool not initialized with messagesService for live execution');
     }
 
-    // Get next message index
-    const existingMessages = await this.messagesRepo.findBySessionId(sessionId);
-    let nextIndex = existingMessages.length;
+    // Hydrate only this Task while deriving the append position from one row.
+    const [existingMessages, sessionNextIndex] = await Promise.all([
+      taskId ? this.messagesRepo.findInitialUserMessagesByTaskId(taskId) : Promise.resolve([]),
+      this.messagesRepo.getNextIndexBySessionId(sessionId),
+    ]);
+    let nextIndex = sessionNextIndex;
 
     // Create user message (or reuse the daemon's pre-write — see Alt D in
     // docs/never-lose-prompt-design.md).
@@ -1049,7 +1019,7 @@ export class ClaudeTool implements ITool {
       this.messagesService!,
       { messageSource, existingMessages }
     );
-    nextIndex = userMessage.index + 1;
+    nextIndex = Math.max(nextIndex, userMessage.index + 1);
 
     // Execute prompt via Agent SDK
     const assistantMessageIds: MessageID[] = [];

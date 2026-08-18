@@ -91,6 +91,37 @@ describe('resolveApiKeyForTask', () => {
 });
 
 describe('settleTaskFailure', () => {
+  it('appends after the maximum Message index rather than the row count', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageFind = vi.fn().mockResolvedValue({
+      total: 2,
+      data: [{ index: 2 }],
+    });
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { find: messageFind, create: messageCreate };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, new Error('failed'), {
+      status: 'failed',
+      error_message: 'failed',
+    });
+
+    expect(messageFind).toHaveBeenCalledWith({
+      query: {
+        session_id: 'session-1',
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
+      },
+    });
+    expect(messageCreate).toHaveBeenCalledWith(expect.objectContaining({ index: 3 }));
+  });
+
   it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
     const secret = 'secret-binary-tool-result';
     const taskPatch = vi.fn().mockResolvedValue(undefined);

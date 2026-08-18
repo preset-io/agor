@@ -6,7 +6,7 @@
 
 import type { MessageID, Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
@@ -581,81 +581,6 @@ describe('TaskRepository runtime reconciliation', () => {
 });
 
 // ============================================================================
-// CreateMany
-// ============================================================================
-
-describe('TaskRepository.createMany', () => {
-  dbTest('should create multiple tasks in bulk', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    const tasks = [
-      createTaskData({ session_id: sessionId, full_prompt: 'Task 1' }),
-      createTaskData({ session_id: sessionId, full_prompt: 'Task 2' }),
-      createTaskData({ session_id: sessionId, full_prompt: 'Task 3' }),
-    ];
-
-    const created = await taskRepo.createMany(tasks);
-
-    expect(created).toHaveLength(3);
-    expect(created[0].full_prompt).toBe('Task 1');
-    expect(created[1].full_prompt).toBe('Task 2');
-    expect(created[2].full_prompt).toBe('Task 3');
-  });
-
-  dbTest('should handle empty array', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-
-    const created = await taskRepo.createMany([]);
-
-    expect(created).toEqual([]);
-  });
-
-  dbTest('should create tasks with different sessions', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const session1 = await createSessionWithDeps(db);
-    const session2 = await createSessionWithDeps(db);
-    const tasks = [
-      createTaskData({ session_id: session1 }),
-      createTaskData({ session_id: session2 }),
-    ];
-
-    const created = await taskRepo.createMany(tasks);
-
-    expect(created).toHaveLength(2);
-    expect(created[0].session_id).toBe(session1);
-    expect(created[1].session_id).toBe(session2);
-  });
-
-  dbTest('should preserve all task data in bulk create', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    const tasks = [
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.RUNNING,
-        tool_use_count: 5,
-        git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
-      }),
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.COMPLETED,
-        tool_use_count: 10,
-        git_state: { ref_at_start: 'develop', sha_at_start: 'def456' },
-      }),
-    ];
-
-    const created = await taskRepo.createMany(tasks);
-
-    expect(created[0].status).toBe(TaskStatus.RUNNING);
-    expect(created[0].tool_use_count).toBe(5);
-    expect(created[0].git_state.ref_at_start).toBe('main');
-    expect(created[1].status).toBe(TaskStatus.COMPLETED);
-    expect(created[1].tool_use_count).toBe(10);
-    expect(created[1].git_state.ref_at_start).toBe('develop');
-  });
-});
-
-// ============================================================================
 // FindById (with short ID support)
 // ============================================================================
 
@@ -819,6 +744,58 @@ describe('TaskRepository.findAll', () => {
 
     const visible = await taskRepo.findAll({ visibleToUserId: viewerId });
     expect(visible.map((task) => task.task_id)).toEqual([visibleTask.task_id]);
+  });
+});
+
+describe('TaskRepository.findPage', () => {
+  dbTest('counts and returns only the requested deterministic SQL page', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = [];
+    for (let index = 0; index < 12; index += 1) {
+      created.push(
+        await taskRepo.create(
+          createTaskData({ session_id: sessionId, full_prompt: `Task ${index}` })
+        )
+      );
+    }
+
+    const client = (
+      db as unknown as {
+        $client: { execute: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await taskRepo.findPage({
+      sessionId,
+      sort: { task_id: 1 },
+      limit: 2,
+      skip: 3,
+    });
+
+    const expected = [...created]
+      .sort((left, right) => left.task_id.localeCompare(right.task_id))
+      .slice(3, 5)
+      .map((task) => task.task_id);
+    expect(page.total).toBe(12);
+    expect(page.data.map((task) => task.task_id)).toEqual(expected);
+    expect(
+      execute.mock.calls.some(
+        ([query]) => /tasks/i.test(JSON.stringify(query)) && /limit/i.test(JSON.stringify(query))
+      )
+    ).toBe(true);
+  });
+
+  dbTest('projects only task_id for hydration membership verification', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, full_prompt: 'large Task payload' })
+    );
+
+    await expect(
+      taskRepo.findPage({ sessionId, selectTaskIdOnly: true, limit: 10 })
+    ).resolves.toEqual({ total: 1, data: [{ task_id: task.task_id }] });
   });
 });
 
@@ -2365,8 +2342,7 @@ describe('TaskRepository.update', () => {
     const data = createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING });
     await taskRepo.create(data);
 
-    const errorMessage =
-      'Unix user agor_123 not found. Ensure the Unix user is created before attempting to execute sessions.';
+    const errorMessage = 'Delegated execution home key is unavailable for this session.';
     const updated = await taskRepo.update(data.task_id!, {
       status: TaskStatus.FAILED,
       completed_at: new Date().toISOString(),

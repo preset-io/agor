@@ -24,7 +24,22 @@ import {
   sessionCanStartTask,
   TaskStatus,
 } from '@agor/core/types';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, like, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -211,6 +226,21 @@ export interface TaskRuntimeDiscoveryOptions {
   after?: TaskRuntimeDiscoveryCursor;
   /** Deterministic test clock. PostgreSQL uses database time when omitted. */
   now?: Date;
+}
+
+export interface TaskFindPageOptions {
+  taskId?: TaskID;
+  afterTaskId?: TaskID;
+  throughTaskId?: TaskID;
+  sessionId?: SessionID;
+  sessionIds?: SessionID[];
+  status?: Task['status'];
+  createdAt?: Date;
+  visibleToUserId?: UUID;
+  sort?: Record<string, 1 | -1>;
+  selectTaskIdOnly?: boolean;
+  limit?: number;
+  skip?: number;
 }
 
 /**
@@ -491,41 +521,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Bulk create multiple tasks (for imports)
-   */
-  async createMany(taskList: Partial<Task>[]): Promise<Task[]> {
-    try {
-      // Handle empty array
-      if (taskList.length === 0) {
-        return [];
-      }
-
-      const inserts = taskList.map((task) => this.taskToInsert(task));
-
-      // Bulk insert all tasks
-      await insert(this.db, tasks).values(inserts).run();
-
-      // Retrieve all inserted tasks. SQLite SELECT order is undefined without
-      // an ORDER BY — we used to rely on UUIDv7's monotonic counter to make
-      // `id ASC` mirror insertion order, but `generateId` now passes random
-      // bytes to `uuid.v7()` (so 24-char short IDs don't collide for same-ms
-      // IDs), which breaks sub-ms sort. Re-impose insertion order explicitly
-      // by mapping returned rows back to the input order. Use drizzle's
-      // `inArray` so the query is parameterized rather than string-built.
-      const taskIds = inserts.map((t) => t.task_id);
-      const rows = await select(this.db).from(tasks).where(inArray(tasks.task_id, taskIds)).all();
-
-      const rowsById = new Map(rows.map((r: TaskRow) => [r.task_id, r]));
-      return taskIds.map((id) => this.rowToTask(rowsById.get(id) as TaskRow));
-    } catch (error) {
-      throw new RepositoryError(
-        `Failed to bulk create tasks: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
-  }
-
-  /**
    * Find task by ID (supports short ID)
    */
   async findById(id: string): Promise<Task | null> {
@@ -580,6 +575,70 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Find one exact SQL page for the public Task list contract. Count and data
+   * share the same tenant/RBAC predicate, and only returned rows hydrate their
+   * potentially large JSON payloads.
+   */
+  async findPage(
+    opts: TaskFindPageOptions = {}
+  ): Promise<{ data: Partial<Task>[]; total: number }> {
+    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.taskId) conditions.push(eq(tasks.task_id, opts.taskId));
+    if (opts.afterTaskId) conditions.push(gt(tasks.task_id, opts.afterTaskId));
+    if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
+    if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
+    if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
+    if (opts.status) conditions.push(eq(tasks.status, opts.status));
+    if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
+    if (opts.visibleToUserId) {
+      conditions.push(
+        visibleSessionReferenceAccessExists(this.db, opts.visibleToUserId, tasks.session_id)
+      );
+    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(tasks);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+
+    let dataQuery = select(
+      this.db,
+      opts.selectTaskIdOnly ? { task_id: tasks.task_id } : undefined
+    ).from(tasks);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+    const sortColumns = {
+      task_id: tasks.task_id,
+      session_id: tasks.session_id,
+      status: tasks.status,
+      created_at: tasks.created_at,
+      created_by: tasks.created_by,
+    } as const;
+    const orderBy = Object.entries(opts.sort ?? {})
+      .map(([field, direction]) => {
+        const column = sortColumns[field as keyof typeof sortColumns];
+        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
+      })
+      .filter((expression): expression is SQL => expression !== undefined);
+    if (orderBy.length === 0) orderBy.push(asc(tasks.created_at));
+    if (!Object.hasOwn(opts.sort ?? {}, 'task_id')) orderBy.push(asc(tasks.task_id));
+    dataQuery = dataQuery.orderBy(...orderBy);
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
+
+    const rows = await dataQuery.all();
+    return {
+      data: opts.selectTaskIdOnly
+        ? rows.map((row: unknown) => ({
+            task_id: (row as Pick<TaskRow, 'task_id'>).task_id as TaskID,
+          }))
+        : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
+      total: Number(countRow?.count ?? 0),
+    };
+  }
+
+  /**
    * Find all tasks for a session
    */
   async findBySession(sessionId: string): Promise<Task[]> {
@@ -587,7 +646,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(eq(tasks.session_id, sessionId))
-        .orderBy(tasks.created_at)
+        .orderBy(tasks.created_at, tasks.task_id)
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));

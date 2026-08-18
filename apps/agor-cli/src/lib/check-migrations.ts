@@ -55,3 +55,9 @@ export async function getPendingMigrationsInfo(
     pending: status.pending,
   };
 }
+
+/** User-facing blocker shared by every CLI path that starts a daemon process. */
+export async function getDaemonStartMigrationBlocker(dbUrl?: string): Promise<string | null> {
+  const info = await getPendingMigrationsInfo(dbUrl);
+  return info ? formatPendingMigrationsMessage(info) : null;
+}

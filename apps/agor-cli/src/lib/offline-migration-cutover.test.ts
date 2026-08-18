@@ -8,16 +8,17 @@ const existingDatabaseStatus = {
   applied: ['0073_task_runtime_reconciliation'],
   pending: ['0074_knowledge_embedding_claims'],
 };
+const postgresDb = {} as never;
 
 describe('offline migration cutover CLI boundary', () => {
   it('refuses an existing-database cutover without the dedicated acknowledgement', () => {
-    expect(() => requireOfflineCutoverAcknowledgement(existingDatabaseStatus, false)).toThrow(
-      'Offline migration cutover required'
-    );
+    expect(() =>
+      requireOfflineCutoverAcknowledgement(postgresDb, existingDatabaseStatus, false)
+    ).toThrow('Offline migration cutover required');
   });
 
   it('accepts the dedicated acknowledgement and propagates it to the migration runner', async () => {
-    requireOfflineCutoverAcknowledgement(existingDatabaseStatus, true);
+    requireOfflineCutoverAcknowledgement(postgresDb, existingDatabaseStatus, true);
     const migrate = vi.fn(async () => undefined);
     const db = { dialect: 'postgresql' } as never;
 

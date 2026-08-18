@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const base = JSON.parse(await readFile(join(root, 'packages/agor-live/package.json'), 'utf8'));
+const cli = JSON.parse(await readFile(join(root, 'apps/agor-cli/package.json'), 'utf8'));
 const integrations = ['claude', 'codex', 'copilot', 'gemini', 'opencode', 'cursor'];
 const forbiddenBaseDependencies = [
   '@anthropic-ai/claude-agent-sdk',
@@ -14,6 +15,11 @@ const forbiddenBaseDependencies = [
   'opencode-ai',
 ];
 const failures = [];
+if (cli.version !== base.version) {
+  failures.push(`@agor/cli: ${cli.version} != agor-live ${base.version}`);
+}
+const EXACT_SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 for (const dependency of forbiddenBaseDependencies) {
   if (base.dependencies?.[dependency]) failures.push(`agor-live must not depend on ${dependency}`);
 }
@@ -66,12 +72,52 @@ for (const id of integrations) {
   if (pkg.version !== base.version)
     failures.push(`${pkg.name}: ${pkg.version} != agor-live ${base.version}`);
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
-    if (/^[~^*]|\s|\|/.test(range))
+    if (!EXACT_SEMVER.test(range))
       failures.push(`${pkg.name}: ${name} must use an exact version, found ${range}`);
   }
   const source = await readFile(join(directory, 'src/index.ts'), 'utf8');
   if (!source.includes(`AGOR_INTEGRATION_VERSION = '${base.version}'`)) {
     failures.push(`${pkg.name}: source integration version does not match ${base.version}`);
+  }
+}
+
+const opencodeWrapper = JSON.parse(
+  await readFile(join(root, 'packages/agor-opencode/package.json'), 'utf8')
+);
+const opencodeRuntimeVersion = opencodeWrapper.dependencies?.['opencode-ai'];
+const opencodeToolManifest = JSON.parse(
+  await readFile(join(root, 'packages/agentic-tool-opencode/package.json'), 'utf8')
+);
+const opencodeKnownModels = await readFile(
+  join(root, 'packages/agentic-tool-opencode/src/shared/known-models.ts'),
+  'utf8'
+);
+const opencodeIntegration = await readFile(
+  join(root, 'packages/agentic-tool-opencode/src/shared/index.ts'),
+  'utf8'
+);
+const opencodeVersionOwners = {
+  'wrapper opencode-ai': opencodeRuntimeVersion,
+  'wrapper @opencode-ai/sdk': opencodeWrapper.dependencies?.['@opencode-ai/sdk'],
+  'tool devDependency @opencode-ai/sdk': opencodeToolManifest.devDependencies?.['@opencode-ai/sdk'],
+  OPENCODE_VERSION: opencodeKnownModels.match(/OPENCODE_VERSION\s*=\s*['"]([^'"]+)['"]/)?.[1],
+  'OPENCODE_INTEGRATION.sdkVersion': opencodeIntegration.match(
+    /sdkVersion:\s*['"]@opencode-ai\/sdk@([^'"]+)['"]/
+  )?.[1],
+};
+for (const [owner, version] of Object.entries(opencodeVersionOwners)) {
+  if (version !== opencodeRuntimeVersion || !EXACT_SEMVER.test(version ?? '')) {
+    failures.push(
+      `OpenCode version drift: ${owner} is ${version ?? 'missing'}, expected ${opencodeRuntimeVersion}`
+    );
+  }
+}
+for (const [path, expected] of [
+  ['docker/Dockerfile', `npm install -g opencode-ai@${opencodeRuntimeVersion}`],
+]) {
+  const contents = await readFile(join(root, path), 'utf8');
+  if (!contents.includes(expected)) {
+    failures.push(`${path}: OpenCode runtime must match ${opencodeRuntimeVersion}`);
   }
 }
 // Everything publishable must sit in a namespace we own on npm.

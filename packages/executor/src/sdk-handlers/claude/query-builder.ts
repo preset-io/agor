@@ -37,6 +37,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import type { MCPServersConfig, SessionID, TaskID } from '../../types.js';
+import { resolveExecutorWorkingDirectory } from '../../user-runtime-paths.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { createMcpToolPermissionHook } from '../base/mcp-tool-permission-hook.js';
@@ -150,7 +151,7 @@ export async function setupQuery(
     try {
       const branch = await deps.branchesRepo.findById(session.branch_id);
       if (branch) {
-        cwd = branch.path;
+        cwd = resolveExecutorWorkingDirectory(branch.path);
       } else {
         console.warn(
           `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${cwd}`
@@ -261,7 +262,7 @@ export async function setupQuery(
   // `os.tmpdir()` resolves to the shared, sticky-bit `/tmp` (the daemon runs with
   // TMPDIR stripped), so every session with identical advisor settings targets the
   // SAME path. The first writer owns it mode 0600; later sessions — or other Unix
-  // users under insulated/strict isolation — then fail to open it with
+  // users in separate execution homes — then fail to open it with
   // `EACCES ... claude-settings-*.json`, crashing the CLI before the first message.
   // `--advisor <model>` is the CLI's dedicated, server-validated flag (Claude Code
   // >= 2.1.175) and writes no settings file, so it sidesteps the collision entirely.

@@ -38,6 +38,20 @@ async function makeUser(repo: UsersRepository): Promise<UserID> {
   return u.user_id as UserID;
 }
 
+describe('UsersRepository execution home key validation', () => {
+  dbTest('rejects invalid keys on create and update', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    await expect(
+      repo.create({ email: 'invalid-home-create@example.com', unix_username: '1alice' })
+    ).rejects.toThrow(/Invalid execution home key/);
+
+    const id = await makeUser(repo);
+    await expect(repo.update(id, { unix_username: '-alice' })).rejects.toThrow(
+      /Invalid execution home key/
+    );
+  });
+});
+
 describe('UsersRepository.findByEmailForAlignment', () => {
   dbTest('matches external-provider emails case-insensitively', async ({ db }) => {
     const repo = new UsersRepository(db);

@@ -1,5 +1,10 @@
 # Daemon startup/runtime log analysis (2026-06-11)
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 Scope: inspected `journalctl -u agor-daemon --no-pager -n 2000` and `--since '2 hours ago'` on the production-ish host. I did not copy secrets into this note. The current shell cannot see all system journal entries (`journalctl` reports that this user is not in `adm` / `systemd-journal`), so the captured logs are mostly executor child-process output under the `agor-daemon` unit, not the main daemon boot banner. `systemctl status agor-daemon` showed the main daemon was active since `2026-06-11 00:51:13 UTC`, but `journalctl` returned no visible main-process startup entries for that window.
 
 ## High-signal findings

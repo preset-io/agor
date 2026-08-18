@@ -125,10 +125,8 @@ export class OpenCodeAuthService {
     mutationFence?: OpenCodeNativeStateMutationFence
   ): Promise<OpenCodeProviderDiscovery> {
     const handle = startOpenCodeExecutorInvocation(context.dataHome, params, {
-      asUser: context.asUser,
       env: context.executorEnv,
       logPrefix: '[OpenCode Auth]',
-      templateVariables: { unix_user: context.asUser ?? undefined },
     });
     if (mutationFence) await mutationFence.attach(handle);
     const result = await handle.result;
@@ -149,7 +147,7 @@ export class OpenCodeAuthService {
       ...discovery,
       isolation: {
         mode: context.mode,
-        boundary: context.mode === 'strict' ? 'os' : 'logical',
+        boundary: 'logical',
       },
     };
   }
@@ -273,10 +271,8 @@ export class OpenCodeAuthService {
             : {}),
         },
         {
-          asUser: context.asUser,
           env: context.executorEnv,
           logPrefix: '[OpenCode Auth]',
-          templateVariables: { unix_user: context.asUser ?? undefined },
           timeoutMs: OAUTH_TIMEOUT_MS,
         },
         (event) => {

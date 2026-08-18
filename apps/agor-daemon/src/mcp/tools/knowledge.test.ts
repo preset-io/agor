@@ -12,8 +12,8 @@ vi.mock('@agor/core/feathers', () => ({
 vi.mock('../../utils/branch-workspace-path.js', () => ({
   resolveBranchWorkspacePath: vi.fn(),
 }));
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn(async () => undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
@@ -37,8 +37,15 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
-  getTeammateConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
-    branch.teammate ?? branch.assistant,
+  getTeammateConfig: (branch: {
+    teammate?: unknown;
+    assistant?: unknown;
+    custom_context?: { teammate?: unknown; assistant?: unknown };
+  }) =>
+    branch.custom_context?.teammate ??
+    branch.custom_context?.assistant ??
+    branch.teammate ??
+    branch.assistant,
   isTeammate: (branch: { teammate?: unknown; assistant?: unknown }) =>
     Boolean(branch.teammate ?? branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
@@ -215,6 +222,41 @@ describe('Knowledge MCP input schemas', () => {
     expect(data).not.toHaveProperty('kind');
     expect(data).not.toHaveProperty('content_text');
     expect(data).not.toHaveProperty('first_line_is_title');
+  });
+
+  it('passes trusted current-Session assistant attribution to Knowledge writes', async () => {
+    const putDocument = vi.fn().mockResolvedValue({ document_id: 'doc-1' });
+    const tools = await captureKnowledgeTools(
+      {
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+          }),
+        },
+        'kb/documents': { putDocument },
+      },
+      {
+        authenticatedSession: {
+          session_id: 'session-1',
+          agentic_tool: 'codex',
+          branch_id: 'branch-1',
+        },
+      }
+    );
+
+    await tools.agor_kb_put.handler?.({
+      namespace: 'global',
+      path: 'page.md',
+      content: '# Page',
+    });
+
+    expect(putDocument.mock.calls[0][1]).toMatchObject({
+      knowledgeWriteAttribution: {
+        sessionId: 'session-1',
+        agenticTool: 'codex',
+        teammateName: 'Scout',
+      },
+    });
   });
 
   it('requires document content to be a string when provided', async () => {

@@ -71,24 +71,171 @@
           },
           "type": {
             "type": "string",
-            "enum": ["user", "assistant", "system", "tool_use", "tool_result"]
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
           },
           "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "content_preview": {
             "type": "string"
           },
           "content": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
           },
-          "created_at": {
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "parent_tool_use_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "messagesCreate": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "type",
+          "role",
+          "index",
+          "timestamp",
+          "content_preview",
+          "content"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
             "type": "string",
             "format": "date-time"
+          },
+          "content_preview": {
+            "type": "string"
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
+          },
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "parent_tool_use_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
       "messagesList": {
         "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for messagesList. See @agor-live/client for the authoritative TypeScript type."
+        "required": ["total", "limit", "skip", "data"],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "skip": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/messages"
+            }
+          }
+        }
       },
       "boards": {
         "type": "object",
@@ -395,11 +542,6 @@
         "additionalProperties": true,
         "description": "Schema for gateway. See @agor-live/client for the authoritative TypeScript type."
       },
-      "local-actions": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for local-actions. See @agor-live/client for the authoritative TypeScript type."
-      },
       "agentic-tool-settings": {
         "type": "object",
         "additionalProperties": true,
@@ -589,11 +731,6 @@
         "type": "object",
         "additionalProperties": true,
         "description": "Schema for impersonate. See @agor-live/client for the authoritative TypeScript type."
-      },
-      "bulk": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for bulk. See @agor-live/client for the authoritative TypeScript type."
       },
       "streaming": {
         "type": "object",
@@ -1390,7 +1527,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/messages"
+                "$ref": "#/components/schemas/messagesCreate"
               }
             }
           }
@@ -6874,43 +7011,6 @@
         }
       }
     },
-    "/admin/local-actions": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/local-actions"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["admin"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/local-actions"
-              }
-            }
-          }
-        }
-      }
-    },
     "/agentic-tool-settings": {
       "get": {
         "parameters": [
@@ -9292,43 +9392,6 @@
         }
       }
     },
-    "/messages/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["messages"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
-              }
-            }
-          }
-        }
-      }
-    },
     "/messages/streaming": {
       "post": {
         "parameters": [],
@@ -10152,43 +10215,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/_id"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["tasks"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
               }
             }
           }

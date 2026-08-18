@@ -1,5 +1,10 @@
 # Per-user git auth & impersonated clone
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** Implemented (PR #1088)
 **Branch:** `feat/per-user-impersonated-clone`
 **Supersedes:** #1069 (the HTTPS→SSH fallback approach — see "Why not fallback" below)

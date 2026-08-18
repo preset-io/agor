@@ -122,6 +122,25 @@ export function getAgenticToolInstallDir(
   return join(getAgenticToolsRoot(), agorVersion, tool);
 }
 
+/** Minimal root manifest for Agor-owned, project-scoped npm installs. */
+export function createManagedAgenticToolInstallManifest(
+  tool: InstallableAgenticTool,
+  agorVersion: string
+): {
+  name: string;
+  version: string;
+  private: true;
+  dependencies: Record<string, string>;
+} {
+  const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+  return {
+    name: `agor-managed-${tool}`,
+    version: '0.0.0',
+    private: true,
+    dependencies: { [definition.packageName]: agorVersion },
+  };
+}
+
 function isContainedPath(root: string, candidate: string): boolean {
   const relativePath = relative(root, candidate);
   return !(
@@ -189,17 +208,50 @@ export async function resolveManagedAgenticToolPackageDirectory(
   return packageDirectory;
 }
 
+/** Resolve a wrapper and its primary SDK from one explicitly owned install tree. */
+async function resolveManagedAgenticToolIntegrationAt<T>(
+  tool: InstallableAgenticTool,
+  installDir: string
+): Promise<ManagedAgenticToolIntegration<T>> {
+  const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
+  const require = createRequire(join(installDir, 'package.json'));
+  const realInstallDir = await realpath(installDir);
+  const integrationEntry = await realpath(require.resolve(definition.packageName));
+  if (!isContainedPath(realInstallDir, integrationEntry)) {
+    throw new Error('integration wrapper resolved outside the managed directory');
+  }
+  const vendorDirectory = await findInstalledPackageDirectory(
+    integrationEntry,
+    definition.vendorPackage,
+    realInstallDir
+  );
+  if (!isContainedPath(realInstallDir, vendorDirectory)) {
+    throw new Error(`${definition.vendorPackage} resolved outside the managed directory`);
+  }
+  return import(pathToFileURL(integrationEntry).href) as Promise<ManagedAgenticToolIntegration<T>>;
+}
+
 /** Resolve and validate both wrapper and vendor code inside one managed tree. */
 export async function resolveManagedAgenticToolIntegration<T>(
   tool: InstallableAgenticTool,
   agorVersion: string
 ): Promise<ManagedAgenticToolIntegration<T>> {
+  return resolveManagedAgenticToolIntegrationAt(tool, getAgenticToolInstallDir(tool, agorVersion));
+}
+
+/** Prove a staged package tree contains the aligned wrapper and vendor SDK. */
+export async function assertManagedAgenticToolInstallReady(
+  tool: InstallableAgenticTool,
+  agorVersion: string,
+  installDir = getAgenticToolInstallDir(tool, agorVersion)
+): Promise<void> {
   const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
-  const installDir = getAgenticToolInstallDir(tool, agorVersion);
-  const require = createRequire(join(installDir, 'package.json'));
-  const integrationEntry = await realpath(require.resolve(definition.packageName));
-  await resolveManagedAgenticToolPackageDirectory(tool, agorVersion, definition.vendorPackage);
-  return import(pathToFileURL(integrationEntry).href) as Promise<ManagedAgenticToolIntegration<T>>;
+  const integration = await resolveManagedAgenticToolIntegrationAt(tool, installDir);
+  if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
+    throw new Error(
+      `${definition.displayName} integration ${integration.AGOR_INTEGRATION_VERSION ?? 'has no version'} does not match Agor ${agorVersion}`
+    );
+  }
 }
 
 /** Inspect the deployment-configured integrations without mutating disk. */
@@ -237,6 +289,54 @@ export async function inspectManagedAgenticToolAlignment(
 }
 
 /**
+ * Fail before a packaged daemon starts when its deployment-owned tool policy
+ * is implicit or its selected package set is not ready for this exact Agor version.
+ */
+export async function assertConfiguredAgenticToolsReady(
+  config: { agentic_tools?: { installed?: InstallableAgenticTool[] } },
+  env: NodeJS.ProcessEnv = process.env
+): Promise<readonly InstallableAgenticTool[] | undefined> {
+  if (env.AGOR_MANAGED_AGENTIC_TOOLS !== '1') return undefined;
+
+  const agorVersion = resolveManagedAgenticToolVersion(undefined, env);
+  if (!agorVersion) {
+    throw new Error(
+      'Managed agentic tools are enabled, but AGOR_VERSION is unavailable. Reinstall the agor-live package.'
+    );
+  }
+
+  const policy = await resolveAgenticToolSelectionPolicy(config);
+  if (policy.source === 'missing-manifest') {
+    throw new Error(
+      [
+        'No agentic tools have been selected for this installation.',
+        'Run `agor install` to select at least one tool before starting the daemon.',
+        'For an intentionally tool-free headless deployment, set `agentic_tools.installed: []` in config.yaml.',
+      ].join('\n')
+    );
+  }
+
+  const configured = policy.selected;
+  const state = await inspectManagedAgenticToolAlignment(configured, agorVersion);
+  const invalid = state.filter((item) => item.status !== 'ready');
+  if (invalid.length === 0) return configured;
+
+  const lines = invalid.map(
+    (item) =>
+      `  - ${item.displayName}: missing or invalid (expected ${item.expectedVersion})${item.detail ? `; ${item.detail}` : ''}`
+  );
+  throw new Error(
+    [
+      `Configured agentic tool packages are not aligned with Agor ${agorVersion}:`,
+      ...lines,
+      '',
+      `Run \`${AGENTIC_TOOL_REPAIR_COMMAND}\` as the daemon user.`,
+      'Inspect without changing anything with `agor doctor`.',
+    ].join('\n')
+  );
+}
+
+/**
  * Load an SDK from Agor's isolated, version-aligned integration tree.
  * Source checkouts use workspace dependencies unless managed mode is explicitly enabled.
  */
@@ -251,9 +351,11 @@ export async function loadManagedAgenticToolSdk<T>(tool: InstallableAgenticTool)
   let integration: ManagedAgenticToolIntegration<T>;
   try {
     integration = await resolveManagedAgenticToolIntegration<T>(tool, agorVersion);
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : '';
     throw new Error(
-      `${definition.displayName} support is not installed for Agor ${agorVersion}. Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`
+      `${definition.displayName} support is not installed for Agor ${agorVersion}${detail}. Run: ${AGENTIC_TOOL_REPAIR_COMMAND}`,
+      { cause: error }
     );
   }
   if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {

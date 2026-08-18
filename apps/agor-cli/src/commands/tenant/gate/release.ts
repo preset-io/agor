@@ -28,6 +28,7 @@ import {
 const EXIT_GENERATION_MISMATCH = 3;
 
 export default class TenantGateRelease extends Command {
+  static override summary = 'Release a tenant write gate';
   static override description =
     "Release a tenant's write gate for the generation the caller holds (compare-and-delete). " +
     'Refuses on a generation mismatch unless --force; an absent gate is an idempotent no-op. PostgreSQL-only.';

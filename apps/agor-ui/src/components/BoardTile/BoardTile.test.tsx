@@ -10,6 +10,13 @@ const board = (id: string, name: string, primary_teammate_id?: string): Board =>
   ({ board_id: id, name, primary_teammate_id }) as unknown as Board;
 
 describe('getBoardEmoji', () => {
+  it('prefers the board-owned icon over its primary teammate emoji', () => {
+    const branchById = new Map<string, Branch>([['b1', teammateBranch('🦊')]]);
+    expect(getBoardEmoji({ icon: '🧭', primary_teammate_id: 'b1' } as Board, branchById)).toBe(
+      '🧭'
+    );
+  });
+
   it('resolves the primary teammate branch emoji', () => {
     const branchById = new Map<string, Branch>([['b1', teammateBranch('🦊')]]);
     expect(getBoardEmoji({ primary_teammate_id: 'b1' } as Board, branchById)).toBe('🦊');
@@ -50,6 +57,16 @@ describe('boardSelectOptions', () => {
     render(<>{opt.label}</>);
     expect(screen.getByText('🦊')).toBeInTheDocument();
     expect(screen.getByText('Alpha')).toBeInTheDocument();
+  });
+
+  it('renders the board-owned icon when it differs from the primary teammate', () => {
+    const [opt] = boardSelectOptions(
+      [{ ...board('1', 'Alpha', 'b1'), icon: '🧭' } as Board],
+      branchById
+    );
+    render(<>{opt.label}</>);
+    expect(screen.getByText('🧭')).toBeInTheDocument();
+    expect(screen.queryByText('🦊')).not.toBeInTheDocument();
   });
 
   it('renders the neutral tile (never a bare name) for an assistant-less board', () => {

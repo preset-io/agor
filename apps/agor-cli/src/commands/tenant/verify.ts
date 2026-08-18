@@ -28,6 +28,7 @@ import {
 const EXIT_MISMATCH = 3;
 
 export default class TenantVerify extends Command {
+  static override summary = 'Verify live tenant data against an archive';
   static override description =
     "Verify a tenant's live data against a saved archive proof and emit strict, bounded evidence. " +
     'Compares runtime-derived database identity, re-hashes every tenant table, and (when isolation is ' +

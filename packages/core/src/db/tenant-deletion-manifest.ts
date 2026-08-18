@@ -33,10 +33,8 @@
  * the PostgreSQL schema exclusively.
  */
 
-import type { MCPCatalogEntryData } from '@agor/core/types';
 import { is } from 'drizzle-orm';
 import { getTableConfig, type PgColumn, PgTable } from 'drizzle-orm/pg-core';
-import type { mcpCatalogEntries } from './schema.postgres';
 import * as postgresSchema from './schema.postgres';
 
 /** Name of the column that scopes a row to a tenant. */
@@ -46,33 +44,37 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * Tables that legitimately hold no tenant-scoped data and must therefore be
  * left untouched by tenant deletion.
  *
- * This list is intentionally explicit: the exhaustiveness test fails if a schema
- * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
- * a new global table cannot be introduced without a conscious decision recorded
- * in this set.
+ * Currently empty: every application table carries tenant data. The machinery
+ * is kept rather than deleted with its last member, because it is what a future
+ * global table has to be declared through. Removing it would leave the next one
+ * to be classified by whichever guard noticed first — and the exhaustiveness
+ * test would then fail with "unclassified table" and no explanation of what the
+ * author is being asked to decide.
  *
- * `mcp_catalog_entries` mirrors the public MCP registry and joins a curated
- * overlay checked into this repository onto it. Every field originates outside
- * any tenant, and Agor has no tenant registry to enumerate, so a per-tenant copy
- * of the mirror could never be kept in sync. Its Postgres RLS policies keep
- * reads open to all tenants and confine writes to the `mcp_catalog_ingestion`
- * system capability.
+ * The list is deliberately explicit: the exhaustiveness test fails if a schema
+ * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
+ * a global table cannot be introduced without a conscious decision recorded in
+ * this set. A name added here needs a paragraph saying why every one of its
+ * columns originates outside every tenant, and an entry in
+ * {@link GLOBAL_TABLE_COLUMN_SOURCES}, which will not compile without one.
  *
  * **The invariant is per column, not per table.** A table qualifies only while
  * every one of its columns is sourced from outside every tenant — a public
- * registry, or a file in this repository. Adding a column derived from tenant
- * activity (a connect counter, a rating, a last-used timestamp) silently breaks
- * the justification above even though the table stays in this set: the value
- * aggregates across tenants on read, and its only writer would be a tenant
- * request path, which the write policy correctly refuses. Such a column belongs
- * in its own tenant-scoped table. `GLOBAL_TABLE_COLUMN_SOURCES` records the
- * per-column decision so the companion test can hold a reviewer to it.
+ * service, or a file in this repository. A column derived from tenant activity
+ * (a connect counter, a rating, a last-used timestamp) silently breaks the
+ * justification even though the table stays in this set: the value aggregates
+ * across tenants on read, and its only writer would be a tenant request path.
+ * Such a column belongs in its own tenant-scoped table.
  *
  * Note: Drizzle's own migration bookkeeping table (`drizzle.__drizzle_migrations`)
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
-export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_entries']);
+export const GLOBAL_TABLE_NAMES = [] as const satisfies readonly string[];
+
+export type GlobalTableName = (typeof GLOBAL_TABLE_NAMES)[number];
+
+export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(GLOBAL_TABLE_NAMES);
 
 /**
  * Where a column of a global table gets its value.
@@ -84,12 +86,12 @@ export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_
  * that appears to fit and the guard passes. Naming what each value is computed
  * *from* leaves no label a counter can honestly take:
  *
- * - `registry` — mirrored verbatim from the public MCP registry.
- * - `repo` — supplied by `curated.yaml`, checked into this repository.
- * - `computed-from-registry` — Agor computed it, from registry data alone.
+ * - `public-service` — mirrored verbatim from a public third-party service.
+ * - `repo` — supplied by a file checked into this repository.
+ * - `computed-from-public-service` — Agor computed it, from such a mirror alone.
  * - `computed-from-repo` — Agor computed it, from repository data alone.
  * - `row-identity` — this row's own identity and write timestamps.
- * - `probe` — discovered by probing a public endpoint the registry named.
+ * - `probe` — discovered by contacting a public endpoint.
  * - `composite` — a JSON column whose keys have different sources, classified
  *   one level down in {@link GLOBAL_BLOB_KEY_SOURCES}. Not a licence to skip
  *   the question: a `composite` column with no entry there is a type error.
@@ -98,59 +100,41 @@ export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(['mcp_catalog_
  * tenant-scoped table, and the absence of a label is the prompt to build one.
  */
 export type GlobalColumnSource =
-  | 'registry'
+  | 'public-service'
   | 'repo'
-  | 'computed-from-registry'
+  | 'computed-from-public-service'
   | 'computed-from-repo'
   | 'row-identity'
   | 'probe'
   | 'composite';
 
+/** The PostgreSQL tables the schema module exports, keyed by table name. */
+type SchemaTablesByName = {
+  [K in keyof typeof postgresSchema as (typeof postgresSchema)[K] extends PgTable
+    ? (typeof postgresSchema)[K]['_']['name']
+    : never]: (typeof postgresSchema)[K];
+};
+
+type ColumnsOf<N extends keyof SchemaTablesByName> = SchemaTablesByName[N] extends PgTable
+  ? keyof SchemaTablesByName[N]['_']['columns'] & string
+  : never;
+
 /**
  * Every column of every global table, classified.
  *
- * `satisfies` against the compiled Drizzle table is what makes this binding:
- * adding a column to the schema without classifying it is a type error in the
- * editor and in `tsc`, not a test failure someone sees after pushing.
+ * `satisfies` is what makes this binding rather than documentation. The
+ * required shape is derived from {@link GLOBAL_TABLE_NAMES} and, for each name
+ * in it, from that table's own compiled Drizzle columns — so declaring a table
+ * global without classifying its columns, or leaving one column out, is a type
+ * error in the editor and in `tsc`, not a test failure someone sees after
+ * pushing.
+ *
+ * With no global tables the required shape is empty and so is this. That is not
+ * the guard going quiet: the moment a name is added above, this stops
+ * compiling until every one of that table's columns is accounted for.
  */
-type ColumnsOf<T extends PgTable> = keyof T['_']['columns'] & string;
-
-export const GLOBAL_TABLE_COLUMN_SOURCES = {
-  mcp_catalog_entries: {
-    catalog_entry_id: 'row-identity',
-    created_at: 'row-identity',
-    updated_at: 'row-identity',
-    name: 'registry',
-    version: 'registry',
-    registry_updated_at: 'registry',
-    title: 'registry',
-    description: 'registry',
-    website_url: 'registry',
-    repository_url: 'registry',
-    transport: 'registry',
-    remote_url: 'registry',
-    has_remote: 'computed-from-registry',
-    has_package: 'computed-from-registry',
-    curated: 'computed-from-repo',
-    category: 'repo',
-    capability_tags: 'repo',
-    benefit: 'repo',
-    starter_prompt: 'repo',
-    permission_disclosure: 'repo',
-    icon_url: 'repo',
-    verified: 'repo',
-    popularity_rank: 'repo',
-    probed_auth_type: 'probe',
-    probed_at: 'probe',
-    auth_server_origin: 'probe',
-    registry_status: 'registry',
-    last_registry_seen_at: 'computed-from-registry',
-    data: 'composite',
-  },
-  // One key per table in GLOBAL_TABLES, spelled out rather than `Record<string,
-  // ...>` so each table is checked against its own columns.
-} satisfies {
-  mcp_catalog_entries: Record<ColumnsOf<typeof mcpCatalogEntries>, GlobalColumnSource>;
+export const GLOBAL_TABLE_COLUMN_SOURCES = {} satisfies {
+  [N in GlobalTableName]: Record<ColumnsOf<N>, GlobalColumnSource>;
 };
 
 /**
@@ -160,32 +144,17 @@ export const GLOBAL_TABLE_COLUMN_SOURCES = {
  * likely one. A JSON column is schemaless in the database: a `connect_count` or
  * a `last_used_by_tenant` key needs no migration, changes no Drizzle table, and
  * so trips nothing at the column level — while breaking the same invariant a new
- * column would. The `satisfies` below closes that by binding to the TypeScript
- * interface the blob is written through, which is the one place such a key has
- * to be declared.
+ * column would.
  *
- * Keys are optional on the interface but required here: `Required<...>` is what
- * makes an unclassified key a compile error rather than a silently absent entry.
+ * Only the presence of an entry can be required generically; a column's keys
+ * live in the TypeScript interface the blob is written through, and nothing
+ * connects a table name to that interface automatically. So a `composite`
+ * column takes a `satisfies Record<keyof Required<TheBlobInterface>, ...>` on
+ * its own entry, which is what makes an unclassified key a compile error. The
+ * companion test fails if a `composite` column has no entry here at all.
  */
-export const GLOBAL_BLOB_KEY_SOURCES = {
-  mcp_catalog_entries: {
-    data: {
-      remotes: 'registry',
-      packages: 'registry',
-      registry_icons: 'registry',
-      registry_mirrored: 'computed-from-registry',
-      registry: 'registry',
-      capabilities: 'repo',
-      curation: 'repo',
-      repository_source: 'registry',
-      probed_auth_scheme: 'probe',
-      probed_url: 'probe',
-    },
-  },
-} satisfies {
-  mcp_catalog_entries: {
-    data: Record<keyof Required<MCPCatalogEntryData>, GlobalColumnSource>;
-  };
+export const GLOBAL_BLOB_KEY_SOURCES = {} satisfies {
+  [N in GlobalTableName]: Record<string, Record<string, GlobalColumnSource>>;
 };
 
 /** Full classification of a table, including non-tenant tables. */
@@ -278,12 +247,23 @@ export function classifyPostgresTables(
    * Override the discovered schema. Only tests pass this, to assert what the
    * classifier does with a shape the real schema is guarded against ever having.
    */
-  metas: ReadonlyMap<string, TableMeta> = discoverTableMetas()
+  metas: ReadonlyMap<string, TableMeta> = discoverTableMetas(),
+  /**
+   * Override the declared global set. Only tests pass this.
+   *
+   * {@link GLOBAL_TABLES} is empty, so the guards below — a global table that
+   * grows a `tenant_id`, or one pointing a foreign key into tenant space —
+   * cannot fire against the real schema and would otherwise go untested until
+   * the next global table arrived and needed them. They protect a decision made
+   * rarely and reviewed once, which is the kind of code that has to be exercised
+   * deliberately or not at all.
+   */
+  declaredGlobal: ReadonlySet<string> = GLOBAL_TABLES
 ): TableClassificationResult {
   const global = new Set<string>();
   const direct = new Set<string>();
   for (const [name, meta] of metas) {
-    if (GLOBAL_TABLES.has(name)) {
+    if (declaredGlobal.has(name)) {
       // Checked before the exemption is granted, not after. A declaration is
       // not evidence: adding `tenant_id` to a table already named here would
       // otherwise be classified global and drop out of the deletion plan

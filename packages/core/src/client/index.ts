@@ -15,7 +15,6 @@ export type {
   ClientInput,
   FindResult,
   GatewayChannelsService,
-  MessagesBulkService,
   MessagesService,
   ReposCloneService,
   ReposLocalService,

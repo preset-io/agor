@@ -23,7 +23,7 @@ import type {
   Task,
   User,
 } from '@agor/core/types';
-import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
@@ -98,10 +98,10 @@ export async function fireAlwaysNewZoneTrigger(
     branch,
   });
 
-  // In strict/delegated, refuse to create a zone-triggered session for a user
+  // In delegated mode, refuse to create a zone-triggered session for a user
   // without a unix_username — it would fail at prompt time (or silently share
   // an identity in hosted deployments).
-  assertUnixUsernameSatisfiesMode(
+  assertExecutionHomeKeySatisfiesMode(
     user.unix_username,
     resolveExecutionSecurityMode().unixUserMode,
     `user ${userId}`

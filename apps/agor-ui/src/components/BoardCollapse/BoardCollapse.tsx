@@ -9,7 +9,7 @@ const { Text } = Typography;
 export interface BoardCollapseItem {
   key: string;
   board: Board;
-  /** Pre-resolved primary-assistant emoji (see {@link getBoardEmoji}). */
+  /** Pre-resolved board emoji (see {@link getBoardEmoji}). */
   emoji?: string;
   badge?: ReactNode;
   children: ReactNode;

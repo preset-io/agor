@@ -100,6 +100,7 @@ import { KnowledgeGraph } from '../components/KnowledgeGraph';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
+import { knowledgeAttributionDisplay } from '../knowledgeAttributionDisplay';
 import { useAgorStore } from '../store/agorStore';
 import { selectUserById } from '../store/selectors';
 import {
@@ -887,6 +888,17 @@ export function KnowledgePage({
       }),
     [activeDocId, activeDocSnapshot, documents, draftDocument]
   );
+  const activeAttribution = activeDoc
+    ? knowledgeAttributionDisplay(
+        {
+          userId: activeDoc.updated_by,
+          sessionId: activeDoc.updated_by_session_id,
+          agenticTool: activeDoc.updated_by_agentic_tool,
+          teammateName: activeDoc.updated_by_teammate_name,
+        },
+        userById
+      )
+    : null;
   const isDraftDocument = activeDoc?.document_id === DRAFT_DOCUMENT_ID;
   const activeDocIconEmoji = activeDoc ? (isEditing ? iconEmojiDraft : activeDoc.icon_emoji) : null;
   const activeDocContentReady = isKnowledgeDocumentContentReady({
@@ -3348,6 +3360,11 @@ export function KnowledgePage({
                           )}
                           <Text type="secondary">{activeDoc.path}</Text>
                         </Space>
+                        {!isEditing && activeAttribution && (
+                          <Text type="secondary">
+                            Last edited by {activeAttribution.editorLabel}
+                          </Text>
+                        )}
                         {isEditing && (
                           <Space orientation="vertical" size={4}>
                             <Checkbox
@@ -3625,6 +3642,15 @@ export function KnowledgePage({
               locale={{ emptyText: <Empty description="No version history yet" /> }}
               renderItem={(version, index) => {
                 const reuse = embeddingReuseIntoNext(version);
+                const attribution = knowledgeAttributionDisplay(
+                  {
+                    userId: version.created_by,
+                    sessionId: version.created_by_session_id,
+                    agenticTool: version.created_by_agentic_tool,
+                    teammateName: version.created_by_teammate_name,
+                  },
+                  userById
+                );
                 const targetVersion = reuse?.targetVersionId
                   ? versions.find((item) => item.version_id === reuse.targetVersionId)
                   : null;
@@ -3684,6 +3710,7 @@ export function KnowledgePage({
                       description={
                         <Space orientation="vertical" size={2}>
                           <Text type="secondary">{formatTimestamp(version.created_at)}</Text>
+                          <Text type="secondary">{attribution.editorLabel}</Text>
                           {version.change_summary && <Text>{version.change_summary}</Text>}
                         </Space>
                       }

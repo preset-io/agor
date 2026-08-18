@@ -9,10 +9,9 @@ function declaresPermissionMessage(data: unknown): boolean {
   return (data as Record<string, unknown>).type === 'permission_request';
 }
 
-/** Reject public single/bulk DTOs that attempt to mint executor-owned permission Messages. */
+/** Reject public DTOs that attempt to mint executor-owned permission Messages. */
 export function assertExternalPermissionMessageCreateAllowed(data: unknown): void {
-  const writes = Array.isArray(data) ? data : [data];
-  if (writes.some(declaresPermissionMessage)) {
+  if (declaresPermissionMessage(data)) {
     throw new Forbidden('Permission messages can only be created by a task-scoped executor');
   }
 }

@@ -25,7 +25,7 @@ execution:
   # These are assertions about the named shared home and nested Agor workspace
   # volumes mounted at the same paths on both daemons. They do not configure mounts.
   executor_storage:
-    # One shared Unix identity/home for this static smoke profile. This makes
+    # One shared execution home for this static smoke profile. This makes
     # auth-file import/logout and Tasks replica-consistent, but is not Cloud's
     # per-user isolation contract. The device-code poller remains gated.
     user_home: shared

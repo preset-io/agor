@@ -15,10 +15,9 @@ function declaresWidgetMessage(data: unknown): boolean {
   );
 }
 
-/** Reject public single/bulk DTOs that attempt to mint daemon-owned widgets. */
+/** Reject public DTOs that attempt to mint daemon-owned widgets. */
 export function assertExternalWidgetMessageCreateAllowed(data: unknown): void {
-  const writes = Array.isArray(data) ? data : [data];
-  if (writes.some(declaresWidgetMessage)) {
+  if (declaresWidgetMessage(data)) {
     throw new Forbidden('Widget messages can only be created by the daemon');
   }
 }

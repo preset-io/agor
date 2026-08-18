@@ -84,8 +84,13 @@ export interface Repository<T> {
  * bypassing the proxy + eventHook) and need a realtime event emit it explicitly
  * via `emitServiceEvent(...)`, which builds a correctly-shaped hook.
  */
-// biome-ignore lint/suspicious/noExplicitAny: Generic service adapter needs default any type
-export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> {
+export class DrizzleService<
+  // biome-ignore lint/suspicious/noExplicitAny: Generic service adapter needs default any type
+  T = any,
+  D = Partial<T>,
+  P extends Params = Params,
+  Patch = D,
+> {
   id: string;
   paginate?: PaginationOptions;
   multi: boolean | string[];
@@ -120,11 +125,11 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /** Never allow a patch/update to move a row across tenants. */
-  private stripTenantMutation(data: D | Partial<T>): D | Partial<T> {
+  private stripTenantMutation<Input>(data: Input): Input {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
     const clone = { ...(data as Record<string, unknown>) };
     delete clone.tenant_id;
-    return clone as D | Partial<T>;
+    return clone as Input;
   }
 
   constructor(
@@ -387,7 +392,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   /**
    * Patch a record (partial update)
    */
-  async patch(id: NullableId, data: D, params?: P): Promise<T | T[]> {
+  async patch(id: NullableId, data: Patch, params?: P): Promise<T | T[]> {
     if (id === null) {
       // Multi-patch not supported in simple implementation
       if (!this.multi) {

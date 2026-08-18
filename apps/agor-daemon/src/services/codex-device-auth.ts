@@ -48,7 +48,7 @@ import { codexIdTokenClaims } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
-  resolveCodexUnixIdentity,
+  resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
@@ -227,8 +227,8 @@ interface DeviceAuthAttempt {
   userId: UserID;
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
-  targetUnixUser: string | null;
-  reportedUnixUser: string | null;
+  delegatedHomeKey: string | null;
+  codexHome?: string;
   phase: CodexDeviceAuthStatus['phase'];
   deviceAuthId: string;
   userCode: string;
@@ -332,10 +332,10 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         persistVerifiedCodexAuth({
           app,
           normalized: buildDeviceAuthJson(tokens),
-          targetUnixUser: attempt.targetUnixUser,
-          reportedUnixUser: attempt.reportedUnixUser,
+          delegatedHomeKey: attempt.delegatedHomeKey,
           userId: attempt.userId,
           authUser: attempt.authUser,
+          codexHome: attempt.codexHome,
         })
       );
       attempt.planType = summary.planType;
@@ -403,16 +403,15 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         throw new BadRequest('Codex is disabled for this workspace.');
       }
 
-      // Resolve the destination identity up front so a strict-mode user with
-      // no unix_username fails fast instead of after approving the code.
-      const identity = await resolveCodexUnixIdentity(
+      // Resolve the credential destination before the user approves the code.
+      const identity = await resolveCodexCredentialRoute(
         userId,
         withTenantDatabase,
         app.get('config')
       );
       if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
+          `Cannot determine which execution home should hold this Codex login: ${identity.message}`
         );
       }
 
@@ -427,8 +426,8 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         userId,
         tenantId,
         authUser,
-        targetUnixUser: identity.unixUser,
-        reportedUnixUser: identity.reportedUnixUser,
+        delegatedHomeKey: identity.delegatedHomeKey,
+        codexHome: identity.codexHome,
         phase: 'pending',
         deviceAuthId: '',
         userCode: '',

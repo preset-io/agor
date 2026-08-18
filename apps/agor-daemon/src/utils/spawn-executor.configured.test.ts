@@ -31,14 +31,7 @@ vi.mock('../executor-tracking.js', () => ({
 }));
 
 vi.mock('@agor/core/unix', () => ({
-  attachEnvFileCleanup: vi.fn(),
-  buildSpawnArgs: vi.fn(),
-  escapeShellArg: (value: string) => `'${value.replace(/'/g, "'\\''")}'`,
-  isSecretEnvKey: vi.fn(),
-  // Real implementation (mirrors user-manager.ts) — the {unix_user} format
-  // guard under test depends on its actual charset semantics.
-  isValidUnixUsername: (username: string) => /^[a-z_][a-z0-9_-]{0,31}$/.test(username),
-  prepareImpersonationEnv: vi.fn(),
+  isValidExecutionHomeKey: (username: string) => /^[a-z_][a-z0-9_-]{0,31}$/.test(username),
 }));
 
 vi.mock('./build-resolved-config-slice.js', () => ({
@@ -99,13 +92,6 @@ describe('configured executor spawning', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const unix = await import('@agor/core/unix');
-    vi.mocked(unix.buildSpawnArgs).mockReturnValue({ cmd: 'node', args: ['executor', '--stdin'] });
-    vi.mocked(unix.isSecretEnvKey).mockReturnValue(false);
-    vi.mocked(unix.prepareImpersonationEnv).mockReset();
-    vi.mocked(unix.attachEnvFileCleanup).mockReset();
-    vi.mocked(unix.attachEnvFileCleanup).mockImplementation(() => {});
-
     const { configureExecutor } = await import('./spawn-executor');
     configureExecutor(null);
   });
@@ -117,10 +103,9 @@ describe('configured executor spawning', () => {
 
     configureExecutor({
       executor_command_template: 'kubectl run executor-{task_id} --user {unix_user} -- {command}',
-      executor_unix_user: 'agor-exec',
     });
 
-    spawnExecutor({ command: 'prompt' }, { logPrefix: '[test]' });
+    spawnExecutor({ command: 'prompt' }, { logPrefix: '[test]', delegatedHomeKey: 'agor-exec' });
 
     expect(spawnMock).toHaveBeenCalledOnce();
     expect(spawnMock).toHaveBeenCalledWith(
@@ -144,14 +129,13 @@ describe('configured executor spawning', () => {
 
     configureExecutor({
       executor_command_template: 'configured {unix_user} {command}',
-      executor_unix_user: 'configured-user',
     });
 
     spawnExecutor(
       { command: 'git.clone' },
       {
         executorCommandTemplate: 'explicit {unix_user} {command}',
-        asUser: 'explicit-user',
+        delegatedHomeKey: 'explicit-user',
       }
     );
 
@@ -170,7 +154,7 @@ describe('configured executor spawning', () => {
       { command: 'branch.files.browse' },
       {
         executorCommandTemplate: 'launch --user {unix_user} -- {command}',
-        asUser: 'alice',
+        delegatedHomeKey: 'alice',
       }
     );
 
@@ -232,14 +216,12 @@ describe('configured executor spawning', () => {
 
     configureExecutor({
       executor_command_template: 'global {command}',
-      executor_unix_user: 'global-user',
     });
     const injectedSpawner = createConfiguredSpawner({
       executor_command_template: 'injected {unix_user} {command}',
-      executor_unix_user: 'injected-user',
     });
 
-    injectedSpawner({ command: 'prompt' });
+    injectedSpawner({ command: 'prompt' }, { delegatedHomeKey: 'injected-user' });
 
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
@@ -566,7 +548,7 @@ describe('configured executor spawning', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       'node',
-      ['executor', '--stdin'],
+      [expect.any(String), '--stdin'],
       expect.objectContaining({
         env: expect.objectContaining({
           DAEMON_URL: expect.any(String),
@@ -596,7 +578,7 @@ describe('configured executor spawning', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       'node',
-      ['executor', '--stdin'],
+      [expect.any(String), '--stdin'],
       expect.objectContaining({
         env: expect.objectContaining({
           LOG_LEVEL: 'info',
@@ -645,7 +627,7 @@ describe('configured executor spawning', () => {
     }
   });
 
-  it('rejects a missing generic cwd before creating an impersonation env file', async () => {
+  it('rejects a missing generic cwd before spawning', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'agor-executor-cwd-'));
     const executorPath = path.join(dir, 'agor-executor');
     const missingCwd = path.join(dir, 'missing');
@@ -654,17 +636,12 @@ describe('configured executor spawning', () => {
     process.env.AGOR_EXECUTOR_PATH = executorPath;
 
     try {
-      const unix = await import('@agor/core/unix');
-      vi.mocked(unix.prepareImpersonationEnv).mockReturnValue({
-        inlineEnv: { PATH: '/usr/bin' },
-        envFilePath: path.join(dir, 'should-not-exist.env'),
-      });
       const { runExecutorCommand } = await import('./spawn-executor');
       const result = await runExecutorCommand(
         { command: 'test.inspect', params: {} },
         {
           cwd: missingCwd,
-          asUser: 'alice',
+          delegatedHomeKey: 'alice',
           env: { PATH: '/usr/bin', OPENAI_API_KEY: 'must-not-write' },
         }
       );
@@ -676,8 +653,6 @@ describe('configured executor spawning', () => {
           message: `Refusing to spawn: cwd does not exist on disk: ${missingCwd}`,
         },
       });
-      expect(unix.prepareImpersonationEnv).not.toHaveBeenCalled();
-      expect(unix.attachEnvFileCleanup).not.toHaveBeenCalled();
       expect(spawnMock).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.AGOR_EXECUTOR_PATH;
@@ -695,7 +670,6 @@ describe('configured executor spawning', () => {
       const { startOpenCodeOAuthExecutor } = await import(
         '../integrations/opencode/oauth-executor'
       );
-      const unix = await import('@agor/core/unix');
       const handle = startOpenCodeOAuthExecutor(
         OAUTH_DATA_HOME,
         {
@@ -709,13 +683,8 @@ describe('configured executor spawning', () => {
 
       expect(spawnMock).toHaveBeenCalledWith(
         'node',
-        ['executor', '--stdin'],
-        expect.objectContaining({ detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
-      );
-      expect(unix.buildSpawnArgs).toHaveBeenCalledWith(
-        'node',
         [expect.any(String), '--interactive-command'],
-        expect.any(Object)
+        expect.objectContaining({ detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
       );
       proc.stdout.emit(
         'data',
@@ -747,9 +716,7 @@ describe('configured executor spawning', () => {
         success: false,
         error: { code: 'OPENCODE_OAUTH_CANCELLED' },
       });
-      expect(trackMock).toHaveBeenCalledWith(
-        expect.objectContaining({ pid: 4242, asUser: undefined })
-      );
+      expect(trackMock).toHaveBeenCalledWith(expect.objectContaining({ pid: 4242 }));
       expect(containMock).toHaveBeenCalledOnce();
       expect(untrackMock).toHaveBeenCalledOnce();
       expect(JSON.stringify(await handle.result)).not.toContain('synthetic-secret-input');
@@ -1246,7 +1213,7 @@ describe('substituteTemplateVariables', () => {
     { name: 'shell metacharacters', value: 'alice; rm -rf /' },
     { name: 'path traversal', value: '../other-tenant' },
     { name: 'command substitution', value: '$(whoami)' },
-    { name: 'uppercase (outside the Unix username charset)', value: 'Alice' },
+    { name: 'uppercase (outside the execution home-key charset)', value: 'Alice' },
   ])('refuses a malformed {unix_user} value: $name', async ({ value }) => {
     const { substituteTemplateVariables } = await import('./spawn-executor');
 
@@ -1255,6 +1222,6 @@ describe('substituteTemplateVariables', () => {
     // is the control — it must reject both shell and path-traversal shapes.
     expect(() =>
       substituteTemplateVariables('launch --user {unix_user}', { unix_user: value })
-    ).toThrow('{unix_user} value is not a valid Unix username');
+    ).toThrow('{unix_user} value is not a valid execution home key');
   });
 });

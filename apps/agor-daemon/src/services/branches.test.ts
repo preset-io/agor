@@ -165,7 +165,7 @@ function createServiceHarness() {
   };
 
   const reposService = {
-    get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo', unix_group: null })),
+    get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo' })),
   };
 
   // The `branches` self-reference is used by updateEnvironment to manually
@@ -313,7 +313,7 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
 
     const environmentUpdates: Array<Record<string, unknown>> = [];
@@ -418,7 +418,7 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
       currentEnvironment = {
@@ -486,7 +486,7 @@ describe('BranchesService environment start async behavior', () => {
     );
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     const executeWebhookSpy = vi
       .spyOn(service as never, 'executeEnvironmentWebhook')
@@ -552,7 +552,7 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     mockedRunExecutorCommand.mockResolvedValue({
       success: true,

@@ -14,11 +14,9 @@
  * 1. Local subprocess (default): Spawns executor as a child process
  * 2. Templated/remote: Uses executor_command_template for k8s/docker/remote execution
  *
- * IMPERSONATION: When asUser is provided, the executor is spawned via
- * `sudo -n -u $asUser bash -c '...'` to run as the target Unix user with
- * fresh group memberships. Secret-looking env vars are routed through a
- * 0600 env-file owned by the target user so their values never appear in
- * argv / /proc/<pid>/cmdline.
+ * Local executors always run as the daemon user. External launchers receive
+ * trusted tenant/user identity through template variables and enforce their
+ * own execution boundary.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
@@ -31,14 +29,7 @@ import {
   EXECUTOR_RESULT_PREFIX,
   INTERACTIVE_EXECUTOR_EVENT_PREFIX,
 } from '@agor/core/executor-protocol';
-import {
-  attachEnvFileCleanup,
-  buildSpawnArgs,
-  escapeShellArg,
-  isSecretEnvKey,
-  isValidUnixUsername,
-  prepareImpersonationEnv,
-} from '@agor/core/unix';
+import { isValidExecutionHomeKey } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
@@ -50,8 +41,13 @@ import {
   untrackExecutorProcess,
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
+import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
 
 let configuredDaemonUrl: string | null = null;
+
+function escapeShellArg(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 function resolveExecutorLogLevel(env: Record<string, string>): string {
   return env.LOG_LEVEL || getCurrentLogLevel();
@@ -77,14 +73,15 @@ export function configureDaemonUrl(url: string): void {
 let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
 let requireExecutorTenantContext = false;
 
-/** Set default executor template + impersonation user from config. Call once at daemon startup. */
+/** Set default executor template and sandbox policy from config. */
 export function configureExecutor(
   config?: ExecutorConfig | null,
-  options: { requireTenantContext?: boolean } = {}
+  options: { requireTenantContext?: boolean; sandboxRuntimePaths?: SandboxRuntimePaths } = {}
 ): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
-    asUser: config?.executor_unix_user || undefined,
+    sandbox: config?.sandbox?.enabled ? config.sandbox : undefined,
+    sandboxRuntimePaths: options.sandboxRuntimePaths,
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
 
@@ -95,8 +92,8 @@ export function configureExecutor(
       `[Executor] Command template configured (first line): ${preview}${preview.length === 80 ? '…' : ''}`
     );
   }
-  if (configuredExecutorDefaults.asUser) {
-    console.log(`[Executor] Default impersonation user: ${configuredExecutorDefaults.asUser}`);
+  if (configuredExecutorDefaults.sandbox && !configuredExecutorDefaults.sandboxRuntimePaths) {
+    throw new Error('Sandbox executor configuration requires resolved runtime paths');
   }
 }
 
@@ -104,8 +101,6 @@ export interface ExecutorTemplateVariables {
   task_id?: string;
   command?: string;
   unix_user?: string;
-  unix_user_uid?: number;
-  unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
   /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
@@ -130,8 +125,8 @@ export interface SpawnExecutorOptions {
   cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
-  /** When set, spawns via `sudo -n -u $asUser`. Secrets go through a 0600 env-file. */
-  asUser?: string | null;
+  /** Opaque legacy home key forwarded only to an external delegated launcher. */
+  delegatedHomeKey?: string | null;
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
   /**
@@ -144,8 +139,6 @@ export interface SpawnExecutorOptions {
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
-  /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
-  preparedEnvFilePath?: string;
 }
 
 export interface ExecutorCommandResult {
@@ -245,12 +238,12 @@ export function substituteTemplateVariables(
 
   // `{unix_user}` is rendered into a `sh -c` command AND is typically used by
   // launchers as a path segment (per-user home mounts), so a malformed value
-  // is both a shell-injection and a path-traversal vector. The Unix username
+  // is both a shell-injection and a path-traversal vector. The home-key
   // charset excludes shell metacharacters, `/` and `.`, so format validation
   // is the control here (stronger than escaping, which would not stop `../`).
-  if (variables.unix_user !== undefined && !isValidUnixUsername(variables.unix_user)) {
+  if (variables.unix_user !== undefined && !isValidExecutionHomeKey(variables.unix_user)) {
     throw new Error(
-      'executor_command_template {unix_user} value is not a valid Unix username; refusing to execute'
+      'executor_command_template {unix_user} value is not a valid execution home key; refusing to execute'
     );
   }
   if (
@@ -268,8 +261,6 @@ export function substituteTemplateVariables(
     task_id: variables.task_id,
     command: variables.command,
     unix_user: variables.unix_user,
-    unix_user_uid: variables.unix_user_uid,
-    unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
     user_id: variables.user_id,
@@ -357,7 +348,7 @@ export function findExecutorPath(): string {
  * - Logs stdout/stderr to daemon logs
  *
  * The executor is responsible for:
- * - Completing all operations (git, DB updates, Unix groups)
+ * - Completing filesystem and database lifecycle operations
  * - Communicating with daemon via Feathers WebSocket client
  * - Handling its own errors, logging, and status updates
  * - Emitting events that the UI can display as toasts
@@ -376,20 +367,16 @@ export function spawnExecutor(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const asUser =
-    options.asUser !== undefined ? options.asUser || undefined : configuredExecutorDefaults.asUser;
-
   const payloadWithConfig = withResolvedConfig(payload);
 
   if (executorCommandTemplate) {
     spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
-      asUser,
       executorCommandTemplate,
       templateVariables: {
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
-        unix_user: asUser,
+        unix_user: options.delegatedHomeKey || undefined,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         executor_type: 'executor',
         ...templateVariables,
@@ -398,7 +385,7 @@ export function spawnExecutor(
       logPrefix,
     });
   } else {
-    spawnExecutorLocal(payloadWithConfig, { ...options, asUser });
+    spawnExecutorLocal(payloadWithConfig, options);
   }
 }
 
@@ -445,15 +432,82 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     return;
   }
 
-  const { executorPath, cwd, asUser, envWithDaemonUrl, envFilePath, inlineEnv, cmd, args } =
-    prepareLocalExecutorSpawn(options, '--stdin', location);
+  const { executorPath, cwd, envWithDaemonUrl, cmd, args } = prepareLocalExecutorSpawn(
+    options,
+    '--stdin',
+    location
+  );
 
-  if (asUser) {
-    // Safe summary only — never log secret values or their key names.
-    const safeEnvKeys = Object.keys(inlineEnv ?? {}).filter((key) => !isSecretEnvKey(key));
-    console.log(
-      `${logPrefix} Spawning executor as user=${asUser} tool=${payload.command ?? '?'} envKeys=[${safeEnvKeys.join(',')}]${envFilePath ? ' (secrets in env-file)' : ''}`
-    );
+  // OS-level sandbox wrap (SRT) — covers ALL tools at this one chokepoint.
+  let spawnCmd = cmd;
+  let spawnArgs = args;
+  let spawnEnv = envWithDaemonUrl;
+  // Sandbox around the WORK directory (the branch the agent operates in): it is
+  // `payload.params.cwd` for prompt/terminal tasks, or top-level `payload.cwd`
+  // for some commands — NOT the executor process cwd (the executor package dir
+  // for prompt tasks). No work dir (e.g. repo-level ops) ⇒ no wrap.
+  const paramsCwd = (payload.params as { cwd?: unknown } | undefined)?.cwd;
+  const candidateCwd =
+    typeof payload.cwd === 'string' && payload.cwd.length > 0
+      ? payload.cwd
+      : typeof paramsCwd === 'string' && paramsCwd.length > 0
+        ? paramsCwd
+        : undefined;
+  const sandboxWorkdir = candidateCwd;
+  // Authoritative mount inputs the daemon resolved from its own DB state and
+  // threaded through `payload.params` (see register-services) — the sandbox
+  // never derives these from disk.
+  const sandboxParams = payload.params as
+    | {
+        sandboxBaseRepoPath?: unknown;
+        sandboxHomeStore?: unknown;
+        sandboxWorktreesRoot?: unknown;
+        principalBranchAccess?: unknown;
+      }
+    | undefined;
+  const sandboxBaseRepoPath =
+    typeof sandboxParams?.sandboxBaseRepoPath === 'string'
+      ? sandboxParams.sandboxBaseRepoPath
+      : undefined;
+  const sandboxHomeStore =
+    typeof sandboxParams?.sandboxHomeStore === 'string'
+      ? sandboxParams.sandboxHomeStore
+      : undefined;
+  const sandboxWorktreesRoot =
+    typeof sandboxParams?.sandboxWorktreesRoot === 'string'
+      ? sandboxParams.sandboxWorktreesRoot
+      : undefined;
+  const principalBranchAccess =
+    sandboxParams?.principalBranchAccess === 'read' ||
+    sandboxParams?.principalBranchAccess === 'none'
+      ? sandboxParams.principalBranchAccess
+      : 'write';
+  if (sandboxWorkdir) {
+    try {
+      const wrap = buildSandboxWrap({
+        sandbox: configuredExecutorDefaults.sandbox,
+        branchPath: sandboxWorkdir,
+        cmd,
+        args,
+        baseRepoPath: sandboxBaseRepoPath,
+        ownerHomeStore: sandboxHomeStore,
+        worktreesRoot: sandboxWorktreesRoot,
+        branchAccess: principalBranchAccess,
+        runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
+      });
+      if (wrap) {
+        spawnCmd = wrap.cmd;
+        spawnArgs = wrap.args;
+        spawnEnv = { ...envWithDaemonUrl, ...wrap.extraEnv };
+        console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
+      }
+    } catch (err) {
+      console.error(
+        `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+      observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
+      return;
+    }
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
@@ -465,26 +519,19 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
-  const executorProcess = spawn(cmd, args, {
+  const executorProcess = spawn(spawnCmd, spawnArgs, {
     cwd,
-    env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
+    env: { ...spawnEnv },
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: process.platform !== 'win32',
   });
-
-  // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
-  // file before exec, but if sudo/bash failed to launch — or `set -eu`
-  // aborted the source step — the file may remain. attachEnvFileCleanup
-  // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
-  attachEnvFileCleanup(executorProcess, { envFilePath, asUser });
 
   const spawnReady = options.onSpawn?.(executorProcess, { mode: 'local' });
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
     // child_process may emit `error` without a following `exit` when the
-    // executable itself cannot be spawned (for example, missing sudo in a dev
-    // image). Surface that through the normal onExit safety net so callers do
+    // executable itself cannot be spawned. Surface that through the normal onExit safety net so callers do
     // not leave persistent rows stuck in in-progress states.
     reportExit(127);
   });
@@ -670,55 +717,12 @@ function resolveLocalExecutorCwdFailure(
   };
 }
 
-function definedEnvironment(values: Record<string, string | undefined>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
-  );
-}
-
-function executorEnvironmentForImpersonation(env: Record<string, string>): Record<string, string> {
-  return definedEnvironment({
-    PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
-    NODE_ENV: env.NODE_ENV,
-    LOG_LEVEL: env.LOG_LEVEL,
-    // Version-aligned agentic tool packages are system runtime metadata, not
-    // tenant credentials. Preserve their absolute read-only location when an
-    // executor crosses a Unix identity boundary.
-    AGOR_VERSION: env.AGOR_VERSION,
-    AGOR_AGENTIC_TOOLS_DIR: env.AGOR_AGENTIC_TOOLS_DIR,
-    AGOR_MANAGED_AGENTIC_TOOLS: env.AGOR_MANAGED_AGENTIC_TOOLS,
-    ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-    ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
-    ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL,
-    CLAUDE_CODE_OAUTH_TOKEN: env.CLAUDE_CODE_OAUTH_TOKEN,
-    OPENAI_API_KEY: env.OPENAI_API_KEY,
-    OPENAI_BASE_URL: env.OPENAI_BASE_URL,
-    GEMINI_API_KEY: env.GEMINI_API_KEY,
-    GOOGLE_API_KEY: env.GOOGLE_API_KEY,
-    GIT_CONFIG_PARAMETERS: env.GIT_CONFIG_PARAMETERS,
-  });
-}
-
 function resolveLocalExecutorEnvironment(
-  options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>,
-  asUser: string | undefined
+  options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>
 ): Record<string, string> {
   const env = options.env ?? (process.env as Record<string, string>);
-  const source = options.preparedEnv ?? (asUser ? executorEnvironmentForImpersonation(env) : env);
+  const source = options.preparedEnv ?? env;
   return withDaemonExecutorEnv(source, getDaemonUrl());
-}
-
-function prepareLocalExecutorImpersonation(
-  asUser: string | undefined,
-  env: Record<string, string>,
-  preparedEnvFilePath: string | undefined
-): { inlineEnv?: Record<string, string>; envFilePath?: string } {
-  if (!asUser) return {};
-  if (!preparedEnvFilePath) return prepareImpersonationEnv({ asUser, env });
-  return {
-    inlineEnv: Object.fromEntries(Object.entries(env).filter(([key]) => !isSecretEnvKey(key))),
-    envFilePath: preparedEnvFilePath,
-  };
 }
 
 function prepareLocalExecutorSpawn(
@@ -727,26 +731,13 @@ function prepareLocalExecutorSpawn(
   location = resolveLocalExecutorLocation(options)
 ) {
   const { executorPath, cwd } = location;
-  const asUser = options.asUser || undefined;
-  const envWithDaemonUrl = resolveLocalExecutorEnvironment(options, asUser);
-  const prepared = prepareLocalExecutorImpersonation(
-    asUser,
-    envWithDaemonUrl,
-    options.preparedEnvFilePath
-  );
-  const command = buildSpawnArgs('node', [executorPath, mode], {
-    asUser,
-    env: asUser ? prepared.inlineEnv : undefined,
-    envFilePath: prepared.envFilePath,
-  });
+  const envWithDaemonUrl = resolveLocalExecutorEnvironment(options);
   return {
-    ...command,
+    cmd: 'node',
+    args: [executorPath, mode],
     executorPath,
     cwd,
-    asUser,
     envWithDaemonUrl,
-    inlineEnv: prepared.inlineEnv,
-    envFilePath: prepared.envFilePath,
   };
 }
 
@@ -880,30 +871,19 @@ export function startInteractiveExecutor(
   }
 
   const { timeoutMs = 10 * 60_000 } = options;
-  const rawAsUser = options.asUser;
-  const asUser =
-    rawAsUser !== undefined
-      ? rawAsUser || undefined
-      : configuredExecutorDefaults.asUser || undefined;
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
   if (cwdFailure) return failedInteractiveExecutorHandle(cwdFailure);
-  const prepared = prepareLocalExecutorSpawn(
-    { ...options, asUser },
-    '--interactive-command',
-    location
-  );
-  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
+  const prepared = prepareLocalExecutorSpawn(options, '--interactive-command', location);
+  const { cmd, args, cwd, envWithDaemonUrl } = prepared;
   const child = spawn(cmd, args, {
     cwd,
-    env: asUser ? undefined : { ...envWithDaemonUrl },
+    env: { ...envWithDaemonUrl },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
-  attachEnvFileCleanup(child, { envFilePath, asUser });
-
   let resolveResult!: (result: ExecutorCommandResult) => void;
   const result = new Promise<ExecutorCommandResult>((resolve) => {
     resolveResult = resolve;
@@ -953,7 +933,7 @@ export function startInteractiveExecutor(
     resolveResult(spawnFailure);
     return failedInteractiveExecutorHandle(spawnFailure);
   }
-  trackExecutorProcess({ sessionId: attemptId, taskId, pid: child.pid, asUser });
+  trackExecutorProcess({ sessionId: attemptId, taskId, pid: child.pid });
 
   const controls = {
     deliver: input.deliver,
@@ -1100,21 +1080,17 @@ export async function runExecutorCommand(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const asUser =
-    options.asUser !== undefined ? options.asUser || undefined : configuredExecutorDefaults.asUser;
-
   const payloadWithConfig = withResolvedConfig(payload);
 
   if (executorCommandTemplate) {
     return runExecutorCommandWithTemplate(payloadWithConfig, {
       ...options,
       timeoutMs,
-      asUser,
       executorCommandTemplate,
       templateVariables: {
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
-        unix_user: asUser,
+        unix_user: options.delegatedHomeKey || undefined,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
         executor_type: 'executor',
         ...templateVariables,
@@ -1124,7 +1100,7 @@ export async function runExecutorCommand(
     });
   }
 
-  return runExecutorCommandLocal(payloadWithConfig, { ...options, timeoutMs, asUser, logPrefix });
+  return runExecutorCommandLocal(payloadWithConfig, { ...options, timeoutMs, logPrefix });
 }
 
 function runExecutorCommandLocal(
@@ -1132,13 +1108,11 @@ function runExecutorCommandLocal(
   options: RunExecutorCommandOptions
 ): Promise<ExecutorCommandResult> {
   const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
-  const rawAsUser = options.asUser;
-  const asUser = rawAsUser || undefined;
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
   if (cwdFailure) return Promise.resolve(cwdFailure);
-  const prepared = prepareLocalExecutorSpawn({ ...options, asUser }, '--stdin', location);
-  const { cmd, args, cwd, envWithDaemonUrl, envFilePath } = prepared;
+  const prepared = prepareLocalExecutorSpawn(options, '--stdin', location);
+  const { cmd, args, cwd, envWithDaemonUrl } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
@@ -1149,12 +1123,10 @@ function runExecutorCommandLocal(
 
     const child = spawn(cmd, args, {
       cwd,
-      env: asUser ? undefined : { ...envWithDaemonUrl },
+      env: { ...envWithDaemonUrl },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false,
     });
-
-    attachEnvFileCleanup(child, { envFilePath, asUser });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -1426,16 +1398,15 @@ export function generateScopedServiceToken(
  * Configuration for executor spawning.
  * Loaded from ~/.agor/config.yaml execution section.
  */
-export type ExecutorConfig = Pick<
-  AgorExecutionSettings,
-  'executor_command_template' | 'executor_unix_user'
->;
+export type ExecutorConfig = Pick<AgorExecutionSettings, 'executor_command_template' | 'sandbox'>;
 
 interface ExecutorSpawnDefaults {
   /** Executor command template for containerized execution */
   executorCommandTemplate?: string;
-  /** Unix user to run executors as */
-  asUser?: string;
+  /** OS-level sandbox policy (SRT) wrapped around every local executor spawn. */
+  sandbox?: AgorExecutionSettings['sandbox'];
+  /** Deployment paths captured from the immutable startup configuration. */
+  sandboxRuntimePaths?: SandboxRuntimePaths;
 }
 
 /** DI-based factory that bakes execution config into a spawner, independent of module-level defaults. */
@@ -1450,10 +1421,6 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
       // factory remains an explicit dependency-injection variant rather than
       // accidentally inheriting whatever configureExecutor() last installed.
       executorCommandTemplate: executionConfig?.executor_command_template ?? null,
-      asUser:
-        options.asUser !== undefined
-          ? options.asUser
-          : (executionConfig?.executor_unix_user ?? null),
     });
   };
 }

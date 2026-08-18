@@ -10,6 +10,7 @@ import { Transform } from 'node:stream';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
+  requireDeploymentId,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -22,14 +23,11 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
-  MCPServerRepository,
   MessagesRepository,
-  RepoRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
-  SessionMCPServerRepository,
-  SessionRepository,
+  type SessionRepository,
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
@@ -99,7 +97,6 @@ import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
-  MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
   TasksServiceImpl,
@@ -112,13 +109,11 @@ import {
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
-import { assertExternalProviderFailureMetadataAllowed } from './hooks/classify-missing-credential.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
-import { assertExternalPermissionMessageCreateAllowed } from './permissions/permission-message-boundary.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
@@ -194,7 +189,6 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
-import { assertExternalWidgetMessageCreateAllowed } from './widgets/message-boundary.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
@@ -246,19 +240,6 @@ export interface RouteParams extends Params {
   _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
 }
 
-export function createMessagesBulkRouteService(
-  messagesService: Pick<MessagesServiceImpl, 'createMany'>
-) {
-  return {
-    async create(data: unknown, _params: RouteParams) {
-      assertExternalProviderFailureMetadataAllowed(data);
-      assertExternalWidgetMessageCreateAllowed(data);
-      assertExternalPermissionMessageCreateAllowed(data);
-      return messagesService.createMany(data as Message[]);
-    },
-  };
-}
-
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
 export function rejectRemovedClaudeCliRestart(): never {
   throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
@@ -305,7 +286,6 @@ export interface RegisterRoutesContext {
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
-  messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
   branchRepository: BranchRepository;
   usersRepository: UsersRepository;
@@ -408,10 +388,10 @@ export function createUploadAuthMiddleware(input: {
 }
 
 export async function authorizeForceFailRoute(input: {
-  session: Pick<Session, 'branch_id'>;
+  session: Pick<Session, 'session_id' | 'branch_id'>;
   params: RouteParams;
   body: Record<string, unknown>;
-  findActiveTasks: () => Promise<readonly Task[]>;
+  findTask: (taskId: string) => Promise<Task | undefined>;
   isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
 }): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
   const userId = input.params.user?.user_id;
@@ -430,10 +410,14 @@ export async function authorizeForceFailRoute(input: {
   ) {
     throw new BadRequest('Force-fail requires the exact Task termination request.');
   }
-  const task = findMatchingUnverifiedTerminationTask(await input.findActiveTasks(), {
-    taskId: input.body.task_id,
-    terminationRequestedAt: input.body.termination_requested_at,
-  });
+  const candidate = await input.findTask(input.body.task_id);
+  const task =
+    candidate?.session_id === input.session.session_id
+      ? findMatchingUnverifiedTerminationTask([candidate], {
+          taskId: input.body.task_id,
+          terminationRequestedAt: input.body.termination_requested_at,
+        })
+      : undefined;
   if (!task) {
     throw new Conflict(
       'The Task termination state changed. Review the current Task before force-failing.'
@@ -469,7 +453,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     distributedWorkIdentity,
     deployment,
     sessionsService,
-    messagesService,
     boardsService,
     branchRepository,
     usersRepository: _usersRepository,
@@ -841,30 +824,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Initialize repositories and permission service
+  // Message streaming routes
   // ============================================================================
-
-  const _messagesRepo = new MessagesRepository(db);
-  const _sessionsRepo = new SessionRepository(db);
-  const _sessionMCPRepo = new SessionMCPServerRepository(db);
-  const _mcpServerRepo = new MCPServerRepository(db);
-  const _branchesRepo = new BranchRepository(db);
-  const _reposRepo = new RepoRepository(db);
-  const _tasksRepo = new TaskRepository(db);
-
-  // ============================================================================
-  // Messages bulk + streaming routes
-  // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/messages/bulk',
-    createMessagesBulkRouteService(messagesService),
-    {
-      create: { role: ROLES.MEMBER, action: 'create messages' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,
@@ -941,10 +902,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // These routes re-emit onto the `messages` / `tasks` services (which carry
-  // the real streaming payloads); their OWN default `created` event is just the
-  // `{ success: true }` ack and must never broadcast — one per chunk otherwise
-  // reaches every service-account socket. Publish it to no one.
+  // These routes re-emit canonical events onto the `messages` / `tasks`
+  // services. Their own `{ success: true }` acknowledgements must not
+  // broadcast as service events.
   app.service('/messages/streaming').publish(() => []);
   app.service('/tasks/streaming').publish(() => []);
 
@@ -1450,8 +1410,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
     // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+    // (`createPending` for the prompt/queue/callback paths and `create` for
+    // pre-created tasks run via `/tasks/:id/run`), so it survives the queue
     // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
     // that don't carry `queued_by_user_id` and is therefore not authoritative.
     // See `./utils/build-prompter-prefix.ts` for the helper + tests.
@@ -1620,6 +1580,59 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
         id = session.session_id;
         const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
+
+        // Branch RBAC — fail fast before admitting a Task. This route creates
+        // its Task via `taskRepo.createPending` (repository admission), which
+        // deliberately bypasses `TasksService.create` and therefore its
+        // `ensureCanPromptInSession` hook. Without this check a 'session'-tier
+        // collaborator prompting ANOTHER user's session is admitted rather than
+        // rejected: the Task queues and the executor then runs under the session
+        // OWNER's identity/home (in `unix_user_mode: sandbox`, the owner's
+        // per-user home store), so the prompt either silently impersonates the
+        // owner or stalls into a hung task instead of returning a clean 403.
+        // Mirrors the `/tasks/:id/run` (~L1832) and upload (~L2233) routes.
+        // Internal/daemon callers (spawn-prompt forward, widget submissions,
+        // scheduler, gateway) are provider-less and skipped, as are executor
+        // service accounts.
+        const promptBranchId = session.branch_id;
+        const isInternalPrompt = !params.provider;
+        const isPromptServiceAccount =
+          (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (branchRbacEnabled && !isInternalPrompt && !isPromptServiceAccount && promptBranchId) {
+          const promptUserId = params.user?.user_id as UUID | undefined;
+          if (!promptUserId) {
+            throw new NotAuthenticated('Authentication required to prompt a session');
+          }
+          const access = await runWithTenantDatabaseScope(db, promptTenantId, async () => {
+            const wt = await branchRepository.findById(promptBranchId);
+            if (!wt) return null;
+            const isOwner = await branchRepository.isOwner(wt.branch_id, promptUserId);
+            const branchPermission = await branchRepository.resolveUserPermission(wt, promptUserId);
+            return { branchPermission, isOwner, wt };
+          });
+          if (!access) {
+            throw new NotFound(`Branch ${promptBranchId} not found`);
+          }
+          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            branch: access.wt,
+            session,
+            userId: promptUserId,
+            isOwner: access.isOwner,
+            userRole: params.user?.role,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+            branchPermission: access.branchPermission,
+          });
+          if (!allowed) {
+            throw new Forbidden(
+              effectiveLevel === 'session'
+                ? `You have 'session' permission — you can only prompt sessions you created. ` +
+                    `This session was created by another user. Ask a branch owner to upgrade ` +
+                    `your access to 'prompt' if you need to prompt other users' sessions.`
+                : `You need 'prompt' permission to prompt this session. You have ` +
+                    `'${effectiveLevel}' permission.`
+            );
+          }
+        }
 
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
           if (!data.idempotencyTaskId) return null;
@@ -2703,7 +2716,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 session,
                 params,
                 body,
-                findActiveTasks: () => findActiveTasksForSession(app, session.session_id, params),
+                findTask: async (taskId) => {
+                  try {
+                    return await app.service('tasks').get(taskId, params);
+                  } catch (error) {
+                    if ((error as { code?: number }).code === 404) return undefined;
+                    throw error;
+                  }
+                },
                 isBranchOwner: (branchId, userId) =>
                   stopRouteRepositories.branchRepo.isOwner(branchId, userId),
               });
@@ -3109,28 +3129,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Tasks custom routes
   // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        if (!Array.isArray(data)) throw new BadRequest('Task import requires an array');
-        const createdBy = params.user?.user_id;
-        if (!createdBy) throw new NotAuthenticated('Authentication required to import tasks');
-        return tasksService.createMany(
-          (data as Partial<Task>[]).map((task) => ({
-            ...task,
-            created_by: createdBy as UUID,
-          }))
-        );
-      },
-    },
-    {
-      create: { role: ROLES.ADMIN, action: 'import tasks' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,
@@ -4354,6 +4352,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
+        service: 'agor-daemon',
+        deploymentId: requireDeploymentId(config),
+        // Present only for daemons detached by `agor daemon start`. The CLI
+        // compares this opaque ID with its local ownership record before it
+        // sends a signal, preventing a stale/recycled PID from being killed.
+        managedInstanceId: process.env.AGOR_MANAGED_DAEMON_INSTANCE_ID,
         status:
           healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
             ? 'ok'
@@ -4392,7 +4396,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           managedEnvsExecutionMode:
             config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           // True when the daemon runs in a multi-user Unix isolation mode
-          // (insulated/strict). UI hides "trust everyone on this instance"
+          // (sandbox). UI hides "trust everyone on this instance"
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',

@@ -32,6 +32,7 @@ import {
 export const tenantDeleteErrorMarker = formatPortabilityError;
 
 export default class TenantDelete extends Command {
+  static override summary = 'Delete all data owned by one tenant';
   static override description =
     'Permanently delete all data belonging to a single tenant in a standalone multi-tenant PostgreSQL runtime. Idempotent and verified. ' +
     'Preconditions: quiesce tenant writes and schema changes for the entire operation, and ensure every foreign-key reference between tenant rows is tenant-consistent. ' +

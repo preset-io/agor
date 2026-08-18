@@ -15,6 +15,7 @@ import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireAgenticToolInstallLock,
+  assertManagedIntegrationPermissions,
   findRestorableAgenticTools,
   installManagedIntegration,
   listInstalledAgenticTools,
@@ -23,6 +24,7 @@ import {
   removeManagedAgorVersion,
   removeManagedInstallDebris,
   removeManagedIntegration,
+  repairManagedIntegrationPermissions,
   writeAgenticToolSelectionManifest,
 } from './agentic-tool-integrations.js';
 
@@ -143,6 +145,65 @@ describe('listInstalledAgenticTools', () => {
 
 describe('managed integration cleanup', () => {
   it.runIf(process.platform !== 'win32')(
+    'disables lifecycle scripts before accepting an install',
+    async () => {
+      const root = await createRoot();
+      const bin = join(root, 'fixture-bin');
+      const capturedArguments = join(root, 'npm-arguments.json');
+      await mkdir(bin);
+      const npm = join(bin, 'npm');
+      await writeFile(
+        npm,
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const prefix = args[args.indexOf('--prefix') + 1];
+const project = JSON.parse(fs.readFileSync(path.join(prefix, 'package.json'), 'utf8'));
+if (project.private !== true || project.allowScripts !== undefined || project.dependencies['@agor-live/codex'] !== '0.24.0') process.exit(65);
+const writePackage = (name, source) => {
+  const directory = path.join(prefix, 'node_modules', ...name.split('/'));
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name, type: 'module', exports: './index.js', version: '0.24.0' }));
+  fs.writeFileSync(path.join(directory, 'index.js'), source);
+};
+writePackage('@agor-live/codex', "export const AGOR_INTEGRATION_VERSION = '0.24.0'; export const sdk = {};");
+writePackage('@openai/codex-sdk', 'export const fixture = true;');
+const privatePackage = path.join(prefix, 'node_modules', '@agor-live', 'codex');
+fs.chmodSync(privatePackage, 0o700);
+fs.chmodSync(path.join(privatePackage, 'package.json'), 0o600);
+fs.chmodSync(path.join(privatePackage, 'index.js'), 0o600);
+fs.writeFileSync(${JSON.stringify(capturedArguments)}, JSON.stringify(args));
+`
+      );
+      await chmod(npm, 0o755);
+      process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
+
+      await expect(installManagedIntegration('codex', '0.24.0')).resolves.toMatchObject({
+        packageName: '@agor-live/codex',
+        packageVersion: '0.24.0',
+      });
+      for (const directory of [root, join(root, '0.24.0'), join(root, '0.24.0', 'codex')]) {
+        expect((await stat(directory)).mode & 0o777).toBe(0o755);
+      }
+      const installedPackage = join(root, '0.24.0', 'codex', 'node_modules', '@agor-live', 'codex');
+      expect((await stat(installedPackage)).mode & 0o777).toBe(0o755);
+      expect((await stat(join(installedPackage, 'index.js'))).mode & 0o004).toBe(0o004);
+      await expect(assertManagedIntegrationPermissions('codex', '0.24.0')).resolves.toBeUndefined();
+      const args = JSON.parse(await readFile(capturedArguments, 'utf8')) as string[];
+      expect(args).toContain('--ignore-scripts');
+      expect(args).toContain('--include=optional');
+      expect(args).toContain('--no-audit');
+      expect(
+        args.some(
+          (argument) =>
+            argument.startsWith('--allow-scripts') || argument.startsWith('--strict-allow-scripts')
+        )
+      ).toBe(false);
+    }
+  );
+
+  it.runIf(process.platform !== 'win32')(
     'preserves the previous package and cleans staging when npm fails',
     async () => {
       const root = await createRoot();
@@ -176,6 +237,40 @@ describe('managed integration cleanup', () => {
     await removeManagedIntegration('codex', '0.24.0');
     await expect(access(join(root, '0.24.0', 'codex'))).rejects.toThrow();
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'repairs an existing managed path for non-daemon executor traversal',
+    async () => {
+      const root = await createRoot();
+      const version = join(root, '0.24.0');
+      const destination = await installFixture(root, '0.24.0', 'codex', '@agor-live/codex');
+      const privateDirectory = join(destination, 'node_modules', '@agor-live', 'codex');
+      const privateSource = join(privateDirectory, 'index.js');
+      const privateExecutable = join(privateDirectory, 'bin.js');
+      await mkdir(privateDirectory, { recursive: true });
+      await writeFile(privateSource, 'export {};');
+      await writeFile(privateExecutable, '#!/usr/bin/env node\n');
+      await chmod(root, 0o700);
+      await chmod(version, 0o700);
+      await chmod(destination, 0o700);
+      await chmod(privateDirectory, 0o700);
+      await chmod(privateSource, 0o600);
+      await chmod(privateExecutable, 0o700);
+
+      await expect(assertManagedIntegrationPermissions('codex', '0.24.0')).rejects.toThrow(
+        'not readable and traversable'
+      );
+      await repairManagedIntegrationPermissions('codex', '0.24.0');
+
+      for (const directory of [root, version, destination]) {
+        expect((await stat(directory)).mode & 0o777).toBe(0o755);
+      }
+      expect((await stat(privateDirectory)).mode & 0o005).toBe(0o005);
+      expect((await stat(privateSource)).mode & 0o004).toBe(0o004);
+      expect((await stat(privateExecutable)).mode & 0o005).toBe(0o005);
+      await expect(assertManagedIntegrationPermissions('codex', '0.24.0')).resolves.toBeUndefined();
+    }
+  );
 
   it('removes interrupted staging and backup directories', async () => {
     const root = await createRoot();
@@ -256,10 +351,15 @@ describe('local selection persistence', () => {
       installed: ['codex'],
     });
     if (process.platform !== 'win32') {
+      expect((await stat(root)).mode & 0o777).toBe(0o755);
       expect((await stat(join(root, 'selection.json'))).mode & 0o777).toBe(0o600);
     }
 
     const release = await acquireAgenticToolInstallLock();
+    if (process.platform !== 'win32') {
+      expect((await stat(root)).mode & 0o777).toBe(0o755);
+      expect((await stat(join(root, '.install.lock'))).mode & 0o777).toBe(0o700);
+    }
     await expect(acquireAgenticToolInstallLock()).rejects.toThrow(
       'Another `agor install` is already updating agentic tools'
     );

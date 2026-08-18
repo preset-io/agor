@@ -10,7 +10,7 @@
  * than reaching into `claude/claude-tool.ts` to grab Claude-local types.
  */
 
-import type { Session, SessionUpdate } from '@agor/core/types';
+import type { MessageCreate, MessagePatch, Session, SessionUpdate } from '@agor/core/types';
 import type { Message } from '../../types.js';
 
 /**
@@ -19,8 +19,8 @@ import type { Message } from '../../types.js';
  * broadcasts to UI clients.
  */
 export interface MessagesService {
-  create(data: Partial<Message>): Promise<Message>;
-  patch(id: string, data: Partial<Message>): Promise<Message>;
+  create(data: MessageCreate): Promise<Message>;
+  patch(id: string, data: MessagePatch): Promise<Message>;
 }
 
 /**

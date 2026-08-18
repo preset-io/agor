@@ -171,7 +171,6 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
-  createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
     data: { git_state?: { sha_at_end?: string; commit_message?: string } },
@@ -296,9 +295,14 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
 /**
  * Messages service with custom methods (server-side implementation)
  */
-export interface MessagesServiceImpl extends Service<Message, Partial<Message>, FeathersParams> {
+export interface MessagesServiceImpl
+  extends Service<
+    Message,
+    import('@agor/core/types').MessageCreate,
+    FeathersParams,
+    import('@agor/core/types').MessagePatch
+  > {
   findByIdForScopeCheck(messageId: import('@agor/core/types').MessageID): Promise<Message | null>;
-  createMany(data: Array<Partial<Message>>): Promise<Message[]>;
 }
 
 /**

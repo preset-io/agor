@@ -2,7 +2,11 @@ import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { RepositoryError } from './repositories/base';
-import { isDatabaseUniqueConstraintError, sanitizeDbError } from './sanitize-error';
+import {
+  formatSanitizedDbError,
+  isDatabaseUniqueConstraintError,
+  sanitizeDbError,
+} from './sanitize-error';
 
 describe('sanitizeDbError', () => {
   function drizzleFailure(): Error {
@@ -37,6 +41,14 @@ describe('sanitizeDbError', () => {
     expect(output).toContain('23505');
     expect(output).toContain('json_errsave_error');
     expect(output.length).toBeLessThan(1024);
+  });
+
+  it('formats only allowlisted metadata for command diagnostics', () => {
+    const diagnostic = formatSanitizedDbError(sanitizeDbError(drizzleFailure()));
+    expect(diagnostic).toBe(
+      'Database constraint violation (code=23505 constraint=sessions_schedule_run_unique routine=json_errsave_error)'
+    );
+    expect(diagnostic).not.toContain('SECRET_SENTINEL');
   });
 
   it('sanitizes RepositoryError output without changing its cause semantics', () => {

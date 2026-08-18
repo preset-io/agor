@@ -29,7 +29,7 @@ export default class RepoAdd extends BaseCommand {
     '<%= config.bin %> <%= command.id %> https://github.com/apache/superset.git --slug my-org/custom-name',
     '',
     '# Already have the repo locally?',
-    '<%= config.bin %> repo add-local ~/code/myapp',
+    '<%= config.bin %> local add-repo ~/code/myapp',
   ];
 
   static args = {

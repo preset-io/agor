@@ -1,19 +1,19 @@
 /**
  * One catalog entry in the browse grid.
  *
- * The badge is `curated` and only `curated`. The row also carries a `verified`
- * boolean — a registry name match — which is deliberately not rendered: it
- * reads backwards exactly where curation was most careful, because the vendor
- * endpoints a Preset engineer hand-picked from vendor docs never appeared in
- * the registry under a matching name.
+ * The card carries no trust badge. Every entry on the shelf is hand-reviewed
+ * and shipped in the same file, so a mark saying so would be on every row —
+ * telling a user nothing they could act on and drawing the eye away from the
+ * one status that does differ between rows, which is whether Connect will get
+ * anywhere.
  */
 
 import type { MCPCatalogEntry } from '@agor/core/types';
 import {
   CheckCircleOutlined,
   LockOutlined,
+  LoginOutlined,
   QuestionCircleOutlined,
-  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Avatar, Card, Flex, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { memo } from 'react';
@@ -31,7 +31,7 @@ const VISIBLE_CAPABILITIES = 3;
 const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
   const { token } = theme.useToken();
   const title = entryTitle(entry);
-  const capabilities = entry.capabilities ?? [];
+  const capabilities = entry.capabilities;
   const overflow = capabilities.length - VISIBLE_CAPABILITIES;
   // Whether pressing Connect will get anywhere, on the card rather than after
   // the disclosure — most curated entries want an account the marketplace has
@@ -61,19 +61,9 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
             {title.charAt(0).toUpperCase()}
           </Avatar>
           <Flex vertical style={{ minWidth: 0, flex: 1 }}>
-            <Space size={token.marginXXS} align="center">
-              <Text strong ellipsis>
-                {title}
-              </Text>
-              {entry.curated && (
-                <Tooltip title="Reviewed by Preset">
-                  <SafetyCertificateOutlined
-                    aria-label="Reviewed by Preset"
-                    style={{ color: token.colorPrimary }}
-                  />
-                </Tooltip>
-              )}
-            </Space>
+            <Text strong ellipsis>
+              {title}
+            </Text>
             <Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               {entry.name}
             </Text>
@@ -81,11 +71,10 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
         </Flex>
 
         <Paragraph
-          type={entry.benefit ? undefined : 'secondary'}
           ellipsis={{ rows: 2 }}
           style={{ marginBottom: 0, minHeight: token.fontSize * 2 * token.lineHeight }}
         >
-          {entry.benefit ?? entry.description ?? 'No description published.'}
+          {entry.benefit}
         </Paragraph>
 
         <Space size={[token.marginXXS, token.marginXXS]} wrap>
@@ -101,6 +90,11 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
           <Space size={token.marginXXS} align="center">
             {connect.readiness === 'ready' ? (
               <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+            ) : connect.readiness === 'sign-in' ? (
+              // The icon a session already shows on a server awaiting sign-in
+              // (`MCPServerPill`), so the card and the thing it installs are
+              // recognisably about the same step.
+              <LoginOutlined style={{ color: token.colorTextTertiary }} />
             ) : connect.readiness === 'unchecked' ? (
               <QuestionCircleOutlined style={{ color: token.colorTextTertiary }} />
             ) : (

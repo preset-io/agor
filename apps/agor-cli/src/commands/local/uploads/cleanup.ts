@@ -20,6 +20,7 @@ async function loadCleanup(): Promise<
 }
 
 export default class LocalUploadsCleanup extends Command {
+  static override summary = 'Delete expired local upload data';
   static override description =
     'Delete expired upload metadata and exact storage objects using deployment-local credentials';
 

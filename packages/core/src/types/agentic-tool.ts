@@ -217,8 +217,6 @@ export interface AgenticToolCapabilities {
   supportsSessionFork: boolean;
   /** Can spawn child sessions for subsessions */
   supportsChildSpawn: boolean;
-  /** Can import historical sessions from tool's storage */
-  supportsSessionImport: boolean;
   /**
    * Supported reasoning-effort overrides. Absent when the runtime has no
    * effort control.

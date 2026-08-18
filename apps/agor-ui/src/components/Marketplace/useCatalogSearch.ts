@@ -1,28 +1,34 @@
 /**
- * Paged reads of `/mcp-catalog`.
+ * The catalog, read once and narrowed in the browser.
  *
- * The catalog is a global table that grows to thousands of registry rows, and
- * every predicate, the ordering and the page bounds already resolve in SQL. So
- * this fetches one page at a time and never holds the result set — it is
- * deliberately not hydrated into the workspace store, which models a
- * fully-loaded tenant-scoped collection kept live by socket events. The catalog
- * has no writers a browser can observe and nothing to keep live.
+ * `/mcp-catalog` returns all ~50 entries in one read, so this fetches them once
+ * per mount and every filter, sort and page after that is a pass over an array
+ * already in memory. Searching is a keystroke rather than a debounced round
+ * trip, and there is no second request whose only job is to learn the total.
+ *
+ * The catalog is deliberately not hydrated into the workspace store, which
+ * models a fully-loaded tenant-scoped collection kept live by socket events.
+ * This has no writers a browser can observe and nothing to keep live — it
+ * changes when the daemon is redeployed, which reloads the page anyway.
  *
  * Reads wait for `ready`. The client object exists from the moment the socket
  * is being built, well before it has connected and authenticated, so a surface
  * that fetches on `client !== null` asks an anonymous socket and is refused.
+ *
+ * Filtering and ordering come from `@agor/core/mcp-catalog/query` rather than
+ * being written here, so that "search matches the same things it used to" holds
+ * by construction: it is the same function, and one test suite covers it.
  */
 
+import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
 import type { AgorClient, FindResult } from '@agor-live/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CONNECTABLE_PROBE_VERDICTS } from './catalogPresentation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CONNECTABLE_AUTH_TYPES } from './catalogPresentation';
 
 /** The catalog service always paginates; an array is only a defensive fallback. */
-function asPage(result: FindResult<MCPCatalogEntry>): { data: MCPCatalogEntry[]; total: number } {
-  return Array.isArray(result)
-    ? { data: result, total: result.length }
-    : { data: result.data, total: result.total };
+function asEntries(result: FindResult<MCPCatalogEntry>): MCPCatalogEntry[] {
+  return Array.isArray(result) ? result : result.data;
 }
 
 export const CATALOG_PAGE_SIZE = 24;
@@ -31,18 +37,13 @@ export interface CatalogFilterState {
   search: string;
   category?: MCPCatalogCategory;
   capability?: string;
-  reviewedOnly: boolean;
   connectableOnly: boolean;
   sort: MCPCatalogSort;
 }
 
 export function isFilterActive(filters: CatalogFilterState): boolean {
   return Boolean(
-    filters.search.trim() ||
-      filters.category ||
-      filters.capability ||
-      filters.reviewedOnly ||
-      filters.connectableOnly
+    filters.search.trim() || filters.category || filters.capability || filters.connectableOnly
   );
 }
 
@@ -57,28 +58,15 @@ export function isFilterActive(filters: CatalogFilterState): boolean {
 export type CatalogStatus = 'loading' | 'ready' | 'error';
 
 export interface CatalogSearchResult {
+  /** The current page of matching entries. */
   entries: MCPCatalogEntry[];
   status: CatalogStatus;
-  /** Rows matching the active filters. Meaningful only when `ready`. */
+  /** Entries matching the active filters. Meaningful only when `ready`. */
   matchCount: number;
-  /** Rows in the catalog with no filters applied, for "N of M". */
+  /** Entries in the catalog with no filters applied, for "N of M". */
   catalogSize: number | null;
   error: string | null;
   retry: () => void;
-}
-
-function buildQuery(filters: CatalogFilterState, page: number): Record<string, unknown> {
-  const search = filters.search.trim();
-  return {
-    ...(search ? { search } : {}),
-    ...(filters.category ? { category: filters.category } : {}),
-    ...(filters.capability ? { capability: filters.capability } : {}),
-    ...(filters.reviewedOnly ? { curated: true } : {}),
-    ...(filters.connectableOnly ? { probed_auth_types: CONNECTABLE_PROBE_VERDICTS } : {}),
-    sort: filters.sort,
-    $limit: CATALOG_PAGE_SIZE,
-    $skip: (page - 1) * CATALOG_PAGE_SIZE,
-  };
 }
 
 export function useCatalogSearch(
@@ -87,18 +75,12 @@ export function useCatalogSearch(
   filters: CatalogFilterState,
   page: number
 ): CatalogSearchResult {
-  const [entries, setEntries] = useState<MCPCatalogEntry[]>([]);
+  const [catalog, setCatalog] = useState<MCPCatalogEntry[] | null>(null);
   const [status, setStatus] = useState<CatalogStatus>('loading');
-  const [matchCount, setMatchCount] = useState(0);
-  const [catalogSize, setCatalogSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
 
-  // Responses can land out of order — a cheap `$skip` page overtaking a slow
-  // search. Only the newest request may write state.
-  const requestSeq = useRef(0);
-
-  const { search, category, capability, reviewedOnly, connectableOnly, sort } = filters;
+  const { search, category, capability, connectableOnly, sort } = filters;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {
@@ -109,29 +91,21 @@ export function useCatalogSearch(
       return;
     }
 
-    const seq = ++requestSeq.current;
     let cancelled = false;
     setStatus('loading');
 
-    const query = buildQuery(
-      { search, category, capability, reviewedOnly, connectableOnly, sort },
-      page
-    );
     client
       .service('mcp-catalog')
-      .find({ query })
+      .find()
       .then((result) => {
-        if (cancelled || seq !== requestSeq.current) return;
-        const matched = asPage(result);
-        setEntries(matched.data);
-        setMatchCount(matched.total);
+        if (cancelled) return;
+        setCatalog(asEntries(result));
         setError(null);
         setStatus('ready');
       })
       .catch((err: unknown) => {
-        if (cancelled || seq !== requestSeq.current) return;
-        setEntries([]);
-        setMatchCount(0);
+        if (cancelled) return;
+        setCatalog(null);
         setError(err instanceof Error ? err.message : 'Could not load the catalog');
         setStatus('error');
       });
@@ -139,41 +113,39 @@ export function useCatalogSearch(
     return () => {
       cancelled = true;
     };
-  }, [
-    client,
-    ready,
-    search,
-    category,
-    capability,
-    reviewedOnly,
-    connectableOnly,
-    sort,
-    page,
-    retryToken,
-  ]);
-
-  // The unfiltered size is the M in "N of M". It changes only when ingestion
-  // runs, so it is read once rather than alongside every filtered page. A
-  // failure here only costs the count, never the grid.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
-  useEffect(() => {
-    if (!client || !ready) return;
-    let cancelled = false;
-    client
-      .service('mcp-catalog')
-      .find({ query: { $limit: 1 } })
-      .then((result) => {
-        if (!cancelled) setCatalogSize(asPage(result).total);
-      })
-      .catch(() => {
-        if (!cancelled) setCatalogSize(null);
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [client, ready, retryToken]);
+
+  // Everything below is derived from what is already held: no request, and no
+  // dependency on `page`, so paging does not re-filter the catalog.
+  const matched = useMemo(
+    () =>
+      catalog === null
+        ? []
+        : filterCatalog(catalog, {
+            search,
+            category,
+            capability,
+            sort,
+            // The toolbar's one auth control means a set: "not known to need an
+            // account" is stated-open *or* not stated.
+            ...(connectableOnly ? { auth_types: CONNECTABLE_AUTH_TYPES } : {}),
+          }),
+    [catalog, search, category, capability, connectableOnly, sort]
+  );
+
+  const entries = useMemo(() => {
+    const start = (page - 1) * CATALOG_PAGE_SIZE;
+    return matched.slice(start, start + CATALOG_PAGE_SIZE);
+  }, [matched, page]);
 
   const retry = useCallback(() => setRetryToken((token) => token + 1), []);
 
-  return { entries, status, matchCount, catalogSize, error, retry };
+  return {
+    entries,
+    status,
+    matchCount: matched.length,
+    catalogSize: catalog?.length ?? null,
+    error,
+    retry,
+  };
 }

@@ -152,18 +152,17 @@ export interface Session {
   created_by: string;
 
   /**
-   * Unix username to impersonate when executing this session
+   * Immutable execution-home key for this session.
    *
    * Set once at session creation time from the creator's unix_username.
    * IMMUTABLE - never changes, even if the user's unix_username changes.
    *
    * Why immutable?
    * - SDK sessions (Claude Code, Codex) store data in user home directories
-   * - Changing unix_username would break access to existing SDK session state
-   * - If unix user no longer exists, operations will fail (expected behavior)
+   * - Changing it would break access to existing SDK session state
+   * - If the delegated home key changes or disappears, resumable state may be unreachable
    *
-   * DEFENSIVE: Before prompting, we validate that creator's current unix_username
-   * matches session.unix_username. If they differ, reject the prompt with clear error.
+   * Before prompting, the creator's current key is checked against the stamp.
    */
   unix_username: string | null;
 
@@ -421,7 +420,7 @@ export interface Session {
      *
      * Used as queued_by_user_id when the callback is delivered, so the
      * resulting task is attributed to the callback setter, not the target
-     * session owner. Execution still runs as the target session's Unix user.
+     * session owner. Execution still uses the target session's home and credentials.
      */
     callback_created_by?: string;
     /**

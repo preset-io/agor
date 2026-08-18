@@ -25,7 +25,9 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateEmoji: '🤖',
     agent: 'claude-code',
     suggestedIntegrations: ['Slack', 'GitHub'],
-    user: { name: 'Ada', email: 'ada@example.com', persona: 'developer' },
+    canManageIntegrations: true,
+    goals: ['ship-without-busywork'],
+    user: { name: 'Ada', email: 'ada@example.com' },
     client: {} as SeedOnboardingTeammateInput['client'],
     repoById: new Map(),
     onCreateBranch,
@@ -40,7 +42,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
 describe('seedOnboardingTeammate', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates a teammate branch + persona-primed onboarding session when the framework repo is present', async () => {
+  it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -68,17 +70,18 @@ describe('seedOnboardingTeammate', () => {
     expect(sessionArg).toEqual(
       expect.objectContaining({ branchId: 'branch-1', boardId: 'board-1', onCreateSession })
     );
-    // Agent choice + persona are threaded through to the onboarding prompt.
+    // Agent choice + goals are threaded through to the onboarding prompt.
     expect(sessionArg.sessionConfig).toEqual(
       expect.objectContaining({
         branch_id: 'branch-1',
         agent: 'claude-code',
-        title: '🤖 Rusty onboarding',
+        title: '🤖 Rusty — first session',
       })
     );
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
-    expect(initialPrompt).toContain('developer');
+    // The selected goal's bootstrap line is threaded into the first-session prompt.
+    expect(initialPrompt).toContain('Desired outcome: less shipping busywork');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');

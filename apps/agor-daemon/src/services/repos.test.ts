@@ -13,7 +13,8 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     })),
     resolveExecutionSecurityMode: vi.fn(() => ({
       appRbacEnabled: true,
-      shouldInitUnixGroups: true,
+      unixUserMode: 'simple',
+      requiresExecutionHomeKey: false,
     })),
     resolveMultiTenancyConfig: vi.fn(() => ({ mode: 'disabled' })),
   };
@@ -56,6 +57,10 @@ const executorMocks = vi.hoisted(() => ({
   runExecutorCommand: vi.fn(),
   spawnExecutorFireAndForget: vi.fn(),
 }));
+const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
+vi.mock('../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: delegatedHomeMocks.resolve,
+}));
 vi.mock('../utils/spawn-executor.js', () => {
   return {
     runExecutorCommand: executorMocks.runExecutorCommand,
@@ -64,17 +69,6 @@ vi.mock('../utils/spawn-executor.js', () => {
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
 });
-
-const impersonationMocks = vi.hoisted(() => ({
-  resolveExecutorReadAsUser: vi.fn(async () => 'requesting-user'),
-  resolveGitImpersonationForUser: vi.fn(async () => 'daemon-user'),
-}));
-vi.mock('../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: impersonationMocks.resolveExecutorReadAsUser,
-}));
-vi.mock('../utils/git-impersonation.js', () => ({
-  resolveGitImpersonationForUser: impersonationMocks.resolveGitImpersonationForUser,
-}));
 
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
@@ -133,11 +127,115 @@ describe('ReposService.addLocalRepository executor boundary', () => {
   });
 });
 
-describe('ReposService.createBranch Git lifecycle identity', () => {
-  it('uses the Git lifecycle resolver rather than the requesting-user read resolver', async () => {
+describe('ReposService.createBranch Git lifecycle execution', () => {
+  it('rejects invalid delegated routing before persisting the branch', async () => {
+    delegatedHomeMocks.resolve.mockRejectedValueOnce(
+      new Error('Delegated execution requires a unix_username home key')
+    );
+    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const app = {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    } as never);
+
+    await expect(
+      service.createBranch(
+        '550e8400-e29b-41d4-a716-446655440001',
+        {
+          name: 'invalid-routing',
+          ref: 'invalid-routing',
+          createBranch: true,
+          sourceBranch: 'main',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+          storage_mode: 'worktree',
+        },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+      )
+    ).rejects.toThrow(/unix_username/);
+    expect(branches.create).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('returns the failed representation when executor dispatch throws synchronously', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockImplementationOnce(() => {
+      throw new Error('launcher unavailable');
+    });
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor',
+      local_path: '/managed/repos/agor',
+      default_branch: 'main',
+    };
+    const creatingBranch = {
+      branch_id: '550e8400-e29b-41d4-a716-446655440002',
+      repo_id: repo.repo_id,
+      name: 'dispatch-failure',
+      path: '/managed/worktrees/preset-io/agor/dispatch-failure',
+      filesystem_status: 'creating',
+    };
+    const failedBranch = {
+      ...creatingBranch,
+      filesystem_status: 'failed',
+      error_message: 'Failed to spawn executor: launcher unavailable',
+    };
+    const branches = {
+      create: vi.fn(async () => creatingBranch),
+      patch: vi.fn(async () => failedBranch),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'branches') return branches;
+        if (name === 'board-objects') {
+          return { create: vi.fn(async () => undefined), find: vi.fn(async () => ({ data: [] })) };
+        }
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    const result = await service.createBranch(
+      repo.repo_id,
+      {
+        name: creatingBranch.name,
+        ref: creatingBranch.name,
+        createBranch: true,
+        sourceBranch: 'main',
+        boardId: '550e8400-e29b-41d4-a716-446655440003',
+        position: { x: 10, y: 20 },
+        storage_mode: 'worktree',
+      },
+      { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+    );
+
+    expect(branches.patch).toHaveBeenCalledWith(
+      creatingBranch.branch_id,
+      {
+        filesystem_status: 'failed',
+        error_message: 'Failed to spawn executor: launcher unavailable',
+      },
+      expect.objectContaining({ provider: undefined })
+    );
+    expect(result).toEqual(failedBranch);
+  });
+
+  it('does not attach a delegated user to daemon-owned Git lifecycle work', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    impersonationMocks.resolveExecutorReadAsUser.mockClear();
-    impersonationMocks.resolveGitImpersonationForUser.mockClear();
 
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
@@ -189,20 +287,16 @@ describe('ReposService.createBranch Git lifecycle identity', () => {
       } as never
     );
 
-    expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
-    expect(impersonationMocks.resolveExecutorReadAsUser).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'git.branch.add' }),
-      expect.objectContaining({ asUser: 'daemon-user' })
+      expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
     );
   });
 });
 
-describe('ReposService.cloneRepository Git lifecycle identity', () => {
-  it('creates managed storage as the daemon lifecycle user, not the requesting user', async () => {
+describe('ReposService.cloneRepository Git lifecycle execution', () => {
+  it('creates managed storage without delegated user routing', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    impersonationMocks.resolveExecutorReadAsUser.mockClear();
-    impersonationMocks.resolveGitImpersonationForUser.mockClear();
 
     const repos = { patch: vi.fn() };
     const app = {
@@ -223,11 +317,9 @@ describe('ReposService.cloneRepository Git lifecycle identity', () => {
       user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
     } as never);
 
-    expect(impersonationMocks.resolveGitImpersonationForUser).toHaveBeenCalledOnce();
-    expect(impersonationMocks.resolveExecutorReadAsUser).not.toHaveBeenCalled();
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'git.clone' }),
-      expect.objectContaining({ asUser: 'daemon-user' })
+      expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
     );
   });
 });

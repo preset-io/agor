@@ -19,7 +19,7 @@ import type {
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -55,7 +55,11 @@ export class FileService
     if (!branchId) throw new Error('branch_id query parameter is required');
     const resolved = await this.resolveBranchRead(branchId, params);
 
-    const result = await this.runCommand('branch.files.browse', resolved.branchId, resolved.asUser);
+    const result = await this.runCommand(
+      'branch.files.browse',
+      resolved.branchId,
+      resolved.delegatedHomeKey
+    );
     if (!result.success) {
       throw new Error(
         `Failed to browse files: ${result.error?.message ?? 'unknown executor error'}`
@@ -70,9 +74,14 @@ export class FileService
     if (!branchId) throw new Error('branch_id query parameter is required');
     const resolved = await this.resolveBranchRead(branchId, params);
 
-    const result = await this.runCommand('branch.files.read', resolved.branchId, resolved.asUser, {
-      filePath: id.toString(),
-    });
+    const result = await this.runCommand(
+      'branch.files.read',
+      resolved.branchId,
+      resolved.delegatedHomeKey,
+      {
+        filePath: id.toString(),
+      }
+    );
     if (!result.success) {
       throw new Error(`Failed to read file: ${result.error?.message ?? 'unknown executor error'}`);
     }
@@ -84,7 +93,7 @@ export class FileService
   private async runCommand(
     command: 'branch.files.browse' | 'branch.files.read',
     branchId: string,
-    asUser?: string,
+    delegatedHomeKey?: string,
     extraParams: Record<string, unknown> = {}
   ) {
     const sessionToken = generateScopedServiceToken(
@@ -99,7 +108,7 @@ export class FileService
       },
       {
         logPrefix: `[FileService ${branchId}]`,
-        asUser,
+        delegatedHomeKey: delegatedHomeKey,
       }
     );
   }
@@ -115,12 +124,12 @@ export class FileService
           ? cachedBranch
           : await this.branchRepo.findById(branchId);
       if (!branch) throw new Error(`Branch not found: ${branchId}`);
-      const asUser = await resolveExecutorReadAsUser(
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         params?.user?.user_id,
         this.app.get('config')
       );
-      return { branchId: branch.branch_id, asUser };
+      return { branchId: branch.branch_id, delegatedHomeKey };
     });
   }
 

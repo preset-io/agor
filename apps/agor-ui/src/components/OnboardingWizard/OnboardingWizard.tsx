@@ -2,7 +2,7 @@
 /**
  * OnboardingWizard — redesigned 5-step first-run flow.
  *
- * Steps: persona → workspace → llm → integrations → done
+ * Steps: goals → llm → workspace → integrations → done
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -16,16 +16,13 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
-  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
-  ProjectOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -40,22 +37,27 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import {
+  MAX_ONBOARDING_GOALS,
+  type McpRecommendation,
+  mergeGoalMcpRecs,
+  ONBOARDING_GOALS,
+} from '../../utils/onboardingGoals';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
-
-/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
-const PERSONA_ICONS: Record<string, ReactNode> = {
-  developer: <CodeOutlined />,
-  pm: <ProjectOutlined />,
-  lead: <TeamOutlined />,
-  solo: <ThunderboltOutlined />,
-};
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -63,7 +65,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
+export type WizardStep = 'goals' | 'llm' | 'workspace' | 'integrations' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-subscription-token'
@@ -91,7 +93,7 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
+const STEPS: WizardStep[] = ['goals', 'llm', 'workspace', 'integrations', 'done'];
 
 // Prefilled so the required workspace step never blocks on an empty field; the
 // user can rename it. Named the teammate and the board the wizard creates.
@@ -106,14 +108,14 @@ const NO_CLIENT_BOARD_ERROR =
 // The workspace step creates the user's board + first teammate, so it is NOT
 // skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
-  persona: { number: 1, label: 'You', skippable: true },
+  goals: { number: 1, label: 'Goals', skippable: true },
   llm: { number: 2, label: 'AI', skippable: true },
   workspace: { number: 3, label: 'Workspace', skippable: false },
   integrations: { number: 4, label: 'Tools', skippable: false },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
-const PERSONAS = ONBOARDING_PERSONAS;
+const GOALS = ONBOARDING_GOALS;
 
 interface LlmOption {
   id: string;
@@ -171,158 +173,23 @@ const LLM_OPTIONS: LlmOption[] = [
   },
 ];
 
-interface McpRecommendation {
-  id: string;
-  name: string;
-  description: string;
-  docsUrl: string;
-  featured?: boolean;
-}
+// Why an unselected goal card is disabled once two are picked. Surfaced both as
+// an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
+// the reason isn't a hover-only affordance (see frontend.md a11y guidance).
+const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
 
-const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
-  developer: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'sentry',
-      name: 'Sentry',
-      description: 'Let your AI read error traces and fix bugs straight from the issue.',
-      docsUrl: 'https://agor.live/docs/mcp/sentry',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  pm: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description: 'Pull customer context into sessions - your AI knows who you are building for.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'amplitude',
-      name: 'Amplitude',
-      description: 'Ask your AI what the data says without writing a single query.',
-      docsUrl: 'https://agor.live/docs/mcp/amplitude',
-    },
-    {
-      id: 'figma',
-      name: 'Figma',
-      description: 'Read design files and write feedback without switching tabs.',
-      docsUrl: 'https://agor.live/docs/mcp/figma',
-    },
-  ],
-  lead: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description:
-        'See what is in progress, what is blocked, and what shipped - without chasing updates.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Get a live health read on your systems without pinging the on-call engineer.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  solo: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, push commits, and manage your repos hands-free.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'stripe',
-      name: 'Stripe',
-      description: 'Ask your AI what revenue looks like today - no dashboard needed.',
-      docsUrl: 'https://agor.live/docs/mcp/stripe',
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-  ],
-  _default: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, review code, and sync issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description: 'Pick up issues and update status automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'notion',
-      name: 'Notion',
-      description: 'Write and update docs as your AI works.',
-      docsUrl: 'https://agor.live/docs/mcp/notion',
-    },
-  ],
+// Visually hidden but exposed to assistive tech — carries the cap hint text
+// rendered inside disabled cards so it joins their accessible name.
+const SR_ONLY_STYLE: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
 };
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
@@ -479,11 +346,14 @@ export interface OnboardingWizardProps {
     teammateEmoji?: string;
     /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
     agent?: AgenticToolName | null;
-    /** Persona-tailored MCP integration names to seed into the bootstrap prompt. */
+    /** Goal-tailored MCP integration names to seed into the bootstrap prompt. */
     suggestedIntegrations?: string[];
-    /** Persona chosen in step 1, threaded straight through so the completion
-     * handler never has to wait on the async preference save. */
-    persona?: string | null;
+    /** Whether this user can manage the workspace's MCP integrations. */
+    canManageIntegrations?: boolean;
+    /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
+     * skipped), threaded straight through so the completion handler never has
+     * to wait on the async preference save. */
+    goals?: string[];
     // May run async (teammate creation) — the wizard awaits it and shows a
     // loading state until it resolves, so the modal covers the whole operation.
   }) => void | Promise<void>;
@@ -518,6 +388,10 @@ const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,25
 const WIZARD_SELECTED_BG =
   'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 100%)';
 const WIZARD_SELECTED_BORDER = '1.5px solid rgba(46,154,146,0.95)';
+// Unselected border for *selectable* cards (goals, LLM providers). Same 1.5px
+// width as WIZARD_SELECTED_BORDER so selecting only changes the border COLOR,
+// never the width — no box-model change, no layout shift on select/deselect.
+const SELECTABLE_CARD_BORDER = '1.5px solid rgba(255,255,255,0.16)';
 const WIZARD_SELECTED_SHADOW =
   '0 0 0 3px rgba(46,154,146,0.38), 0 6px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18)';
 
@@ -546,10 +420,17 @@ export function OnboardingWizard({
   const CARD_SELECTED_SHADOW = WIZARD_SELECTED_SHADOW;
 
   // ── Step state ──────────────────────────────────────────────────────────
-  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
+  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'goals');
 
-  // ── Step 1: persona ─────────────────────────────────────────────────────
-  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  // ── Step 1: goals — multi-select, order-preserving (primary first), max 2 ──
+  const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
+  const toggleGoal = useCallback((id: string) => {
+    setSelectedGoals((prev) => {
+      if (prev.includes(id)) return prev.filter((goalId) => goalId !== id);
+      if (prev.length >= MAX_ONBOARDING_GOALS) return prev;
+      return [...prev, id];
+    });
+  }, []);
 
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
@@ -587,8 +468,8 @@ export function OnboardingWizard({
   // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
   useEffect(() => {
     if (!open) return;
-    setCurrentStep(initialStep || 'persona');
-    setSelectedPersona(null);
+    setCurrentStep(initialStep || 'goals');
+    setSelectedGoals([]);
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -775,8 +656,8 @@ export function OnboardingWizard({
 
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
-        return !!selectedPersona;
+      case 'goals':
+        return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -808,7 +689,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -822,8 +703,8 @@ export function OnboardingWizard({
   const disabledReason = useMemo((): string | null => {
     if (llmSaving || boardCreating) return null;
     switch (currentStep) {
-      case 'persona':
-        return selectedPersona ? null : 'Pick one, or skip for now';
+      case 'goals':
+        return selectedGoals.length > 0 ? null : 'Pick up to two, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -850,7 +731,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -865,7 +746,7 @@ export function OnboardingWizard({
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
+      case 'goals':
         return 'Continue →';
       case 'llm': {
         if (
@@ -899,16 +780,14 @@ export function OnboardingWizard({
   // ─── Handlers ────────────────────────────────────────────────────────────
 
   const saveOnboardingProgress = useCallback(
-    (updates: Record<string, unknown>) => {
+    async (updates: Record<string, unknown>) => {
       if (!user) return;
       const current = (user.preferences?.onboarding ?? {}) as Record<string, unknown>;
       const prefs: UserPreferences = {
         ...user.preferences,
         onboarding: { ...current, ...updates },
       } as UserPreferences;
-      onUpdateUser(user.user_id, { preferences: prefs }).catch((e) => {
-        console.warn('onboarding progress save failed', e);
-      });
+      await onUpdateUser(user.user_id, { preferences: prefs });
     },
     [onUpdateUser, user]
   );
@@ -942,6 +821,9 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (currentStep === 'done') return;
+    // Skip means "decide later", even if the user experimented with a card
+    // first. Do not silently submit a selection they explicitly skipped.
+    if (currentStep === 'goals') setSelectedGoals([]);
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
     // and completion reads a non-null agent as "there is a model to run on" —
@@ -957,10 +839,10 @@ export function OnboardingWizard({
 
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
-      case 'persona': {
-        if (selectedPersona) {
-          saveOnboardingProgress({ persona: selectedPersona });
-        }
+      case 'goals': {
+        // Goals are persisted once, authoritatively and awaited, by the
+        // completion handler. An intermediate whole-preferences write here can
+        // race later onboarding saves and resurrect stale data.
         goToStep('llm');
         break;
       }
@@ -1046,7 +928,7 @@ export function OnboardingWizard({
             await client
               .service('boards')
               .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
-            if (user) saveOnboardingProgress({ boardId: createdBoardId });
+            if (user) await saveOnboardingProgress({ boardId: createdBoardId });
             goToStep('integrations');
           } catch (err) {
             setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
@@ -1078,7 +960,7 @@ export function OnboardingWizard({
             return;
           }
           setCreatedBoardId(newBoardId);
-          if (user) saveOnboardingProgress({ boardId: newBoardId });
+          if (user) await saveOnboardingProgress({ boardId: newBoardId });
           goToStep('integrations');
         } catch (err) {
           setBoardError(err instanceof Error ? err.message : 'Failed to create board');
@@ -1093,10 +975,9 @@ export function OnboardingWizard({
       }
       case 'done': {
         const boardIdToUse = createdBoardId || verifiedBoard?.board_id || '';
-        // Suggested MCP integrations for the chosen persona (same set shown on
-        // the integrations step) — threaded into the teammate's bootstrap prompt.
-        const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
-        const suggestedIntegrations = recs.map((rec) => rec.name);
+        // Merged MCP integrations for the chosen goals (same set shown on the
+        // integrations step) — threaded into the teammate's bootstrap prompt.
+        const suggestedIntegrations = mergeGoalMcpRecs(selectedGoals).map((rec) => rec.name);
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1111,7 +992,8 @@ export function OnboardingWizard({
             teammateEmoji,
             agent: selectedAgent,
             suggestedIntegrations,
-            persona: selectedPersona,
+            canManageIntegrations: hasMinimumRole(user?.role, ROLES.ADMIN),
+            goals: selectedGoals,
           });
         } finally {
           setCompleting(false);
@@ -1121,7 +1003,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1221,58 +1103,116 @@ export function OnboardingWizard({
     </div>
   );
 
-  const renderPersona = () => {
+  const renderGoals = () => {
     const firstName = user?.name?.split(' ')[0];
-    const personaTitle = firstName
-      ? `${firstName}, let's make this yours.`
-      : "Let's make this yours.";
+    const goalsTitle = firstName
+      ? `${firstName}, what do you want done?`
+      : 'What do you want done?';
+    const atCap = selectedGoals.length >= MAX_ONBOARDING_GOALS;
     return (
       <div>
-        {renderStepBadge(personaTitle)}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          How do you work? We'll tailor your setup to what you actually need.
+        {renderStepBadge(goalsTitle)}
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
+          Pick up to two — we'll shape your first session around them. Not sure yet? Skip and decide
+          later.
         </Paragraph>
 
         <div
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
-            gap: 12,
+            gap: 10,
           }}
         >
-          {PERSONAS.map((persona) => {
-            const isSelected = selectedPersona === persona.id;
+          {GOALS.map((goal) => {
+            const isSelected = selectedGoals.includes(goal.id);
+            // At the cap, unselected cards can't be added until one is dropped.
+            const isDisabled = !isSelected && atCap;
+            // aria-disabled (not the native `disabled` attribute) keeps the card
+            // focusable and lets the Tooltip trigger on hover AND keyboard focus;
+            // the click is guarded to a no-op instead.
             return (
-              <button
-                key={persona.id}
-                type="button"
-                aria-pressed={isSelected}
-                className="onb-card"
-                onClick={() => setSelectedPersona(persona.id)}
-                style={{
-                  background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  borderRadius: 12,
-                  padding: '16px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-                  transition: 'all 0.15s ease',
-                  width: '100%',
-                }}
-              >
-                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
-                  {PERSONA_ICONS[persona.id]}
-                </div>
-                <div
-                  style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
+              <Tooltip key={goal.id} title={isDisabled ? GOAL_CAP_HINT : undefined}>
+                <button
+                  type="button"
+                  aria-pressed={isSelected}
+                  aria-disabled={isDisabled || undefined}
+                  className="onb-card"
+                  onClick={() => {
+                    if (!isDisabled) toggleGoal(goal.id);
+                  }}
+                  style={{
+                    position: 'relative',
+                    background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                    // Constant 1.5px width in both states — only the color changes
+                    // on select, so the card never resizes/shifts (no re-click bait).
+                    border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
+                    backdropFilter: 'blur(20px)',
+                    WebkitBackdropFilter: 'blur(20px)',
+                    borderRadius: 12,
+                    padding: '15px 13px',
+                    cursor: isDisabled ? 'not-allowed' : 'pointer',
+                    opacity: isDisabled ? 0.45 : 1,
+                    textAlign: 'left',
+                    boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+                    transition: 'all 0.15s ease',
+                    width: '100%',
+                  }}
                 >
-                  {persona.title}
-                </div>
-                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
-              </button>
+                  {isSelected && (
+                    <div
+                      className="onb-check"
+                      style={{
+                        position: 'absolute',
+                        top: 12,
+                        right: 12,
+                        width: 20,
+                        height: 20,
+                        borderRadius: '50%',
+                        background: PRIMARY,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
+                    </div>
+                  )}
+                  {/* Reserve a fixed 2-line title block too: some titles wrap to
+                      two lines and some to one, so without this the cards would
+                      still differ in height even with uniform descriptions. */}
+                  <div
+                    style={{
+                      color: TEXT_PRIMARY,
+                      fontWeight: 600,
+                      fontSize: 14,
+                      lineHeight: 1.3,
+                      minHeight: '2.6em',
+                      marginBottom: 5,
+                      paddingRight: 20,
+                    }}
+                  >
+                    {goal.title}
+                  </div>
+                  {/* Reserve a fixed 2-line block so every card is the same
+                      height regardless of description length. Font/line-height
+                      are tuned so the longest description fits in 2 lines at the
+                      standard modal width without shrinking the copy. */}
+                  <div
+                    style={{
+                      color: TEXT_MUTED,
+                      fontSize: 11.5,
+                      lineHeight: 1.4,
+                      minHeight: '2.8em',
+                    }}
+                  >
+                    {goal.description}
+                  </div>
+                  {/* Screen-reader-only cap reason — joins the disabled card's
+                      accessible name so it isn't a hover-only affordance. */}
+                  {isDisabled && <span style={SR_ONLY_STYLE}>{GOAL_CAP_HINT}</span>}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
@@ -1310,7 +1250,8 @@ export function OnboardingWizard({
                 key={option.id}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  // Constant border width in both states — no layout shift on select.
+                  border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
                   backdropFilter: 'blur(20px)',
                   WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 10,
@@ -1705,7 +1646,8 @@ export function OnboardingWizard({
   );
 
   const renderIntegrations = () => {
-    const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
+    const recs: McpRecommendation[] = mergeGoalMcpRecs(selectedGoals);
+    const canManageIntegrations = hasMinimumRole(user?.role, ROLES.ADMIN);
     return (
       <div>
         {renderStepBadge('Recommended tools')}
@@ -1719,11 +1661,13 @@ export function OnboardingWizard({
             lineHeight: 1.6,
           }}
         >
-          These are the tools we recommend for your work. You can connect any of them via MCP — just
-          ask your AI teammate to help set them up.
+          These are the tools we recommend for your work.{' '}
+          {canManageIntegrations
+            ? 'Connect them from Marketplace, or ask your AI teammate to help set them up.'
+            : 'A workspace admin can connect them for your team.'}
         </div>
 
-        {/* Persona-curated MCP recommendations — informational list, no selection */}
+        {/* Goal-curated MCP recommendations — informational list, no selection */}
         <List
           dataSource={recs}
           renderItem={(rec) => (
@@ -1991,6 +1935,10 @@ export function OnboardingWizard({
         keyboard={false}
         footer={null}
         width={600}
+        // Vertically center instead of antd's default fixed top:100 so the
+        // footer stays on-screen on shorter laptop viewports (the content
+        // region's vh cap keeps header + grid + footer within the viewport).
+        centered
         style={{
           background: MODAL_BG,
           borderRadius: 20,
@@ -2044,7 +1992,7 @@ export function OnboardingWizard({
           )}
 
           {/* Progress indicator */}
-          <div style={{ padding: '24px 32px 0', position: 'relative', zIndex: 1 }}>
+          <div style={{ padding: '18px 32px 0', position: 'relative', zIndex: 1 }}>
             {renderProgressDots()}
           </div>
 
@@ -2053,17 +2001,19 @@ export function OnboardingWizard({
             key={currentStep}
             className="onb-step"
             style={{
-              padding: '16px 32px 20px',
+              padding: '14px 32px 18px',
               // Fixed height keeps the modal from jumping between steps; the viewport
-              // cap + scroll keeps it usable on short/mobile viewports.
+              // cap + scroll keeps it usable on short/mobile viewports. The cap is
+              // high enough that the fixed height is honored on typical laptop
+              // viewports so the goals grid + footer are never clipped.
               height: 460,
-              maxHeight: '62vh',
+              maxHeight: '76vh',
               overflowY: 'auto',
               position: 'relative',
               zIndex: 1,
             }}
           >
-            {currentStep === 'persona' && renderPersona()}
+            {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
             {currentStep === 'integrations' && renderIntegrations()}

@@ -36,16 +36,19 @@ export type PersistedMessageSource = MessageSource | LegacyMessageSource;
  * Message type
  * Distinguishes conversation messages from meta/synthetic messages
  */
-export type MessageType =
-  | 'user'
-  | 'assistant'
-  | 'system'
-  | 'file-history-snapshot'
-  | 'permission_request'
-  | 'input_request'
-  | 'daemon_restart'
-  | 'daemon_crash'
-  | 'widget_request';
+export const MESSAGE_TYPE_VALUES = [
+  'user',
+  'assistant',
+  'system',
+  'file-history-snapshot',
+  'permission_request',
+  'input_request',
+  'daemon_restart',
+  'daemon_crash',
+  'widget_request',
+] as const;
+
+export type MessageType = (typeof MESSAGE_TYPE_VALUES)[number];
 
 /**
  * Content block (for multi-modal messages)
@@ -318,6 +321,22 @@ export interface Message {
 export type MessageCreate = Omit<Message, 'message_id'> & {
   message_id?: MessageID;
 };
+
+/**
+ * Fields that may change after a Message is created.
+ *
+ * Message identity, Session/Task membership, transcript position, type/role,
+ * and timestamps are deliberately immutable.
+ */
+export const MESSAGE_PATCH_FIELDS = [
+  'content_preview',
+  'content',
+  'tool_uses',
+  'parent_tool_use_id',
+  'metadata',
+] as const satisfies readonly (keyof Message)[];
+
+export type MessagePatch = Partial<Pick<Message, (typeof MESSAGE_PATCH_FIELDS)[number]>>;
 
 /**
  * Streaming event types

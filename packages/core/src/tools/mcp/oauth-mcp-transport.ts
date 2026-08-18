@@ -578,7 +578,16 @@ async function registerDynamicClient(
       'Dynamic Client Registration did not bind the required redirect URI'
     );
   }
-  const authMethod = result.token_endpoint_auth_method ?? 'none';
+  // We request a public client (`token_endpoint_auth_method: 'none'`), but some providers
+  // (e.g. Atlassian) ignore that and register a *confidential* client — returning HTTP 201
+  // with a `client_secret` while either omitting the auth method or echoing 'none'. A returned
+  // secret is the authoritative signal that the client is confidential, so treat it as
+  // client_secret_basic regardless of the advertised method. The token exchange already routes
+  // any present secret through HTTP Basic auth (RFC 6749 §2.3.1), so these credentials are
+  // usable as-is.
+  const authMethod = result.client_secret
+    ? 'client_secret_basic'
+    : (result.token_endpoint_auth_method ?? 'none');
   if (!['none', 'client_secret_basic'].includes(authMethod)) {
     throw registrationFailure(
       diagnostic,
@@ -589,12 +598,6 @@ async function registerDynamicClient(
     throw registrationFailure(
       diagnostic,
       'Dynamic Client Registration omitted the required client secret'
-    );
-  }
-  if (authMethod === 'none' && result.client_secret) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration returned incompatible public-client credentials'
     );
   }
   if (result.grant_types && !result.grant_types.includes('authorization_code')) {

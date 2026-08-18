@@ -1,5 +1,10 @@
 # Daemon Filesystem Decoupling
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🔬 Exploration / design. **Phase 1A (config hygiene, §1.5) is shipping in this PR** (H1–H4). Phase 1B and Phases 2–4 are still position-paper. **H5 (CLI config separation) is split to a follow-up branch** to keep Phase 1A focused and reviewable.
 **Created:** 2026-05-16
 **Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.

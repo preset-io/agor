@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -54,4 +54,35 @@ describe('agentic tool diagnostics', () => {
     expect(codex).toMatchObject({ status: 'unusable', path: install });
     expect(codex?.detail).toContain('agor install');
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'reports an executor-inaccessible managed integration as unusable',
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'agor-agentic-tools-'));
+      temporaryDirectories.push(directory);
+      process.env.AGOR_AGENTIC_TOOLS_DIR = directory;
+      const version = join(directory, '0.24.0');
+      const install = join(version, 'codex');
+      await mkdir(install, { recursive: true });
+      await chmod(directory, 0o755);
+      await chmod(version, 0o755);
+      await chmod(install, 0o700);
+      await writeFile(
+        join(install, 'agor-integration.json'),
+        JSON.stringify({
+          agorVersion: '0.24.0',
+          packageName: '@agor-live/codex',
+          packageVersion: '0.24.0',
+          installedAt: new Date().toISOString(),
+        })
+      );
+
+      const diagnostics = await diagnoseAgenticTools('0.24.0');
+      const codex = diagnostics.find((tool) => tool.id === 'codex');
+
+      expect(codex).toMatchObject({ status: 'unusable', path: install });
+      expect(codex?.detail).toContain('not readable and traversable');
+      expect(codex?.detail).toContain('agor install --sync');
+    }
+  );
 });

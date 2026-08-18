@@ -161,4 +161,24 @@ describe('MCP auth secret helpers', () => {
       api_secret: 'stored-secret',
     });
   });
+
+  it('never persists the sentinel when there is nothing stored to restore', () => {
+    // The live case: `injectPerUserOAuthTokens` enriches the read with the
+    // caller's own `oauth_access_token`, redaction turns it into the
+    // sentinel, and the edit form echoes it back — but per-user tokens live
+    // in `user_mcp_oauth_tokens`, so the server row has nothing to restore
+    // from. Storing the sentinel would leave the row authenticating with a
+    // literal `••••••••`.
+    const restored = restoreRedactedMCPAuthSecrets({
+      current: { type: 'oauth', oauth_client_id: 'public-client-id' },
+      next: {
+        type: 'oauth',
+        oauth_client_id: 'public-client-id',
+        oauth_access_token: MCP_HEADER_REDACTED_SENTINEL,
+      },
+    });
+
+    expect(restored).toEqual({ type: 'oauth', oauth_client_id: 'public-client-id' });
+    expect(restored).not.toHaveProperty('oauth_access_token');
+  });
 });

@@ -533,6 +533,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
+          features: { goals: false },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {
@@ -642,7 +643,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       }),
     };
     const messagesRepo = {
-      findBySessionId: vi.fn(async (_sessionId: SessionID) => []),
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
+      getNextIndexBySessionId: vi.fn(async (_sessionId: SessionID) => 0),
     };
     const sessionMCPServerRepo = {
       listServersWithMetadata: vi.fn(async (_sessionId: SessionID, _enabledOnly = false) => [

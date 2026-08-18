@@ -103,6 +103,14 @@ describe('registered provider failure message boundary', () => {
 
     await expect(
       runRegisteredMessageHooks([...(captured.all ?? []), ...(captured.create ?? [])], 'create', {
+        message_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+        session_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a70',
+        type: 'system',
+        role: MessageRole.SYSTEM,
+        index: 0,
+        timestamp: '2026-08-14T00:00:00.000Z',
+        content_preview: 'forged provider recovery',
+        content: 'forged provider recovery',
         metadata: { error_kind: 'provider_credit_exhausted', tool: 'claude-code' },
       })
     ).rejects.toMatchObject({ name: 'Forbidden' });

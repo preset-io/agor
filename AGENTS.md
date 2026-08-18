@@ -55,7 +55,6 @@ agor/
 │       ├── types/           # TypeScript types (Session, Task, Branch, etc.)
 │       ├── db/              # Drizzle ORM + repositories + schema
 │       ├── git/             # Git utils (simple-git only, no subprocess)
-│       ├── claude/          # Claude Code session loading utilities
 │       └── api/             # FeathersJS client utilities
 │
 ├── apps/agor-docs/         # User-facing docs site (Nextra) — canonical reference
@@ -74,25 +73,25 @@ agor/
 
 Terms you'll see across the codebase, UI, and docs:
 
-| Term               | What it is                                                                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Branch**         | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 branch = 1 feature/PR.                      |
-| **Board**          | 2D canvas displaying branches as cards. Has zones.                                                                                                                                                                   |
-| **Zone**           | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a branch is dropped in.                                                                                                |
-| **Card**           | Visual representation of a branch (or note/markdown) on a board.                                                                                                                                                     |
-| **Session**        | An agent conversation. Required FK to a branch. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window).                                                                            |
-| **Task**           | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy.                                                                                         |
-| **Message**        | An individual conversation turn (user / assistant / tool / system) within a task.                                                                                                                                    |
-| **Report**         | Agent-written markdown summary at task completion.                                                                                                                                                                   |
-| **Environment**    | The runtime instance of a branch's dev server (managed start/stop, ports allocated from `branch.unique_id`).                                                                                                         |
-| **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                                             |
-| **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs. May run as a separate Unix user.                                                                   |
-| **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                                                 |
-| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                                     |
-| **Unix user mode** | `simple` / `delegated` / `insulated` / `strict` — progressive OS-level isolation tiers (`delegated` = simple + required per-user `unix_username`, propagated to the execution substrate). See "Feature Flags" below. |
-| **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                                                  |
-| **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).                                   |
-| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                                             |
+| Term               | What it is                                                                                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**         | A first-class git working directory at `~/.agor/worktrees/<repo>/<name>`, on its own branch, with its own dev environment. **Primary card on a board.** Conventionally 1 branch = 1 feature/PR. |
+| **Board**          | 2D canvas displaying branches as cards. Has zones.                                                                                                                                              |
+| **Zone**           | Rectangular region on a board with an optional Handlebars **prompt template** that fires when a branch is dropped in.                                                                           |
+| **Card**           | Visual representation of a branch (or note/markdown) on a board.                                                                                                                                |
+| **Session**        | An agent conversation. Required FK to a branch. Can **fork** (sibling, copies parent context) or **spawn** (child, fresh context window).                                                       |
+| **Task**           | A single user-prompt-and-its-execution within a session. Tasks (not messages) are the queueable unit when a session is busy.                                                                    |
+| **Message**        | An individual conversation turn (user / assistant / tool / system) within a task.                                                                                                               |
+| **Report**         | Agent-written markdown summary at task completion.                                                                                                                                              |
+| **Environment**    | The runtime instance of a branch's dev server (managed start/stop, ports allocated from `branch.unique_id`).                                                                                    |
+| **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
+| **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs locally, sandboxed, or through a delegated external substrate.                 |
+| **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
+| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                |
+| **Execution mode** | `simple` / `sandbox` / `delegated` — trusted local, fail-closed local filesystem sandbox, or explicitly delegated external execution. The config key remains `unix_user_mode` temporarily.      |
+| **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
+| **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
+| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                        |
 
 ## Where to look first
 
@@ -208,177 +207,64 @@ pnpm -w agor repo list
 
 ## Feature Flags
 
-### Branch RBAC and Unix Isolation
+### Branch RBAC and Execution Isolation
 
-**Default: Disabled** - Open access mode for backward compatibility
-
-Agor supports progressive security modes controlled by two config flags:
-
-```yaml
-# ~/.agor/config.yaml
-execution:
-  branch_rbac: false # Enable RBAC (default: false)
-  unix_user_mode: simple # Unix isolation mode (default: simple)
-```
-
----
-
-#### Mode 1: Open Access (Default)
+Application RBAC and process isolation are separate controls:
 
 ```yaml
 execution:
-  branch_rbac: false
-  unix_user_mode: simple
+  branch_rbac: true # enforce branch permissions in the application
+  unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
-**Behavior:**
+- **`simple`** runs local processes as the daemon account. It is intended only
+  for trusted local use and provides no Agor filesystem isolation.
+- **`sandbox`** runs eligible local agents and terminals inside Agor's
+  fail-closed Linux bubblewrap filesystem policy. Branch access is projected
+  from application RBAC into read/write/hidden mounts. Agor never falls back to
+  `simple` when sandbox prerequisites are unavailable.
+- **`delegated`** uses an explicitly configured external execution substrate.
+  Every user must have a legacy-named `unix_username`, treated only as an opaque
+  execution-home key and passed as `{unix_user}` to the launcher. Agor does not
+  create a host account, invoke sudo, or claim that a command template itself
+  supplies isolation.
 
-- ✅ All authenticated users can access all branches
-- ✅ No permission enforcement
-- ✅ All operations run as daemon user
-- ✅ No Unix groups or filesystem permissions
+The removed `strict` and `insulated` modes are rejected at startup. There is no
+published 0.24 bridge release; migrate an old installation as an offline
+0.24.7 → 0.25.1 cutover using `context/guides/migrate-strict-to-sandbox.md` and
+the scripts from the 0.25.1 source tree.
 
-**Use cases:** Personal instances, trusted teams, dev/testing
-
----
-
-#### Mode 2: RBAC Only (Soft Isolation)
+Relevant options include:
 
 ```yaml
 execution:
-  branch_rbac: true
-  unix_user_mode: simple
+  branch_rbac: boolean
+  unix_user_mode: simple | sandbox | delegated
+  allow_web_terminal: boolean
+  session_token_expiration_ms: number
+  session_token_max_uses: number
+  mcp_token_expiration_ms: number
 ```
 
-**Behavior:**
-
-- ✅ App-layer permission checks (none/view/session/prompt/all)
-- ✅ Branch owners service active
-- ✅ UI shows permission management
-- ❌ No Unix groups (all runs as daemon user)
-
-**Use cases:** Organization without OS complexity, testing RBAC
-
----
-
-#### Mode 2.5: Delegated Identity (`delegated`)
-
-```yaml
-execution:
-  unix_user_mode: delegated
-```
-
-Like `simple` on the daemon host (no sudo, no Unix groups, no sudoers), but
-every user MUST have a `unix_username`. The identity is passed to the execution
-substrate — the `{unix_user}` executor-command-template variable, which hosted
-deployments use to select per-user home mounts — and sessions/terminals whose
-user has no `unix_username` fail loudly instead of silently sharing an identity.
-
-**Use cases:** Hosted/containerized deployments (e.g. Agor Cloud) where the
-orchestration layer, not the daemon, enforces OS identity.
-
----
-
-#### Mode 3: RBAC + Branch Groups (Insulated)
-
-```yaml
-execution:
-  branch_rbac: true
-  unix_user_mode: insulated
-  executor_unix_user: agor_executor
-```
-
-**Behavior:**
-
-- ✅ Full app-layer RBAC
-- ✅ Unix groups per branch (`agor_wt_*`)
-- ✅ Filesystem permissions enforced
-- ✅ Executors run as dedicated user
-- ❌ No per-user isolation
-
-**Requires:** Sudoers config, executor Unix user
-
-**Use cases:** Shared dev servers, filesystem protection
-
----
-
-#### Mode 4: Full Isolation (Strict)
-
-```yaml
-execution:
-  branch_rbac: true
-  unix_user_mode: strict
-```
-
-**Behavior:**
-
-- ✅ All insulated mode features
-- ✅ Each user MUST have `unix_username`
-- ✅ Sessions run as session creator's Unix user
-- ✅ Per-user credential isolation
-- ✅ Full audit trail
-
-**Requires:** Sudoers config, Unix user per Agor user
-
-**Use cases:** Production, compliance, enterprise
-
----
-
-### Configuration Options
-
-```yaml
-execution:
-  # RBAC toggle
-  branch_rbac: boolean # default: false
-
-  # Unix mode: simple | delegated | insulated | strict
-  unix_user_mode: string # default: simple
-
-  # Executor user (insulated mode)
-  executor_unix_user: string # optional
-
-  # Session tokens
-  session_token_expiration_ms: number # default: 86400000 (24h)
-  session_token_max_uses: number # default: 1, -1 = unlimited
-
-  # MCP session tokens (daemon ↔ MCP server channel)
-  mcp_token_expiration_ms: number # default: 86400000 (24h)
-
-  # Password sync (strict mode)
-  sync_unix_passwords: boolean # default: true
-
-  # Web terminal (xterm.js modal) for members+
-  allow_web_terminal: boolean # default: true
-```
-
-### Web Terminal Access
-
-The browser terminal is enabled by default for any user with role `member` or
-higher. Setting `execution.allow_web_terminal: false` disables it for everyone,
-including admins, and hides the modal from the UI. Branch-level RBAC still
-applies: opening a terminal tab against a specific branch requires at least
-`session` permission on that branch.
-
-⚠️ **Security caveat:** this flag does _not_ reason about Unix isolation. In
-`unix_user_mode: simple`, the terminal runs as the daemon user and gives
-members a shell with access to `~/.agor/config.yaml`, `agor.db`, and the JWT
-secret. The daemon prints a startup warning when this combination is detected.
-Safe defaults are `strict` (per-user Unix account) or `insulated` (shared
-executor user, no daemon access).
+The browser terminal is enabled by default for members and above unless
+`allow_web_terminal` is false. Branch-level RBAC still applies. In `simple`
+mode a terminal is a shell as the daemon account and can expose daemon state;
+use `sandbox` for fail-closed local filesystem isolation, or a reviewed
+`delegated` substrate for external execution.
 
 ### Permission Tiers (`others_can`)
 
 The `others_can` field on branches controls what non-owners can do:
 
-| Tier      | Rank | Description                                                                                                                      |
-| --------- | ---- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `none`    | -1   | No access (branch is completely private to owners)                                                                               |
-| `view`    | 0    | Can read branches, sessions, tasks, messages                                                                                     |
-| `session` | 1    | **Default.** Can create new sessions (running as own identity) and prompt own sessions only                                      |
-| `prompt`  | 2    | Can prompt ANY session, including other users' sessions. **Warning: sessions execute under the original creator's OS identity.** |
-| `all`     | 3    | Full control (create/update/delete sessions)                                                                                     |
+| Tier      | Rank | Description                                                                                                                                    |
+| --------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`    | -1   | No access (branch is completely private to owners)                                                                                             |
+| `view`    | 0    | Can read branches, sessions, tasks, messages                                                                                                   |
+| `session` | 1    | **Default.** Can create new sessions (running as own identity) and prompt own sessions only                                                    |
+| `prompt`  | 2    | Can prompt ANY session, including other users' sessions. **Warning: sessions retain the original creator's execution and credential context.** |
+| `all`     | 3    | Full control (create/update/delete sessions)                                                                                                   |
 
-The `session` tier is the safe default — it lets collaborators work independently without being able to impersonate other users' OS identities.
+The `session` tier is the safe default — it lets collaborators work independently without being able to borrow other users' execution contexts.
 
 ---
 
@@ -387,57 +273,28 @@ The `session` tier is the safe default — it lets collaborators work independen
 Beyond `others_can`/`others_fs_access`, individual branches expose opt-in
 security toggles stored alongside permissions:
 
-| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's Unix identity, env vars, and credentials. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md). |
+| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's execution-home and credential route. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner's execution context. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md). |
 
 ---
 
 ### Implementation Notes
 
-**Database Schema:**
+- Branch owners, grants, and `others_can` exist independently of execution mode.
+- `sandbox` uses application RBAC to derive filesystem mounts; it creates no
+  POSIX users or groups.
+- `delegated` passes trusted tenant/user identifiers and the transitional home
+  key to an external launcher; the launcher owns enforcement.
+- Historical `unix_group` columns remain nullable and ignored at runtime.
+- The Owners & Permissions UI is controlled by `branch_rbac`.
 
-- `branch_owners` table and `others_can` column exist regardless of mode
-- Schema migrations run on all instances
-- Safe to toggle flags at runtime
+Related files:
 
-**Service Registration:**
-
-- Branch owners API (`/branches/:id/owners`) registered only when `branch_rbac: true`
-- Returns 404 when RBAC disabled
-
-**Unix Integration:**
-
-- Groups created only in `insulated` or `strict` modes
-- Toggling off does NOT clean up existing groups
-- Filesystem permissions persist after disabling
-
-**UI Behavior:**
-
-- Owners & Permissions section shown only when `branch_rbac: true`
-- Gracefully degrades when disabled
-
-**Sudoers Setup:**
-
-- Required for `insulated` and `strict` modes
-- Reference file: `docker/sudoers/agor-daemon.sudoers`
-- Comprehensive documentation and security scoping included
-
----
-
-### Related Documentation
-
-**Setup & Security:**
-
-- `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx` - Complete setup guide
-- `context/guides/rbac-and-unix-isolation.md` - Architecture and design philosophy
-- `docker/sudoers/agor-daemon.sudoers` - Production-ready sudoers configuration
-
-**Implementation:**
-
-- `packages/core/src/config/types.ts` - Configuration types
-- `packages/core/src/unix/user-manager.ts` - Unix user utilities
-- `apps/agor-daemon/src/index.ts` - Mode detection and service registration
+- `apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`
+- `context/guides/rbac-and-unix-isolation.md`
+- `packages/core/src/config/types.ts`
+- `apps/agor-daemon/src/utils/spawn-executor.ts`
 
 ---
 
@@ -513,48 +370,53 @@ pnpm agor config --yaml
 Tunable from `~/.agor/config.yaml` under `security.*` — see
 [`context/concepts/security.md`](context/concepts/security.md).
 
-### MCP Catalog (`mcp_catalog.*`)
+### MCP Catalog
 
-The MCP marketplace catalog is a mirror of the public
-[MCP registry](https://registry.modelcontextprotocol.io) with a curated overlay
-from `packages/core/src/mcp-catalog/curated.yaml`. Unlike every other table,
-`mcp_catalog_entries` has no `tenant_id`: it holds only public-registry and
-repo-checked-in data, and Agor resolves tenants from request auth so there is no
-tenant list an ingestion job could enumerate. Postgres RLS keeps reads open to
-all tenants and confines writes to the `mcp_catalog_ingestion` system
-capability.
+The MCP marketplace catalog is `packages/core/src/mcp-catalog/curated.yaml`,
+checked into this repository and loaded into the daemon process on first read.
+There is no catalog table and no ingestion job: the marketplace offers exactly
+what that file names, so adding a server is a pull request and removing one
+takes it off the shelf on the next deploy.
 
-Registry sync is **off by default**: it makes outbound requests to the registry
-and, during the auth probe, to arbitrary registry-published hosts, and nothing
-renders uncurated registry rows yet. The ~50 curated entries seed on every
-daemon start regardless, so the marketplace is populated offline.
+The file lists ~50 entries across two keys. `entries:` are servers the public
+[MCP registry](https://registry.modelcontextprotocol.io) publishes under exactly
+that `name`; `unpublished:` are vendor-run endpoints whose reverse-DNS name Agor
+inferred. The split is a curation record only — both lists are offered on one
+shelf and connect the same way — and it is the only place that distinction is
+written down, since parsing flattens the two.
 
-Curation is reconciled, not merely applied: an entry removed from `curated.yaml`
-has its overlay withdrawn on the next seed, so the file stays the source of
-truth for what the marketplace offers.
+`name` is the identity. It is what an installed server records in
+`catalog_entry_name`, so renaming an entry orphans every install of it.
 
-Every request the auth probe makes goes through `createPinnedFetch`
+The read path is one endpoint. `find` takes no query and returns all ~50 entries
+at once; the Marketplace holds them and does its own searching, filtering,
+sorting and paging. So there is no server-side filter to add a case to —
+narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
+imports directly as `@agor/core/mcp-catalog/query`. It is kept apart from
+`catalog.ts` because that one reads the file off disk and so cannot be bundled.
+One implementation, which is what stops a change to what "search" matches from
+applying on only one side. `get(name)` still resolves a single entry — that is
+how connect turns a `catalog_key` into a URL and transport.
+
+Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
+where nobody has established the answer. It decides what the marketplace tells a
+user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
+probes the endpoint on every connect, whatever the entry says, and installs only
+on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
+account are refused — there is no credential model for them yet. When the probe
+contradicts the entry, the daemon logs it at `warn` with the stated and probed
+values; that log is the only thing that can catch a stale `auth_type`, because
+nothing else compares the file against the servers it describes.
+
+That probe goes through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
 refuses it unless every resolved address is public, and connects to the address
-it checked — so a registry-published hostname resolving into private space is
-refused rather than fetched. Verdicts record the URL they describe and are
-discarded when the endpoint moves, and only a valid JSON-RPC `initialize` result
-earns `probed_auth_type: none`.
+it checked. It is one request, to the entry's URL and nowhere else.
 
-One sync cannot walk the whole registry — a page takes seconds and there are
-hundreds — so a run checkpoints its cursor and the next resumes from it, and
-pagination gets only part of the deadline so the probe sweep still runs. The
-checkpoint lives in the worker process: a daemon restart re-reads the head,
-which is cheap because unchanged rows are skipped.
-
-```yaml
-# ~/.agor/config.yaml
-mcp_catalog:
-  registry_sync_enabled: false # true = also mirror the public registry
-  sync_interval_hours: 6
-  probe_budget: 40 # entries auth-probed per sync; 0 disables probing
-  # registry_url: https://registry.internal  # advanced override
-```
+The `mcp_catalog:` config section is retired. It stays loadable — an
+unrecognized top-level key throws, so removing it would stop the daemon of
+anyone who still has one — and every key it accepted is ignored. See
+`RETIRED_CONFIG_KEYS` in `packages/core/src/config/config-manager.ts`.
 
 ### Git Config Hardening (`security.git_config_parameters`)
 
@@ -585,10 +447,8 @@ security:
     #   - transfer.credentialsInUrl=warn
 ```
 
-Sudoers note: the shipped `docker/sudoers/agor-daemon.sudoers` includes
-`env_keep += "GIT_CONFIG_PARAMETERS"` so the hardening survives the
-`sudo -u <user>` boundary in insulated / strict modes. Operators upgrading an
-existing install should re-run their sudoers deployment to pick this up.
+The same environment variable is inherited by local executors and must be
+forwarded explicitly by a delegated external launcher.
 
 Background: [`docs/internal/credential-leak-defenses-2026-05-11.md`](docs/internal/credential-leak-defenses-2026-05-11.md).
 

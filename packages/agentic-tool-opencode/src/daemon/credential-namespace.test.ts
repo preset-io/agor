@@ -97,10 +97,10 @@ describe('OpenCode credential namespace routing', () => {
       assertOpenCodeNativeAuthSupported({
         execution: { unix_user_mode: 'delegated' },
       })
-    ).toThrow(/unavailable in delegated Unix user mode/i);
+    ).toThrow(/unavailable in delegated execution mode/i);
   });
 
-  it.each(['simple', 'insulated', 'strict'] as const)(
+  it.each(['simple', 'sandbox'] as const)(
     'returns supported %s execution mode for downstream path resolution',
     (mode) => {
       expect(

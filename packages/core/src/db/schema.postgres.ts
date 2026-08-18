@@ -11,7 +11,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  MCPCatalogEntryData,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -71,7 +70,7 @@ export const sessions = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
 
-    // Unix username for SDK impersonation (immutable once set)
+    // Immutable execution-home key (legacy column name)
     // Set from creator's unix_username at session creation time
     // NEVER changes, even if user's unix_username changes later
     // This ensures SDK session data remains accessible in the original home directory
@@ -386,6 +385,7 @@ export const tasks = pgTable(
   (table) => ({
     tenantIdx: index('tasks_tenant_id_idx').on(table.tenant_id),
     sessionIdx: index('tasks_session_idx').on(table.session_id),
+    sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     // Composite for "latest task for session" queries (ORDER BY created_at DESC LIMIT 1).
@@ -548,6 +548,11 @@ export const messages = pgTable(
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
+    sessionMessageIdIdx: index('messages_session_message_id_idx').on(
+      table.session_id,
+      table.message_id
+    ),
+    taskMessageIdIdx: index('messages_task_message_id_idx').on(table.task_id, table.message_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
     timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
     sessionTimestampIdx: index('messages_session_timestamp_idx').on(
@@ -631,12 +636,8 @@ export const repos = pgTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for repo-level git access (canonical 24-char suffix; legacy 8-char valid)
-    // Users who have access to ANY branch in this repo get added to this group.
-    // Applied to repo Unix-group-managed paths:
-    // - repo root (non-recursive) for traversal into .git/worktrees/<name>
-    // - .git (recursive) for shared git objects/refs and git operations
-    unix_group: text('unix_group'),
+    // Retired nullable compatibility stamp retained for rollback/audit only.
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
 
     data: t
       .json<unknown>('data')
@@ -779,7 +780,7 @@ export const branches = pgTable(
     }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
-    unix_group: text('unix_group'), // canonical 24-char suffix; legacy 8-char stamps remain valid
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
     others_fs_access: text('others_fs_access', {
       enum: ['none', 'read', 'write'],
     })
@@ -1016,8 +1017,13 @@ export const users = pgTable(
       .notNull()
       .default('member'),
 
-    // Unix username for process impersonation (optional, app-enforced uniqueness)
+    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
     unix_username: text('unix_username'),
+
+    // Absolute host home dir used as the per-user sandbox overlay SOURCE under
+    // unix_user_mode: sandbox (home_mode: per_user). Null → canonical store
+    // <data_home>/tenants/<tenant>/homes/<user_id>. See types/user.ts.
+    filesystem_home: text('filesystem_home'),
 
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),
@@ -1473,117 +1479,6 @@ export const mcpServers = pgTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
-  })
-);
-
-/**
- * MCP Catalog Entries table - browsable index of connectable MCP servers
- *
- * A mirror of the official MCP registry (breadth + reverse-DNS identity) with a
- * curated overlay from `packages/core/src/mcp-catalog/curated.yaml` (category,
- * capabilities, benefit copy, starter prompt, permission disclosure) joined on
- * by `name`.
- *
- * This table is deliberately global rather than tenant-scoped, and is the only
- * entry in `GLOBAL_TABLES`. Every field originates from a public unauthenticated
- * HTTP registry or from a file checked into this repository, so there is no
- * tenant data to isolate; and Agor has no tenant registry to enumerate, so a
- * per-tenant mirror of 4,000+ rows could never be kept in sync. Postgres RLS
- * still guards it: reads are open, writes require the
- * `mcp_catalog_ingestion` system capability, so no tenant-scoped request path
- * can mutate the shared catalog.
- *
- * Columns are materialized when the marketplace filters or sorts on them; the
- * rest lives in `data`, matching `mcp_servers`.
- */
-export const mcpCatalogEntries = pgTable(
-  'mcp_catalog_entries',
-  {
-    // Primary identity
-    catalog_entry_id: varchar('catalog_entry_id', { length: 36 }).primaryKey(),
-    created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at').notNull(),
-
-    // Registry identity. `name` is the join key between the registry mirror and
-    // the curated overlay, so it is unique.
-    name: text('name').notNull(),
-    version: text('version'),
-    registry_updated_at: t.timestamp('registry_updated_at'),
-
-    // Registry presentation (materialized for search)
-    title: text('title'),
-    description: text('description'),
-    website_url: text('website_url'),
-    repository_url: text('repository_url'),
-
-    // Connect surface
-    transport: text('transport', {
-      enum: ['streamable-http', 'sse', 'stdio'],
-    }),
-    remote_url: text('remote_url'),
-    has_remote: t.bool('has_remote').notNull().default(false),
-    has_package: t.bool('has_package').notNull().default(false),
-
-    // Curation overlay
-    curated: t.bool('curated').notNull().default(false),
-    category: text('category'),
-    /**
-     * Curated capability tags as a delimiter-wrapped lowercase string
-     * (`|issues|repos|ci|`), matched with `LIKE '%|issues|%'`.
-     *
-     * The structured array lives in `data.capabilities`. This denormalization
-     * exists so a capability filter is a single-table SQL predicate that behaves
-     * identically on SQLite and Postgres — a jsonb containment operator has no
-     * SQLite equivalent, and a join table would cost a second read on every
-     * keystroke for a low-cardinality field only ~50 curated rows carry.
-     */
-    capability_tags: text('capability_tags'),
-    benefit: text('benefit'),
-    starter_prompt: text('starter_prompt'),
-    permission_disclosure: text('permission_disclosure'),
-    icon_url: text('icon_url'),
-    verified: t.bool('verified').notNull().default(false),
-    /** 1 = most popular. Null sorts last. */
-    popularity_rank: integer('popularity_rank'),
-
-    // Auth probe results, cached so the connect UI knows which branch to render
-    // before the user clicks.
-    probed_auth_type: text('probed_auth_type', {
-      enum: ['none', 'oauth', 'credentials', 'unreachable', 'unknown'],
-    })
-      .notNull()
-      .default('unknown'),
-    probed_at: t.timestamp('probed_at'),
-    auth_server_origin: text('auth_server_origin'),
-
-    /**
-     * Registry lifecycle state, e.g. `active` or `deleted`.
-     *
-     * A real column rather than a blob key because the browse read filters on
-     * it: a withdrawn server left only in the blob still matches every query
-     * and, being curated, still sorts to the top of the catalog.
-     */
-    registry_status: text('registry_status'),
-
-    /**
-     * When a registry walk last returned this server.
-     *
-     * Stamped on every observation, including the `unchanged` fast path, so it
-     * answers "is this still published" rather than "when did this last
-     * change". A hard deletion leaves no record behind for a walk to notice, so
-     * a staleness sweep is the only way to reconcile one — and the column has to
-     * exist from the start, because adding it later leaves every row NULL and
-     * unable to distinguish "never observed" from "the registry dropped it".
-     */
-    last_registry_seen_at: t.timestamp('last_registry_seen_at'),
-
-    data: t.json<MCPCatalogEntryData>('data').notNull(),
-  },
-  (table) => ({
-    nameIdx: uniqueIndex('mcp_catalog_entries_name_unique').on(table.name),
-    categoryIdx: index('mcp_catalog_entries_category_idx').on(table.category),
-    popularityIdx: index('mcp_catalog_entries_popularity_idx').on(table.popularity_rank),
-    probedAtIdx: index('mcp_catalog_entries_probed_at_idx').on(table.probed_at),
   })
 );
 
@@ -2491,6 +2386,9 @@ export const kbDocuments = pgTable(
     updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    updated_by_session_id: varchar('updated_by_session_id', { length: 36 }),
+    updated_by_agentic_tool: text('updated_by_agentic_tool'),
+    updated_by_teammate_name: text('updated_by_teammate_name'),
     updated_at: t.timestamp('updated_at'),
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
@@ -2538,6 +2436,9 @@ export const kbDocumentVersions = pgTable(
     created_by: varchar('created_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    created_by_session_id: varchar('created_by_session_id', { length: 36 }),
+    created_by_agentic_tool: text('created_by_agentic_tool'),
+    created_by_teammate_name: text('created_by_teammate_name'),
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
@@ -2850,8 +2751,6 @@ export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
-export type MCPCatalogEntryRow = typeof mcpCatalogEntries.$inferSelect;
-export type MCPCatalogEntryInsert = typeof mcpCatalogEntries.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;

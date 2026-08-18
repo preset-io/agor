@@ -12,23 +12,12 @@
  * Authorization:
  * - Only branch owners can manage other owners (requires 'all' permission)
  *
- * Unix Integration:
- * - When Unix filesystem isolation is enabled, owner changes fire-and-forget sync to executor
- *
- * @see context/guides/rbac-and-unix-isolation.md
  */
 
 import type { BranchRepository } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
+import type { HookContext, User, UUID } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
-import {
-  createServiceToken,
-  getDaemonUrl,
-  serviceTokenScopeForCurrentTenant,
-  spawnExecutorFireAndForget,
-} from '../utils/spawn-executor.js';
 
 interface BranchOwnerCreateData {
   user_id: string;
@@ -140,12 +129,6 @@ function requireBranchOwner(branchRepo: BranchRepository, allowSuperadmin = true
  * Configuration options for branch owners service
  */
 export interface BranchOwnersServiceConfig {
-  /** JWT secret for creating service tokens (required for Unix integration) */
-  jwtSecret?: string;
-  /** Daemon Unix user (for group membership) */
-  daemonUser?: string;
-  /** Whether Unix filesystem isolation is enabled */
-  unixFsIsolationEnabled?: boolean;
   /** Whether superadmin bypass is enabled (default: true) */
   allowSuperadmin?: boolean;
 }
@@ -236,85 +219,13 @@ export function setupBranchOwnersService(
     }
   );
 
-  // Add authorization and Unix integration hooks
+  // Add authorization hooks.
   const allowSuperadmin = config.allowSuperadmin ?? true;
   app.service('branches/:id/owners').hooks({
     before: {
       find: [requireViewPermission(branchRepo, allowSuperadmin)],
       create: [requireBranchOwner(branchRepo, allowSuperadmin)],
       remove: [requireBranchOwner(branchRepo, allowSuperadmin)],
-    },
-    after: {
-      // After adding owner: fire-and-forget sync to executor
-      // The executor will handle adding user to branch group, repo group, and creating symlinks
-      create: [
-        async (context: HookContext) => {
-          // Skip unless Unix filesystem isolation is enabled/configured.
-          if (!config.unixFsIsolationEnabled || !config.jwtSecret) {
-            return context;
-          }
-
-          const branchId = context.params.route?.id as BranchID;
-
-          // Fire-and-forget sync to executor
-          // Syncing the branch will pick up the new owner from the DB
-          console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
-          const serviceToken = createServiceToken(config.jwtSecret, undefined, {
-            branch_id: branchId,
-            command: 'unix.sync-branch',
-            ...serviceTokenScopeForCurrentTenant(),
-          });
-          spawnExecutorFireAndForget(
-            {
-              command: 'unix.sync-branch',
-              sessionToken: serviceToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId,
-                daemonUser: config.daemonUser,
-              },
-            },
-            { logPrefix: '[Executor/branch-owners.create]' }
-          );
-
-          return context;
-        },
-      ],
-      // After removing owner: fire-and-forget sync to executor
-      // The executor will handle removing user from groups and updating permissions
-      remove: [
-        async (context: HookContext) => {
-          // Skip unless Unix filesystem isolation is enabled/configured.
-          if (!config.unixFsIsolationEnabled || !config.jwtSecret) {
-            return context;
-          }
-
-          const branchId = context.params.route?.id as BranchID;
-
-          // Fire-and-forget sync to executor
-          // Syncing the branch will handle the removed owner
-          console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
-          const serviceToken = createServiceToken(config.jwtSecret, undefined, {
-            branch_id: branchId,
-            command: 'unix.sync-branch',
-            ...serviceTokenScopeForCurrentTenant(),
-          });
-          spawnExecutorFireAndForget(
-            {
-              command: 'unix.sync-branch',
-              sessionToken: serviceToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId,
-                daemonUser: config.daemonUser,
-              },
-            },
-            { logPrefix: '[Executor/branch-owners.remove]' }
-          );
-
-          return context;
-        },
-      ],
     },
   });
 }

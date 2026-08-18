@@ -91,6 +91,8 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
+const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
+
 /**
  * Public Task transport surface. `update` is deliberately absent so whole-row
  * `PUT` never reaches the inherited DrizzleService implementation.
@@ -108,6 +110,12 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
 ] as const;
 
 export type TaskParams = QueryParams<{
+  task_id?:
+    | string
+    | {
+        $gt?: string;
+        $lte: string;
+      };
   session_id?: string;
   status?: Task['status'];
 }> &
@@ -187,79 +195,87 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Override find to support session-based filtering
+   * Keep broad Task lists bounded in SQL. Exact Session hydration remains
+   * complete through the shared client's verified Task-ID keyset loop.
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
-    if (params?._agorSqlSessionAccessUserId) {
-      return super.find(params);
+    const query = (params?.query ?? {}) as Query;
+    const requestedLimit = query.$limit ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT;
+    const skip = query.$skip ?? 0;
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 0) {
+      throw new BadRequest('$limit must be a finite non-negative integer');
     }
-
-    // If filtering by session_id as a scalar string, use repository shortcut.
-    // Note: `session_id` may be injected as `{ $in: [...] }` by the RBAC scoping
-    // hook — in that case we fall through to `super.find`, whose adapter's
-    // `filterData` handles $in natively.
-    if (typeof params?.query?.session_id === 'string') {
-      const tasks = await this.taskRepo.findBySession(params.query.session_id);
-
-      // Apply pagination if enabled
-      if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? PAGINATION.DEFAULT_LIMIT;
-        const skip = params.query.$skip ?? 0;
-
-        return {
-          total: tasks.length,
-          limit,
-          skip,
-          data: tasks.slice(skip, skip + limit),
-        };
+    if (!Number.isSafeInteger(skip) || skip < 0) {
+      throw new BadRequest('$skip must be a finite non-negative integer');
+    }
+    const limit = Math.min(requestedLimit, this.paginate?.max ?? PAGINATION.MAX_LIMIT);
+    const sort = query.$sort;
+    if (sort) {
+      for (const [field, direction] of Object.entries(sort)) {
+        if (!TASK_SORT_FIELDS.has(field)) throw new BadRequest(`Unsupported $sort field: ${field}`);
+        if (direction !== 1 && direction !== -1) {
+          throw new BadRequest(`$sort direction for ${field} must be 1 or -1`);
+        }
       }
-
-      return tasks;
+    }
+    if (query.updated_at !== undefined) {
+      throw new BadRequest('updated_at is not a Task field');
     }
 
-    // If filtering by status
-    if (params?.query?.status === TaskStatus.RUNNING) {
-      const tasks = await this.taskRepo.findRunning();
-
-      if (this.paginate) {
-        const limit = params.query.$limit ?? this.paginate.default ?? PAGINATION.DEFAULT_LIMIT;
-        const skip = params.query.$skip ?? 0;
-
-        return {
-          total: tasks.length,
-          limit,
-          skip,
-          data: tasks.slice(skip, skip + limit),
-        };
-      }
-
-      return tasks;
-    }
-
-    // Otherwise use default find
-    return super.find(params);
-  }
-
-  protected async fetchData(query: Query, params?: TaskParams): Promise<Task[]> {
+    const pageOptions: Parameters<TaskRepository['findPage']>[0] = {
+      limit,
+      skip,
+      sort,
+      selectTaskIdOnly:
+        Array.isArray(query.$select) &&
+        query.$select.length === 1 &&
+        query.$select[0] === 'task_id',
+    };
     const sessionId = query.session_id;
-    const filter: Parameters<TaskRepository['findAll']>[0] = {};
-
+    if (skip > PAGINATION.MAX_LIMIT && typeof sessionId !== 'string') {
+      throw new BadRequest('Deep Task pagination requires an exact session_id filter');
+    }
+    if (typeof query.task_id === 'string') {
+      pageOptions.taskId = query.task_id as TaskID;
+    } else if (query.task_id && typeof query.task_id === 'object') {
+      if (typeof sessionId !== 'string') {
+        throw new BadRequest('Task hydration cursors require an exact session_id filter');
+      }
+      if (typeof query.task_id.$gt === 'string') {
+        pageOptions.afterTaskId = query.task_id.$gt as TaskID;
+      }
+      if (typeof query.task_id.$lte !== 'string') {
+        throw new BadRequest('Task hydration cursor requires a $lte boundary');
+      }
+      pageOptions.throughTaskId = query.task_id.$lte as TaskID;
+    }
     if (typeof sessionId === 'string') {
-      filter.sessionId = sessionId as SessionID;
+      pageOptions.sessionId = sessionId as SessionID;
     } else if (
       sessionId &&
       typeof sessionId === 'object' &&
       Array.isArray(sessionId.$in) &&
-      sessionId.$in.every((el: unknown) => typeof el === 'string')
+      sessionId.$in.every((value: unknown) => typeof value === 'string')
     ) {
-      filter.sessionIds = sessionId.$in as SessionID[];
+      pageOptions.sessionIds = sessionId.$in as SessionID[];
     }
-    if (typeof query.status === 'string') filter.status = query.status as Task['status'];
+    if (typeof query.status === 'string') pageOptions.status = query.status as Task['status'];
+    if (typeof query.created_at === 'number' && Number.isFinite(query.created_at)) {
+      pageOptions.createdAt = new Date(query.created_at);
+    }
     if (params?._agorSqlSessionAccessUserId) {
-      filter.visibleToUserId = params._agorSqlSessionAccessUserId;
+      pageOptions.visibleToUserId = params._agorSqlSessionAccessUserId;
     }
 
-    return this.taskRepo.findAll(filter);
+    const page = await this.taskRepo.findPage(pageOptions);
+    return {
+      total: page.total,
+      limit,
+      skip,
+      data: pageOptions.selectTaskIdOnly
+        ? (page.data as Task[])
+        : (this.selectFields(page.data as Task[], query.$select) as Task[]),
+    };
   }
 
   /**
@@ -792,23 +808,38 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     try {
       const messagesService = this.app.service('messages');
 
-      // Fetch all messages from the btw fork's task to extract prompt + response
-      const messagesResult = await messagesService.find({
-        query: {
-          session_id: btwSession.session_id,
-          task_id: task.task_id,
-        },
-      });
-
-      const allMessages = messagesResult.data || messagesResult;
-      const messageList = Array.isArray(allMessages) ? allMessages : [];
+      // Only the boundary messages are needed; do not hydrate the whole fork.
+      const [firstUserResult, lastAssistantResult] = await Promise.all([
+        messagesService.find({
+          query: {
+            session_id: btwSession.session_id,
+            task_id: task.task_id,
+            role: 'user',
+            $sort: { index: 1 },
+            $limit: 1,
+          },
+        }),
+        messagesService.find({
+          query: {
+            session_id: btwSession.session_id,
+            task_id: task.task_id,
+            role: 'assistant',
+            $sort: { index: -1 },
+            $limit: 1,
+          },
+        }),
+      ]);
+      const firstUserMessages = Array.isArray(firstUserResult)
+        ? firstUserResult
+        : firstUserResult.data;
+      const lastAssistantMessages = Array.isArray(lastAssistantResult)
+        ? lastAssistantResult
+        : lastAssistantResult.data;
 
       // Extract the original prompt (first user message or task description)
-      // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-      const userMessages = messageList.filter((msg: any) => msg.role === 'user');
       let promptText = '';
-      if (userMessages.length > 0) {
-        const firstUser = userMessages[0];
+      if (firstUserMessages.length > 0) {
+        const firstUser = firstUserMessages[0];
         promptText =
           typeof firstUser.content === 'string'
             ? firstUser.content
@@ -826,15 +857,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       // Extract the last assistant response
-      const assistantMessages = messageList
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .filter((msg: any) => msg.role === 'assistant')
-        // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-        .sort((a: any, b: any) => (b.index || 0) - (a.index || 0));
-
       let responseText = '';
-      if (assistantMessages.length > 0) {
-        const lastMsg = assistantMessages[0];
+      if (lastAssistantMessages.length > 0) {
+        const lastMsg = lastAssistantMessages[0];
         responseText =
           typeof lastMsg.content === 'string'
             ? lastMsg.content
@@ -1154,17 +1179,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             query: {
               session_id: childSession.session_id,
               task_id: task.task_id,
+              role: 'assistant',
+              $sort: { index: -1 },
+              $limit: 1,
             },
           });
 
-          // MessagesService.find() ignores role/sort/limit when task_id is present
-          // So we need to filter and sort manually
           const allMessages = messages.data || messages;
-          const assistantMessages = (Array.isArray(allMessages) ? allMessages : [])
-            // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-            .filter((msg: any) => msg.role === 'assistant')
-            // biome-ignore lint/suspicious/noExplicitAny: Message type varies based on service response format
-            .sort((a: any, b: any) => (b.index || 0) - (a.index || 0)); // Descending by index
+          const assistantMessages = Array.isArray(allMessages) ? allMessages : [];
 
           if (assistantMessages.length > 0) {
             const lastMsg = assistantMessages[0];
@@ -1230,7 +1252,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       //
       // IMPORTANT: queued_by_user_id = the person who set up the callback
       // (task attribution), NOT the target session owner. Execution still runs
-      // as the target session's Unix user. Falls back to target session creator
+      // in the target session's immutable execution context. Falls back to its creator
       // for backward compat (legacy sessions without callback_created_by).
       const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =
@@ -1528,13 +1550,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
       sdkFailure: failure,
     });
-  }
-
-  /**
-   * Custom method: Bulk create tasks (for imports)
-   */
-  async createMany(taskList: Partial<Task>[]): Promise<Task[]> {
-    return this.taskRepo.createMany(taskList);
   }
 
   /**

@@ -39,6 +39,8 @@ import type {
   MCPMemberPolicySetting,
   MCPServer,
   Message,
+  MessageCreate,
+  MessagePatch,
   OpenCodeModelCatalog,
   OpenCodeOAuthAttempt,
   OpenCodeOAuthAttemptPatch,
@@ -71,7 +73,7 @@ import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
 import io, { type Socket } from 'socket.io-client';
-import { DAEMON } from '../config/constants';
+import { DAEMON, MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
 
 /**
  * Default daemon URL for client connections
@@ -410,9 +412,7 @@ export interface SessionsService
   getGenealogy(id: string, params?: Params): Promise<unknown>;
 }
 
-/**
- * Tasks service with bulk creation support
- */
+/** Tasks service with lifecycle methods. */
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
@@ -426,12 +426,6 @@ export interface TasksService extends AgorService<Task> {
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
   /**
-   * Create multiple tasks in a single request
-   * Returns array of created tasks with IDs
-   */
-  createMany(data: Partial<Task>[]): Promise<Task[]>;
-
-  /**
    * Mark a task as completed
    */
   complete(id: string, data: { report?: unknown }, params?: Params): Promise<Task>;
@@ -443,12 +437,12 @@ export interface TasksService extends AgorService<Task> {
 }
 
 /** Public Message CRUD surface. Full replacement is daemon-internal. */
-export type MessagesService = Omit<AgorService<Message>, 'update'>;
-
-/** Narrow transport contract for `POST /messages/bulk`. */
-export interface MessagesBulkService {
-  create(data: CreatePayload<Message>[], params?: Params): Promise<Message[]>;
-}
+export type MessagesService = Omit<
+  AgorService<Message, ClientInput<MessageCreate>>,
+  'update' | 'patch'
+> & {
+  patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
+};
 
 /**
  * Repos service with branch management
@@ -707,10 +701,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'opencode-auth'): OpenCodeAuthService;
   service(path: 'opencode-models'): OpenCodeModelsService;
 
-  // Bulk operation endpoints
-  service(path: 'messages/bulk'): MessagesBulkService;
-  service(path: 'tasks/bulk'): TasksService;
-
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
@@ -874,7 +864,205 @@ function isPaginatedResult<T>(result: FindResult<T>): result is Paginated<T> {
   );
 }
 
-function extendFindAllOnService(service: AgorService<unknown>): void {
+function isAscendingHydrationSort(path: string, sort: unknown): boolean {
+  if (sort === undefined) return true;
+  if (!sort || typeof sort !== 'object' || Array.isArray(sort)) return false;
+  const entries = Object.entries(sort);
+  if (path === 'messages') {
+    return (
+      entries.length >= 1 &&
+      entries.length <= 2 &&
+      entries[0][0] === 'index' &&
+      entries[0][1] === 1 &&
+      (entries.length === 1 || (entries[1][0] === 'message_id' && entries[1][1] === 1))
+    );
+  }
+  return (
+    entries.length === 2 &&
+    entries[0][0] === 'created_at' &&
+    entries[0][1] === 1 &&
+    entries[1][0] === 'task_id' &&
+    entries[1][1] === 1
+  );
+}
+
+function hydrationKeysetFor(
+  path: string,
+  query: Record<string, unknown>
+): { idField: 'message_id' | 'task_id'; pageLimit: number } | null {
+  if (query.$skip !== undefined && query.$skip !== 0) return null;
+  if (query.$select !== undefined) return null;
+  if (!isAscendingHydrationSort(path, query.$sort)) return null;
+
+  if (
+    path === 'messages' &&
+    query.message_id === undefined &&
+    (typeof query.task_id === 'string' || typeof query.session_id === 'string')
+  ) {
+    return { idField: 'message_id', pageLimit: MESSAGE_PAGINATION.MAX_LIMIT };
+  }
+  if (path === 'tasks' && query.task_id === undefined && typeof query.session_id === 'string') {
+    return { idField: 'task_id', pageLimit: PAGINATION.MAX_LIMIT };
+  }
+  return null;
+}
+
+function sortHydratedRows(path: string, rows: unknown[]): unknown[] {
+  if (path === 'messages') {
+    return rows.sort((left, right) => {
+      const a = left as { index?: unknown; message_id?: unknown };
+      const b = right as { index?: unknown; message_id?: unknown };
+      const indexDiff = Number(a.index ?? 0) - Number(b.index ?? 0);
+      return indexDiff || String(a.message_id).localeCompare(String(b.message_id));
+    });
+  }
+  return rows.sort((left, right) => {
+    const a = left as { created_at?: unknown; task_id?: unknown };
+    const b = right as { created_at?: unknown; task_id?: unknown };
+    const createdDiff =
+      new Date(String(a.created_at)).getTime() - new Date(String(b.created_at)).getTime();
+    return createdDiff || String(a.task_id).localeCompare(String(b.task_id));
+  });
+}
+
+const MAX_HYDRATION_STABILITY_ATTEMPTS = 3;
+
+class HydrationMembershipChangedError extends Error {}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+async function scanAtIdHighWater(
+  service: AgorService<unknown>,
+  params: Params | undefined,
+  path: string,
+  idField: 'message_id' | 'task_id',
+  pageLimit: number,
+  idsOnly = false
+): Promise<{ rows: unknown[]; ids: string[] }> {
+  const originalQuery =
+    params?.query && typeof params.query === 'object'
+      ? ({ ...params.query } as Record<string, unknown>)
+      : {};
+  const baseQuery = { ...originalQuery };
+  delete baseQuery.$limit;
+  delete baseQuery.$skip;
+  delete baseQuery.$sort;
+  delete baseQuery.$select;
+  delete baseQuery[idField];
+
+  // Capture a traversal boundary. IDs are immutable but deliberately are not
+  // monotonic by commit time, so the caller verifies every multi-page walk
+  // against a second collection before accepting it as one stable membership
+  // view.
+  const boundaryResult = await service.find({
+    ...(params ?? {}),
+    query: {
+      ...baseQuery,
+      $sort: { [idField]: -1 },
+      $limit: 1,
+      $select: [idField],
+    },
+  });
+  const boundaryData = normalizeFindResult(boundaryResult);
+  if (boundaryData.length === 0) return { rows: [], ids: [] };
+  const through = (boundaryData[0] as Record<string, unknown>)[idField];
+  if (typeof through !== 'string') {
+    throw new Error(`Cannot hydrate ${path}: boundary page omitted ${idField}`);
+  }
+
+  const rows: unknown[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const cursor = after ? { $gt: after, $lte: through } : { $lte: through };
+    const pageResult = await service.find({
+      ...(params ?? {}),
+      query: {
+        ...baseQuery,
+        [idField]: cursor,
+        $sort: { [idField]: 1 },
+        $limit: pageLimit,
+        ...(idsOnly ? { $select: [idField] } : {}),
+      },
+    });
+    const page = normalizeFindResult(pageResult);
+    if (page.length === 0) {
+      throw new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: keyset ended before ${idField} high-water mark`
+      );
+    }
+
+    for (const row of page) {
+      const id = (row as Record<string, unknown>)[idField];
+      if (typeof id !== 'string' || (after !== undefined && id <= after) || id > through) {
+        throw new HydrationMembershipChangedError(
+          `Cannot hydrate ${path}: ${idField} keyset did not advance`
+        );
+      }
+      after = id;
+      rows.push(row);
+    }
+    // Do not infer exhaustion from the requested limit. An older/more
+    // conservative daemon may clamp the page below this client's compiled-in
+    // ceiling. The immutable boundary (or an actually empty page) is the only
+    // version-skew-safe completion signal for this keyset walk.
+    if (after === through) break;
+  }
+
+  return { rows, ids: rows.map((row) => String((row as Record<string, unknown>)[idField])) };
+}
+
+async function findAllAtStableIdMembership(
+  service: AgorService<unknown>,
+  params: Params | undefined,
+  path: string,
+  idField: 'message_id' | 'task_id',
+  pageLimit: number
+): Promise<unknown[]> {
+  const originalQuery =
+    params?.query && typeof params.query === 'object'
+      ? ({ ...params.query } as Record<string, unknown>)
+      : {};
+  const probeResult = await service.find({
+    ...(params ?? {}),
+    query: {
+      ...originalQuery,
+      $sort: { [idField]: 1 },
+      $limit: pageLimit,
+    },
+  });
+  const probe = normalizeFindResult(probeResult);
+  if (!isPaginatedResult(probeResult) || probe.length < probeResult.limit) {
+    return sortHydratedRows(path, probe);
+  }
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < MAX_HYDRATION_STABILITY_ATTEMPTS; attempt += 1) {
+    try {
+      const candidate = await scanAtIdHighWater(service, params, path, idField, pageLimit);
+      const verification = await scanAtIdHighWater(service, params, path, idField, pageLimit, true);
+      if (sameIds(candidate.ids, verification.ids)) {
+        return sortHydratedRows(path, candidate.rows);
+      }
+      lastError = new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: membership changed while keyset pages were being read`
+      );
+    } catch (error) {
+      if (!(error instanceof HydrationMembershipChangedError)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw (
+    lastError ??
+    new HydrationMembershipChangedError(
+      `Cannot hydrate ${path}: membership did not stabilize after bounded retries`
+    )
+  );
+}
+
+function extendFindAllOnService(service: AgorService<unknown>, rawPath: string): void {
   const findAllService = service as AgorService<unknown> & {
     [SERVICE_FIND_ALL_EXTENDED]?: boolean;
   };
@@ -884,13 +1072,28 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
   }
 
   findAllService.findAll = async (params?: Params) => {
+    const path = rawPath.replace(/^\//, '');
+    const query =
+      params?.query && typeof params.query === 'object'
+        ? (params.query as Record<string, unknown>)
+        : {};
+    const keyset = hydrationKeysetFor(path, query);
+    if (keyset) {
+      return findAllAtStableIdMembership(service, params, path, keyset.idField, keyset.pageLimit);
+    }
+
     const firstResult = await service.find(params);
     if (!isPaginatedResult(firstResult)) {
       return firstResult;
     }
 
     const allData = [...firstResult.data];
-    let total = firstResult.total;
+    const total = firstResult.total;
+    // Feathers `total` describes the whole matching query, not the tail that
+    // begins at `$skip`. Preserve the caller's offset semantics while still
+    // validating that every continuation page belongs to one stable walk.
+    const initialSkip = firstResult.skip;
+    const expectedRows = Math.max(0, total - initialSkip);
     let nextSkip = firstResult.skip + firstResult.data.length;
     const pageLimit =
       typeof firstResult.limit === 'number' && firstResult.limit > 0
@@ -904,7 +1107,7 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
     const baseQuery =
       params?.query && typeof params.query === 'object' ? { ...params.query } : undefined;
 
-    while (allData.length < total) {
+    while (allData.length < expectedRows) {
       const nextParams: Params = {
         ...(params ?? {}),
         query: {
@@ -916,17 +1119,22 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
 
       const nextResult = await service.find(nextParams);
       if (!isPaginatedResult(nextResult)) {
-        allData.push(...nextResult);
-        break;
+        throw new Error('Paginated findAll() received a non-paginated continuation page');
       }
 
+      if (nextResult.total !== total || nextResult.skip !== nextSkip) {
+        throw new Error('Paginated findAll() changed while pages were being read');
+      }
       if (nextResult.data.length === 0) {
-        break;
+        throw new Error('Paginated findAll() ended before the advertised total');
       }
 
       allData.push(...nextResult.data);
       nextSkip = nextResult.skip + nextResult.data.length;
-      total = nextResult.total;
+    }
+
+    if (allData.length !== expectedRows) {
+      throw new Error('Paginated findAll() did not return the advertised total');
     }
 
     return allData;
@@ -1012,7 +1220,7 @@ function extendServiceFactory(client: AgorClient): void {
 
   augmentedClient.service = ((path: string) => {
     const service = rawService(path);
-    extendFindAllOnService(service);
+    extendFindAllOnService(service, path);
     return service;
   }) as AgorClient['service'];
 

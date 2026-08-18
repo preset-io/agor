@@ -73,28 +73,27 @@ export function EnvironmentPill({
   if (!hasConfig) {
     return (
       <Tooltip title="Click to configure environment (optional)">
-        <Tag
-          color="default"
+        <Button
+          size="small"
+          aria-label="Configure environment"
+          icon={<GlobalOutlined style={{ fontSize: 12 }} />}
+          disabled={!onEdit}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit?.();
+          }}
           style={{
-            cursor: onEdit ? 'pointer' : 'default',
-            userSelect: 'none',
+            height: 22,
+            paddingInline: 7,
+            fontSize: 12,
             opacity: 0.6,
           }}
-          onClick={
-            onEdit
-              ? (e) => {
-                  e.stopPropagation();
-                  onEdit();
-                }
-              : undefined
-          }
         >
           <Space size={4}>
-            <GlobalOutlined style={{ fontSize: 12 }} />
             <span style={{ fontFamily: token.fontFamilyCode }}>env</span>
             <EditOutlined style={{ fontSize: 12 }} />
           </Space>
-        </Tag>
+        </Button>
       </Tooltip>
     );
   }

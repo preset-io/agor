@@ -2,10 +2,14 @@
  * `agor daemon stop` - Stop daemon gracefully
  */
 
+import { getDaemonUrl, loadConfig, loadConfigFromFile } from '@agor/core/config';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { isInstalledPackage } from '../../lib/context.js';
-import { stopDaemon } from '../../lib/daemon-manager.js';
+import { getDaemonPid, getManagedDaemonIdentity, stopDaemon } from '../../lib/daemon-manager.js';
+import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { confirmLegacyManagedDaemonStop } from '../../lib/legacy-daemon-stop.js';
+import { assertLocalContextUnlockedWhenIdentified } from '../../lib/local-context.js';
 
 export default class DaemonStop extends Command {
   static description = 'Stop daemon gracefully';
@@ -24,12 +28,43 @@ export default class DaemonStop extends Command {
     }
 
     try {
+      // Validate the PID first; this also clears stale identity state before
+      // a persisted custom config path can influence this command.
+      const pid = getDaemonPid();
+      const identity = getManagedDaemonIdentity();
+      const config = identity?.configPath
+        ? await loadConfigFromFile(identity.configPath)
+        : await loadConfig();
+      await assertLocalContextUnlockedWhenIdentified(config);
+      const daemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
+      const probe = await probeAgorDaemon(daemonUrl);
+      const expectedInstanceId = identity?.instanceId;
+
+      if (pid === null) {
+        if (probe.running) {
+          throw new Error(
+            `An Agor daemon is running at ${daemonUrl}, but it is not managed by this CLI. Stop its launchd/systemd service, container, or foreground terminal instead.`
+          );
+        }
+        this.log(chalk.yellow('⚠ Daemon is not running'));
+        this.log('');
+        return;
+      }
+
+      if (!identity) {
+        await confirmLegacyManagedDaemonStop(pid, daemonUrl);
+      } else if (!(await isExpectedManagedDaemon(daemonUrl, expectedInstanceId))) {
+        throw new Error(
+          `Refusing to signal PID ${pid}: it cannot be verified as the CLI-managed Agor daemon at ${daemonUrl}. Remove stale ~/.agor/daemon.pid and ~/.agor/daemon.instance files only after verifying that PID yourself.`
+        );
+      }
+
       const stopped = stopDaemon();
 
       if (!stopped) {
         this.log(chalk.yellow('⚠ Daemon is not running'));
         this.log('');
-        this.exit(0);
+        return;
       }
 
       this.log(chalk.green('✓ Daemon stopped successfully'));

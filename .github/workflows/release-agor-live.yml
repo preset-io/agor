@@ -1,0 +1,287 @@
+# Release contract:
+#   1. A version-bump PR updates every aligned package.
+#   2. After merge, push v<package-version> on that main commit.
+#   3. This workflow builds once, runs the full packaged-install matrix, and
+#      publishes those exact tarballs with npm trusted publishing (OIDC).
+#      Stable versions use `latest`; SemVer prereleases use `next`.
+#
+# workflow_dispatch is a non-publishing preflight on the selected ref. Retry a
+# failed tag release with GitHub's "Re-run failed jobs" so it reuses the same
+# validated artifacts and cannot accidentally publish from a branch.
+name: Release agor-live
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Validate release ref
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
+      should_publish: ${{ steps.release.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: release
+        name: Validate tag and package alignment
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./packages/agor-live/package.json').version")
+          NPM_TAG=latest
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then NPM_TAG=next; fi
+          SHOULD_PUBLISH=false
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+              echo "::error::Publishing is allowed only from an existing v* tag"
+              exit 1
+            fi
+            TAG_VERSION=${GITHUB_REF_NAME#v}
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match agor-live $VERSION"
+              exit 1
+            fi
+            git fetch origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Release tag must point to a commit contained in origin/main"
+              exit 1
+            fi
+            SHOULD_PUBLISH=true
+          fi
+          node scripts/check-agentic-tool-packages.mjs
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Build once and run release matrix
+    needs: metadata
+    uses: ./.github/workflows/agor-live-smoke.yml
+
+  publish:
+    name: Publish exact validated tarballs
+    needs: [metadata, validate]
+    if: needs.metadata.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      # Trusted publishing requires npm >=11.5.1. Pin the release client rather
+      # than inheriting whichever npm happens to ship with the runner image.
+      - run: npm install -g --ignore-scripts npm@11.16.0
+
+      # Do not pass setup-node's registry-url here. It writes an _authToken
+      # placeholder that makes npm attempt token auth instead of trusted
+      # publishing: https://github.com/actions/setup-node/issues/1551
+      - name: Verify npm trusted publishing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          if [[ -n "${NODE_AUTH_TOKEN:-}" || -n "${NPM_TOKEN:-}" ]]; then
+            echo "::error::Static npm credentials are configured; this release requires trusted publishing"
+            exit 1
+          fi
+          if [[ "$(npm config get registry)" != "https://registry.npmjs.org/" ]]; then
+            echo "::error::npm is not configured for the public registry"
+            exit 1
+          fi
+          npmrc=$(npm config get userconfig)
+          if [[ -f "$npmrc" ]] && grep -Eq '_auth(Token)?[[:space:]]*=' "$npmrc"; then
+            echo "::error::npm user config contains static registry credentials"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agor-live-release
+          path: ${{ runner.temp }}/release
+
+      - name: Verify artifact set
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE="$RUNNER_TEMP/release"
+          expected=(
+            "agor-live-claude-$VERSION.tgz"
+            "agor-live-codex-$VERSION.tgz"
+            "agor-live-copilot-$VERSION.tgz"
+            "agor-live-gemini-$VERSION.tgz"
+            "agor-live-opencode-$VERSION.tgz"
+            "agor-live-cursor-$VERSION.tgz"
+            "agor-live-client-$VERSION.tgz"
+            "agor-live-$VERSION.tgz"
+          )
+          test "$(find "$RELEASE" -maxdepth 1 -name '*.tgz' | wc -l)" -eq "${#expected[@]}"
+          for artifact in "${expected[@]}"; do test -f "$RELEASE/$artifact"; done
+          (cd "$RELEASE" && sha256sum "${expected[@]}")
+
+      - name: Preflight trusted publishers and publish exact artifacts
+        env:
+          NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE="$RUNNER_TEMP/release"
+          artifacts=(
+            "$RELEASE/agor-live-claude-$VERSION.tgz"
+            "$RELEASE/agor-live-codex-$VERSION.tgz"
+            "$RELEASE/agor-live-copilot-$VERSION.tgz"
+            "$RELEASE/agor-live-gemini-$VERSION.tgz"
+            "$RELEASE/agor-live-opencode-$VERSION.tgz"
+            "$RELEASE/agor-live-cursor-$VERSION.tgz"
+            "$RELEASE/agor-live-client-$VERSION.tgz"
+            "$RELEASE/agor-live-$VERSION.tgz"
+          )
+          to_publish=()
+
+          inspect_exact() {
+            local artifact=$1
+            local manifest name version spec local_sha remote_sha lookup_error
+            manifest=$(tar -xOf "$artifact" package/package.json)
+            name=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.name)' "$manifest")
+            version=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.version)' "$manifest")
+            spec="$name@$version"
+            local_sha=$(sha1sum "$artifact" | awk '{print $1}')
+
+            # npm emits a JSON error object on stdout for a missing version when
+            # --json is used. Preserve the command status instead of mistaking
+            # that object for a published tarball shasum.
+            lookup_error=$(mktemp)
+            if remote_sha=$(npm view "$spec" dist.shasum 2>"$lookup_error"); then
+              remote_sha=$(printf '%s' "$remote_sha" | tr -d '"[:space:]')
+              if [[ -z "$remote_sha" ]]; then
+                echo "::error::npm returned no shasum for existing package $spec"
+                rm -f "$lookup_error"
+                return 1
+              fi
+            elif grep -Eq '(^|[[:space:]])E404([[:space:]]|$)' "$lookup_error"; then
+              remote_sha=""
+            else
+              echo "::error::Failed to query npm for $spec"
+              cat "$lookup_error" >&2
+              rm -f "$lookup_error"
+              return 1
+            fi
+            rm -f "$lookup_error"
+
+            if [[ -n "$remote_sha" ]]; then
+              if [[ "$remote_sha" != "$local_sha" ]]; then
+                echo "::error::$spec already exists with different tarball bytes"
+                exit 1
+              fi
+              echo "✓ $spec already contains the validated artifact; skipping"
+              return
+            fi
+
+            to_publish+=("$artifact")
+          }
+
+          verify_trusted_publisher() {
+            local artifact=$1
+            local manifest name probe_log
+            manifest=$(tar -xOf "$artifact" package/package.json)
+            name=$(node -e 'const p=JSON.parse(process.argv[1]); process.stdout.write(p.name)' "$manifest")
+            probe_log=$(mktemp)
+
+            # npm's dry-run still performs the real package-scoped OIDC token
+            # exchange. npm returns success when that exchange is unavailable,
+            # so require its pinned client's explicit success diagnostic.
+            if ! npm publish "$artifact" --access public --tag "$NPM_TAG" --dry-run --loglevel verbose >"$probe_log" 2>&1 || \
+              ! grep -Fq 'oidc Successfully retrieved and set token' "$probe_log"; then
+              echo "::error::npm trusted publishing is not authorized for $name"
+              echo "::error::Configure preset-io/agor, release-agor-live.yml, environment npm, and allow npm publish in this package's npmjs.com settings"
+              grep -E 'npm (verbose oidc|warn publish|error)' "$probe_log" >&2 || true
+              rm -f "$probe_log"
+              return 1
+            fi
+
+            rm -f "$probe_log"
+            echo "✓ npm trusted publisher accepted $name"
+          }
+
+          # Determine the complete missing set before authenticating or
+          # publishing. This keeps exact-byte partial-release recovery intact.
+          for artifact in "${artifacts[@]}"; do
+            inspect_exact "$artifact"
+          done
+
+          # Prove every missing package's npm-side trust relationship before
+          # publishing any package, avoiding preventable partial releases.
+          for artifact in "${to_publish[@]}"; do
+            verify_trusted_publisher "$artifact"
+          done
+
+          # agor-live is the user-visible release marker and remains last.
+          for artifact in "${to_publish[@]}"; do
+            npm publish "$artifact" --access public --tag "$NPM_TAG"
+          done
+
+      - name: Verify registry release
+        env:
+          NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          packages=(
+            @agor-live/claude @agor-live/codex @agor-live/copilot \
+            @agor-live/gemini @agor-live/opencode @agor-live/cursor \
+            @agor-live/client agor-live
+          )
+          remaining=("${packages[@]}")
+
+          # npm publish can return before a new version is visible through
+          # every registry read path. Force npm to revalidate its metadata
+          # cache and retry the complete missing set rather than reporting a
+          # successful publish as failed immediately.
+          for attempt in {1..13}; do
+            next=()
+            for package in "${remaining[@]}"; do
+              actual=$(npm view --prefer-online "$package@$VERSION" version 2>/dev/null || true)
+              if [[ "$actual" == "$VERSION" ]]; then
+                echo "✓ $package@$VERSION is visible"
+              else
+                next+=("$package")
+              fi
+            done
+
+            if [[ "${#next[@]}" -eq 0 ]]; then
+              break
+            fi
+            if [[ "$attempt" -eq 13 ]]; then
+              echo "::error::npm versions were not visible after 60 seconds: ${next[*]}"
+              exit 1
+            fi
+
+            echo "Waiting for npm registry propagation: ${next[*]}"
+            remaining=("${next[@]}")
+            sleep 5
+          done
+
+          for package in "${packages[@]}"; do
+            tagged=$(npm view --prefer-online "$package@$NPM_TAG" version 2>/dev/null || true)
+            if [[ "$tagged" != "$VERSION" ]]; then
+              echo "::error::$package@$NPM_TAG resolved to ${tagged:-<missing>}, expected $VERSION"
+              exit 1
+            fi
+            echo "✓ $package@$NPM_TAG resolves to $VERSION"
+          done

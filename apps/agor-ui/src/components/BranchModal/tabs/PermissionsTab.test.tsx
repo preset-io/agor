@@ -50,7 +50,7 @@ describe('PermissionsTab', () => {
         setField={vi.fn()}
       />
     );
-    expect(screen.getByText('Unix identity risk')).toBeInTheDocument();
+    expect(screen.getByText('Cross-user execution risk')).toBeInTheDocument();
   });
 
   it('shows the dangerous warning when legacy session sharing is on', () => {

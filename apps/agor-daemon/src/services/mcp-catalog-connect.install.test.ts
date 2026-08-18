@@ -46,16 +46,13 @@ vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType }));
 const DEEPWIKI = 'com.deepwiki/mcp';
 
 const CURATED = {
-  catalog_entry_id: '00000000-0000-7000-8000-0000000ce001',
   name: DEEPWIKI,
   title: 'DeepWiki',
   transport: 'streamable-http',
   remote_url: 'https://mcp.deepwiki.com/mcp',
   has_remote: true,
   has_package: false,
-  curated: true,
-  verified: false,
-  probed_auth_type: 'none',
+  auth_type: 'none',
   permission_disclosure: 'Reads public GitHub repository content only.',
 } as unknown as MCPCatalogEntry;
 
@@ -129,6 +126,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
 describe('marketplace install, as it lands in the database', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('none');
   });
 
   it('leaves the install owned by the member who connected it', async () => {
@@ -265,7 +263,6 @@ function captureRegisteredMcpServerCreateHooks(
     app: app as unknown as RegisterHooksContext['app'],
     config: { database: { dialect: 'sqlite' } } as RegisterHooksContext['config'],
     jwtSecret: 'mcp-server-wiring-test-secret',
-    branchRbacEnabled: false,
     requireAuth: async (context) => context,
     superadminOpts: { allowSuperadmin: true },
     sessionsService: {} as RegisterHooksContext['sessionsService'],

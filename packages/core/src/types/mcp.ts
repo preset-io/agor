@@ -53,7 +53,23 @@ export interface MCPOAuthRefreshResult {
 
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
-export type MCPOAuthDCRMode = 'disabled' | 'advertised' | 'fallback';
+
+/**
+ * Dynamic Client Registration policy.
+ *
+ * A value array rather than a bare union because the catalog loader validates
+ * this field out of a YAML file, and a `z.enum` built from the type is the only
+ * arrangement in which the accepted strings cannot drift from the ones
+ * {@link MCPAuth.oauth_dcr_mode} is declared to hold.
+ */
+export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as const;
+
+export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
+
+/** Strictness of OAuth authorization-metadata discovery. See {@link MCP_OAUTH_DCR_MODES}. */
+export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
+
+export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
 
 /**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
@@ -221,7 +237,7 @@ export interface MCPAuth {
   oauth_scope?: string;
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */
-  oauth_compatibility_mode?: 'strict' | 'legacy';
+  oauth_compatibility_mode?: MCPOAuthCompatibilityMode;
   /**
    * Dynamic Client Registration policy. Missing values use `advertised` for
    * compatibility with servers that publish an RFC 7591 endpoint. The
@@ -345,12 +361,10 @@ export interface MCPServer {
   /**
    * The catalog entry this server was installed from, if any.
    *
-   * Stamped as the entry's reverse-DNS registry name, which is the catalog's
-   * unique join key and the only identifier that outlives a row. A registry
-   * withdrawal followed by a republication deletes the entry and re-creates it
-   * under a fresh `catalog_entry_id`, so an id would dangle on the one event
-   * ingestion performs routinely, while the name still resolves to the entry
-   * for the same server.
+   * Stamped as the entry's reverse-DNS catalog name, which is what the entry is
+   * unique on. Every other field of an entry can be rewritten without the
+   * install ceasing to be an install of it, so the name is the only thing worth
+   * recording here — and renaming an entry is what orphans one.
    */
   catalog_entry_name?: string;
   enabled: boolean;
