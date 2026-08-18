@@ -67,7 +67,8 @@ describe('executionPolicyFor', () => {
         const constructsDatabase = /\b(?:createDatabase|createDatabaseAsync|getDatabaseUrl)\b/.test(
           source
         );
-        const constructsClient = /\b(?:connectToDaemon|createRestClient)\b/.test(source);
+        const constructsClient =
+          /\b(?:connectToDaemon|connectToLocalDaemon|createRestClient)\b/.test(source);
         return constructsDatabase && constructsClient ? [path] : [];
       });
 
@@ -81,8 +82,8 @@ describe('executionPolicyFor', () => {
         .filter((path) => !path.endsWith('.test.ts'))
         .map((path) => path.split('/')[0].replace(/\.ts$/, ''))
     );
-    const local = LOCAL_DEPLOYMENT_COMMANDS.map(([name]) => name);
-    const connected = CONNECTED_DEPLOYMENT_COMMANDS.map(([name]) => name);
+    const local = LOCAL_DEPLOYMENT_COMMANDS.map(({ name }) => name);
+    const connected = CONNECTED_DEPLOYMENT_COMMANDS.map(({ name }) => name);
 
     const connectedNames = new Set<string>(connected);
     expect(local.filter((name) => connectedNames.has(name))).toEqual([]);
@@ -100,8 +101,26 @@ describe('executionPolicyFor', () => {
           /\b(?:createDatabase|createDatabaseAsync|getConfigPath|getDatabaseUrl|loadConfig)\b/.test(
             source
           );
-        const accessesDaemonClient = /\b(?:connectToDaemon|createRestClient)\b/.test(source);
+        const accessesDaemonClient =
+          /\b(?:connectToDaemon|connectToLocalDaemon|createRestClient)\b/.test(source);
         return accessesLocalDeployment && accessesDaemonClient ? [path] : [];
+      });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('requires local commands to use the explicit local-daemon client boundary', () => {
+    const commandsDir = resolve(import.meta.dirname, '../commands');
+    const violations = globSync('**/*.ts', { cwd: commandsDir })
+      .filter((path) => !path.endsWith('.test.ts'))
+      .flatMap((path) => {
+        const commandId = path
+          .replace(/\.ts$/, '')
+          .replace(/\/index$/, '')
+          .replaceAll('/', ':');
+        if (executionPolicyFor(commandId) !== 'local') return [];
+        const source = readFileSync(resolve(commandsDir, path), 'utf8');
+        return /\bconnectToDaemon\b/.test(source) ? [commandId] : [];
       });
 
     expect(violations).toEqual([]);

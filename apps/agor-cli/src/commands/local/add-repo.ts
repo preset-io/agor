@@ -35,7 +35,7 @@ export default class LocalAddRepo extends BaseCommand {
 
   async run(): Promise<void> {
     const { args, flags } = await this.parse(LocalAddRepo);
-    const client = await this.connectToDaemon();
+    const client = await this.connectToLocalDaemon();
 
     try {
       const repoPath = args.path;

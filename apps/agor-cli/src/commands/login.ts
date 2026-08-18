@@ -44,10 +44,16 @@ export default class Login extends Command {
     const { flags } = await this.parse(Login);
 
     if (flags.url && flags.local) this.error('Use either --url or --local, not both.');
-    const hasLocalConfig = await access(getConfigPath()).then(
-      () => true,
-      () => false
-    );
+    // An explicit remote target must not depend on the state of an unrelated
+    // local installation. Only inspect local config when it can affect target
+    // selection.
+    const shouldInspectLocalConfig = !flags.url;
+    const hasLocalConfig = shouldInspectLocalConfig
+      ? await access(getConfigPath()).then(
+          () => true,
+          () => false
+        )
+      : false;
     let localSelected = flags.local;
     const localConfig = hasLocalConfig ? await loadConfig() : null;
     let daemonUrl = flags.url

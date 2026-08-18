@@ -18,7 +18,7 @@ import { getBanner } from './banner.js';
 import {
   CONNECTED_DEPLOYMENT_COMMANDS,
   LOCAL_DEPLOYMENT_COMMANDS,
-  type RootCommandEntry,
+  type RootCommandMetadata,
 } from './command-groups.js';
 import { probeAgorDaemon } from './daemon-probe.js';
 import { resolveConnectedDeploymentTarget } from './deployment-target.js';
@@ -97,12 +97,12 @@ export default class CustomHelp extends Help {
     this.log('');
   }
 
-  private formatDeploymentGroup(title: string, entries: readonly RootCommandEntry[]) {
-    const width = Math.max(...entries.map(([name]) => name.length));
+  private formatDeploymentGroup(title: string, entries: readonly RootCommandMetadata[]) {
+    const width = Math.max(...entries.map(({ name }) => name.length));
     return [
       chalk.bold(title),
       ...entries.map(
-        ([name, description]) => `  ${chalk.cyan(name.padEnd(width))}  ${chalk.dim(description)}`
+        ({ name, description }) => `  ${chalk.cyan(name.padEnd(width))}  ${chalk.dim(description)}`
       ),
     ].join('\n');
   }

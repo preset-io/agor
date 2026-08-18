@@ -10,7 +10,10 @@ import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './lib/auth';
 import { probeAgorDaemon } from './lib/daemon-probe.js';
-import { resolveConnectedDeploymentTarget } from './lib/deployment-target.js';
+import {
+  resolveConnectedDeploymentTarget,
+  resolveLocalDeploymentTarget,
+} from './lib/deployment-target.js';
 
 /**
  * Base command with daemon connection utilities
@@ -87,6 +90,20 @@ export abstract class BaseCommand extends Command {
     }
 
     return client;
+  }
+
+  /** Connect to the authenticated daemon for this machine's local deployment. */
+  protected async connectToLocalDaemon(): Promise<AgorClient> {
+    const localTarget = await resolveLocalDeploymentTarget();
+    const connectedTarget = await resolveConnectedDeploymentTarget();
+    if (!connectedTarget || connectedTarget.deploymentId !== localTarget.deploymentId) {
+      this.error(
+        chalk.red('✗ Local deployment authentication required') +
+          "\n\nAuthenticate with this machine's deployment first:\n  " +
+          chalk.cyan('agor login --local')
+      );
+    }
+    return await this.connectToDaemon();
   }
 
   /**
