@@ -5,7 +5,7 @@ export function catalogServerTransport(entry: MCPCatalogEntry): MCPTransport {
   return entry.transport === 'sse' ? 'sse' : 'http';
 }
 
-function sameCatalogEndpoint(a: string | undefined, b: string): boolean {
+export function sameCatalogEndpoint(a: string | undefined, b: string): boolean {
   if (!a) return false;
   const normalize = (value: string): string => {
     try {

@@ -43,13 +43,59 @@ function installOf(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function buildApp(entry: MCPCatalogEntry, existingServers: unknown[] = []) {
+/**
+ * A row carrying the caller's own live OAuth grant, as `mcp-servers` find hands
+ * one back.
+ *
+ * The token is the redaction sentinel rather than a credential, which is what
+ * the hook chain actually produces: `injectPerUserOAuthTokens` writes the
+ * caller's token on and `redactMCPServerSecretFields` replaces it, leaving
+ * presence and expiry — the two things reuse reads. Fixtures here never carry a
+ * real token because there is nothing in this file that needs one.
+ */
+function authenticated(overrides: Record<string, unknown> = {}) {
+  return {
+    mcp_server_id: 'server-signed-in',
+    transport: 'http',
+    url: 'https://mcp.linear.app/mcp',
+    enabled: true,
+    auth: {
+      type: 'oauth',
+      oauth_mode: 'per_user',
+      oauth_access_token: '••••••••',
+      oauth_token_expires_at: 4102444800000,
+    },
+    ...overrides,
+  };
+}
+
+function buildApp(
+  entry: MCPCatalogEntry,
+  existingServers: unknown[] = [],
+  /**
+   * What `/mcp-servers/oauth-refresh` answers. Defaults to the refusal, so a
+   * test only says so when reviving a stale grant is the thing under test.
+   */
+  refresh: (id: string) => Promise<{ success: boolean }> = async () => ({ success: false })
+) {
   const created: Record<string, unknown[]> = { mcpServers: [], sessions: [], attachments: [] };
   const removed: string[] = [];
+  const refreshed: string[] = [];
   const services: Record<string, unknown> = {
     'mcp-catalog': { get: vi.fn(async () => entry) },
+    '/mcp-servers/oauth-refresh': {
+      create: vi.fn(async (data: { mcp_server_id: string }) => {
+        refreshed.push(data.mcp_server_id);
+        return refresh(data.mcp_server_id);
+      }),
+    },
     'mcp-servers': {
       find: vi.fn(async () => existingServers),
+      get: vi.fn(async (id: string) =>
+        (existingServers as Array<{ mcp_server_id?: string }>).find(
+          (server) => server.mcp_server_id === id
+        )
+      ),
       create: vi.fn(async (data: Record<string, unknown>) => {
         created.mcpServers.push(data);
         return { ...data, mcp_server_id: 'server-1' };
@@ -80,6 +126,7 @@ function buildApp(entry: MCPCatalogEntry, existingServers: unknown[] = []) {
     services,
     created,
     removed,
+    refreshed,
   };
 }
 
@@ -844,6 +891,214 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
     expect((created.mcpServers[0] as { auth: unknown }).auth).toEqual({
       type: 'oauth',
       oauth_mode: 'per_user',
+    });
+  });
+});
+
+/**
+ * CONNECT-3: a credential the caller already holds is reused rather than asked
+ * for again.
+ *
+ * The rows here are shaped as `mcp-servers` find returns them, because that is
+ * where the answer comes from: the find hook has already looked up the caller's
+ * own grant, checked its binding against the row, rejected it if expired or
+ * mid-refresh, and written the token on. Reuse reads that verdict. So a fixture
+ * carrying a token is standing in for "the hook said this caller has a usable
+ * grant here", and one without is standing in for "it said they do not".
+ */
+describe('credential reuse', () => {
+  const OAUTH_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'oauth' };
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('oauth');
+  });
+
+  const connect = (app: { service: (path: string) => unknown }) =>
+    createMCPCatalogConnectService(app).create(request, params);
+
+  it('reuses a server the caller already signed in to, without a second row', async () => {
+    // Signed in from anywhere — Settings, another session, another board. This
+    // row was never installed from the catalog and carries no
+    // `catalog_entry_name`, which is exactly the case the requirement is about.
+    const { app, created } = buildApp(OAUTH_ENTRY, [authenticated()]);
+
+    const result = await connect(app);
+
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-signed-in');
+    expect(created.mcpServers).toHaveLength(0);
+  });
+
+  it('hands back a server that can answer, so the starter prompt is armed', async () => {
+    // The daemon half of CONNECT-4. `CatalogTab` stages the prompt only when
+    // `mcpServerNeedsAuth` says the install can answer, and that reads exactly
+    // these two fields off the returned row.
+    const { app } = buildApp(OAUTH_ENTRY, [authenticated()]);
+
+    const result = await connect(app);
+
+    expect(result.mcp_server.auth?.oauth_access_token).toBeTruthy();
+    expect(result.mcp_server.auth?.oauth_token_expires_at).toBeGreaterThan(Date.now());
+    expect(result.starter_prompt).toBe('List the issues assigned to me this cycle.');
+  });
+
+  it('installs fresh for a caller who has never signed in', async () => {
+    // No grant anywhere: unchanged behaviour, and nothing to reuse.
+    const { app, created, refreshed } = buildApp(OAUTH_ENTRY, []);
+
+    const result = await connect(app);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(refreshed).toEqual([]);
+    // Nothing to arm a prompt with — the row it just wrote holds no token.
+    expect(
+      (created.mcpServers[0] as { auth: { oauth_access_token?: string } }).auth.oauth_access_token
+    ).toBeUndefined();
+  });
+
+  it('does not reuse a grant minted for a different resource', async () => {
+    // Same vendor, different protected resource. A token minted for one is not
+    // valid at the other, and the catalog name that would call them "both
+    // Linear" is a label this repo chose, not an identity the provider knows.
+    const { app, created } = buildApp(OAUTH_ENTRY, [
+      authenticated({ url: 'https://mcp.linear.app/other-workspace' }),
+    ]);
+
+    const result = await connect(app);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  it('does not reuse a grant routed through a different issuer', async () => {
+    // The row points at the entry's endpoint but mints through somebody's own
+    // token endpoint, so the grant behind it came from a different authority.
+    const { app, created } = buildApp(OAUTH_ENTRY, [
+      authenticated({
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_token_url: 'https://tokens.attacker.example/oauth/token',
+          oauth_access_token: '••••••••',
+          oauth_token_expires_at: 4102444800000,
+        },
+      }),
+    ]);
+
+    const result = await connect(app);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  it('does not reuse an admin-provisioned shared grant', async () => {
+    // A `shared` row's grant is keyed `(NULL, server)` and belongs to nobody in
+    // particular, so hydrating it would ride an admin's consent.
+    const { app, created } = buildApp(OAUTH_ENTRY, [
+      authenticated({ auth: { type: 'oauth', oauth_mode: 'shared', oauth_access_token: '••••' } }),
+    ]);
+
+    const result = await connect(app);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  it('does not reuse a grant asked for on narrower terms than the entry needs', async () => {
+    // Nothing records what the provider actually granted, so the closest true
+    // statement is "asked for on the same terms". Reusing across a difference
+    // would fail at tool-call time with an error naming neither cause.
+    const scoped: MCPCatalogEntry = { ...OAUTH_ENTRY, oauth: { scope: 'issues:write' } };
+    const { app, created } = buildApp(scoped, [authenticated()]);
+
+    const result = await createMCPCatalogConnectService(app).create(request, params);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
+  });
+
+  describe('expiry', () => {
+    const expired = () => authenticated({ auth: { type: 'oauth', oauth_mode: 'per_user' } });
+
+    it('refreshes an expired grant rather than asking for consent again', async () => {
+      const servers = [expired()];
+      const { app, created, refreshed } = buildApp(OAUTH_ENTRY, servers, async () => {
+        // What a successful refresh leaves behind: the next read of this row
+        // hydrates the new token.
+        servers[0] = authenticated();
+        return { success: true };
+      });
+
+      const result = await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(refreshed).toEqual(['server-signed-in']);
+      expect(result.reused_existing_server).toBe(true);
+      expect(result.mcp_server.auth?.oauth_access_token).toBeTruthy();
+      expect(created.mcpServers).toHaveLength(0);
+    });
+
+    it('installs fresh when the grant cannot be refreshed', async () => {
+      // No refresh token, or the vendor revoked it: `oauth-refresh` answers
+      // `needs_reauth` either way, and consent is the honest next step.
+      const { app, created, refreshed } = buildApp(OAUTH_ENTRY, [expired()]);
+
+      const result = await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(refreshed).toEqual(['server-signed-in']);
+      expect(result.reused_existing_server).toBe(false);
+      expect(created.mcpServers).toHaveLength(1);
+    });
+
+    it('treats a token expiring this millisecond as expired', async () => {
+      // `<=`, matching the daemon's own boundary and the UI's
+      // `mcpServerNeedsAuth`, so all three agree on the same millisecond.
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(now);
+      const { app, refreshed } = buildApp(OAUTH_ENTRY, [
+        authenticated({
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_access_token: '••••••••',
+            oauth_token_expires_at: now,
+          },
+        }),
+      ]);
+
+      const result = await createMCPCatalogConnectService(app).create(request, params);
+
+      // Not taken as live: it went down the refresh path instead.
+      expect(refreshed).toEqual(['server-signed-in']);
+      expect(result.reused_existing_server).toBe(false);
+    });
+
+    it('spends at most one refresh on a connect', async () => {
+      // The candidate list is every server the caller can use, so refreshing
+      // each in turn would make one connect an unbounded fan-out of token
+      // requests at a third party.
+      const { app, refreshed } = buildApp(OAUTH_ENTRY, [
+        expired(),
+        authenticated({ mcp_server_id: 'server-b', auth: { type: 'oauth' } }),
+        authenticated({ mcp_server_id: 'server-c', auth: { type: 'oauth' } }),
+      ]);
+
+      await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(refreshed).toHaveLength(1);
+    });
+
+    it('prefers a live grant over spending a refresh', async () => {
+      const { app, refreshed } = buildApp(OAUTH_ENTRY, [
+        expired(),
+        authenticated({ mcp_server_id: 'server-live' }),
+      ]);
+
+      const result = await createMCPCatalogConnectService(app).create(request, params);
+
+      expect(refreshed).toEqual([]);
+      expect(result.mcp_server.mcp_server_id).toBe('server-live');
     });
   });
 });

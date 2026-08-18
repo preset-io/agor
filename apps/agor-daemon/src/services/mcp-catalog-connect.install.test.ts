@@ -20,6 +20,7 @@ import {
   runMigrations,
   setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
@@ -382,4 +383,204 @@ describe('the write hook this seam depends on', () => {
       await expect(patchAs(bob, data)).rejects.toThrow(/must be either strict or legacy/);
     }
   );
+});
+
+/**
+ * Collect the read chain `registerHooks` actually leaves on `mcp-servers`.
+ *
+ * Credential reuse is decided by reading whether a token arrived on a row, and
+ * the only thing that puts one there is `injectPerUserOAuthTokens` — which is
+ * module-private, keys its lookup on the authenticated caller, and is followed
+ * by redaction. Rebuilding an equivalent here would prove reuse is safe against
+ * a copy of the rule rather than the rule, which is the exact mistake the
+ * unowned-install bug was made of. So the production registration is captured
+ * and mounted, the same way `captureRegisteredMcpServerCreateHooks` does for
+ * the write path.
+ */
+function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase) {
+  const captured = {
+    beforeAll: [] as unknown[],
+    beforeFind: [] as unknown[],
+    afterFind: [] as unknown[],
+    afterGet: [] as unknown[],
+  };
+  const app = {
+    service(path: string) {
+      return {
+        hooks(hooks: {
+          before?: { all?: unknown[]; find?: unknown[] };
+          after?: { find?: unknown[]; get?: unknown[] };
+        }) {
+          if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.beforeAll.push(...(hooks.before?.all ?? []));
+          captured.beforeFind.push(...(hooks.before?.find ?? []));
+          captured.afterFind.push(...(hooks.after?.find ?? []));
+          captured.afterGet.push(...(hooks.after?.get ?? []));
+        },
+      };
+    },
+    use() {},
+    publish() {},
+  };
+
+  registerHooks({
+    db,
+    app: app as unknown as RegisterHooksContext['app'],
+    config: { database: { dialect: 'sqlite' } } as RegisterHooksContext['config'],
+    jwtSecret: 'mcp-credential-reuse-test-secret',
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: true },
+    sessionsService: {} as RegisterHooksContext['sessionsService'],
+    messagesService: {} as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: { mode: 'standalone' } as RegisterHooksContext['deployment'],
+  });
+
+  return captured;
+}
+
+/**
+ * CONNECT-3 across two users, with real grants in a real database.
+ *
+ * The row both users can see is deliberately unowned: an owned one would be
+ * filtered out of Bob's `find` by `usableByUserId` before reuse ever looked at
+ * it, so passing that would prove only that the ownership filter works. This
+ * puts the row squarely inside Bob's reach and asks whether Alice's *credential*
+ * on it can be borrowed.
+ */
+describe('credential reuse cannot cross users', () => {
+  const OAUTH_ENTRY = {
+    ...CURATED,
+    auth_type: 'oauth',
+  } as unknown as MCPCatalogEntry;
+
+  const SHARED_ROW = '00000000-0000-7000-8000-0000000005ee' as MCPServer['mcp_server_id'];
+
+  async function buildTwoUserDaemon() {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    const db = rawDb as unknown as TenantScopeAwareDatabase;
+    await runMigrations(rawDb);
+    await setMcpMemberPolicy(db, 'allow_private_only', undefined, null);
+
+    const users = new UsersRepository(rawDb);
+    const alice = (await users.create({
+      email: 'alice@agor.live',
+      name: 'Alice',
+      role: 'member',
+    })) as User;
+    const bob = (await users.create({
+      email: 'bob@agor.live',
+      name: 'Bob',
+      role: 'member',
+    })) as User;
+
+    // An unowned OAuth server at the entry's endpoint: every member can see it,
+    // nobody's credential is implied by it.
+    await new MCPServerRepository(rawDb).create({
+      mcp_server_id: SHARED_ROW,
+      name: 'deepwiki-shared',
+      transport: 'http',
+      url: 'https://mcp.deepwiki.com/mcp',
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+      scope: 'session',
+      source: 'user',
+      enabled: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    } as never);
+
+    // Alice signs in. Hers, keyed `(alice, row)`, and nothing else changes.
+    await new UserMCPOAuthTokenRepository(rawDb).saveToken(alice.user_id, SHARED_ROW, {
+      accessToken: 'alice-grant-not-a-real-token',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const hooks = captureRegisteredMcpServerHooks(db);
+    const app = feathers();
+    app.use('mcp-servers', createMCPServersService(db));
+    app.service('mcp-servers').hooks({
+      before: {
+        all: hooks.beforeAll,
+        find: hooks.beforeFind,
+        create: [createMcpServerWriteAuthorizationHook(db)],
+      },
+      after: { find: hooks.afterFind, get: hooks.afterGet },
+    } as never);
+    app.use('mcp-catalog', {
+      async get() {
+        return OAUTH_ENTRY;
+      },
+    } as never);
+    app.use('sessions', {
+      async create(data: Record<string, unknown>) {
+        return { ...data, session_id: 'session-1' };
+      },
+    } as never);
+    app.use('/sessions/:id/mcp-servers', {
+      async create(data: unknown) {
+        return data;
+      },
+    } as never);
+    app.use('/mcp-servers/oauth-refresh', {
+      async create() {
+        // Nothing here has a refresh token; the honest answer is "sign in again".
+        return { success: false, error: 'needs_reauth' };
+      },
+    } as never);
+
+    const connectAs = (caller: User) =>
+      createMCPCatalogConnectService(app).create(CONNECT_REQUEST, {
+        provider: 'rest',
+        authenticated: true,
+        user: { user_id: caller.user_id, role: 'member' },
+      } as unknown as AuthenticatedParams);
+
+    return { alice, bob, connectAs, rawDb };
+  }
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('oauth');
+  });
+
+  it('reuses the grant for the user who holds it', async () => {
+    // The positive control. Without it the negative below would also pass if
+    // reuse were simply broken, and would keep passing after it was removed.
+    const { alice, connectAs } = await buildTwoUserDaemon();
+
+    const result = await connectAs(alice);
+
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe(SHARED_ROW);
+    expect(result.mcp_server.auth?.oauth_access_token).toBeTruthy();
+  });
+
+  it('never lends Alice’s grant to Bob', async () => {
+    const { bob, connectAs, rawDb } = await buildTwoUserDaemon();
+
+    const result = await connectAs(bob);
+
+    // Same fixtures, same row in reach, only the caller differs.
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe(SHARED_ROW);
+    expect(result.mcp_server.auth?.oauth_access_token).toBeUndefined();
+
+    // And nothing was minted, copied, or re-keyed on the way past.
+    const tokens = new UserMCPOAuthTokenRepository(rawDb);
+    expect(await tokens.getToken(bob.user_id, SHARED_ROW)).toBeNull();
+    expect(await tokens.getToken(bob.user_id, result.mcp_server.mcp_server_id)).toBeNull();
+  });
+
+  it('does not leak the grant through the row it hands Bob back', async () => {
+    // The other way a credential could travel: not as a reused row, but as a
+    // token hydrated onto whatever connect returns.
+    const { bob, connectAs } = await buildTwoUserDaemon();
+
+    const result = await connectAs(bob);
+
+    expect(JSON.stringify(result)).not.toContain('alice-grant-not-a-real-token');
+  });
 });
