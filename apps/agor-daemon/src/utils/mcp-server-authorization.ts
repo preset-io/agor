@@ -32,6 +32,7 @@ import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   isAtLeastMemberRole,
   isMCPServerUsableBy,
+  isMcpGrantSubjectEntitled,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
@@ -214,14 +215,22 @@ export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp
  * ~1,800 lines of `register-services.ts`, so per-endpoint wiring is exactly
  * where the next one gets forgotten.
  *
- * This list is only the surfaces where flooring the *caller* is the right
- * instrument. Two others mint a credential with no useful caller role to read,
- * and are guarded by {@link isMcpGrantSubjectEntitled} instead — see there.
- * `register-services.mcp-capability-role.test.ts` derives which endpoints mint
- * from the source rather than trusting either list, so an endpoint that mints
- * and appears in neither fails the build.
+ * This list is not the security boundary for durable credentials, and must not
+ * be read as one. Whether a grant may be *stored* is decided at the two writes
+ * that store it — `persistOAuthToken` and `refreshAndPersistToken` both call
+ * `assertMcpGrantSubjectEntitled` themselves — precisely so that no list of
+ * endpoints has to be complete for the rule to hold. An earlier revision tried
+ * to keep this list honest with a source scan for minting calls; a scan
+ * enumerates callers, and callers can be aliased, wrapped, or newly added, so
+ * it was replaced by enforcement at the choke point.
  *
- * Genuinely absent, because they issue nothing:
+ * What this list *is*: the endpoints a person drives where the caller's own
+ * role is the right question, and where refusing up front beats a provider
+ * round-trip that fails at the write. Two of them (`discover`, `test-jwt`)
+ * reach a provider on a stored credential without persisting a grant, so for
+ * those this is the only check there is.
+ *
+ * Absent because they issue nothing:
  * - `oauth-disconnect` — revocation. Refusing a demoted user the ability to
  *   drop their own grant would strand the credential this change exists to
  *   contain, so it stays open at every role.
@@ -270,14 +279,7 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
  * Deliberately not a `hasMinimumRole` call: see {@link assertMcpCapabilityRole}
  * for why an absent role must not read as MEMBER here.
  */
-export function isMcpGrantSubjectEntitled(
-  role: unknown,
-  oauthMode: 'per_user' | 'shared' | undefined
-): boolean {
-  if (!isAtLeastMemberRole(role)) return false;
-  if (oauthMode === 'shared') return hasMinimumRole(role as string, ROLES.ADMIN);
-  return true;
-}
+export { isMcpGrantSubjectEntitled } from '@agor/core/mcp';
 
 /**
  * {@link isMcpGrantSubjectEntitled} against the subject's stored role.

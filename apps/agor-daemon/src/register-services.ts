@@ -1520,13 +1520,25 @@ async function registerMCPServices(
    */
   const AWAIT_TOKEN_TIMEOUT_MS = 5 * 60 * 1000;
 
+  /**
+   * How long a standalone pending flow may sit between `oauth-start` and the
+   * provider redirect.
+   *
+   * Enforced wherever a flow is *taken*, not only by the sweeper below. A
+   * periodic job alone makes this a TTL plus up to one sweep interval of
+   * jitter, and the reason the extra minute matters is that a demotion can land
+   * inside it — the flow would then be consumed and its token persisted.
+   */
+  const LOCAL_OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
+  const isLocalOAuthFlowExpired = (flow: PendingOAuthFlow): boolean =>
+    Date.now() - flow.createdAt > LOCAL_OAUTH_FLOW_TTL_MS;
+
   // Standalone cleanup remains process-local. PostgreSQL cleanup is a
   // fleet-safe, idempotent state-machine transition plus terminal retention.
   const oauthCleanupTimer = setInterval(() => {
     const now = Date.now();
-    const tenMinutes = 10 * 60 * 1000;
     for (const [state, flow] of pendingOAuthFlows.entries()) {
-      if (now - flow.createdAt > tenMinutes) {
+      if (isLocalOAuthFlowExpired(flow)) {
         pendingOAuthFlows.delete(state);
         localOAuthAttemptStatuses.set(flow.attemptId, {
           status: 'expired',
@@ -2227,7 +2239,17 @@ async function registerMCPServices(
           // Consume before the provider call. A second callback can never run
           // the single-use authorization code concurrently.
           pendingOAuthFlows.delete(state);
-          markLocalOAuthAttempt(pendingFlow, 'exchanging');
+          // Age checked on retrieval, not left to the sweeper. That timer runs
+          // once a minute, so a flow created just after a pass stayed usable
+          // for up to 10m59s — a TTL with a jitter window, and the reason the
+          // window matters is that a demotion can land inside it.
+          if (isLocalOAuthFlowExpired(pendingFlow)) {
+            markLocalOAuthAttempt(pendingFlow, 'expired', 'authorization_timed_out');
+            pendingFlow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
+            pendingFlow = undefined;
+          } else {
+            markLocalOAuthAttempt(pendingFlow, 'exchanging');
+          }
         }
       }
       if (!pendingFlow) {
@@ -3071,6 +3093,15 @@ async function registerMCPServices(
             };
           }
           pendingOAuthFlows.delete(state);
+          // Same age check the callback applies — see `isLocalOAuthFlowExpired`.
+          if (isLocalOAuthFlowExpired(pendingFlow)) {
+            markLocalOAuthAttempt(pendingFlow, 'expired', 'authorization_timed_out');
+            pendingFlow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
+            return {
+              success: false,
+              error: 'OAuth flow expired or not found. Please start the flow again.',
+            };
+          }
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
 

@@ -340,6 +340,12 @@
       "import": "./dist/tools/mcp/oauth-refresh.js",
       "require": "./dist/tools/mcp/oauth-refresh.cjs"
     },
+    "./tools/mcp/grant-entitlement": {
+      "source": "./src/tools/mcp/grant-entitlement.ts",
+      "types": "./dist/tools/mcp/grant-entitlement.d.ts",
+      "import": "./dist/tools/mcp/grant-entitlement.js",
+      "require": "./dist/tools/mcp/grant-entitlement.cjs"
+    },
     "./tools/mcp/oauth-token-expiry": {
       "source": "./src/tools/mcp/oauth-token-expiry.ts",
       "types": "./dist/tools/mcp/oauth-token-expiry.d.ts",

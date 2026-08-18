@@ -38,6 +38,30 @@ export function isAtLeastMemberRole(role: unknown): boolean {
 }
 
 /**
+ * Whether the user an OAuth grant belongs to may hold one at their current role.
+ *
+ * Distinct from every other predicate here, which answer what a *caller* may
+ * do. This one answers for the grant's *subject*, because the surfaces that
+ * mint a credential are not all driven by the person it is minted for: the
+ * OAuth callback is an unauthenticated browser redirect, and the executor
+ * refreshes a grant on behalf of a session's creator. It is enforced at the
+ * writes that make a grant durable rather than at those entry points — see
+ * `assertMcpGrantSubjectEntitled` in `tools/mcp/grant-entitlement`.
+ *
+ * `shared` keeps the admin floor it has always had at flow start; `per_user`
+ * gets the member floor it never had. Decided on the raw role for the reason
+ * {@link isAtLeastMemberRole} documents.
+ */
+export function isMcpGrantSubjectEntitled(
+  role: unknown,
+  oauthMode: 'per_user' | 'shared' | undefined
+): boolean {
+  if (!isAtLeastMemberRole(role)) return false;
+  if (oauthMode === 'shared') return hasMinimumRole(role as string, ROLES.ADMIN);
+  return true;
+}
+
+/**
  * Whether this role and policy together permit configuring a server at all.
  *
  * The daemon answers it on `GET /mcp-member-policy` so a client greys out its

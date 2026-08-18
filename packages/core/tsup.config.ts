@@ -60,6 +60,7 @@ export default defineConfig({
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
+    'tools/mcp/grant-entitlement': 'src/tools/mcp/grant-entitlement.ts', // MCP OAuth grant subject entitlement, enforced at the write
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
     'unix/index': 'src/unix/index.ts', // Unix group management utilities for branch isolation
     'local-actions/index': 'src/local-actions/index.ts', // Shared host-local admin actions

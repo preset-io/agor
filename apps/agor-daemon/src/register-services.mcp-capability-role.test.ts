@@ -1,20 +1,37 @@
 /**
- * That the guards run, and that no endpoint which mints a credential escapes
- * being guarded by one of them.
+ * That the caller floor runs, and that the writes which make a grant durable
+ * carry the subject check.
  *
- * The first version of this file asserted a hand-written list of "non-issuing"
- * paths, which is how it managed to certify `oauth-auth-headers` as harmless
- * while that endpoint called `refreshAndPersistToken` twice. A test that
- * restates a decision cannot detect the decision being wrong; it just makes the
- * mistake look considered. So the classification here is *derived* — the source
- * is searched for the functions that actually mint or store a credential, and
- * every endpoint containing one must be covered by a named guard that the same
- * endpoint demonstrably carries.
+ * ## Why there is no longer a scan over endpoints
  *
- * Source-level for the same reason the other `register-services.*` tests are:
- * standing up the whole registration needs a database, a config, an executor
- * and a socket server, none of which this is about. The behaviour of each guard
- * is driven for real in `services/mcp-capability-role.test.ts`.
+ * Two earlier versions of this file tried to prove "no endpoint that mints a
+ * credential is missing a guard" by searching `register-services.ts` for the
+ * calls that mint. Both were wrong, in instructive ways:
+ *
+ * 1. The first hard-coded `oauth-auth-headers` as non-issuing. It calls
+ *    `refreshAndPersistToken` twice. The test asserted the wrong answer and
+ *    made the mistake look considered.
+ * 2. The second derived the list by scanning, but matched the guard's *name*
+ *    anywhere in the endpoint — which its own `const ... =` declaration
+ *    satisfies — so deleting the refusal still passed.
+ *
+ * Fixing the second did not fix the shape. A scan over call sites enumerates
+ * callers, and callers are the easy thing to add: `const mint =
+ * refreshAndPersistToken`, an imported wrapper, or a helper defined outside the
+ * block all mint without matching, and the endpoint is silently skipped. No
+ * amount of pattern-tightening makes a survey into a proof.
+ *
+ * So the enforcement moved to the choke point instead. `persistOAuthToken` and
+ * `refreshAndPersistToken` call `assertMcpGrantSubjectEntitled` themselves,
+ * immediately before their write, so aliasing, wrapping and new endpoints are
+ * all irrelevant — every route arrives at the same two functions. What is left
+ * to check here is small and structural: that those two writes carry the check,
+ * and that the caller floor is still wired.
+ *
+ * The caller floor is not redundant to that. It covers `discover` and
+ * `test-jwt`, which reach a provider on a stored credential without persisting
+ * a grant, and it gives the other four a fast, well-worded refusal instead of a
+ * provider round-trip that fails at the write.
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,144 +39,121 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MCP_CAPABILITY_ISSUING_SERVICE_PATHS } from './utils/mcp-server-authorization.js';
 
-/**
- * Calls that obtain, exchange, or persist a credential. An endpoint containing
- * one of these is issuing capability, whatever its name suggests.
- */
-const CREDENTIAL_MINTING_CALLS = [
-  'refreshAndPersistToken(',
-  'persistOAuthToken(',
-  'persistOAuthTokenForPendingFlow(',
-  'completeMCPOAuthFlow(',
-  'startTwoPhaseMCPOAuthFlow(',
-  'startTwoPhaseMCPOAuthFlowAndAwaitToken(',
-];
+/** Strip comments so prose naming a helper cannot satisfy a structural check. */
+const codeOf = (path: string): string =>
+  readFileSync(path, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-/**
- * Endpoints that mint but cannot be guarded by flooring their caller, with the
- * guard that covers them instead. The guard's name must appear in the
- * endpoint's own source, so an exemption cannot outlive the guard it claims.
- */
-const GUARDED_BY_SUBJECT_STANDING: Record<string, string> = {
-  // The provider's browser redirect. No caller, no session — only `state` — so
-  // the standing checked is the recorded initiator's.
-  'mcp-servers/oauth-callback': 'assertPendingFlowStillAuthorized',
-  // Called by an executor under a session token; the standing checked is the
-  // grant owner's.
-  'mcp-servers/oauth-auth-headers': 'isPerUserGrantOwnerEntitled',
-};
+describe('grant entitlement is enforced at the write', () => {
+  const persistSource = codeOf(join(__dirname, 'oauth-cache.ts'));
+  const refreshSource = codeOf(
+    join(__dirname, '../../../packages/core/src/tools/mcp/oauth-refresh.ts')
+  );
 
-describe('MCP capability guards', () => {
-  const rawSource = readFileSync(join(__dirname, 'register-services.ts'), 'utf8');
-  // Strip comments so prose naming a helper cannot satisfy any check below.
-  const codeOnly = rawSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  it('checks the subject before persisting a completed flow', () => {
+    const checkAt = persistSource.indexOf('assertMcpGrantSubjectEntitled(');
+    const writeAt = persistSource.indexOf('saveToken(');
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(-1);
+    expect(checkAt, 'the check must precede the write').toBeLessThan(writeAt);
+  });
 
-  /**
-   * The source of each `/mcp-servers/*` endpoint, from its `app.use(` to the
-   * next one. `oauth-callback` is not an `app.use` route — it is an express
-   * handler returned from this module — so it is sliced from its own function.
-   */
-  const endpointBlocks = (): Map<string, string> => {
-    const blocks = new Map<string, string>();
-    const mounts = [...codeOnly.matchAll(/app\.use\(\s*'\/(mcp-servers[^']*)'/g)];
-    mounts.forEach((mount, index) => {
-      const end = index + 1 < mounts.length ? mounts[index + 1].index : codeOnly.length;
-      blocks.set(mount[1], codeOnly.slice(mount.index, end));
+  it('checks the subject before persisting every refreshed token', () => {
+    // Both dialect paths persist: `completeClaimedRefresh` on PostgreSQL and
+    // `saveToken` standalone. Neither may write without a preceding check.
+    const writes = [...refreshSource.matchAll(/\b(completeClaimedRefresh|saveToken)\s*\(/g)];
+    expect(writes.length).toBeGreaterThan(0);
+
+    const unchecked = writes.filter((write) => {
+      const before = refreshSource.slice(0, write.index);
+      const checkAt = before.lastIndexOf('assertGrantSubjectForRefresh(');
+      if (checkAt === -1) return true;
+      // The check has to be in the same function as the write, not merely
+      // earlier in the file. Nothing but a top-level `async function` opener
+      // may sit between them.
+      return /\nasync function /.test(before.slice(checkAt));
     });
-    const callbackAt = codeOnly.indexOf('const oauthCallbackHandler');
-    if (callbackAt > -1) {
-      const rest = codeOnly.slice(callbackAt);
-      const next = rest.slice(1).search(/\n {2}(const|async function) /);
-      blocks.set('mcp-servers/oauth-callback', next === -1 ? rest : rest.slice(0, next + 1));
-    }
-    return blocks;
-  };
 
-  it('finds the endpoints it means to classify (sanity)', () => {
-    const blocks = endpointBlocks();
-    expect(blocks.size).toBeGreaterThan(5);
-    expect([...blocks.keys()]).toEqual(expect.arrayContaining(['mcp-servers/oauth-callback']));
+    expect(unchecked.map((w) => `${w[1]} persists without a preceding subject check`)).toEqual([]);
   });
 
-  /**
-   * The offset of the first *call* to `name` in `block`, or -1.
-   *
-   * A call, not a mention: an earlier draft of this test asked whether the
-   * guard's name appeared anywhere in the endpoint, which the guard's own
-   * `const ... =` declaration satisfies. Deleting the refusal while leaving the
-   * declaration behind therefore passed — the test certified a guard that no
-   * longer ran. Requiring `name(` excludes the declaration, whose identifier is
-   * followed by `=` rather than `(`.
-   */
-  const firstCallAt = (block: string, name: string): number =>
-    block.search(new RegExp(`\\b${name}\\s*\\(`));
+  it('resolves the subject from stored state, not from a caller argument', () => {
+    // The point of moving the check inward: a caller cannot pre-satisfy it by
+    // passing a flag. It reads the role itself.
+    const guard = codeOf(
+      join(__dirname, '../../../packages/core/src/tools/mcp/grant-entitlement.ts')
+    );
+    expect(guard).toContain('UsersRepository');
+    expect(guard).toContain('isMcpGrantSubjectEntitled(');
+  });
+});
 
-  it('guards every endpoint that mints a credential, before it mints', () => {
-    const unguarded: string[] = [];
-    for (const [path, block] of endpointBlocks()) {
-      const mints = CREDENTIAL_MINTING_CALLS.filter((call) => block.includes(call));
-      if (mints.length === 0) continue;
-      if ((MCP_CAPABILITY_ISSUING_SERVICE_PATHS as readonly string[]).includes(path)) continue;
+describe('standalone pending flows expire when taken, not only when swept', () => {
+  const source = codeOf(join(__dirname, 'register-services.ts'));
 
-      const subjectGuard = GUARDED_BY_SUBJECT_STANDING[path];
-      const guardAt = subjectGuard ? firstCallAt(block, subjectGuard) : -1;
-      const firstMintAt = Math.min(
-        ...mints.map((call) => block.indexOf(call)).filter((at) => at > -1)
-      );
+  it('checks flow age between claiming a flow and using it', () => {
+    // A TTL enforced only by the 60s sweeper is a TTL plus a jitter window, and
+    // the reason that extra minute matters is that a demotion can land inside
+    // it. Anchored on the assignment, which is where a callback or a manual
+    // completion claims a flow — the sweeper's own delete is the expiry itself,
+    // and the await-timeout's lookup discards rather than consumes.
+    const takes = [...source.matchAll(/pendingFlow = pendingOAuthFlows\.get\(state\)/g)];
+    expect(takes.length).toBeGreaterThan(0);
 
-      if (guardAt > -1 && guardAt < firstMintAt) continue;
-
-      unguarded.push(
-        !subjectGuard
-          ? `${path} calls ${mints.join(', ')} but carries no role guard`
-          : guardAt === -1
-            ? `${path} claims ${subjectGuard}, which its source never calls`
-            : `${path} calls ${subjectGuard} only after it has already minted`
-      );
-    }
-
-    // This is the assertion that would have caught `oauth-auth-headers`.
-    expect(unguarded).toEqual([]);
+    const unchecked = takes.filter((take) => {
+      // The window is "until the flow is acted on", not a character count: the
+      // age has to be settled before anything else looks at the flow.
+      const after = source.slice(take.index);
+      const usedAt = after.indexOf('assertPendingFlowStillAuthorized(');
+      const checkedAt = after.indexOf('isLocalOAuthFlowExpired(');
+      return checkedAt === -1 || (usedAt > -1 && checkedAt > usedAt);
+    });
+    expect(unchecked.map(() => 'a flow is claimed and used without an age check')).toEqual([]);
   });
 
-  it('keeps the caller floor to endpoints a caller actually drives', () => {
-    // The converse mistake: flooring the caller on an endpoint the executor
-    // drives would refuse a robot for having no role.
-    for (const path of Object.keys(GUARDED_BY_SUBJECT_STANDING)) {
-      expect(MCP_CAPABILITY_ISSUING_SERVICE_PATHS as readonly string[]).not.toContain(path);
-    }
+  it('shares one TTL between the sweeper and the take paths', () => {
+    expect(source).toContain('LOCAL_OAUTH_FLOW_TTL_MS');
+    // The sweeper must use the shared predicate rather than an inline literal,
+    // so the two cannot drift apart.
+    const sweeperAt = source.indexOf('const oauthCleanupTimer');
+    const sweeper = source.slice(sweeperAt, sweeperAt + 700);
+    expect(sweeper).toContain('isLocalOAuthFlowExpired(');
   });
+});
 
-  it('applies the caller floor from the shipped registration helper', () => {
-    // The helper, not a loop copied into this file — a copy is what drifts.
-    expect(codeOnly).toContain('registerMcpCapabilityRoleFloor(app)');
+describe('MCP caller floor wiring', () => {
+  const source = codeOf(join(__dirname, 'register-services.ts'));
+
+  it('applies the floor from the shipped registration helper', () => {
+    expect(source).toContain('registerMcpCapabilityRoleFloor(app)');
   });
 
   it('applies it after the endpoints register their own auth hooks', () => {
     // Feathers appends, so ordering is what makes `ctx.requireAuth` run first
     // and lets the floor decide on an authenticated caller.
-    const floorAt = codeOnly.indexOf('registerMcpCapabilityRoleFloor(app)');
+    const floorAt = source.indexOf('registerMcpCapabilityRoleFloor(app)');
     expect(floorAt).toBeGreaterThan(-1);
     for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
-      const hooksAt = codeOnly.indexOf(`app.service('${path}').hooks(`);
+      const hooksAt = source.indexOf(`app.service('${path}').hooks(`);
       expect(hooksAt, `${path} registers its own hooks`).toBeGreaterThan(-1);
       expect(hooksAt, `${path} hooks must register before the floor`).toBeLessThan(floorAt);
     }
   });
 
   it('mounts every path the floor names', () => {
-    // A typo in the list would otherwise fail silently — `app.service()` on an
-    // unmounted path does not throw in a way this registration would notice.
+    // A typo would otherwise fail silently — `app.service()` on an unmounted
+    // path does not throw in a way this registration would notice.
     for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
-      expect(codeOnly, `${path} is not mounted`).toContain(`app.use('/${path}'`);
+      expect(source, `${path} is not mounted`).toContain(`app.use('/${path}'`);
     }
   });
 
   it('re-checks the flow initiator ahead of the durable-only branch', () => {
-    // The gap was not the check being absent but its being unreachable: it sat
+    // The callback gap was not the check being absent but unreachable: it sat
     // behind `if (!record) return`, which is every SQLite deployment.
-    const guardAt = codeOnly.indexOf('const assertPendingFlowStillAuthorized');
-    const body = codeOnly.slice(guardAt, guardAt + 1200);
+    const guardAt = source.indexOf('const assertPendingFlowStillAuthorized');
+    const body = source.slice(guardAt, guardAt + 1200);
     const initiatorAt = body.indexOf('assertFlowInitiatorStillEntitled(');
     const durableReturnAt = body.indexOf('if (!record) return;');
     expect(initiatorAt).toBeGreaterThan(-1);
