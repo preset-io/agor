@@ -8,19 +8,30 @@ describe('knowledgeAttributionDisplay', () => {
     expect(knowledgeAttributionDisplay({ userId: 'user-1' }, users)).toEqual({
       userLabel: 'Ada',
       assistantLabel: null,
+      editorLabel: 'Ada',
     });
   });
 
-  it('shows the trusted assistant and Session attribution for an agent edit', () => {
+  it('combines the human and teammate names without exposing the Session ID', () => {
     expect(
       knowledgeAttributionDisplay(
         {
           userId: 'user-1',
           sessionId: '01abcdef-1234-7890-abcd-ef1234567890',
           agenticTool: 'codex',
+          teammateName: 'Scout',
         },
         users
       )
-    ).toEqual({ userLabel: 'Ada', assistantLabel: 'Codex · session 01abcdef12347890abcdef12' });
+    ).toEqual({ userLabel: 'Ada', assistantLabel: 'Scout', editorLabel: 'Ada and Scout' });
+  });
+
+  it('falls back to the agentic tool when the Session is not a named teammate', () => {
+    expect(
+      knowledgeAttributionDisplay(
+        { userId: 'user-1', sessionId: 'session-1', agenticTool: 'codex' },
+        users
+      )
+    ).toEqual({ userLabel: 'Ada', assistantLabel: 'Codex', editorLabel: 'Ada and Codex' });
   });
 });

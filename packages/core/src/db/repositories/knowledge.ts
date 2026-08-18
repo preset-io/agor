@@ -800,6 +800,7 @@ export class KnowledgeDocumentVersionRepository
       created_by_agentic_tool:
         (row.created_by_agentic_tool as KnowledgeDocumentVersion['created_by_agentic_tool']) ??
         null,
+      created_by_teammate_name: row.created_by_teammate_name ?? null,
       created_at: new Date(row.created_at),
     };
   }
@@ -829,6 +830,7 @@ export class KnowledgeDocumentVersionRepository
       created_by: data.created_by ?? null,
       created_by_session_id: data.created_by_session_id ?? null,
       created_by_agentic_tool: data.created_by_agentic_tool ?? null,
+      created_by_teammate_name: data.created_by_teammate_name ?? null,
       created_at: data.created_at ? new Date(data.created_at) : new Date(),
     };
   }
@@ -939,6 +941,7 @@ export class KnowledgeDocumentRepository
         (row.updated_by_session_id as KnowledgeDocument['updated_by_session_id']) ?? null,
       updated_by_agentic_tool:
         (row.updated_by_agentic_tool as KnowledgeDocument['updated_by_agentic_tool']) ?? null,
+      updated_by_teammate_name: row.updated_by_teammate_name ?? null,
       updated_at: row.updated_at ? new Date(row.updated_at) : null,
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at) : null,
@@ -995,6 +998,7 @@ export class KnowledgeDocumentRepository
       updated_by: data.updated_by ?? data.created_by ?? null,
       updated_by_session_id: data.updated_by_session_id ?? null,
       updated_by_agentic_tool: data.updated_by_agentic_tool ?? null,
+      updated_by_teammate_name: data.updated_by_teammate_name ?? null,
       updated_at: data.updated_at ? new Date(data.updated_at) : new Date(now),
       archived: data.archived ?? false,
       archived_at: data.archived_at ? new Date(data.archived_at) : null,
@@ -1090,6 +1094,7 @@ export class KnowledgeDocumentRepository
           created_by: data.created_by ?? null,
           created_by_session_id: data.updated_by_session_id ?? null,
           created_by_agentic_tool: data.updated_by_agentic_tool ?? null,
+          created_by_teammate_name: data.updated_by_teammate_name ?? null,
           created_at: new Date(),
         })
         .run();
@@ -1369,6 +1374,7 @@ export class KnowledgeDocumentRepository
             created_by: updates.updated_by ?? current.updated_by ?? current.created_by ?? null,
             created_by_session_id: updates.updated_by_session_id ?? null,
             created_by_agentic_tool: updates.updated_by_agentic_tool ?? null,
+            created_by_teammate_name: updates.updated_by_teammate_name ?? null,
             created_at: new Date(),
           })
           .run();

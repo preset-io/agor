@@ -77,7 +77,11 @@ export type KnowledgeDocumentParams = QueryParams<{
 }> &
   AuthenticatedParams & {
     /** Server-derived only; MCP callers cannot provide service params. */
-    knowledgeWriteAttribution?: { sessionId: SessionID; agenticTool: PersistedAgenticToolName };
+    knowledgeWriteAttribution?: {
+      sessionId: SessionID;
+      agenticTool: PersistedAgenticToolName;
+      teammateName?: string;
+    };
   };
 
 type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput) & {
@@ -95,6 +99,7 @@ function assistantAttribution(params?: KnowledgeDocumentParams) {
   return {
     updated_by_session_id: identity?.sessionId ?? null,
     updated_by_agentic_tool: identity?.agenticTool ?? null,
+    updated_by_teammate_name: identity?.teammateName ?? null,
   };
 }
 

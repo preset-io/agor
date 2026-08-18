@@ -222,7 +222,11 @@ describe('Knowledge MCP input schemas', () => {
     const tools = await captureKnowledgeTools(
       { 'kb/documents': { putDocument } },
       {
-        assistantIdentity: { sessionId: 'session-1', agenticTool: 'codex' },
+        assistantIdentity: {
+          sessionId: 'session-1',
+          agenticTool: 'codex',
+          teammateName: 'Scout',
+        },
       }
     );
 
@@ -233,7 +237,11 @@ describe('Knowledge MCP input schemas', () => {
     });
 
     expect(putDocument.mock.calls[0][1]).toMatchObject({
-      knowledgeWriteAttribution: { sessionId: 'session-1', agenticTool: 'codex' },
+      knowledgeWriteAttribution: {
+        sessionId: 'session-1',
+        agenticTool: 'codex',
+        teammateName: 'Scout',
+      },
     });
   });
 

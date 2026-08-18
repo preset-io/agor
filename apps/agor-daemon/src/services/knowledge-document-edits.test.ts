@@ -124,7 +124,11 @@ describe('KnowledgeDocumentEditsService', () => {
       },
       {
         user: owner,
-        knowledgeWriteAttribution: { sessionId: assistantSessionId, agenticTool: 'codex' },
+        knowledgeWriteAttribution: {
+          sessionId: assistantSessionId,
+          agenticTool: 'codex',
+          teammateName: 'Scout',
+        },
       }
     );
 
@@ -138,12 +142,14 @@ describe('KnowledgeDocumentEditsService', () => {
       created_by: owner.user_id,
       created_by_session_id: assistantSessionId,
       created_by_agentic_tool: 'codex',
+      created_by_teammate_name: 'Scout',
       metadata: expect.objectContaining({ session_id: assistantSessionId }),
     });
     expect(await new KnowledgeDocumentRepository(db).findById(document.document_id)).toMatchObject({
       updated_by: owner.user_id,
       updated_by_session_id: assistantSessionId,
       updated_by_agentic_tool: 'codex',
+      updated_by_teammate_name: 'Scout',
     });
   });
 

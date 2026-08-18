@@ -447,7 +447,11 @@ describe('KnowledgeDocumentsService permissions', () => {
         },
         {
           user: owner,
-          knowledgeWriteAttribution: { sessionId: assistantSessionId, agenticTool: 'codex' },
+          knowledgeWriteAttribution: {
+            sessionId: assistantSessionId,
+            agenticTool: 'codex',
+            teammateName: 'Scout',
+          },
         } as never
       );
       expect(updated.document_id).toBe(created.document_id);
@@ -455,6 +459,7 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(updated).toMatchObject({
         updated_by_session_id: assistantSessionId,
         updated_by_agentic_tool: 'codex',
+        updated_by_teammate_name: 'Scout',
       });
 
       const iconOnlyUpdate = await service.putDocument(
@@ -470,6 +475,7 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(iconOnlyUpdate).toMatchObject({
         updated_by_session_id: null,
         updated_by_agentic_tool: null,
+        updated_by_teammate_name: null,
       });
 
       const assistantIconUpdate = await service.putDocument(
@@ -479,13 +485,18 @@ describe('KnowledgeDocumentsService permissions', () => {
         },
         {
           user: owner,
-          knowledgeWriteAttribution: { sessionId: assistantSessionId, agenticTool: 'codex' },
+          knowledgeWriteAttribution: {
+            sessionId: assistantSessionId,
+            agenticTool: 'codex',
+            teammateName: 'Scout',
+          },
         } as never
       );
       expect(assistantIconUpdate.current_version_id).toBe(updated.current_version_id);
       expect(assistantIconUpdate).toMatchObject({
         updated_by_session_id: assistantSessionId,
         updated_by_agentic_tool: 'codex',
+        updated_by_teammate_name: 'Scout',
       });
 
       const hydrated = await service.getDocument(

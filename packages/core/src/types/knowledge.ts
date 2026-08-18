@@ -614,6 +614,8 @@ export interface KnowledgeDocument {
   /** Trusted Session attribution for the most recent assistant-authored version. */
   updated_by_session_id?: SessionID | null;
   updated_by_agentic_tool?: PersistedAgenticToolName | null;
+  /** Teammate display name captured at write time, so attribution survives rename/deletion. */
+  updated_by_teammate_name?: string | null;
   updated_at?: Date | null;
   archived: boolean;
   archived_at?: Date | null;
@@ -642,6 +644,7 @@ export interface KnowledgeDocumentVersion {
   /** Present only when this version was written through a Session-scoped agent request. */
   created_by_session_id?: SessionID | null;
   created_by_agentic_tool?: PersistedAgenticToolName | null;
+  created_by_teammate_name?: string | null;
   created_at: Date;
 }
 

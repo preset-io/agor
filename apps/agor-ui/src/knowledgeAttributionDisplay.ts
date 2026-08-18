@@ -1,11 +1,10 @@
-import { shortId } from '@agor/core/types';
-
 type UserSummary = { name?: string | null; email?: string | null };
 
 export interface KnowledgeAttribution {
   userId?: string | null;
   sessionId?: string | null;
   agenticTool?: string | null;
+  teammateName?: string | null;
 }
 
 export function knowledgeAttributionDisplay(
@@ -14,16 +13,21 @@ export function knowledgeAttributionDisplay(
 ) {
   const user = attribution.userId ? userById.get(attribution.userId) : undefined;
   const userLabel = user?.name?.trim() || user?.email || 'Unknown user';
-  if (!attribution.sessionId) return { userLabel, assistantLabel: null };
+  const teammateLabel = attribution.teammateName?.trim();
+  if (!teammateLabel && !attribution.sessionId && !attribution.agenticTool) {
+    return { userLabel, assistantLabel: null, editorLabel: userLabel };
+  }
 
-  const toolLabel =
-    attribution.agenticTool === 'claude-code'
+  const assistantLabel =
+    teammateLabel ||
+    (attribution.agenticTool === 'claude-code'
       ? 'Claude Code'
       : attribution.agenticTool
         ? attribution.agenticTool.charAt(0).toUpperCase() + attribution.agenticTool.slice(1)
-        : 'Assistant';
+        : 'Assistant');
   return {
     userLabel,
-    assistantLabel: `${toolLabel} · session ${shortId(attribution.sessionId as never)}`,
+    assistantLabel,
+    editorLabel: `${userLabel} and ${assistantLabel}`,
   };
 }

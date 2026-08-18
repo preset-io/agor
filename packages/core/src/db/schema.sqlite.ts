@@ -2249,6 +2249,7 @@ export const kbDocuments = sqliteTable(
     }),
     updated_by_session_id: text('updated_by_session_id', { length: 36 }),
     updated_by_agentic_tool: text('updated_by_agentic_tool'),
+    updated_by_teammate_name: text('updated_by_teammate_name'),
     updated_at: t.timestamp('updated_at'),
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
@@ -2294,6 +2295,7 @@ export const kbDocumentVersions = sqliteTable(
     }),
     created_by_session_id: text('created_by_session_id', { length: 36 }),
     created_by_agentic_tool: text('created_by_agentic_tool'),
+    created_by_teammate_name: text('created_by_teammate_name'),
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({

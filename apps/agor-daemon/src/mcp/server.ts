@@ -30,7 +30,13 @@ import {
   UserApiKeysRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { PersistedAgenticToolName, SessionID, TenantContext, UserID } from '@agor/core/types';
+import {
+  getTeammateConfig,
+  type PersistedAgenticToolName,
+  type SessionID,
+  type TenantContext,
+  type UserID,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
@@ -84,7 +90,11 @@ export interface McpContext {
   /** Current Agor session context, when the caller supplied or authenticated with one. */
   sessionId?: SessionID;
   /** Trusted assistant identity resolved from the current tenant-scoped Session. */
-  assistantIdentity?: { sessionId: SessionID; agenticTool: PersistedAgenticToolName };
+  assistantIdentity?: {
+    sessionId: SessionID;
+    agenticTool: PersistedAgenticToolName;
+    teammateName?: string;
+  };
   authenticatedUser: AuthenticatedUser;
   baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider' | 'tenant'>;
 }
@@ -738,6 +748,16 @@ export function setupMCPRoutes(
               sessionId: session.session_id,
               agenticTool: session.agentic_tool,
             };
+            try {
+              const branch = await app
+                .service('branches')
+                .get(session.branch_id, baseServiceParams);
+              const teammateName = getTeammateConfig(branch)?.displayName.trim();
+              if (teammateName) assistantIdentity.teammateName = teammateName;
+            } catch {
+              // Attribution falls back to the agentic tool when the branch was removed
+              // between Session authorization and this optional display-name lookup.
+            }
           } catch {
             return res.status(403).json({
               ...jsonRpcError(

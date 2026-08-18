@@ -894,6 +894,7 @@ export function KnowledgePage({
           userId: activeDoc.updated_by,
           sessionId: activeDoc.updated_by_session_id,
           agenticTool: activeDoc.updated_by_agentic_tool,
+          teammateName: activeDoc.updated_by_teammate_name,
         },
         userById
       )
@@ -3360,14 +3361,9 @@ export function KnowledgePage({
                           <Text type="secondary">{activeDoc.path}</Text>
                         </Space>
                         {!isEditing && activeAttribution && (
-                          <Space wrap size={6}>
-                            <Text type="secondary">
-                              Last edited by {activeAttribution.userLabel}
-                            </Text>
-                            {activeAttribution.assistantLabel && (
-                              <Tag color="purple">{activeAttribution.assistantLabel}</Tag>
-                            )}
-                          </Space>
+                          <Text type="secondary">
+                            Last edited by {activeAttribution.editorLabel}
+                          </Text>
                         )}
                         {isEditing && (
                           <Space orientation="vertical" size={4}>
@@ -3651,6 +3647,7 @@ export function KnowledgePage({
                     userId: version.created_by,
                     sessionId: version.created_by_session_id,
                     agenticTool: version.created_by_agentic_tool,
+                    teammateName: version.created_by_teammate_name,
                   },
                   userById
                 );
@@ -3713,12 +3710,7 @@ export function KnowledgePage({
                       description={
                         <Space orientation="vertical" size={2}>
                           <Text type="secondary">{formatTimestamp(version.created_at)}</Text>
-                          <Space wrap size={4}>
-                            <Text type="secondary">{attribution.userLabel}</Text>
-                            {attribution.assistantLabel && (
-                              <Tag color="purple">{attribution.assistantLabel}</Tag>
-                            )}
-                          </Space>
+                          <Text type="secondary">{attribution.editorLabel}</Text>
                           {version.change_summary && <Text>{version.change_summary}</Text>}
                         </Space>
                       }
