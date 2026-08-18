@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -232,7 +232,7 @@ async function runInteractiveReinit(
   });
 
   let output = '';
-  let confirmedDeletion = false;
+  let selectedReinitAction = false;
   let skippedAdmin = false;
   let selectedTools = false;
   return await new Promise((resolve, reject) => {
@@ -245,9 +245,10 @@ async function runInteractiveReinit(
     terminal.onData((data) => {
       output += data;
       const plain = stripTerminalControl(output);
-      if (!confirmedDeletion && plain.includes('Delete all existing data and re-initialize?')) {
-        confirmedDeletion = true;
-        terminal.write('y\r');
+      if (!selectedReinitAction && plain.includes('How would you like to re-initialize?')) {
+        selectedReinitAction = true;
+        // Accept the recommended backup-and-reinitialize action.
+        terminal.write('\r');
       }
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
@@ -413,6 +414,12 @@ describe('initial agentic tool selection', () => {
       expect(reinitialized.exitCode, reinitialized.output).toBe(0);
       expect(reinitialized.output).toContain('Migrations complete');
       expect(reinitialized.output).toContain('Agor initialized successfully');
+      expect(reinitialized.output).toContain('Backing up existing installation');
+      expect(reinitialized.output).toContain(`Moved ${join(home, '.agor')} to`);
+      const backupDir = (await readdir(home)).find((entry) => entry.startsWith('.agor.bkp.'));
+      expect(backupDir).toBeDefined();
+      await expect(access(join(home, backupDir!, 'agor.db-wal'))).resolves.toBeUndefined();
+      await expect(access(join(home, backupDir!, 'agor.db-shm'))).resolves.toBeUndefined();
       const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
         agentic_tools?: { installed?: string[] };
       };

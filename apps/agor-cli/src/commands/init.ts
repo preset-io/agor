@@ -6,7 +6,7 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
+import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +68,10 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
 
 export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
   return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+}
+
+export function formatInitBackupTimestamp(date = new Date()): string {
+  return date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 }
 
 /** Parse only the fixed integration allowlist; `all` and `none` are explicit headless shorthands. */
@@ -447,22 +451,27 @@ export default class Init extends Command {
       if (flags.force) {
         await this.prepareAgenticToolSelection(true);
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
-        await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
+        await this.deleteExistingInstall(baseDir);
         await this.performInit(baseDir, dbPath, true);
         return;
       }
 
-      // Prompt user for confirmation
-      const { confirmed } = await inquirer.prompt([
+      const { action } = await inquirer.prompt<{
+        action: 'backup' | 'delete' | 'cancel';
+      }>([
         {
-          type: 'confirm',
-          name: 'confirmed',
-          message: 'Delete all existing data and re-initialize?',
-          default: false,
+          type: 'list',
+          name: 'action',
+          message: 'How would you like to re-initialize?',
+          choices: [
+            { name: 'Back up and re-initialize (recommended)', value: 'backup' },
+            { name: 'Delete and re-initialize', value: 'delete' },
+            { name: 'Cancel', value: 'cancel' },
+          ],
         },
       ]);
 
-      if (!confirmed) {
+      if (action === 'cancel') {
         this.log(chalk.dim('Cancelled. Use --force to skip this prompt.'));
         return;
       }
@@ -471,8 +480,11 @@ export default class Init extends Command {
       // missing headless policy or a cancelled selector must leave data intact.
       await this.prepareAgenticToolSelection(false);
 
-      // User confirmed - clean up and reinitialize
-      await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
+      if (action === 'backup') {
+        await this.backupExistingInstall(baseDir);
+      } else {
+        await this.deleteExistingInstall(baseDir);
+      }
       await this.performInit(baseDir, dbPath, false);
     } catch (error) {
       this.error(
@@ -484,33 +496,24 @@ export default class Init extends Command {
   /**
    * Clean up existing installation
    */
-  private async cleanupExisting(
-    _baseDir: string,
-    dbPath: string,
-    reposDir: string,
-    branchesDir: string
-  ): Promise<void> {
+  private async deleteExistingInstall(baseDir: string): Promise<void> {
     this.log('');
     this.log('🗑️  Cleaning up existing installation...');
+    await rm(baseDir, { recursive: true, force: true });
+    this.log(`${chalk.green('   ✓')} Deleted ${baseDir}`);
+  }
 
-    // Delete database
-    const databaseArtifacts = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
-    if ((await Promise.all(databaseArtifacts.map((path) => this.pathExists(path)))).some(Boolean)) {
-      await Promise.all(databaseArtifacts.map((path) => rm(path, { force: true })));
-      this.log(`${chalk.green('   ✓')} Deleted database`);
+  private async backupExistingInstall(baseDir: string): Promise<void> {
+    const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp()}`;
+    let backupDir = prefix;
+    for (let suffix = 2; await this.pathExists(backupDir); suffix += 1) {
+      backupDir = `${prefix}.${suffix}`;
     }
 
-    // Delete repos
-    if (await this.pathExists(reposDir)) {
-      await rm(reposDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted repos`);
-    }
-
-    // Delete branches
-    if (await this.pathExists(branchesDir)) {
-      await rm(branchesDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted branches`);
-    }
+    this.log('');
+    this.log('📦 Backing up existing installation...');
+    await rename(baseDir, backupDir);
+    this.log(`${chalk.green('   ✓')} Moved ${baseDir} to ${backupDir}`);
   }
 
   /**
