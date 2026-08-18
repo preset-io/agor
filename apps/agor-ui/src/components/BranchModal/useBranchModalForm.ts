@@ -609,22 +609,6 @@ export function useBranchModalForm({
         }
       }
 
-      // 5. Teammate emoji → board icon side effect. Cosmetic only — log on
-      // failure, don't fail the save.
-      if (teammateChanged && isTeammateBranch && canEditGeneral && branch.board_id) {
-        const config = getTeammateConfig(branch);
-        const emojiChanged = config && teammate.emoji !== (config.emoji || '');
-        if (emojiChanged) {
-          try {
-            await client.service('boards').patch(branch.board_id, {
-              icon: teammate.emoji || '🤖',
-            });
-          } catch (err) {
-            console.error('Failed to update board icon:', err);
-          }
-        }
-      }
-
       // Refresh owners cache so the next change-detection cycle reflects the
       // saved state. Doing this lazily here avoids forcing a parent re-fetch.
       if (rbacEnabled && permissionsChanged) {

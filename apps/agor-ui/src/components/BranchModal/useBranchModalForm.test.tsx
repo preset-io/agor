@@ -281,7 +281,7 @@ describe('useBranchModalForm — unified save', () => {
     expect(boardPatches).toHaveLength(0);
   });
 
-  it('does patch the board icon when teammate emoji actually changed', async () => {
+  it('does not overwrite the board icon when teammate emoji changes', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
     const branch = makeTeammateBranch({}, { emoji: '🤖' });
     const { client, calls } = makeStubClient({ owners: [alice], users: [alice] });
@@ -302,9 +302,7 @@ describe('useBranchModalForm — unified save', () => {
     });
 
     const boardPatches = calls.filter((c) => c.service === 'boards' && c.method === 'patch');
-    expect(boardPatches).toHaveLength(1);
-    const [, body] = boardPatches[0].args as [string, Record<string, unknown>];
-    expect(body).toMatchObject({ icon: '🎯' });
+    expect(boardPatches).toHaveLength(0);
   });
 
   it('does NOT call branches.patch for an owner-only transfer (no permission-field churn)', async () => {

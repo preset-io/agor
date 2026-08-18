@@ -104,7 +104,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     <>
       <Form.Item label="Name" required style={{ marginBottom: 24 }}>
         <Space.Compact style={{ display: 'flex' }}>
-          <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
+          <FormEmojiPickerInput fieldName="icon" defaultEmoji="📋" />
           <Form.Item
             name="name"
             noStyle

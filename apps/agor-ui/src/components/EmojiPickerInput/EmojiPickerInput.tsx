@@ -92,7 +92,6 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
  * include it in submitted values.
  */
 export const FormEmojiPickerInput: React.FC<{
-  form: ReturnType<typeof Form.useForm>[0];
   fieldName: string;
   defaultEmoji?: string;
 }> = ({ fieldName, defaultEmoji }) => {

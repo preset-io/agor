@@ -44,7 +44,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
     <>
       <Form.Item label="Name" required tooltip="Human-friendly name and icon for this AI teammate">
         <Space.Compact style={{ display: 'flex' }}>
-          <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
+          <FormEmojiPickerInput fieldName="emoji" defaultEmoji="🤖" />
           <Form.Item
             name="displayName"
             noStyle
