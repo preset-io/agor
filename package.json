@@ -36,7 +36,7 @@
     "prepare": "husky",
     "cli:link": "pnpm -C apps/agor-cli link --global",
     "cli:unlink": "pnpm -C apps/agor-cli unlink --global",
-    "agor": "NODE_NO_WARNINGS=1 pnpm --filter @agor/cli exec tsx bin/dev.ts",
+    "agor": "pnpm --filter @agor/cli dev",
     "seed": "tsx scripts/seed.ts",
     "load:fixtures": "tsx scripts/load-fixtures.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
@@ -45,6 +45,7 @@
     "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
     "check:realtime-boundaries": "node scripts/check-realtime-boundaries.mjs",
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
+    "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
     "test:ha:docker": "node scripts/test-daemon-ha.mjs"
   },

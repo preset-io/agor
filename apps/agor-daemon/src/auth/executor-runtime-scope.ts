@@ -53,13 +53,28 @@ export function hasExecutorRuntimeScope(context: HookContext): boolean {
   return scopedPayload(context) !== null;
 }
 
+/**
+ * The session an executor-session token is scoped to, or undefined when the
+ * request carries no executor scope.
+ *
+ * Callers that exempt executors from a per-session rule should compare against
+ * this rather than {@link hasExecutorRuntimeScope}, so the exemption is bound to
+ * the session it was minted for instead of depending on
+ * {@link executorRuntimeScopeGuard} having pinned the claims upstream.
+ */
+export function executorRuntimeScopeSessionId(
+  context: Pick<HookContext, 'params'>
+): string | undefined {
+  const payload = scopedPayload(context);
+  return payload ? getExecutorSessionTokenSessionId(payload) : undefined;
+}
+
 /** Whether this request carries executor scope for one exact session. */
 export function isSessionScopedExecutorRequest(
   context: Pick<HookContext, 'params'>,
   sessionId: string
 ): boolean {
-  const payload = scopedPayload(context);
-  return payload !== null && getExecutorSessionTokenSessionId(payload) === sessionId;
+  return executorRuntimeScopeSessionId(context) === sessionId;
 }
 
 function expectClaim(claim: string | undefined, label: string): string {
@@ -346,13 +361,6 @@ export function executorRuntimeScopeGuard() {
       }
     } else if (path === 'repos') {
       await requireRepoReadScope(context, id, scope);
-    } else if (path === 'messages/bulk') {
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      for (const record of recordsFromData(context.data)) {
-        scopeTaskRecord(record, scope);
-      }
     } else if (path === 'messages/streaming' || path === 'tasks/streaming') {
       if (context.method !== 'create') {
         throw new Forbidden('Executor token is not valid for this endpoint');

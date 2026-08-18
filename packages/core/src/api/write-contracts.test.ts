@@ -2,11 +2,18 @@ import { describe, expectTypeOf, it } from 'vitest';
 import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
+  MessageCreate,
   ScheduleCreateData,
   SchedulePatchData,
 } from '../types/index.js';
 import { MessageRole } from '../types/index.js';
-import type { AgorClient, ClientInput, GatewayChannelsService, SchedulesService } from './index.js';
+import type {
+  AgorClient,
+  ClientInput,
+  GatewayChannelsService,
+  MessagesService,
+  SchedulesService,
+} from './index.js';
 
 type ScheduleCreateInput = Parameters<SchedulesService['create']>[0];
 type GatewayCreateInput = Parameters<GatewayChannelsService['create']>[0];
@@ -14,6 +21,7 @@ type SchedulePatchInput = Parameters<SchedulesService['patch']>[1];
 type GatewayPatchInput = Parameters<GatewayChannelsService['patch']>[1];
 type ScheduleUpdateInput = Parameters<SchedulesService['update']>[1];
 type GatewayUpdateInput = Parameters<GatewayChannelsService['update']>[1];
+type MessageCreateInput = Parameters<MessagesService['create']>[0];
 
 function assertClientWriteBoundaries(client: AgorClient): void {
   void client.service('schedules').create({
@@ -87,21 +95,24 @@ function assertClientWriteBoundaries(client: AgorClient): void {
   // @ts-expect-error required create fields cannot be omitted.
   void client.service('gateway-channels').create({ agentic_config: { agent: 'codex' } });
 
-  void client.service('messages/bulk').create([
-    {
-      session_id: 'session-id',
-      task_id: 'task-id',
-      role: MessageRole.USER,
-      type: 'user',
-      content: 'Imported transcript row',
-    },
-  ]);
   // @ts-expect-error public Message CRUD does not expose full replacement.
   void client.service('messages').update('message-id', {});
-  // @ts-expect-error bulk insertion is only available on /messages/bulk.
-  void client.service('messages').createMany([]);
-  // @ts-expect-error /messages/bulk is a narrow create-only endpoint.
-  void client.service('messages/bulk').find();
+  // @ts-expect-error public Message patch always targets one exact Message.
+  void client.service('messages').patch(null, { content_preview: 'bulk patch' });
+  // @ts-expect-error Message ownership cannot change after creation.
+  void client.service('messages').patch('message-id', { task_id: 'task-id' });
+  void client.service('messages').create({
+    session_id: 'session-id',
+    task_id: 'task-id',
+    type: 'user',
+    role: MessageRole.USER,
+    index: 0,
+    timestamp: '2026-08-14T00:00:00.000Z',
+    content_preview: 'Prompt',
+    content: 'Prompt',
+  });
+  // @ts-expect-error Message create requires complete persisted content fields.
+  void client.service('messages').create({ session_id: 'session-id', type: 'user' });
 
   // Provenance is derived from the authenticated transport, not caller input.
   // @ts-expect-error messageSource is daemon-owned provenance.
@@ -120,5 +131,6 @@ describe('public service write contracts', () => {
     expectTypeOf<GatewayPatchInput>().toEqualTypeOf<ClientInput<GatewayChannelPatchData> | null>();
     expectTypeOf<ScheduleUpdateInput>().toEqualTypeOf<never>();
     expectTypeOf<GatewayUpdateInput>().toEqualTypeOf<never>();
+    expectTypeOf<MessageCreateInput>().toEqualTypeOf<ClientInput<MessageCreate>>();
   });
 });

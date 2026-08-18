@@ -1,3 +1,14 @@
+agentic_tools:
+  # Headless/container deployments must declare their managed integrations.
+  # The Compose preparation job reconciles this exact list before either
+  # daemon starts, into the shared /home/agor/.agor volume.
+  installed:
+    - claude-code
+    - codex
+    - copilot
+    - gemini
+    - opencode
+    - cursor
 deployment:
   mode: ha
   ha:
@@ -14,14 +25,16 @@ execution:
   # These are assertions about the named shared home and nested Agor workspace
   # volumes mounted at the same paths on both daemons. They do not configure mounts.
   executor_storage:
-    # One shared Unix identity/home for this static smoke profile. This makes
+    # One shared execution home for this static smoke profile. This makes
     # auth-file import/logout and Tasks replica-consistent, but is not Cloud's
     # per-user isolation contract. The device-code poller remains gated.
     user_home: shared
     branch_workspace: shared
     base_repository: shared
-  # Process-affine terminal sessions have not been proven failover-safe.
-  allow_web_terminal: false
+  # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
+  # create/control connection on its owner; owner loss is a visible disconnect
+  # and reconnect creates a new attachment (possibly reattaching local Zellij).
+  allow_web_terminal: true
   # Local managed-environment commands are process/host-affine. HA accepts
   # only an external webhook execution substrate in this first topology. The
   # legacy unfenced environment HealthMonitor is also disabled in HA.

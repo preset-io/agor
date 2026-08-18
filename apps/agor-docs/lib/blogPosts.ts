@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'why-agor-is-leaving-unix-impersonation-behind',
+    title: 'Why Agor Is Leaving Unix Impersonation Behind',
+    description:
+      'We tried mapping Agor RBAC onto Unix users, groups, ACLs, and homes. It was an attractive design, but the wrong foundation for where Agor is going.',
+    author: 'Maxime Beauchemin',
+    date: '2026-08-17',
+    image: '/images/blog/leaving-unix-impersonation.png',
+  },
+  {
     slug: 'whos-still-using-an-ide',
     title: 'Is the IDE Obsolete?',
     description:
@@ -76,7 +85,7 @@ export const blogPosts: BlogPost[] = [
     slug: 'agor-cloud',
     title: 'Agor Cloud — Opening a Private Beta',
     description:
-      'Fully managed Agor with Unix-level isolation, analytics dashboards, policy controls, and enterprise observability.',
+      'Fully managed Agor with tenant-scoped execution isolation, analytics dashboards, policy controls, and enterprise observability.',
     author: 'Maxime Beauchemin',
     date: '2025-11-23',
     image: '/images/blog/agor-cloud.png',

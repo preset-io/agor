@@ -231,9 +231,8 @@ export function createPermissionHandler(
       const requestId = generateId();
       const timestamp = new Date().toISOString();
 
-      // Get current message index
-      const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
-      const nextIndex = existingMessages.length;
+      // Get the append index without transferring the session transcript.
+      const nextIndex = await deps.messagesRepo.getNextIndexBySessionId(sessionId);
 
       // Create permission request message
       const toolInput = getToolInput(request);

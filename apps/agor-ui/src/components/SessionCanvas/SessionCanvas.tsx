@@ -8,6 +8,7 @@ import type {
   BoardID,
   BoardObject,
   Branch,
+  BranchArchiveOrDeleteOptions,
   BranchID,
   CardWithType,
   Repo,
@@ -131,13 +132,7 @@ interface SessionCanvasProps {
   onOpenSettings?: (sessionId: string) => void;
   onCreateSessionForBranch?: (branchId: string) => void;
   onOpenBranch?: (branchId: string) => void;
-  onArchiveOrDeleteBranch?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
@@ -214,13 +209,7 @@ interface BranchNodeData {
   onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenSettings?: (branchId: string) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;

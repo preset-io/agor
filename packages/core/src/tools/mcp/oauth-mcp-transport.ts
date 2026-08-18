@@ -8,7 +8,8 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { MCPOAuthDCRMode } from '../../types/mcp.js';
+import { z } from 'zod';
+import type { MCPOAuthDCRDiagnostic, MCPOAuthDCRMode } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -110,6 +111,23 @@ export class OAuthCallbackValidationError extends Error {
   }
 }
 
+/**
+ * A safe, actionable Dynamic Client Registration failure.
+ *
+ * The diagnostic is intentionally structured so daemon/UI callers do not need
+ * to parse provider response text. Only closed diagnostic fields are carried;
+ * response bodies and registration credentials are never retained.
+ */
+export class OAuthDCRFailure extends Error {
+  constructor(
+    message: string,
+    readonly diagnostic: MCPOAuthDCRDiagnostic
+  ) {
+    super(message);
+    this.name = 'OAuthDCRFailure';
+  }
+}
+
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 60;
 
@@ -123,18 +141,6 @@ export interface AuthorizationServerMetadata {
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
-}
-
-export interface DynamicClientRegistrationResponse {
-  client_id: string;
-  client_secret?: string;
-  client_id_issued_at?: number;
-  client_secret_expires_at?: number;
-  redirect_uris?: string[];
-  token_endpoint_auth_method?: string;
-  grant_types?: string[];
-  response_types?: string[];
-  client_name?: string;
 }
 
 // Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
@@ -411,6 +417,74 @@ const dynamicClientCache = new Map<
   { client_id: string; client_secret?: string; redirect_uri: string }
 >();
 
+const MAX_DCR_RESPONSE_BYTES = 16 * 1024;
+
+const dynamicClientRegistrationSchema = z.object({
+  client_id: z.string().trim().min(1),
+  client_secret: z.string().optional(),
+  redirect_uris: z.array(z.string()).optional(),
+  token_endpoint_auth_method: z.string().optional(),
+  grant_types: z.array(z.string()).optional(),
+  response_types: z.array(z.string()).optional(),
+});
+
+type DynamicClientRegistrationResponse = z.infer<typeof dynamicClientRegistrationSchema>;
+
+function registrationDiagnostic(
+  httpStatus: number,
+  registrationEndpointSource: 'metadata' | 'legacy_fallback'
+): MCPOAuthDCRDiagnostic {
+  return {
+    stage: 'dcr_registration',
+    http_status: httpStatus,
+    registration_endpoint_source: registrationEndpointSource,
+  };
+}
+
+function dcrRecoveryGuidance(diagnostic: MCPOAuthDCRDiagnostic): string {
+  const manualClient =
+    'enter the Client ID and Client Secret for a pre-registered OAuth app in Advanced — OAuth settings, then retry.';
+
+  if (diagnostic.http_status === 404) {
+    if (diagnostic.registration_endpoint_source === 'metadata') {
+      return `The advertised registration endpoint returned HTTP 404 and is unavailable or stale. Verify the provider OAuth metadata, or ${manualClient}`;
+    }
+    if (diagnostic.registration_endpoint_source === 'legacy_fallback') {
+      return `The legacy guessed /register endpoint returned HTTP 404. Disable the legacy fallback, or ${manualClient}`;
+    }
+    return `The registration endpoint used for this attempt returned HTTP 404, or ${manualClient}`;
+  }
+  if (diagnostic.http_status === undefined) {
+    return `Dynamic Client Registration could not complete. Verify the provider's registration endpoint, or ${manualClient}`;
+  }
+  if (diagnostic.http_status >= 400) {
+    return `The provider rejected Dynamic Client Registration. Review its client-registration requirements, or ${manualClient}`;
+  }
+  return `The provider returned an incompatible registration response. Review its client-registration requirements, or ${manualClient}`;
+}
+
+function registrationFailure(
+  diagnostic: MCPOAuthDCRDiagnostic,
+  lead = 'Dynamic Client Registration failed'
+): OAuthDCRFailure {
+  const failureLead = lead.startsWith('Dynamic Client Registration failed')
+    ? lead
+    : `Dynamic Client Registration failed: ${lead}`;
+  const status = diagnostic.http_status === undefined ? '' : ` (HTTP ${diagnostic.http_status})`;
+  return new OAuthDCRFailure(
+    `${failureLead}${status} at stage ${diagnostic.stage}. ${dcrRecoveryGuidance(diagnostic)}`,
+    diagnostic
+  );
+}
+
+function missingRegistrationEndpointFailure(): OAuthDCRFailure {
+  const diagnostic: MCPOAuthDCRDiagnostic = { stage: 'dcr_endpoint_discovery' };
+  return new OAuthDCRFailure(
+    'OAuth client_id is required because the authorization server does not advertise a Dynamic Client Registration endpoint (stage: dcr_endpoint_discovery). The provider may require a pre-registered OAuth app. Enter the Client ID and Client Secret in Advanced — OAuth settings, then retry.',
+    diagnostic
+  );
+}
+
 /**
  * Test-only hook: snapshot the DCR client cache size. Used to verify that
  * `clearAuthCodeTokenCache` clears DCR registrations on blanket clears.
@@ -443,7 +517,8 @@ async function registerDynamicClient(
   clientName: string = 'Agor MCP Client',
   scope?: string,
   reuseLocalCache = true,
-  allowLocalhostHttp = false
+  allowLocalhostHttp = false,
+  registrationEndpointSource: 'metadata' | 'legacy_fallback' = 'metadata'
 ): Promise<DynamicClientRegistrationResponse> {
   // Check cache first
   const cacheKey = registrationEndpoint;
@@ -479,42 +554,63 @@ async function registerDynamicClient(
     body: JSON.stringify(registrationRequest),
     redirect: 'error',
     timeoutMs: 15_000,
+    maxResponseBytes: MAX_DCR_RESPONSE_BYTES,
     allowLocalhostHttp,
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Dynamic Client Registration failed (${response.status}).\n\n` +
-        'This MCP server does not support Dynamic Client Registration (RFC 7591). ' +
-        "You need to register an OAuth app in the provider's developer portal " +
-        '(e.g. figma.com/developers/apps for Figma) and enter the Client ID and ' +
-        'Client Secret in the MCP server configuration.'
+    throw registrationFailure(registrationDiagnostic(response.status, registrationEndpointSource));
+  }
+
+  const diagnostic = registrationDiagnostic(response.status, registrationEndpointSource);
+  const parsed = dynamicClientRegistrationSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an invalid response'
     );
   }
+  const result: DynamicClientRegistrationResponse = parsed.data;
 
-  const result = (await response.json()) as DynamicClientRegistrationResponse;
-
-  if (typeof result.client_id !== 'string' || !result.client_id.trim()) {
-    throw new Error('Dynamic Client Registration returned an invalid client ID');
-  }
   if (!result.redirect_uris?.includes(redirectUri)) {
-    throw new Error('Dynamic Client Registration did not bind the required redirect URI');
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not bind the required redirect URI'
+    );
   }
-  const authMethod = result.token_endpoint_auth_method ?? 'none';
+  // We request a public client (`token_endpoint_auth_method: 'none'`), but some providers
+  // (e.g. Atlassian) ignore that and register a *confidential* client — returning HTTP 201
+  // with a `client_secret` while either omitting the auth method or echoing 'none'. A returned
+  // secret is the authoritative signal that the client is confidential, so treat it as
+  // client_secret_basic regardless of the advertised method. The token exchange already routes
+  // any present secret through HTTP Basic auth (RFC 6749 §2.3.1), so these credentials are
+  // usable as-is.
+  const authMethod = result.client_secret
+    ? 'client_secret_basic'
+    : (result.token_endpoint_auth_method ?? 'none');
   if (!['none', 'client_secret_basic'].includes(authMethod)) {
-    throw new Error('Dynamic Client Registration returned an unsupported token auth method');
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an unsupported token auth method'
+    );
   }
   if (authMethod === 'client_secret_basic' && !result.client_secret) {
-    throw new Error('Dynamic Client Registration omitted the required client secret');
-  }
-  if (authMethod === 'none' && result.client_secret) {
-    throw new Error('Dynamic Client Registration returned incompatible public-client credentials');
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration omitted the required client secret'
+    );
   }
   if (result.grant_types && !result.grant_types.includes('authorization_code')) {
-    throw new Error('Dynamic Client Registration did not enable the authorization-code grant');
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the authorization-code grant'
+    );
   }
   if (result.response_types && !result.response_types.includes('code')) {
-    throw new Error('Dynamic Client Registration did not enable the code response type');
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the code response type'
+    );
   }
 
   if (reuseLocalCache) {
@@ -1083,45 +1179,6 @@ export function isOAuthRequired(status: number, headers: Headers): boolean {
 }
 
 /**
- * Get a cached OAuth 2.1 token for an MCP URL
- *
- * This checks all cached tokens and returns a valid one if the metadata URL
- * matches or contains the MCP URL's origin.
- *
- * @param mcpUrl - The MCP server URL to find a cached token for
- * @returns The cached token if valid, undefined otherwise
- */
-export function getCachedOAuth21Token(mcpUrl: string): string | undefined {
-  const now = Date.now();
-
-  let mcpOrigin: string;
-  try {
-    mcpOrigin = new URL(mcpUrl).origin;
-  } catch {
-    return undefined;
-  }
-
-  // Check all cached tokens for a match
-  for (const [metadataUrl, cached] of authCodeTokenCache.entries()) {
-    // Check if token is still valid
-    if (cached.expiresAt <= now) {
-      continue;
-    }
-
-    // Check if the metadata URL is from the same origin as the MCP URL
-    try {
-      const metadataOrigin = new URL(metadataUrl).origin;
-
-      if (metadataOrigin === mcpOrigin || metadataUrl.includes(mcpOrigin)) {
-        return cached.token;
-      }
-    } catch {}
-  }
-
-  return undefined;
-}
-
-/**
  * Clear cached OAuth tokens from Authorization Code flow
  *
  * Useful when switching accounts or forcing re-authentication.
@@ -1223,8 +1280,9 @@ export interface OAuthFlowContext {
  *
  * Inputs:
  *   - `authServerMetadata`: required when no full URL overrides are supplied
- *   - `cacheKey`: token cache key (must share origin with the MCP URL so
- *     `getCachedOAuth21Token` can find it on later requests)
+ *   - `cacheKey`: becomes `context.metadataUrl` — the exact key
+ *     `completeMCPOAuthFlow` writes its legacy CLI cache entry under, and the
+ *     metadata URI the daemon persists as the grant's binding
  */
 async function startMCPOAuthFlowWithAS(opts: {
   authServerMetadata: AuthorizationServerMetadata | null;
@@ -1342,6 +1400,9 @@ async function startMCPOAuthFlowWithAS(opts: {
       (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
       console.log('[MCP OAuth] Using Dynamic Client Registration');
+      const registrationEndpointSource = authServerMetadata?.registration_endpoint
+        ? 'metadata'
+        : 'legacy_fallback';
       try {
         const registration = await registerDynamicClient(
           registrationEndpoint,
@@ -1349,16 +1410,17 @@ async function startMCPOAuthFlowWithAS(opts: {
           'Agor MCP Client',
           scopeString,
           opts.reuseDynamicClientRegistration !== false,
-          allowLocalhostHttp
+          allowLocalhostHttp,
+          registrationEndpointSource
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
-      } catch {
-        throw new Error(
-          'Dynamic Client Registration failed.\n\n' +
-            "Register an OAuth app in the provider's developer portal and enter " +
-            'the Client ID (and Client Secret if required) in the MCP server configuration.'
-        );
+      } catch (error) {
+        if (error instanceof OAuthDCRFailure) throw error;
+        throw registrationFailure({
+          stage: 'dcr_registration',
+          registration_endpoint_source: registrationEndpointSource,
+        });
       }
     } else if (hasFullOverrides) {
       throw new Error(
@@ -1366,12 +1428,7 @@ async function startMCPOAuthFlowWithAS(opts: {
           'Please provide a client_id in the MCP server configuration.'
       );
     } else {
-      throw new Error(
-        'OAuth client_id is required but the authorization server does not advertise ' +
-          'a Dynamic Client Registration endpoint (RFC 7591).\n\n' +
-          "Register an OAuth app in the provider's developer portal and enter " +
-          'the Client ID (and Client Secret if required) in the MCP server configuration.'
-      );
+      throw missingRegistrationEndpointFailure();
     }
   } else if (!actualClientId) {
     throw new Error(
@@ -1434,10 +1491,11 @@ export async function startMCPOAuthFlow(
      */
     prefetchedAuthServerMetadata?: AuthorizationServerMetadata;
     /**
-     * Token cache key. When `prefetchedAuthServerMetadata` is provided there's
-     * no real RFC 9728 metadata URL to use as the key, so the caller passes a
-     * stable string (typically the MCP URL itself). `getCachedOAuth21Token`
-     * matches by URL origin, so any value sharing the MCP URL's origin works.
+     * Metadata URL stand-in. When `prefetchedAuthServerMetadata` is provided
+     * there's no real RFC 9728 metadata URL, so the caller passes a stable
+     * string (typically the MCP URL itself). It lands on
+     * `OAuthFlowContext.metadataUrl` and must be the same value on every flow
+     * for the server: lookups against it are exact-match, never by origin.
      */
     cacheKey?: string;
     /** Disable process-global DCR credential reuse in multi-user daemons. */
@@ -1466,9 +1524,9 @@ export async function startMCPOAuthFlow(
       throw new Error('Authorization-server-direct discovery requires explicit legacy mode');
     }
     if (!options.cacheKey) {
-      // Without a cache key, `getCachedOAuth21Token` can't find the token on
-      // future requests — every MCP call would re-trigger the browser flow.
-      // The daemon callsites have the MCP URL handy and should pass it.
+      // Without it there is no `context.metadataUrl` to carry through the
+      // flow — the daemon persists that as the grant's metadata URI. The
+      // daemon callsites have the MCP URL handy and should pass it.
       throw new Error(
         'startMCPOAuthFlow: cacheKey is required when prefetchedAuthServerMetadata is provided ' +
           '(typically pass the MCP server URL).'

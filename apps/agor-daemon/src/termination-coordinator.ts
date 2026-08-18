@@ -61,19 +61,32 @@ interface LocalTerminationOperation {
 }
 
 const operationsByApp = new WeakMap<object, Map<string, LocalTerminationOperation>>();
-const DEFAULT_COOPERATIVE_GRACE_MS = 1000;
+const DEFAULT_LOCAL_COOPERATIVE_GRACE_MS = 1_000;
+// A remote/templated executor has no daemon-side PGID fallback. Give normal
+// provider cleanup enough time to acknowledge before exposing force-fail;
+// late fenced acknowledgements remain recoverable after this bounded window.
+const DEFAULT_REMOTE_COOPERATIVE_GRACE_MS = 15_000;
 const COOPERATIVE_POLL_MS = 25;
 const LOCAL_WRAPPER_EXIT_GRACE_MS = 250;
 const COORDINATION_LEASE_MARGIN_MS = 5_000;
 const DEFAULT_COORDINATION_LEASE_MS = 30_000;
 
-function coordinationLeaseMs(input: TerminationInput): number {
+function cooperativeGraceMs(input: TerminationInput, task: Task): number {
+  return (
+    input.signalDelayMs ??
+    input.cooperativeGraceMs ??
+    (task.executor_mode === 'templated'
+      ? DEFAULT_REMOTE_COOPERATIVE_GRACE_MS
+      : DEFAULT_LOCAL_COOPERATIVE_GRACE_MS)
+  );
+}
+
+function coordinationLeaseMs(input: TerminationInput, task: Task): number {
   if (input.coordinationLeaseMs !== undefined) return input.coordinationLeaseMs;
-  const cooperativeGraceMs =
-    input.signalDelayMs ?? input.cooperativeGraceMs ?? DEFAULT_COOPERATIVE_GRACE_MS;
+  const graceMs = cooperativeGraceMs(input, task);
   return Math.max(
     DEFAULT_COORDINATION_LEASE_MS,
-    cooperativeGraceMs +
+    graceMs +
       LOCAL_WRAPPER_EXIT_GRACE_MS +
       DEFAULT_EXECUTOR_TERM_GRACE_MS +
       DEFAULT_EXECUTOR_KILL_GRACE_MS +
@@ -144,7 +157,7 @@ async function waitForExecutorQuiescence(input: TerminationInput, requested: Tas
     return requested;
   }
 
-  const graceMs = input.signalDelayMs ?? input.cooperativeGraceMs ?? DEFAULT_COOPERATIVE_GRACE_MS;
+  const graceMs = cooperativeGraceMs(input, requested);
   if (graceMs <= 0) return requested;
 
   const tasks = input.app.service('tasks');
@@ -199,11 +212,18 @@ async function runContainment(
   const executorQuiesced = !!current.termination_request?.executor_quiesced_at;
   // A scoped remote executor is the only component able to authoritatively
   // quiesce its SDK runtime. Local mode additionally verifies PGID absence.
-  const remoteCooperativeContainment = current.executor_mode === 'templated' && executorQuiesced;
+  const remoteMode = current.executor_mode === 'templated';
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
-    : remoteCooperativeContainment
-      ? ({ status: 'verified_absent' } as const)
+    : remoteMode
+      ? executorQuiesced
+        ? ({ status: 'verified_absent' } as const)
+        : ({
+            status: 'unverified',
+            reason:
+              `Remote executor did not acknowledge quiescence for this termination request ` +
+              `within ${cooperativeGraceMs(input, current)}ms.`,
+          } as const)
       : executorQuiesced
         ? await containExecutorProcess(
             current.session_id,
@@ -308,7 +328,7 @@ async function claimContainmentCoordination(
       {
         taskId: task.task_id,
         claimToken: token,
-        leaseDurationMs: coordinationLeaseMs(input),
+        leaseDurationMs: coordinationLeaseMs(input, task),
         instanceId: identity.instanceId,
         bootId: identity.bootId,
         ...(localMode && !ownsLocalHandle && input.unownedLocalOwnerGraceMs !== undefined
@@ -400,20 +420,24 @@ export async function beginExecutorTermination(input: TerminationInput): Promise
 export async function forceFailUnverifiedTask(input: {
   app: Application;
   taskId: TaskID | string;
+  terminationRequestedAt: string;
   confirmation: string;
   params?: Params;
 }): Promise<Task> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   const current = await tasks.get(input.taskId, input.params);
+  if (input.confirmation !== 'STOP') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
   if (
     current.status !== TaskStatus.STOPPING ||
     !current.termination_request ||
+    current.termination_request.requested_at !== input.terminationRequestedAt ||
     current.sdk_failure?.termination !== 'unverified'
   ) {
-    throw new Conflict('Only a Task with unverified termination may be force-failed.');
-  }
-  if (input.confirmation !== shortId(current.task_id)) {
-    throw new BadRequest(`Type ${shortId(current.task_id)} to confirm force-fail.`);
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
   }
   console.warn(
     `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
@@ -422,6 +446,7 @@ export async function forceFailUnverifiedTask(input: {
     {
       taskId: current.task_id,
       outcome: 'forced_unverified',
+      expectedTerminationRequestedAt: input.terminationRequestedAt,
       errorMessage: 'Force-failed by an authorized user; executor termination remains unverified.',
     },
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params

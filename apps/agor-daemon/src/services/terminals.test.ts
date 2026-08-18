@@ -1,45 +1,54 @@
-import type { BranchID, BranchName, UserID } from '@agor/core/types';
+import type { BranchID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
 const mocks = vi.hoisted(() => {
   const branch = {
     branch_id: 'branch-1',
     name: 'feature-branch',
-    path: '/tmp/agor-feature-branch',
+    path: '/worktrees/feature-branch',
     others_can: 'session',
     created_by: 'user-1',
+    archived: false,
   };
   return {
     branch,
     tenantId: 'tenant-x' as string | undefined,
     tenantDb: { scope: 'tenant-x' },
     databaseScopeDepth: 0,
-    repositoryDbs: [] as unknown[],
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
-    generateScopedServiceToken: vi.fn(() => 'session-token'),
-    resolveUnixUserForImpersonation: vi.fn(() => ({ unixUser: null })),
+    generateScopedServiceToken: vi.fn(() => 'terminal-token'),
+    getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
+    resolveDelegatedHomeKey: vi.fn(() => ({
+      unixUser: null,
+      delegatedHomeKey: null,
+    })),
     createUserProcessEnvironment: vi.fn(async () => ({})),
-    loadConfig: vi.fn(async () => ({ daemon: { port: 3030 }, execution: { branch_rbac: false } })),
+    joinRequestingSocket: vi.fn(async () => true),
+    config: {
+      daemon: { port: 3030 },
+      execution: { branch_rbac: false, unix_user_mode: 'simple' },
+    },
+    canOpen: true,
   };
 });
 
 vi.mock('@agor/core/config', () => ({
   createUserProcessEnvironment: mocks.createUserProcessEnvironment,
-  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class {
-    constructor(db: unknown) {
-      mocks.repositoryDbs.push(db);
-    }
     async findById(branchId: string) {
       return mocks.branchesById.get(branchId) ?? null;
     }
     async isOwner() {
       return true;
+    }
+    async resolveUserPermission() {
+      return 'session';
     }
   },
   getCurrentTenantId: () => mocks.tenantId,
@@ -57,438 +66,358 @@ vi.mock('@agor/core/db', () => ({
     }
   },
   UsersRepository: class {
-    constructor(db: unknown) {
-      mocks.repositoryDbs.push(db);
-    }
     async findById() {
       return { unix_username: 'alice' };
     }
   },
-  shortId: (id: string) =>
-    Array.from(id)
-      .filter((_, index) => index < 8)
-      .join(''),
+  shortId: (id: string) => id,
 }));
 
 vi.mock('@agor/core/unix', () => ({
   UnixUserNotFoundError: class UnixUserNotFoundError extends Error {},
-  getBranchSymlinkPath: (username: string, branchName: string) =>
-    `/home/${username}/agor/worktrees/${branchName}`,
-  resolveUnixUserForImpersonation: mocks.resolveUnixUserForImpersonation,
+  resolveDelegatedHomeKey: mocks.resolveDelegatedHomeKey,
   validateResolvedUnixUser: () => undefined,
 }));
 
 vi.mock('../utils/branch-authorization.js', () => ({
-  hasBranchPermission: () => true,
+  hasBranchPermission: () => mocks.canOpen,
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  generateSessionToken: () => 'session-token',
   generateScopedServiceToken: mocks.generateScopedServiceToken,
+  getDaemonUrl: mocks.getDaemonUrl,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
-import { buildBranchShellTabName, buildZellijSessionName, TerminalsService } from './terminals';
+import { buildZellijSessionName, TerminalsService } from './terminals';
 
 function makeApp() {
   const emit = vi.fn();
   return {
-    get: () => ({ execution: { branch_rbac: false, unix_user_mode: 'simple' } }),
     emit,
-    // The service subscribes to executor ready/error app events in its
-    // constructor; a no-op recorder keeps that wiring from throwing under test.
     on: vi.fn(),
+    get: vi.fn((key: string) => {
+      if (key === 'config') {
+        return mocks.config;
+      }
+      if (key === 'distributedWorkIdentity') {
+        return { instanceId: 'daemon-a', bootId: 'daemon-a-boot' };
+      }
+      return undefined;
+    }),
     io: {
-      to: vi.fn(() => ({ emit })),
-      local: {
-        to: vi.fn(() => ({ emit })),
-      },
+      local: { to: vi.fn(() => ({ emit })) },
     },
   };
 }
 
 const params = {
-  provider: 'rest',
+  provider: 'socketio',
   user: { user_id: 'user-1', role: 'admin' },
+  connection: {
+    [TERMINAL_REQUEST_JOIN_CHANNEL]: mocks.joinRequestingSocket,
+  },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
-  mocks.repositoryDbs.length = 0;
+  mocks.canOpen = true;
+  mocks.branchesById.clear();
+  mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
+  mocks.resolveDelegatedHomeKey.mockReturnValue({
+    unixUser: null,
+    delegatedHomeKey: null,
+  });
+  mocks.createUserProcessEnvironment.mockResolvedValue({});
+  mocks.joinRequestingSocket.mockResolvedValue(true);
+  mocks.config = {
+    daemon: { port: 3030 },
+    execution: { branch_rbac: false, unix_user_mode: 'simple' },
+  };
 });
 
-describe('buildZellijSessionName', () => {
-  it('builds a compact stable identity from the full user id', () => {
-    const userId = '019ed836-1fdc-7cfa-a356-3477c2c54693' as UserID;
-    const first = buildZellijSessionName(userId);
-    const second = buildZellijSessionName('019ed836-1fdc-7cfa-a356-3477c2c54694' as UserID);
-
-    expect(first).toBe(buildZellijSessionName(userId));
+describe('branch-scoped terminal identity', () => {
+  it('makes Zellij shell names stable and tenant/user/branch scoped', () => {
+    const user = 'user-1' as UserID;
+    const first = buildZellijSessionName('tenant-a', user, 'branch-1' as BranchID);
     expect(first).toMatch(/^agor-[a-f0-9]{16}$/);
-    expect(first).not.toBe(second);
+    expect(first).toBe(buildZellijSessionName('tenant-a', user, 'branch-1' as BranchID));
+    expect(first).not.toBe(buildZellijSessionName('tenant-b', user, 'branch-1' as BranchID));
+    expect(first).not.toBe(buildZellijSessionName('tenant-a', user, 'branch-2' as BranchID));
+  });
+
+  it('requires a branch and rejects REST creation so create and I/O share an owner', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await expect(service.create({}, params as never)).rejects.toThrow('branchId is required');
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, { ...params, provider: 'rest' } as never)
+    ).rejects.toThrow('owning Socket.IO connection');
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, { ...params, connection: {} } as never)
+    ).rejects.toThrow('cannot subscribe to this terminal');
+  });
+
+  it('rejects a missing branch even when branch RBAC is disabled', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await expect(
+      service.create({ branchId: 'missing' as BranchID }, params as never)
+    ).rejects.toThrow('Branch not found');
+  });
+
+  it('rejects an archived branch even while its filesystem is preserved', async () => {
+    mocks.branchesById.set('branch-1', { ...mocks.branch, archived: true });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('Branch is archived');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 });
 
-describe('TerminalsService tenant database units of work', () => {
-  it('keeps repository and environment reads scoped while process spawn stays outside', async () => {
-    mocks.branchesById.clear();
-    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
+describe('process-affine attachment creation', () => {
+  it('subscribes the requesting browser before the executor can emit startup state', async () => {
+    const order: string[] = [];
+    mocks.joinRequestingSocket.mockImplementation(async () => {
+      order.push('browser-joined');
+      return true;
+    });
+    mocks.spawnExecutorFireAndForget.mockImplementation(() => {
+      order.push('executor-started');
+    });
+
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    expect(mocks.joinRequestingSocket).toHaveBeenCalledWith(
+      terminal.channel,
+      expect.objectContaining({
+        userId: 'user-1',
+        terminalId: terminal.terminalId,
+        branchId: 'branch-1',
+      })
+    );
+    expect(order).toEqual(['browser-joined', 'executor-started']);
+  });
+
+  it('does not spawn or retain an attachment when the requesting socket disconnects', async () => {
+    mocks.joinRequestingSocket.mockResolvedValue(false);
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('owning Socket.IO connection disconnected');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+
+    mocks.joinRequestingSocket.mockResolvedValue(true);
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).resolves.toMatchObject({ isNew: true });
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
+  });
+
+  it('spawns with server-derived branch cwd and fenced tenant/user/branch/owner claims', async () => {
     mocks.createUserProcessEnvironment.mockImplementation(async () => {
       expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
-      return {};
+      return { SAFE: '1' };
     });
     mocks.spawnExecutorFireAndForget.mockImplementation(() => {
       expect(mocks.databaseScopeDepth).toBe(0);
     });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const result = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
+    expect(result).toMatchObject({
+      userId: 'user-1',
+      branchId: 'branch-1',
+      ownerId: 'daemon-a',
+      ownerBootId: 'daemon-a-boot',
+      isNew: true,
+      ready: false,
     });
-    await service.create({ branchId: mocks.branch.branch_id }, params as never);
-
-    expect(mocks.repositoryDbs.length).toBeGreaterThan(0);
-    expect(mocks.repositoryDbs).toEqual(
-      expect.arrayContaining([mocks.tenantDb, mocks.tenantDb, mocks.tenantDb])
-    );
-    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
-    expect(mocks.databaseScopeDepth).toBe(0);
-  });
-
-  it('fails fast without ambient tenant identity', async () => {
-    mocks.tenantId = undefined;
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-
-    await expect(service.create({}, params as never)).rejects.toThrow(
-      'Missing active tenant context for terminal creation'
-    );
-    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
-  });
-});
-
-describe('TerminalsService cold-start concurrency', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
-    mocks.createUserProcessEnvironment.mockResolvedValue({});
-    mocks.branchesById.clear();
-    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
-    mocks.loadConfig.mockResolvedValue({
-      daemon: { port: 3030 },
-      execution: { branch_rbac: false },
-    });
-  });
-
-  it('serializes concurrent cold starts for the same user into one executor spawn', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-
-    let releaseEnv!: () => void;
-    const envGate = new Promise<Record<string, string>>((resolve) => {
-      releaseEnv = () => resolve({});
-    });
-    mocks.createUserProcessEnvironment.mockReturnValueOnce(envGate);
-
-    const first = service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
-    await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledTimes(1));
-
-    const second = service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
-
-    // Let the first cold start finish; the second should wait for the reservation,
-    // re-enter, and take the warm path rather than spawning another executor.
-    releaseEnv();
-
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-
-    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(1);
-    expect(firstResult.isNew).toBe(true);
-    expect(secondResult.isNew).toBe(false);
-    expect(firstResult.sessionName).toBe(secondResult.sessionName);
-  });
-});
-
-describe('TerminalsService post-restart executor adoption', () => {
-  beforeEach(() => {
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
-    mocks.createUserProcessEnvironment.mockResolvedValue({});
-    mocks.branchesById.clear();
-    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
-  });
-
-  it('adopts a surviving executor that re-announces after the request arrives', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 50,
-    });
-
-    const request = service.create({ branchId: 'branch-1' }, params as never);
-    setTimeout(() => service.handleExecutorReady(params.user.user_id as never), 5);
-
-    const result = await request;
-    expect(result).toMatchObject({ isNew: false, ready: true });
-    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
-  });
-
-  it('reuses a surviving executor that already re-announced', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 50,
-    });
-    service.handleExecutorReady(params.user.user_id as never);
-
-    const result = await service.create({ branchId: 'branch-1' }, params as never);
-    expect(result).toMatchObject({ isNew: false, ready: true });
-    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
-  });
-
-  it('spawns once when no executor re-announces during the discovery window', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 1,
-    });
-
-    const result = await service.create({ branchId: 'branch-1' }, params as never);
-    expect(result).toMatchObject({ isNew: true, ready: false });
-    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
-  });
-});
-
-describe('TerminalsService readiness ack gating', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
-    mocks.createUserProcessEnvironment.mockResolvedValue({});
-    mocks.branchesById.clear();
-    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
-    mocks.loadConfig.mockResolvedValue({
-      daemon: { port: 3030 },
-      execution: { branch_rbac: false },
-    });
-  });
-
-  it('binds terminal_user_id and a long TTL into the executor service token', async () => {
-    // Reconnection reuses this same token; the default 5m service-token TTL
-    // would expire mid-session and break reconnect (the whole point of the
-    // feature). The token must be user-scoped AND long-lived.
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-    await service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
-
+    expect(result.channel).toBe(`tenant/tenant-x/user/user-1/terminal/${result.terminalId}`);
     expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
       expect.anything(),
-      { terminal_user_id: params.user.user_id },
+      {
+        terminal_user_id: 'user-1',
+        terminal_id: result.terminalId,
+        terminal_branch_id: 'branch-1',
+        terminal_owner_boot_id: 'daemon-a-boot',
+      },
       '30d'
     );
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        daemonUrl: 'http://daemon.internal:3030',
+        params: expect.objectContaining({
+          terminalId: result.terminalId,
+          channel: result.channel,
+          cwd: '/worktrees/feature-branch',
+        }),
+      }),
+      expect.anything()
+    );
   });
 
-  it('reports ready=false on cold start and ready=true once the executor acks', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-
-    const cold = await service.create(
-      { branchId: 'branch-1', rows: 24, cols: 80 },
-      params as never
+  it('serializes same-scope starts and reuses only the local live attachment', async () => {
+    let release!: () => void;
+    mocks.createUserProcessEnvironment.mockImplementation(
+      () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
     );
-    expect(cold.isNew).toBe(true);
-    expect(cold.ready).toBe(false);
-
-    // Executor announces its PTY is attached.
-    service.handleExecutorReady(params.user.user_id as never);
-
-    const warm = await service.create(
-      { branchId: 'branch-1', rows: 24, cols: 80 },
-      params as never
-    );
-    expect(warm.isNew).toBe(false);
-    expect(warm.ready).toBe(true);
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const first = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
+    const second = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
+    expect(b.terminalId).toBe(a.terminalId);
+    expect(b.isNew).toBe(false);
   });
 
-  it('rejects stale Claude CLI bootstrap input before adopting or spawning an executor', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
+  it('uses separate attachments and Zellij sessions for separate branches', async () => {
+    mocks.branchesById.set('branch-2', {
+      ...mocks.branch,
+      branch_id: 'branch-2',
+      name: 'other',
+      path: '/worktrees/other',
     });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const a = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const b = await service.create({ branchId: 'branch-2' as BranchID }, params as never);
+    expect(a.terminalId).not.toBe(b.terminalId);
+    expect(a.sessionName).not.toBe(b.sessionName);
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(2);
+  });
 
+  it('enforces branch session permission', async () => {
+    mocks.canOpen = false;
+    mocks.config = {
+      daemon: { port: 3030 },
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+    };
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow("need 'session' permission");
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+});
+
+describe('attachment lifecycle', () => {
+  it('routes ready/error only to the matching terminal channel', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    service.handleExecutorReady(terminal.terminalId, 'user-1');
+    expect(app.io.local.to).toHaveBeenCalledWith(terminal.channel);
+    expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    service.handleExecutorError(terminal.terminalId, 'user-1', 'failed');
+    expect(app.emit).toHaveBeenCalledWith('terminal:error', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+      message: 'failed',
+    });
+  });
+
+  it('explicit remove shuts down only the caller-owned local attachment', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    await expect(service.remove(terminal.terminalId, params as never)).resolves.toEqual({
+      closed: true,
+    });
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    expect(app.emit).toHaveBeenCalledWith('terminal:exit', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+      exitCode: 0,
+    });
+    await expect(
+      service.remove(terminal.terminalId, {
+        ...params,
+        user: { user_id: 'user-2', role: 'admin' },
+      } as never)
+    ).resolves.toEqual({ closed: false });
+  });
+
+  it('fences executor capabilities against the live local attachment registry', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const identity = {
+      terminalId: terminal.terminalId,
+      tenantId: 'tenant-x',
+      userId: 'user-1',
+      branchId: 'branch-1',
+      ownerBootId: 'daemon-a-boot',
+    };
+    expect(service.matchesOwnedAttachment(identity)).toBe(true);
+    expect(service.matchesOwnedAttachment({ ...identity, tenantId: 'tenant-y' })).toBe(false);
+    expect(service.matchesOwnedAttachment({ ...identity, branchId: 'branch-2' })).toBe(false);
+
+    await service.remove(terminal.terminalId, params as never);
+    expect(service.matchesOwnedAttachment(identity)).toBe(false);
+  });
+
+  it('notifies browsers and fences the attachment when the executor process exits', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    service.handleExecutorExit(terminal.terminalId, 'user-1', 17, 9);
+
+    expect(app.emit).toHaveBeenCalledWith('terminal:exit', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+      exitCode: 17,
+      signal: 9,
+    });
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: terminal.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+  });
+
+  it('branch lifecycle cleanup is tenant-qualified', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    service.closeBranch('tenant-b', 'branch-1');
+    expect(app.emit).not.toHaveBeenCalledWith('terminal:shutdown-local', expect.anything());
+    service.closeBranch('tenant-x', 'branch-1');
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+  });
+
+  it('fails closed without tenant context and rejects removed CLI compatibility input', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
     await expect(
       service.create(
-        {
-          branchId: 'branch-1',
-          ensureCliSessionId: 'historical-session',
-          focusTabName: 'cli-historic',
-        },
+        { branchId: 'branch-1' as BranchID, ensureCliSessionId: 'legacy' },
         params as never
       )
     ).rejects.toThrow(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
-    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
-  });
-
-  it('notifies the browser channel on ready and error acks', () => {
-    const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never, { reconnectDiscoveryMs: 0 });
-
-    service.handleExecutorReady(params.user.user_id as never);
-    expect(app.io.local.to).toHaveBeenCalledWith(`user/${params.user.user_id}/terminal`);
-    expect(app.emit).toHaveBeenCalledWith('terminal:ready', { userId: params.user.user_id });
-
-    service.handleExecutorError(params.user.user_id as never, 'spawn failed');
-    expect(app.emit).toHaveBeenCalledWith('terminal:error', {
-      userId: params.user.user_id,
-      message: 'spawn failed',
-    });
-  });
-
-  it('defers cold-start tab focus until the readiness ack arrives', async () => {
-    const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never, { reconnectDiscoveryMs: 0 });
-
-    await service.create(
-      { branchId: 'branch-1', focusTabName: 'cli-abc', rows: 24, cols: 80 },
-      params as never
-    );
-
-    // Cold start: the executor isn't up yet, so no focus is emitted.
-    expect(app.emit).not.toHaveBeenCalledWith(
-      'terminal:tab',
-      expect.objectContaining({ action: 'focus', tabName: 'cli-abc' })
-    );
-
-    // Ack arrives → the gated focus fires.
-    service.handleExecutorReady(params.user.user_id as never);
-    await vi.waitFor(() => {
-      expect(app.emit).toHaveBeenCalledWith('terminal:tab', {
-        userId: params.user.user_id,
-        action: 'focus',
-        tabName: 'cli-abc',
-      });
-    });
-  });
-
-  it('drops readiness when the executor exits so the next start waits again', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-
-    await service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
-    service.handleExecutorReady(params.user.user_id as never);
-    service.handleExecutorExit(params.user.user_id as never);
-
-    const afterExit = await service.create(
-      { branchId: 'branch-1', rows: 24, cols: 80 },
-      params as never
-    );
-    // Executor map was cleared on exit → this is a fresh cold start, not ready.
-    expect(afterExit.isNew).toBe(true);
-    expect(afterExit.ready).toBe(false);
-  });
-});
-
-describe('TerminalsService branch shell tabs', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
-    mocks.createUserProcessEnvironment.mockResolvedValue({});
-    mocks.loadConfig.mockResolvedValue({
-      daemon: { port: 3030 },
-      execution: { branch_rbac: false },
-    });
-    mocks.branchesById.clear();
-  });
-
-  it('includes branch identity in shell tab names even when branch names match', () => {
-    const first = {
-      branch_id: '11111111-1111-7111-8111-111111111111' as BranchID,
-      name: 'same-name' as BranchName,
-    };
-    const second = {
-      branch_id: '22222222-2222-7222-8222-222222222222' as BranchID,
-      name: 'same-name' as BranchName,
-    };
-
-    expect(buildBranchShellTabName(first)).toBe('same-name · 11111111');
-    expect(buildBranchShellTabName(second)).toBe('same-name · 22222222');
-    expect(buildBranchShellTabName(first)).not.toBe(buildBranchShellTabName(second));
-  });
-
-  it('uses identity-safe tab names for cold-start and warm branch shell routing', async () => {
-    const firstBranch = {
-      ...mocks.branch,
-      branch_id: '11111111-1111-7111-8111-111111111111' as BranchID,
-      name: 'same-name',
-      path: '/tmp/repo-a/same-name',
-    };
-    const secondBranch = {
-      ...mocks.branch,
-      branch_id: '22222222-2222-7222-8222-222222222222' as BranchID,
-      name: 'same-name',
-      path: '/tmp/repo-b/same-name',
-    };
-    mocks.branchesById.set(firstBranch.branch_id, firstBranch);
-    mocks.branchesById.set(secondBranch.branch_id, secondBranch);
-
-    const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never, { reconnectDiscoveryMs: 0 });
-
-    const first = await service.create(
-      { branchId: firstBranch.branch_id, rows: 24, cols: 80 },
-      params as never
-    );
-
-    expect(first).toMatchObject({
-      isNew: true,
-      branchName: 'same-name',
-    });
-    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(1);
-    expect(mocks.spawnExecutorFireAndForget.mock.calls[0]?.[0]).toMatchObject({
-      command: 'zellij.attach',
-      params: {
-        cwd: firstBranch.path,
-        tabName: 'same-name · 11111111',
-      },
-    });
-
-    // Warm reuse only drives the executor once it has acked readiness — an
-    // adopted-but-not-yet-reconnected executor must not get commands fired into
-    // an empty room. Mark ready to model a live, acked executor.
-    service.handleExecutorReady(params.user.user_id as never);
-
-    const second = await service.create(
-      { branchId: secondBranch.branch_id, rows: 24, cols: 80 },
-      params as never
-    );
-
-    expect(second).toMatchObject({
-      isNew: false,
-      branchName: 'same-name',
-      ready: true,
-    });
-    await vi.waitFor(() => {
-      expect(app.emit).toHaveBeenCalledWith('terminal:tab', {
-        userId: params.user.user_id,
-        action: 'create',
-        tabName: 'same-name · 22222222',
-        cwd: secondBranch.path,
-      });
-    });
-  });
-
-  it('passes the tenant-derived branch path to the executor without daemon canonicalisation', async () => {
-    const requestedBranch = {
-      ...mocks.branch,
-      branch_id: '11111111-1111-7111-8111-111111111111' as BranchID,
-      name: 'same-name',
-      path: '/tmp/repo-a/same-name',
-    };
-    mocks.branchesById.set(requestedBranch.branch_id, requestedBranch);
-    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: 'alice' });
-    const service = new TerminalsService(makeApp() as never, {} as never, {
-      reconnectDiscoveryMs: 0,
-    });
-    await service.create({ branchId: requestedBranch.branch_id }, params as never);
-    expect(mocks.spawnExecutorFireAndForget.mock.calls[0]?.[0]).toMatchObject({
-      command: 'zellij.attach',
-      params: { cwd: requestedBranch.path, tabName: 'same-name · 11111111' },
-    });
+    mocks.tenantId = undefined;
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('Missing active tenant context');
   });
 });

@@ -11,7 +11,7 @@ Every observed direct I/O operation has an exact registry tuple (file, import, i
 - **C — tenant/user/session/branch violation that must move.** Workspace and user-home access is transitional and requires the same review metadata.
 - **D — ambiguous product decision.** The owning team must decide the durable boundary by the review date.
 
-Adapter placement under `apps/agor-daemon/src/host/local/` is necessary layering, **not an allowlist**. Local adapters need the same exact declarations as every other module. Privileged identity/group operations implement `DaemonHostIdentityOperations`. User-home symlink maintenance and managed Git repair are deliberately absent from the daemon service/import graph: operators retain the offline `agor local` commands, while runtime managed Git reconciliation belongs to the executor. Hosted mode does not register daemon host identity operations.
+Adapter placement under `apps/agor-daemon/src/host/local/` is necessary layering, **not an allowlist**. Local adapters need the same exact declarations as every other module. Host-account, POSIX-group, ACL-repair, and user-home symlink operations have been removed; managed Git and sandbox filesystem work cross typed executor boundaries.
 
 ## Checker and workflow
 
@@ -37,11 +37,17 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 - Call identity uses the nearest named function/method plus an occurrence number. Refactors can require registry updates even when authority is unchanged.
 - The checker verifies declared syntactic capabilities, not path provenance, tenant scoping, authorization, cleanup correctness, TOCTOU safety, or command argument safety. Those require runtime design and negative tests at the owning boundary.
 
-## Closure status (2026-08-03)
+## Closure status (2026-08-17)
 
-The final registry contains **101** exact capabilities (**74 A, 27 B, 0 C, 0 D**). The apparent increase from the prior **93** (**66 A, 27 B**) is eight newly detected pre-existing higher-order aliases: four first-run operator credential-file operations and four operator Unix identity command executions. No tenant-path authority was reclassified. The only B entries remain the local upload adapter.
+The registry contains **101** exact capabilities (**74 A, 27 B, 0 C, 0 D**).
+The only B entries remain the local upload staging adapter. Obsolete declarations
+for Unix account/group management, sudo wrappers, env-file ownership, and local
+OpenCode command execution were removed with those code paths. Sandbox path
+canonicalization remains an explicit daemon-host capability.
 
-Unix permission initialization no longer dynamically loads daemon `unix-group-init` code or runs daemon-side `chgrp`/`chmod`/`setfacl`. After Git materialization, the same tenant-mounted Git lifecycle executor invokes the existing `unix.sync-repo` or `unix.sync-branch` handler. The handler resolves paths from trusted tenant-scoped records; paths never cross into the daemon process. Keeping permission work in the existing lifecycle executor avoids nested-executor capacity starvation. Local insulated/strict deployments retain required group setup; simple/delegated modes skip it because host Unix groups are not part of those modes. Sync is idempotent, awaited, and fail-closed: a resource cannot become `ready` when required isolation fails.
+Runtime Git lifecycle work uses typed executor payloads. Application RBAC is
+projected into sandbox mounts at launch rather than POSIX groups or ACL repair;
+there are no `unix.sync-*` handlers or daemon host-identity operations.
 
 The checker still cannot see semantic path authority. In particular, daemon services resolve tenant layout strings and carry branch/repo cwd values from tenant-owned database records into typed executor payloads. That is intentional routing data, not daemon I/O: local executor processes launch from the executor package directory, and only executor commands consume workspace cwd. Review payload schemas and executor command handlers when changing this contract, because a string passed into an unmanifested dependency or remote launcher can become filesystem authority without a syntactic daemon capability.
 

@@ -179,9 +179,8 @@ export function createCanUseToolCallback(
       const requestId = generateId();
       const timestamp = new Date().toISOString();
 
-      // Get current message index for this session
-      const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
-      const nextIndex = existingMessages.length;
+      // Get the append index without transferring the session transcript.
+      const nextIndex = await deps.messagesRepo.getNextIndexBySessionId(sessionId);
 
       // Create permission request message
       console.log(`🔒 [canUseTool] Creating permission request message for ${toolName}`, {

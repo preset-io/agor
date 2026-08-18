@@ -1,4 +1,12 @@
-import type { AgorClient, BoardEntityObject, Branch, Repo, Session, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  BoardEntityObject,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  Session,
+  User,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -40,13 +48,7 @@ export interface BranchModalProps {
   // it calls `client.service('branches').patch()` directly so errors bubble.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;

@@ -182,7 +182,8 @@ export class KnowledgeDocumentEditsService {
       base_version_id: currentVersion.version_id,
       base_version_number: currentVersion.version_number,
       ops: data.ops,
-      session_id: (params as { sessionId?: string } | undefined)?.sessionId ?? null,
+      // Retained for older API consumers; first-class version columns are authoritative.
+      session_id: baseParams.knowledgeWriteAttribution?.sessionId ?? null,
     } satisfies Record<string, unknown>;
 
     const versionMetadata = {

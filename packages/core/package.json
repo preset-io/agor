@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./realtime": {
+      "source": "./src/realtime/index.ts",
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js",
+      "require": "./dist/realtime/index.cjs"
+    },
     "./executor-protocol": {
       "source": "./src/executor-protocol.ts",
       "types": "./dist/executor-protocol.d.ts",
@@ -63,12 +69,6 @@
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.js",
       "require": "./dist/api/index.cjs"
-    },
-    "./claude": {
-      "source": "./src/claude/index.ts",
-      "types": "./dist/claude/index.d.ts",
-      "import": "./dist/claude/index.js",
-      "require": "./dist/claude/index.cjs"
     },
     "./analytics": {
       "source": "./src/analytics/index.ts",
@@ -322,6 +322,12 @@
       "import": "./dist/tools/mcp/auth-secrets.js",
       "require": "./dist/tools/mcp/auth-secrets.cjs"
     },
+    "./tools/mcp/env-secrets": {
+      "source": "./src/tools/mcp/env-secrets.ts",
+      "types": "./dist/tools/mcp/env-secrets.d.ts",
+      "import": "./dist/tools/mcp/env-secrets.js",
+      "require": "./dist/tools/mcp/env-secrets.cjs"
+    },
     "./tools/mcp/jwt-auth": {
       "source": "./src/tools/mcp/jwt-auth.ts",
       "types": "./dist/tools/mcp/jwt-auth.d.ts",
@@ -345,6 +351,12 @@
       "types": "./dist/tools/mcp/oauth-refresh.d.ts",
       "import": "./dist/tools/mcp/oauth-refresh.js",
       "require": "./dist/tools/mcp/oauth-refresh.cjs"
+    },
+    "./tools/mcp/grant-entitlement": {
+      "source": "./src/tools/mcp/grant-entitlement.ts",
+      "types": "./dist/tools/mcp/grant-entitlement.d.ts",
+      "import": "./dist/tools/mcp/grant-entitlement.js",
+      "require": "./dist/tools/mcp/grant-entitlement.cjs"
     },
     "./tools/mcp/oauth-token-expiry": {
       "source": "./src/tools/mcp/oauth-token-expiry.ts",
@@ -370,11 +382,23 @@
       "import": "./dist/mcp-catalog/index.js",
       "require": "./dist/mcp-catalog/index.cjs"
     },
+    "./mcp-catalog/query": {
+      "source": "./src/mcp-catalog/query.ts",
+      "types": "./dist/mcp-catalog/query.d.ts",
+      "import": "./dist/mcp-catalog/query.js",
+      "require": "./dist/mcp-catalog/query.cjs"
+    },
     "./mcp": {
       "source": "./src/mcp/index.ts",
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js",
       "require": "./dist/mcp/index.cjs"
+    },
+    "./mcp/member-policy": {
+      "source": "./src/mcp/member-policy.ts",
+      "types": "./dist/mcp/member-policy.d.ts",
+      "import": "./dist/mcp/member-policy.js",
+      "require": "./dist/mcp/member-policy.cjs"
     },
     "./gateway": {
       "source": "./src/gateway/index.ts",
@@ -411,12 +435,6 @@
       "types": "./dist/local-actions/index.d.ts",
       "import": "./dist/local-actions/index.js",
       "require": "./dist/local-actions/index.cjs"
-    },
-    "./local-actions/identity": {
-      "source": "./src/local-actions/identity.ts",
-      "types": "./dist/local-actions/identity.d.ts",
-      "import": "./dist/local-actions/identity.js",
-      "require": "./dist/local-actions/identity.cjs"
     },
     "./templates/teammate-welcome-note": {
       "source": "./src/templates/teammate-welcome-note.ts",

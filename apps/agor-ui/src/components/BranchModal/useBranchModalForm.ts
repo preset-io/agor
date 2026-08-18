@@ -501,14 +501,13 @@ export function useBranchModalForm({
       if (rbacEnabled && ownersChanged && permissions.selectedOwnerIds.length === 0) {
         throw new Error('At least one owner is required');
       }
-      if (
-        rbacEnabled &&
-        permissions.permissionSource === 'override' &&
-        permissions.othersCan === 'none' &&
-        permissions.selectedOwnerIds.length !== 1
-      ) {
-        throw new Error('Private branches must have exactly one private user');
-      }
+      // NOTE: unlike boards, branches have no private/shared visibility mode
+      // (see PermissionsTab: `showVisibility={false}`, `visibility: 'shared'`).
+      // `others_can: 'none'` is simply the most restrictive non-owner fallback
+      // tier — it does NOT imply a single solo owner. A branch can be co-owned
+      // by several users while remaining closed to everyone else, so there is
+      // deliberately no "exactly one owner when others_can === none" guard here
+      // (that rule belongs to boards, which do have an `access_mode` column).
 
       // 1. Add new owners FIRST so a transfer like "remove me, add Bob"
       // doesn't briefly leave an empty owner set, and so Bob can pick up
@@ -607,22 +606,6 @@ export function useBranchModalForm({
           await client
             .service('branches/:id/owners')
             .remove(userId, { route: { id: branch.branch_id } });
-        }
-      }
-
-      // 5. Teammate emoji → board icon side effect. Cosmetic only — log on
-      // failure, don't fail the save.
-      if (teammateChanged && isTeammateBranch && canEditGeneral && branch.board_id) {
-        const config = getTeammateConfig(branch);
-        const emojiChanged = config && teammate.emoji !== (config.emoji || '');
-        if (emojiChanged) {
-          try {
-            await client.service('boards').patch(branch.board_id, {
-              icon: teammate.emoji || '🤖',
-            });
-          } catch (err) {
-            console.error('Failed to update board icon:', err);
-          }
         }
       }
 

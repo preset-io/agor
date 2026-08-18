@@ -1,5 +1,5 @@
-# package.json's "files" allowlist is authoritative: bin/, dist/, scripts/,
-# LICENSE, and README.md. These rules further exclude development-only files.
+# package.json's "files" allowlist is authoritative: bin/, dist/, LICENSE,
+# and README.md. These rules further exclude development-only files.
 
 # Build script (not needed in published package)
 build.sh
@@ -8,7 +8,7 @@ build.sh
 *.md
 !README.md
 
-# node_modules is not published; postinstall recreates the internal @agor links.
+# npm includes only the internal packages named in bundleDependencies.
 
 # macOS
 .DS_Store

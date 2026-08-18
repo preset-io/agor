@@ -68,7 +68,7 @@ Agor runs out of the box on SQLite as a single-user instance, but it's designed 
 
 - **PostgreSQL backend** instead of SQLite, for multi-user / team setups
 - **Multiplayer mode** with branch-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
-- **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
+- **Execution isolation** with fail-closed local sandboxing or a reviewed delegated substrate
 - **Docker Compose** and source builds for contributor / dev workflows — see the **Docker Compose** tab above for the evaluation quickstart
 - **Custom config / database paths** for non-default install layouts
 

@@ -2,10 +2,7 @@ import { feathers } from '@agor/core/feathers';
 import type { HookContext, Message, MessageID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  assertExternalWidgetMessageCreateAllowed,
-  protectExternalWidgetMessageWrites,
-} from './message-boundary';
+import { protectExternalWidgetMessageWrites } from './message-boundary';
 
 const externalParams = { provider: 'rest' } as never;
 const executorParams = {
@@ -141,9 +138,6 @@ describe('external widget Message boundary', () => {
         externalParams
       )
     ).rejects.toThrow('only be created by the daemon');
-    expect(() => assertExternalWidgetMessageCreateAllowed([ordinaryMessage(), pending])).toThrow(
-      'only be created by the daemon'
-    );
   });
 
   it('rejects transport attempts to reset or replace a live widget claim', async () => {

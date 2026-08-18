@@ -7,6 +7,13 @@ import type {
 import type { UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
+/** Canonical syntax for the transitional delegated execution-home key. */
+export const EXECUTION_HOME_KEY_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+export function isValidExecutionHomeKey(value: string): boolean {
+  return EXECUTION_HOME_KEY_PATTERN.test(value);
+}
+
 /**
  * User role types
  * - superadmin: Full system access including branch RBAC bypass (requires allow_superadmin=true in config)
@@ -447,8 +454,20 @@ export interface User extends BaseUserFields {
   must_change_password: boolean;
   created_at: Date;
   updated_at?: Date;
-  // Unix username for process impersonation (optional, unique, admin-managed)
+  // Opaque execution-home key (optional, tenant-unique, admin-managed)
   unix_username?: string;
+  /**
+   * Absolute path to this user's home directory ON THE HOST, used as the
+   * SOURCE of the per-user home overlay under `unix_user_mode: sandbox`
+   * (`execution.sandbox.home_mode: per_user`). When set, the sandbox binds this
+   * path over the passwd home so `~` is the user's own persistent home.
+   *
+   * Null/undefined → the daemon uses the canonical store
+   * `<data_home>/tenants/<tenant>/homes/<user_id>`. The migration off `strict`
+   * may set this to an existing migrated home so no files move.
+   * Admin/system-managed; not user-editable.
+   */
+  filesystem_home?: string;
   /**
    * Per-tool credential & auth status (boolean only, never exposes actual values).
    *
@@ -568,6 +587,8 @@ export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {
   password: string;
   role?: UserRole; // Optional, defaults to 'member' if not provided
   unix_username?: string;
+  /** Host home dir used as the per-user sandbox overlay source (admin-only). See {@link User.filesystem_home}. */
+  filesystem_home?: string;
   avatar_url?: string;
   avatar?: string;
   avatar_source?: string;
@@ -590,6 +611,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
   preferences?: UserPreferences;
   onboarding_completed?: boolean;
   unix_username?: string;
+  /** Host home dir used as the per-user sandbox overlay source (admin-only). See {@link User.filesystem_home}. */
+  filesystem_home?: string;
   /** Force user to change password on next login (admin-only) */
   must_change_password?: boolean;
   /**

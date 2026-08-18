@@ -248,11 +248,11 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                           <Typography.Text type="warning">⚠️ Disabled (open access)</Typography.Text>
                         )}
                       </Descriptions.Item>
-                      <Descriptions.Item label="Unix User Mode">
+                      <Descriptions.Item label="Execution Mode">
                         <code>{healthInfo.execution.unixUserMode}</code>
                         {healthInfo.execution.unixUserMode === 'simple' && (
                           <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                            (no OS isolation)
+                            (trusted daemon-user execution)
                           </Typography.Text>
                         )}
                         {healthInfo.execution.unixUserMode === 'delegated' && (
@@ -260,14 +260,9 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                             (per-user identity, enforced by substrate)
                           </Typography.Text>
                         )}
-                        {healthInfo.execution.unixUserMode === 'insulated' && (
+                        {healthInfo.execution.unixUserMode === 'sandbox' && (
                           <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                            (branch groups)
-                          </Typography.Text>
-                        )}
-                        {healthInfo.execution.unixUserMode === 'strict' && (
-                          <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                            (per-user impersonation)
+                            (local filesystem sandbox)
                           </Typography.Text>
                         )}
                       </Descriptions.Item>

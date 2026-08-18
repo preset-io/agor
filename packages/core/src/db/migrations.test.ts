@@ -11,16 +11,25 @@ interface JournalEntry {
   when: number;
 }
 
+/** Both journals, Postgres first, as the migrator reads them off disk. */
+const readJournals = () =>
+  Promise.all(
+    [
+      new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
+      new URL('../../drizzle/sqlite/meta/_journal.json', import.meta.url),
+    ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
+  );
+
 describe('Postgres migrations', () => {
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0073_task_runtime_reconciliation'],
         pending: ['0074_knowledge_embedding_claims'],
       })
     ).toEqual(['0074_knowledge_embedding_claims']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0074_knowledge_embedding_claims'],
       })
@@ -29,13 +38,13 @@ describe('Postgres migrations', () => {
 
   it('enforces the structurally incompatible MCP OAuth migration as an offline cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0076_executor_session_token_session_binding'],
         pending: ['0078_mcp_oauth_pending_flows'],
       })
     ).toEqual(['0078_mcp_oauth_pending_flows']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0078_mcp_oauth_pending_flows'],
       })
@@ -44,35 +53,92 @@ describe('Postgres migrations', () => {
 
   it('enforces the GitHub callback authority migration as an offline cutover', () => {
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0078_mcp_oauth_pending_flows'],
         pending: ['0082_github_install_state'],
       })
     ).toEqual(['0082_github_install_state']);
     expect(
-      pendingOfflineCutoverMigrations({
+      pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0082_github_install_state'],
       })
     ).toEqual([]);
   });
 
-  it('assigns GitHub install state unique post-HA migration watermarks', async () => {
-    const [postgresJournal, sqliteJournal] = await Promise.all(
-      [
-        new URL('../../drizzle/postgres/meta/_journal.json', import.meta.url),
-        new URL('../../drizzle/sqlite/meta/_journal.json', import.meta.url),
-      ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
-    );
+  it('enforces PostgreSQL transcript indexes as an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0082_github_install_state'],
+        pending: ['0083_transcript_hydration_keysets'],
+      })
+    ).toEqual(['0083_transcript_hydration_keysets']);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0085_github_install_state'],
+        pending: ['0086_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_pretty_mac_gargan', '0083_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+  });
 
-    for (const [journal, expectedTag, expectedIndex] of [
-      [postgresJournal, '0082_github_install_state', 82],
-      [sqliteJournal, '0085_github_install_state', 85],
+  it('assigns GitHub install state unique post-HA migration watermarks', async () => {
+    const [postgresJournal, sqliteJournal] = await readJournals();
+
+    for (const [journal, expectedTag, expectedIndex, hydrationTag, hydrationIndex] of [
+      [postgresJournal, '0082_github_install_state', 82, '0083_transcript_hydration_keysets', 83],
+      [sqliteJournal, '0085_github_install_state', 85, '0086_transcript_hydration_keysets', 86],
     ] as const) {
-      const entry = journal.entries.at(-1);
-      const predecessor = journal.entries.at(-2);
+      const entry = journal.entries.find(({ tag }) => tag === expectedTag);
+      const predecessor = journal.entries.find(({ idx }) => idx === expectedIndex - 1);
       expect(entry).toMatchObject({ idx: expectedIndex, tag: expectedTag });
       expect(entry?.when).toBeGreaterThan(predecessor?.when ?? 0);
+
+      // Find by tag rather than assuming it is the newest entry — later
+      // migrations (e.g. add_user_filesystem_home) legitimately follow it.
+      const hydrationEntry = journal.entries.find(({ tag }) => tag === hydrationTag);
+      expect(hydrationEntry).toMatchObject({ idx: hydrationIndex, tag: hydrationTag });
+      expect(hydrationEntry?.when).toBeGreaterThan(entry?.when ?? 0);
+    }
+  });
+
+  it('gives the newest migration a unique watermark that sorts it last', async () => {
+    // Drizzle applies pending migrations in `when` order, so a new migration
+    // that does not sort after the one before it can run out of order against a
+    // database that has neither.
+    //
+    // Only the newest pair is checked. Early history predates the convention
+    // and is not monotonic — those migrations have all long since applied
+    // everywhere, and rewriting their watermarks now would change hashes that
+    // deployed databases already record. What must hold is that each new
+    // migration extends the sequence.
+    //
+    // Deliberately not pinned to a tag: naming the newest migration makes every
+    // migration an edit to this test, and that edit is the moment the property
+    // stops being checked.
+    for (const { entries } of await readJournals()) {
+      expect(entries.length).toBeGreaterThan(1);
+
+      // `idx` is not dense — the history has a gap where a generated migration
+      // was dropped before it shipped — but both keys still have to identify an
+      // entry, or the journal no longer describes the directory beside it.
+      expect(new Set(entries.map((entry) => entry.tag)).size).toBe(entries.length);
+      expect(new Set(entries.map((entry) => entry.idx)).size).toBe(entries.length);
+
+      const newest = entries.at(-1);
+      const highestWhenBefore = Math.max(...entries.slice(0, -1).map((entry) => entry.when));
+      const highestIdxBefore = Math.max(...entries.slice(0, -1).map((entry) => entry.idx));
+
+      expect(
+        newest?.when,
+        `${newest?.tag} does not sort after every earlier migration`
+      ).toBeGreaterThan(highestWhenBefore);
+      expect(newest?.idx).toBeGreaterThan(highestIdxBefore);
     }
   });
 

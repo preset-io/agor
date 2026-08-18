@@ -43,7 +43,7 @@ describe('PromptPayloadSchema', () => {
   });
 
   it('should parse prompt payload with optional fields', () => {
-    // Note: asUser is now handled at spawn time, not in payload
+    // Delegated launcher identity is handled at spawn time, not in payload
     const payload = {
       command: 'prompt',
       sessionToken: 'jwt-token-here',
@@ -394,6 +394,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
       },
@@ -411,6 +414,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
         tabName: 'feature-x',
@@ -602,14 +608,10 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('environment.logs');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
-    expect(commands).toContain('unix.sync-branch');
-    expect(commands).toContain('unix.sync-board');
-    expect(commands).toContain('unix.sync-repo');
-    expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(32);
+    expect(commands.length).toBe(28);
   });
 });

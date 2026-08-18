@@ -132,6 +132,7 @@ describe('task creator executor launch context', () => {
       session_id: SESSION_ID,
       branch_id: 'branch-b',
       created_by: OWNER_ID,
+      unix_username: 'owner-a',
       agentic_tool: 'claude-code',
       agentic_tool_preset_id: null,
       permission_config: { mode: 'default' },
@@ -189,7 +190,6 @@ describe('task creator executor launch context', () => {
       PROMPTER_ID,
       expect.anything(),
       undefined,
-      false,
       undefined,
       SESSION_ID
     );
@@ -211,7 +211,10 @@ describe('task creator executor launch context', () => {
     expect(payload.params.prompt).toContain('Needs B authentication');
     expect(payload.params.prompt).not.toContain('Temporarily unavailable');
     expect(JSON.stringify(payload)).not.toContain('owner-secret');
-    expect(options).toMatchObject({ templateVariables: { unix_user: 'prompter-b' } });
+    expect(options).toMatchObject({
+      delegatedHomeKey: 'owner-a',
+      templateVariables: { user_id: PROMPTER_ID },
+    });
     expect(options.asUser).toBeUndefined();
   });
 

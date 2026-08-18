@@ -1,6 +1,6 @@
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
+import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -11,8 +11,9 @@ import {
   useAgorStore,
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
-import { selectBoardById } from '../../store/selectors';
+import { selectBoardById, selectBranchById } from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
@@ -143,6 +144,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   // whole-map subscription left (board options + default board for the create
   // modal); board patches are rare.
   const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
 
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
@@ -241,8 +243,16 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     () =>
       Array.from(boardById.values())
         .filter((b) => !b.archived)
-        .map((b) => ({ value: b.board_id, label: `${b.icon || '📋'} ${b.name}` })),
-    [boardById]
+        .map((b) => ({
+          value: b.board_id,
+          label: (
+            <Space size={8}>
+              <BoardTile emoji={getBoardEmoji(b, branchById)} size={20} />
+              <span>{b.name}</span>
+            </Space>
+          ),
+        })),
+    [boardById, branchById]
   );
 
   const [createOpen, setCreateOpen] = useState(false);

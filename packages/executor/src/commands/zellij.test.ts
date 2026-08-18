@@ -1,5 +1,80 @@
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createReconnectGrace, forceZellijRepaint, waitForZellijReady } from './zellij.js';
+import {
+  buildZellijLaunchArgs,
+  createReconnectGrace,
+  ensurePrivateZellijCacheDirectory,
+  forceZellijRepaint,
+  waitForZellijReady,
+  zellijListingHasSession,
+} from './zellij.js';
+
+describe('buildZellijLaunchArgs', () => {
+  it('attaches directly when an active or exited session is known', () => {
+    expect(buildZellijLaunchArgs('agor-branch', true)).toEqual([
+      'attach',
+      'agor-branch',
+      'options',
+      '--on-force-close',
+      'quit',
+      '--session-serialization',
+      'true',
+      '--serialize-pane-viewport',
+      'true',
+      '--scrollback-lines-to-serialize',
+      '1000',
+      '--serialization-interval',
+      '1',
+    ]);
+  });
+
+  it('uses the serializable new-session path while accepting an active-session race', () => {
+    expect(buildZellijLaunchArgs('agor-branch', false)).toEqual([
+      '--session',
+      'agor-branch',
+      'options',
+      '--on-force-close',
+      'quit',
+      '--session-serialization',
+      'true',
+      '--serialize-pane-viewport',
+      'true',
+      '--scrollback-lines-to-serialize',
+      '1000',
+      '--serialization-interval',
+      '1',
+      '--attach-to-session',
+      'true',
+    ]);
+  });
+});
+
+describe('zellijListingHasSession', () => {
+  it('recognizes active and exited sessions without prefix collisions', () => {
+    const listing = [
+      'agor-other [Created 2m ago]',
+      'agor-branch [Created 1m ago] (EXITED - attach to resurrect)',
+    ].join('\n');
+    expect(zellijListingHasSession(listing, 'agor-branch')).toBe(true);
+    expect(zellijListingHasSession(listing, 'agor')).toBe(false);
+  });
+});
+
+describe('ensurePrivateZellijCacheDirectory', () => {
+  it('creates and tightens the effective-user resurrection cache to 0700', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agor-zellij-cache-'));
+    const cache = join(root, '.cache', 'zellij');
+    try {
+      mkdirSync(cache, { recursive: true, mode: 0o755 });
+      ensurePrivateZellijCacheDirectory(cache);
+      expect(statSync(cache).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('forceZellijRepaint', () => {
   it('shrinks the row count then restores it to force a SIGWINCH repaint', () => {

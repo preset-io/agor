@@ -13,6 +13,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
 import { getTimeMs } from '../../utils/entityTime';
 import { formatRelativeTime } from '../../utils/time';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { glassSurfaceStyle, withAlpha } from './homeStyles';
 import type { HomePageProps } from './types';
 
@@ -29,6 +30,7 @@ const BOARDS_PER_PAGE = 4;
  */
 interface BoardHomeRow {
   board: Board;
+  emoji: string | undefined;
   branchCount: number;
   activeCount: number;
   latestSessionAt: Session['last_updated'] | null;
@@ -80,12 +82,14 @@ const activeSessions = (sessions: Session[]) =>
 
 const BoardHomeCard = memo(function BoardHomeCard({
   board,
+  emoji,
   branchCount,
   activeCount,
   latestSessionAt,
   onBoardClick,
 }: {
   board: Board;
+  emoji: string | undefined;
   branchCount: number;
   activeCount: number;
   latestSessionAt: Session['last_updated'] | null;
@@ -138,22 +142,7 @@ const BoardHomeCard = memo(function BoardHomeCard({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          {/* Board icon */}
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 8,
-              background: token.colorFillTertiary,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 20,
-              flexShrink: 0,
-            }}
-          >
-            {board.icon || '📋'}
-          </div>
+          <BoardTile emoji={emoji} size={36} />
 
           {/* Name + meta — all aligned under each other, to the right of the icon */}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -235,6 +224,7 @@ export const HomeBoardsSection: React.FC<
         );
         return {
           board,
+          emoji: getBoardEmoji(board, branchById),
           branchCount: branches.length,
           activeCount: activeSessions(sessions).length,
           latestSessionAt,
@@ -324,10 +314,11 @@ export const HomeBoardsSection: React.FC<
             gap: 12,
           }}
         >
-          {visibleRows.map(({ board, branchCount, activeCount, latestSessionAt }) => (
+          {visibleRows.map(({ board, emoji, branchCount, activeCount, latestSessionAt }) => (
             <BoardHomeCard
               key={board.board_id}
               board={board}
+              emoji={emoji}
               branchCount={branchCount}
               activeCount={activeCount}
               latestSessionAt={latestSessionAt}

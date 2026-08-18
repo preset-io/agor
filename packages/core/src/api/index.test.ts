@@ -88,6 +88,46 @@ function createMockSocket(): Socket {
   } as unknown as Socket;
 }
 
+interface MockMessageRow {
+  message_id: string;
+  task_id: string;
+  index: number;
+}
+
+function mockExactMessagePages(
+  findMock: MockedFunction<any>,
+  rows: MockMessageRow[],
+  serverMax = 1000,
+  beforeQuery?: (query: Record<string, any>, rows: MockMessageRow[]) => void
+): void {
+  findMock.mockImplementation(async ({ query = {} }: { query?: Record<string, any> } = {}) => {
+    beforeQuery?.(query, rows);
+    let matches = [...rows];
+    const cursor = query.message_id;
+    if (cursor && typeof cursor === 'object') {
+      if (typeof cursor.$gt === 'string') {
+        matches = matches.filter((row) => row.message_id > cursor.$gt);
+      }
+      if (typeof cursor.$lte === 'string') {
+        matches = matches.filter((row) => row.message_id <= cursor.$lte);
+      }
+    }
+    const direction = query.$sort?.message_id === -1 ? -1 : 1;
+    matches.sort((left, right) => direction * left.message_id.localeCompare(right.message_id));
+    const limit = Math.min(Number(query.$limit ?? serverMax), serverMax);
+    const data = matches
+      .slice(0, limit)
+      .map((row) =>
+        Array.isArray(query.$select)
+          ? Object.fromEntries(
+              query.$select.map((field: keyof MockMessageRow) => [field, row[field]])
+            )
+          : row
+      );
+    return { total: matches.length, limit, skip: 0, data };
+  });
+}
+
 describe('createClient', () => {
   let mockSocket: Socket;
   let ioMock: MockedFunction<any>;
@@ -594,6 +634,205 @@ describe('createClient', () => {
           $limit: 2,
         },
       });
+    });
+
+    it('should auto-paginate only the requested tail after a nonzero $skip', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 5,
+          limit: 2,
+          skip: 1,
+          data: [{ session_id: 's2' }, { session_id: 's3' }],
+        })
+        .mockResolvedValueOnce({
+          total: 5,
+          limit: 2,
+          skip: 3,
+          data: [{ session_id: 's4' }, { session_id: 's5' }],
+        });
+
+      await expect(sessionsService.findAll({ query: { $skip: 1, $limit: 2 } })).resolves.toEqual([
+        { session_id: 's2' },
+        { session_id: 's3' },
+        { session_id: 's4' },
+        { session_id: 's5' },
+      ]);
+      expect(findMock).toHaveBeenCalledTimes(2);
+      expect(findMock).toHaveBeenNthCalledWith(2, { query: { $skip: 3, $limit: 2 } });
+    });
+
+    it('should preserve an exact Task filter while walking server-clamped pages', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      mockExactMessagePages(
+        findMock,
+        [
+          { message_id: 'm1', task_id: 't1', index: 0 },
+          { message_id: 'm2', task_id: 't1', index: 1 },
+        ],
+        1
+      );
+
+      await expect(
+        messagesService.findAll({
+          query: { task_id: 't1', $sort: { index: 1 }, $limit: 10_000 },
+        })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+      ]);
+      expect(findMock).toHaveBeenCalled();
+      for (const [params] of findMock.mock.calls) {
+        expect(params.query.task_id).toBe('t1');
+      }
+    });
+
+    it('accepts an exact result that fits in one server page without a verification scan', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      mockExactMessagePages(findMock, [
+        { message_id: 'm2', task_id: 't1', index: 1 },
+        { message_id: 'm1', task_id: 't1', index: 0 },
+      ]);
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+      ]);
+      expect(findMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed when an offset-paginated result changes between pages', async () => {
+      const client = createClient();
+      const sessionsService = client.service('sessions');
+      const findMock = sessionsService.find as unknown as MockedFunction<any>;
+      findMock
+        .mockResolvedValueOnce({
+          total: 3,
+          limit: 2,
+          skip: 0,
+          data: [{ session_id: 's1' }, { session_id: 's2' }],
+        })
+        .mockResolvedValueOnce({ total: 2, limit: 2, skip: 2, data: [] });
+
+      await expect(sessionsService.findAll()).rejects.toThrow(
+        'Paginated findAll() changed while pages were being read'
+      );
+    });
+
+    it('uses a high-water keyset rather than offsets for a multi-page transcript', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+        message_id: `m${String(index).padStart(4, '0')}`,
+        task_id: 't1',
+        index,
+      }));
+      const final = { message_id: 'm1000', task_id: 't1', index: 1000 };
+      mockExactMessagePages(findMock, [...firstPage, final]);
+
+      const results = await messagesService.findAll({
+        query: { task_id: 't1', $sort: { index: 1 } },
+      });
+      expect(results).toHaveLength(1001);
+      expect(results.at(-1)).toEqual(final);
+      expect(findMock).toHaveBeenCalledWith({
+        query: expect.objectContaining({
+          task_id: 't1',
+          message_id: { $gt: 'm0999', $lte: 'm1000' },
+          $sort: { message_id: 1 },
+        }),
+      });
+    });
+
+    it('continues keyset hydration when the server clamps below the client page limit', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      mockExactMessagePages(
+        findMock,
+        [
+          { message_id: 'm1', task_id: 't1', index: 0 },
+          { message_id: 'm2', task_id: 't1', index: 1 },
+          { message_id: 'm3', task_id: 't1', index: 2 },
+        ],
+        1
+      );
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+        { message_id: 'm3', task_id: 't1', index: 2 },
+      ]);
+      expect(findMock).toHaveBeenCalledWith({
+        query: expect.objectContaining({
+          task_id: 't1',
+          message_id: { $gt: 'm2', $lte: 'm3' },
+          $sort: { message_id: 1 },
+        }),
+      });
+    });
+
+    it('fails closed when keyset hydration empties before its high-water mark', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      findMock.mockImplementation(async ({ query = {} }: { query?: Record<string, any> } = {}) => {
+        if (query.$sort?.message_id === -1) {
+          return { total: 2, limit: 1, skip: 0, data: [{ message_id: 'm2' }] };
+        }
+        if (query.message_id?.$gt) {
+          return { total: 0, limit: 1, skip: 0, data: [] };
+        }
+        return {
+          total: 2,
+          limit: 1,
+          skip: 0,
+          data: [{ message_id: 'm1', task_id: 't1', index: 0 }],
+        };
+      });
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).rejects.toThrow('keyset ended before message_id high-water mark');
+    });
+
+    it('retries when a concurrent lower ID appears behind the keyset cursor', async () => {
+      const client = createClient();
+      const messagesService = client.service('messages');
+      const findMock = messagesService.find as unknown as MockedFunction<any>;
+      const rows: MockMessageRow[] = [
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm3', task_id: 't1', index: 2 },
+        { message_id: 'm4', task_id: 't1', index: 3 },
+      ];
+      let inserted = false;
+      mockExactMessagePages(findMock, rows, 2, (query, currentRows) => {
+        if (!inserted && query.message_id?.$gt === 'm3') {
+          inserted = true;
+          currentRows.push({ message_id: 'm2', task_id: 't1', index: 1 });
+        }
+      });
+
+      await expect(
+        messagesService.findAll({ query: { task_id: 't1', $sort: { index: 1 } } })
+      ).resolves.toEqual([
+        { message_id: 'm1', task_id: 't1', index: 0 },
+        { message_id: 'm2', task_id: 't1', index: 1 },
+        { message_id: 'm3', task_id: 't1', index: 2 },
+        { message_id: 'm4', task_id: 't1', index: 3 },
+      ]);
+      expect(findMock.mock.calls.length).toBeGreaterThan(8);
     });
 
     // Executor lifecycle callbacks use explicitly registered custom methods.

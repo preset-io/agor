@@ -1,11 +1,12 @@
 import * as configModule from '@agor/core/config';
 import { BranchRepository } from '@agor/core/db';
+import { Forbidden } from '@agor/core/feathers';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerBranchTools } from './branches.js';
 
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn().mockResolvedValue(undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
@@ -134,6 +135,52 @@ function registerAndCaptureUpdate(ctx: {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe('agor_branches_delete authorization boundary', () => {
+  it('uses the hooked route so a view-only rejection happens before destructive work', async () => {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'view-only', role: 'member' },
+    };
+    const directArchiveOrDelete = vi.fn();
+    const routeCreate = vi.fn(async () => {
+      throw new Forbidden("You need 'all' permission to archive or delete branches");
+    });
+    const generateToken = vi.fn();
+    const app = {
+      sessionTokenService: { generateToken },
+      get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
+      service(name: string) {
+        if (name === 'branches') {
+          return {
+            get: vi.fn(async () => ({ branch_id: branchId })),
+            archiveOrDelete: directArchiveOrDelete,
+          };
+        }
+        if (name === '/branches/:id/archive-or-delete') return { create: routeCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const deleteBranch = registerAndCaptureHandler('agor_branches_delete', {
+      app,
+      userId: 'view-only',
+      baseServiceParams,
+    });
+
+    await expect(deleteBranch({ branchId, filesystemAction: 'deleted' })).rejects.toBeInstanceOf(
+      Forbidden
+    );
+
+    expect(routeCreate).toHaveBeenCalledWith(
+      { metadataAction: 'delete', filesystemAction: 'deleted' },
+      { ...baseServiceParams, route: { id: branchId } }
+    );
+    expect(directArchiveOrDelete).not.toHaveBeenCalled();
+    expect(generateToken).not.toHaveBeenCalled();
+  });
 });
 
 describe('agor_branches_update', () => {

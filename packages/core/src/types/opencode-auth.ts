@@ -84,8 +84,9 @@ export interface OpenCodeProviderDiscovery {
 }
 
 export type OpenCodeCredentialIsolation = {
-  mode: 'simple' | 'insulated' | 'strict';
-  boundary: 'logical' | 'os';
+  // Delegated mode has no daemon-managed native-state home boundary.
+  mode: 'simple' | 'sandbox';
+  boundary: 'logical';
 };
 
 export type OpenCodeProviderSettings = OpenCodeProviderDiscovery & {

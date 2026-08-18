@@ -3,6 +3,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchFilesystemAction,
   BranchID,
   Repo,
   Session,
@@ -22,7 +23,7 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -364,8 +365,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         },
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',
-          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
+          delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveDelegatedExecutionHomeKey(
+              db,
+              ctx.authenticatedUser.user_id,
+              ctx.app.get('config')
+            )
           ),
         }
       );
@@ -1453,14 +1458,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction =
-        (args.filesystemAction as 'preserved' | 'cleaned' | 'deleted') || 'cleaned';
-      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      const result = await branchesService.archiveOrDelete(
-        branchId as BranchID,
-        { metadataAction: 'archive', filesystemAction },
-        ctx.baseServiceParams
-      );
+      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
+      const result = await ctx.app
+        .service('/branches/:id/archive-or-delete')
+        .create(
+          { metadataAction: 'archive', filesystemAction },
+          { ...ctx.baseServiceParams, route: { id: branchId } }
+        );
       return textResult({
         success: true,
         branch: result,
@@ -1525,13 +1529,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as 'preserved' | 'deleted') || 'deleted';
-      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      await branchesService.archiveOrDelete(
-        branchId as BranchID,
-        { metadataAction: 'delete', filesystemAction },
-        ctx.baseServiceParams
-      );
+      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'deleted';
+      await ctx.app
+        .service('/branches/:id/archive-or-delete')
+        .create(
+          { metadataAction: 'delete', filesystemAction },
+          { ...ctx.baseServiceParams, route: { id: branchId } }
+        );
       return textResult({
         success: true,
         branch_id: branchId,

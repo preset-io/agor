@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agor.live/schemas/kb-materialization/2026-06-06.json",
+  "document_id": "019fefc2-bbc5-7a3d-bfd7-ef71c2c6a605",
+  "uri": "agor://kb/agor-cloud-team/architecture/web-terminal-ownership-and-ha.md",
+  "namespace": "agor-cloud-team",
+  "path": "architecture/web-terminal-ownership-and-ha.md",
+  "version_id": "019ff3f9-da5d-7fe0-9e73-d936f9eeb53b",
+  "version_number": 4,
+  "content_sha256": "429bbf96b0d6f8c851032dc2054097fb6ea05e83810a929b209fd614b0e5d045",
+  "materialized_at": null,
+  "materialized_by": null,
+  "published_at": "2026-08-12T03:17:45.794Z",
+  "published_by": "4ba459df-7de6-454f-b5b0-1aed95bc5084"
+}

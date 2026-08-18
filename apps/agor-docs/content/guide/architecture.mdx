@@ -9,109 +9,40 @@ Agor is a **multi-client agent orchestration platform** with real-time collabora
 
 ## System Architecture
 
-### Current Architecture (Executor Isolation)
+### Current architecture (execution substrates)
 
-Agor uses the **Executor Isolation** model, which separates privileged daemon operations from untrusted SDK/CLI execution contexts for enhanced security. The executor runs as a specialized subprocess that communicates with the daemon via session token authentication.
+The daemon owns trusted state and authorization. Executors contain agent SDKs
+and terminal work, authenticate back to the daemon with scoped tokens, and have
+no direct database connection. Their launch policy is explicit: trusted local
+execution (`simple`), fail-closed Linux bubblewrap filesystem isolation
+(`sandbox`), or a configured external launcher (`delegated`).
 
 ```mermaid
-graph TB
-    subgraph Clients
-        CLI["<b>CLI</b><br/>oclif"]
-        UI["<b>Web UI</b><br/>React + Ant Design"]
-    end
-
-    Client["<b>Feathers Client</b><br/>REST + WebSocket"]
-
-    subgraph "Agor Daemon (Trusted Zone)"
-        Feathers["<b>FeathersJS Server</b>"]
-        MCP["<b>MCP HTTP Endpoint</b><br/>POST /mcp + Bearer auth"]
-        Services["<b>Services</b><br/>Sessions, Tasks, Messages<br/>Boards, Branches, Repos<br/>Users, MCP, Context, Health"]
-        ExecutorPool["<b>Executor Pool</b><br/>Spawn & manage executors"]
-        IPCService["<b>IPC Service</b><br/>Unix socket server"]
-        ORM["<b>Drizzle ORM</b><br/>Type-safe queries"]
-    end
-
-    subgraph "Executor Processes (Sandboxed)"
-        Executor1["<b>Executor (agor_alice)</b><br/>Unix user: agor_alice"]
-        Executor2["<b>Executor (agor_bob)</b><br/>Unix user: agor_bob"]
-
-        subgraph "Executor1 Scope"
-            SDK1["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
-            Terminal1["<b>Terminal (PTY)</b><br/>bash/zsh"]
-            MCPServers1["<b>MCP Servers</b><br/>Child processes"]
-        end
-
-        subgraph "Executor2 Scope"
-            SDK2["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
-            Terminal2["<b>Terminal (PTY)</b><br/>bash/zsh"]
-            MCPServers2["<b>MCP Servers</b><br/>Child processes"]
-        end
-    end
-
-    subgraph Storage
-        DB[("<b>LibSQL Database</b><br/>~/.agor/agor.db<br/>🔒 Daemon access only")]
-        Git["<b>Git Branches</b><br/>~/.agor/worktrees/"]
-        Config["<b>Config</b><br/>~/.agor/config.yaml<br/>🔒 Daemon access only"]
-    end
-
-    CLI --> Client
-    UI --> Client
-    Client <-->|REST + WebSocket| Feathers
-
-    Feathers --> Services
-    Feathers --> MCP
-    MCP --> Services
-    Services --> ORM
-    Services --> ExecutorPool
-
-    ExecutorPool -.->|"spawn (sudo -u)"| Executor1
-    ExecutorPool -.->|"spawn (sudo -u)"| Executor2
-
-    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor1
-    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor2
-
-    Executor1 --> SDK1
-    Executor1 --> Terminal1
-    Executor1 --> MCPServers1
-
-    Executor2 --> SDK2
-    Executor2 --> Terminal2
-    Executor2 --> MCPServers2
-
-    ORM --> DB
-    Services --> Git
-    Services --> Config
-
-    SDK1 -.->|"request API key<br/>(just-in-time)"| IPCService
-    SDK2 -.->|"request API key<br/>(just-in-time)"| IPCService
-
-    style Executor1 fill:#fff4e6
-    style Executor2 fill:#fff4e6
-    style DB fill:#ffe6e6
-    style Config fill:#ffe6e6
+graph LR
+  UI[UI / CLI / MCP] --> D[Feathers daemon]
+  D --> DB[(SQLite or PostgreSQL)]
+  D --> G[Git and tenant storage]
+  D --> L[Local executor]
+  D --> B[Bubblewrap executor]
+  D --> X[Delegated external substrate]
+  L --> SDK[Agent SDK / terminal]
+  B --> SDK2[Agent SDK / terminal]
+  X --> SDK3[Agent SDK]
+  SDK -->|scoped service token| D
+  SDK2 -->|scoped service token| D
+  SDK3 -->|trusted tenant/user route| D
 ```
 
-**Key Security Improvements:**
+Key properties:
 
-- **Process Separation** - Executors run as separate processes with different Unix users
-- **Session Token Authentication** - Executors authenticate with daemon using opaque UUID tokens (not JWTs), validated by custom Feathers strategy
-- **Feathers Client Communication** - Executors use authenticated Feathers client for all database/service operations (no direct database access)
-- **No Database Access** - Executors never receive database credentials or direct database connections
-- **Just-in-Time API Keys** - Executors request API keys per-call via IPC (not in environment)
-- **Unix User Isolation** - Each executor runs as `agor_alice`, `agor_bob`, etc. (file permission boundaries)
-- **IPC Audit Trail** - All daemon↔executor communication logged
-- **Credential Isolation** - SSH keys, GitHub tokens isolated by Unix user (`~/.ssh/` ownership)
-
-**Implementation Details:**
-
-- All Agent SDKs (Claude, Codex, Gemini) run exclusively in executor processes
-- External clients (UI/CLI) use `@agor-live/client`; executor internals currently use `@agor/core/api` with session token authentication
-- Custom `SessionTokenStrategy` in daemon validates tokens via `SessionTokenService`
-- Session tokens are opaque UUIDs (not JWTs) with 24-hour expiration
-- IPC communication via Unix sockets using JSON-RPC 2.0 protocol
-- Daemon routes all SDK operations through ExecutorPool service
-
-For detailed design documentation, see `context/explorations/executor-isolation.md`.
+- Application RBAC and trusted tenant context are enforced at daemon boundaries.
+- Executors do not receive database credentials or direct database access.
+- Sandbox mode derives read/write/hidden mounts from RBAC and never falls back
+  to simple mode when bubblewrap is unavailable.
+- Delegated launchers receive stable tenant/user identifiers and own runtime,
+  home, credential, storage, cancellation, and containment enforcement.
+- Agor does not create host accounts, POSIX branch groups, or sudo-impersonate
+  executor processes.
 
 ### Legacy Architecture (Unified Process Model)
 
@@ -231,7 +162,7 @@ The daemon exposes 12 FeathersJS services via REST and WebSocket:
 | ----------------------- | ----------------------------- | ----------------------------------- |
 | **sessions**            | Agent sessions with genealogy | CRUD, fork, spawn, prompt execution |
 | **tasks**               | Work units within sessions    | CRUD, completion tracking           |
-| **messages**            | Conversation history          | CRUD, bulk insert, streaming        |
+| **messages**            | Conversation history          | CRUD, pagination, streaming         |
 | **boards**              | Spatial session organization  | CRUD, session positioning           |
 | **branches**           | Git branch isolation        | Create, list, delete branches      |
 | **repos**               | Git repository management     | Clone, list, branch operations    |
@@ -401,7 +332,7 @@ $ agor session list | grep running | wc -l
 | Tool | Description | Example |
 |------|-------------|---------|
 | `agor_users_list` | List users with pagination, compact rows, and optional search | `{ search: 'reed', limit: 10 }` |
-| `agor_users_find` | Find users by name, email, or Unix username before admin updates | `{ email: 'reed@preset.io' }` |
+| `agor_users_find` | Find users by name, email, or execution home key before admin updates | `{ email: 'reed@preset.io' }` |
 | `agor_users_get` | Get user by ID | `{ userId: '...' }` |
 | `agor_users_get_current` | Get current authenticated user | `{}` |
 | `agor_users_update_current` | Update own profile | `{ name: 'Alice', emoji: '🚀' }` |
@@ -541,6 +472,6 @@ readinessProbe:
 
 - **[Getting Started](/guide/getting-started)**: Install and run Agor
 - **[Agor MCP Server](/guide/internal-mcp)**: The agent-facing automation surface
-- **[Security](/security)**: Deployment modes, RBAC, Unix isolation, trust boundaries
+- **[Security](/security)**: Deployment modes, RBAC, execution isolation, and trust boundaries
 - **[SDK Comparison](/guide/sdk-comparison)**: Capability matrix across agent SDKs
 - Run `agor --help` for complete CLI documentation

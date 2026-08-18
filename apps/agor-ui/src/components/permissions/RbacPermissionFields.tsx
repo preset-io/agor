@@ -315,8 +315,8 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
                 type="warning"
                 showIcon
                 icon={<WarningOutlined />}
-                message="Unix identity risk"
-                description="Allows prompting sessions created by others; use only with trusted collaborators."
+                message="Cross-user execution risk"
+                description="Allows prompting sessions in another creator's immutable execution and credential context; use only with trusted collaborators."
               />
             </Form.Item>
           )}

@@ -117,9 +117,6 @@ export interface StreamingCallbacks {
  * Tool capabilities - feature flags for what each tool supports
  */
 export interface ToolCapabilities {
-  /** Can import historical sessions from tool's storage */
-  supportsSessionImport: boolean;
-
   /** Can create new sessions via SDK/API */
   supportsSessionCreate: boolean;
 
@@ -149,17 +146,6 @@ export interface ToolCapabilities {
 }
 
 /**
- * Options for importing sessions
- */
-export interface ImportOptions {
-  /** Project directory (for tools that organize by project) */
-  projectDir?: string;
-
-  /** Additional tool-specific options */
-  [key: string]: unknown;
-}
-
-/**
  * Configuration for creating new sessions
  */
 export interface CreateSessionConfig {
@@ -185,15 +171,6 @@ export interface CreateSessionConfig {
 export interface SessionHandle {
   sessionId: string;
   toolType: ToolType;
-}
-
-/**
- * Session data - rich data from import
- */
-export interface SessionData extends SessionHandle {
-  messages: Message[];
-  metadata: SessionMetadata;
-  workingDirectory?: string;
 }
 
 /**

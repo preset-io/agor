@@ -3,7 +3,7 @@
  * (provider-less) path.
  *
  * Internal fork/spawn preserves parent attribution and inherits the parent's
- * immutable `unix_username` stamp. In strict/delegated modes that stamp is
+ * immutable `unix_username` stamp. In delegated mode that stamp is
  * load-bearing identity, so a null-stamped parent must be rejected at
  * fork/spawn time — not persisted as a child that only fails at first prompt
  * (or, in hosted deployments, silently shares an identity).
@@ -25,16 +25,11 @@ import { SessionsService } from './sessions';
 
 const resolveExecutionSecurityModeMock = vi.mocked(resolveExecutionSecurityMode);
 
-function mockMode(unixUserMode: 'simple' | 'delegated' | 'insulated' | 'strict'): void {
+function mockMode(unixUserMode: 'simple' | 'delegated' | 'sandbox'): void {
   resolveExecutionSecurityModeMock.mockReturnValue({
     appRbacEnabled: false,
     unixUserMode,
-    unixImpersonationEnabled: false,
-    unixFsIsolationEnabled: false,
-    unixGroupRefreshNeeded: false,
-    requiresDaemonUnixUser: false,
-    shouldInitUnixGroups: false,
-    requiresUserUnixUsername: unixUserMode === 'strict' || unixUserMode === 'delegated',
+    requiresExecutionHomeKey: unixUserMode === 'delegated',
   });
 }
 
@@ -76,13 +71,6 @@ describe('resolveChildIdentity — internal (provider-less) calls', () => {
     mockMode('delegated');
     await expect(resolveInternalChildIdentity(makeService(), makeParent(null))).rejects.toThrow(
       /unix_user_mode 'delegated' requires a unix_username/
-    );
-  });
-
-  it('rejects a null-stamped parent in strict mode', async () => {
-    mockMode('strict');
-    await expect(resolveInternalChildIdentity(makeService(), makeParent(null))).rejects.toThrow(
-      /unix_user_mode 'strict' requires a unix_username/
     );
   });
 

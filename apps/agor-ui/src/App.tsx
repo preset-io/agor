@@ -6,6 +6,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -66,6 +67,7 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MARKETPLACE_ROUTE_PATHS,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
@@ -165,6 +167,11 @@ const loadKnowledgePage = cacheRouteLoader(
   () => import('./pages/KnowledgePage'),
   (module) => ({ default: module.KnowledgePage })
 );
+const loadMarketplacePage = cacheRouteLoader(
+  'marketplace',
+  () => import('./pages/MarketplacePage'),
+  (module) => ({ default: module.MarketplacePage })
+);
 const loadArtifactFullscreenPage = cacheRouteLoader(
   'artifact-fullscreen',
   () => import('./pages/ArtifactFullscreenPage'),
@@ -193,6 +200,7 @@ const MarketingVideoPage = lazy(() =>
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
+const MarketplacePage = lazy(loadMarketplacePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
@@ -200,6 +208,7 @@ const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
+  marketplace: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
@@ -496,9 +505,10 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
-  // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
-  // banner is never a dead-end for users who can't open it.
+  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
+  // Slack/GitHub channels — so it is offered to the role that can complete it.
+  // Members reach the MCP settings tab without it, to read the policy that
+  // governs them.
   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
@@ -787,20 +797,22 @@ function AppContent() {
     });
     if (seeded.sessionId) sessionId = seeded.sessionId;
 
-    // Navigate to the user's board + session, or to the boards list if they
-    // skipped. Use the centralized path builders — the old
-    // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
+    // Always land the user on a board — never the homepage. Prefer the seeded
+    // session, then the board the wizard created, then the user's main board,
+    // then any existing board. With the workspace step now required a board
+    // always exists, so the later fallbacks are belt-and-suspenders. Use the
+    // centralized path builders — the old `/b/<board>/<session>/` shape was
+    // removed when we flattened entity URLs.
+    const boardById = agorStore.getState().boardById;
+    const mainBoardId = currentUser.preferences?.mainBoardId;
+    const targetBoardId =
+      result.boardId ||
+      (mainBoardId && boardById.has(mainBoardId) ? mainBoardId : undefined) ||
+      boardById.keys().next().value;
     if (sessionId) {
       navigate(sessionPath(sessionId as SessionID));
-    } else if (result.boardId) {
-      navigate(
-        boardPath(
-          result.boardId as BoardID,
-          agorStore.getState().boardById.get(result.boardId)?.slug
-        )
-      );
-    } else {
-      navigate('/');
+    } else if (targetBoardId) {
+      navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
 
     // Close the wizard only now that creation + navigation are done, so the
@@ -1378,10 +1390,7 @@ function AppContent() {
 
   const handleArchiveOrDeleteBranch = async (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => {
     if (!client) {
       throw new Error('Not connected to daemon');
@@ -1788,6 +1797,16 @@ function AppContent() {
     />
   );
 
+  const marketplacePageElement = (
+    <MarketplacePage
+      client={client}
+      connected={connected}
+      currentUser={currentUser}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   const artifactFullscreenElement = (
     <ArtifactFullscreenPage
       client={client}
@@ -1944,6 +1963,13 @@ function AppContent() {
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
           {KNOWLEDGE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={knowledgePageElement} />
+          ))}
+
+          {/* MCP marketplace: browse the catalog and connect a server. Its own
+                surface because it reads the global catalog table, not the
+                tenant's board/session store. */}
+          {MARKETPLACE_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={marketplacePageElement} />
           ))}
 
           {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

@@ -3,6 +3,16 @@
  */
 
 export {
+  canConfigureMCPServers,
+  isAtLeastMemberRole,
+  isMcpGrantSubjectEntitled,
+  MEMBER_PRIVATE_MCP_SCOPE,
+  mayMemberManageMCPServer,
+  mayMemberUseMCPScope,
+  mayMemberUseMCPTransport,
+  mayMemberWriteMCPServers,
+} from './member-policy';
+export {
   filterMCPServersForSession,
   isMCPServerUsableBy,
   isMCPServerUsableInSession,

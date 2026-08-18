@@ -3,9 +3,6 @@
  *
  * Provides Git operations for repo management and branch isolation shared by daemon compatibility paths and executor commands.
  * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
- *
- * When branch RBAC is enabled, git operations run via `sudo su -` to ensure
- * fresh Unix group memberships (groups are cached at login time).
  */
 
 import { existsSync, type Stats } from 'node:fs';
@@ -53,7 +50,7 @@ export interface GitDiagnosticOptions {
  * Exercise the same simple-git path used by repository operations.
  * This is local-only: it neither reads a remote nor resolves credentials.
  * Call it in the process that will actually run the clone; daemon-side
- * checks cannot see an executor's filtered PATH or impersonated environment.
+ * checks cannot see an executor's filtered PATH or external-launcher environment.
  */
 export async function diagnoseGit(options: GitDiagnosticOptions = {}): Promise<GitDiagnostic> {
   try {
@@ -476,7 +473,7 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
 /**
  * Create a configured simple-git instance.
  *
- * Unix-user impersonation is handled upstream when spawning the executor;
+ * Substrate selection is handled upstream when spawning the executor;
  * per-user credentials reach this function via `env` (e.g. from
  * `users.getGitEnvironment`).
  *
@@ -489,8 +486,8 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  * `GIT_CONFIG_GLOBAL=/dev/null` blocks inheritance from the daemon user's
  * `~/.gitconfig` (which may carry an ambient `credential.helper` from
  * `gh auth login` that would silently leak the daemon's identity). Git ops
- * run as the daemon user (see `git-impersonation.ts`), so HOME is the
- * daemon's; if that ever changes to a true uid switch this must be removed.
+ * run with the substrate's process identity; explicit user environment isolation
+ * prevents ambient control-plane credentials from leaking.
  * `/etc/gitconfig` is intentionally NOT killed — admin policy territory
  * (CA bundles, proxies, safe.directory).
  *
@@ -557,8 +554,8 @@ export function createGit(
     config,
     unsafe: {
       // simple-git's scanner blocks spawning when these env vars / config keys
-      // are present. We own the daemon env (in strict mode it's the user's own
-      // env) and inject GIT_CONFIG_* ourselves — opting in here mirrors what a
+      // are present. We own the daemon env and inject GIT_CONFIG_* ourselves —
+      // opting in here mirrors what a
       // direct `git` invocation on the same machine does.
       allowUnsafeSshCommand: true,
       allowUnsafeConfigPaths: true,
@@ -598,12 +595,12 @@ export function createGitForRemote(
 
 /**
  * Register `path` as a git `safe.directory` in the daemon user's global
- * gitconfig. Multi-user setups (branches owned by one uid, accessed by
- * another) trip "dubious ownership" otherwise. Non-fatal: logs a warning
+ * gitconfig. Delegated storage may expose paths owned by a different runtime principal,
+ * which trips "dubious ownership". Non-fatal: logs a warning
  * and returns on failure, since the branch itself is already on disk.
  *
  * IMPORTANT: never pass user env here. `createGit(_, env)` activates the
- * impersonation isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
+ * credential-isolation block (`GIT_CONFIG_GLOBAL=/dev/null`), and
  * `addConfig(..., 'global')` writes to whatever `GIT_CONFIG_GLOBAL` points
  * at — git would try to lock `/dev/null` and fail with permission denied.
  * The safe.directory entry belongs in the daemon user's real `~/.gitconfig`
@@ -1191,18 +1188,18 @@ export interface CreateBranchAsCloneOptions {
   /**
    * Optional `git clone --reference <path>` object-cache borrow.
    *
-   * When set AND the path exists on the calling process's filesystem at
-   * runtime, this turns the per-branch `.git/objects/` into an `alternates`
-   * pointer at `<path>/.git/objects/` — disk drops from "full pack copy"
-   * (hundreds of MB for big repos) to "a few MB of refs/config". The
-   * config/credentials isolation that clone mode buys is preserved: only
+   * When set AND the path is a full Git repository on the calling process's
+   * filesystem at runtime, this turns the per-branch `.git/objects/` into an
+   * `alternates` pointer at `<path>/.git/objects/` — disk drops from "full
+   * pack copy" (hundreds of MB for big repos) to "a few MB of refs/config".
+   * The config/credentials isolation that clone mode buys is preserved: only
    * the immutable object store is shared with the daemon-owned base clone.
    *
-   * When set but the path does NOT exist (executor running in a different
-   * mount, base clone not yet seeded, etc.), the `--reference` flag is
-   * silently dropped and a regular clone runs — at higher disk cost but
-   * still correct. This lets the daemon hand the executor a "use this if
-   * you have it" hint without coupling the two filesystems.
+   * When set but the path is missing, invalid, or shallow (executor running
+   * in a different mount, base clone not yet seeded, etc.), the `--reference`
+   * flag is dropped and a regular clone runs — at higher disk cost but still
+   * correct. Git rejects shallow reference repositories outright, so this is
+   * part of the correctness fallback rather than only an optimization.
    *
    * NEVER paired with `--dissociate`: dissociate copies all reachable
    * objects out of the reference into the new clone (~equivalent to a
@@ -1352,21 +1349,37 @@ export async function createBranchAsClone(
   }
 
   // Resolve `--reference` opportunistically: caller passes the base-cache
-  // path they'd *like* to use; we check on this process's filesystem and
-  // either use it or fall back silently. This decouples the daemon's
-  // knowledge of "where the base clone lives" from the executor's
-  // filesystem reality, so future mount asymmetry (remote executors,
-  // hosted env-pods, etc.) doesn't break clone creation — it just costs
-  // more disk for branches that can't see the cache.
+  // path they'd *like* to use; we verify it is a full Git repository on this
+  // process's filesystem and otherwise fall back. Git refuses shallow
+  // reference repositories, while remote executors may see an absent or
+  // unrelated path. None of those cache-hint failures should prevent the
+  // authoritative remote clone from succeeding.
   let useReference = false;
   if (referencePath) {
-    if (existsSync(referencePath)) {
-      useReference = true;
-    } else {
+    if (!existsSync(referencePath)) {
       console.log(
         `[createBranchAsClone] referencePath '${referencePath}' not present on this filesystem — ` +
           `falling back to a full clone without --reference.`
       );
+    } else {
+      try {
+        const { git: referenceGit } = createGit(referencePath);
+        const rawGitDir = (await referenceGit.revparse(['--git-dir'])).trim();
+        const gitDir = isAbsolute(rawGitDir) ? rawGitDir : resolve(referencePath, rawGitDir);
+        if (existsSync(join(gitDir, 'shallow'))) {
+          console.log(
+            `[createBranchAsClone] referencePath '${referencePath}' is shallow — ` +
+              `falling back to a clone without --reference.`
+          );
+        } else {
+          useReference = true;
+        }
+      } catch (error) {
+        console.warn(
+          `[createBranchAsClone] referencePath '${referencePath}' is not a usable Git repository — ` +
+            `falling back to a clone without --reference: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
   }
 
@@ -1426,7 +1439,6 @@ export interface RestoreBranchResult {
  * Restore a branch directory by checking out the branch or creating it from a base ref.
  *
  * Shared logic used by both:
- * - `sync-unix` CLI command (restore action for failed branches)
  * - `unarchive()` daemon method (via executor's git.branch.add command)
  *
  * Strategy:
@@ -1591,18 +1603,10 @@ export async function removeGitWorktree(repoPath: string, branchName: string): P
  * - Tracked files
  * - Git state (commits, branches)
  *
- * In multi-user branches, files may be owned by different users (e.g., build artifacts
- * created by different user sessions). This function attempts to fix ownership before
- * cleaning to ensure all files can be removed.
- *
  * @param branchPath - Absolute path to the branch directory
- * @param fixOwnership - Whether to attempt ownership fix via sudo (default: true)
  * @returns Disk space freed in bytes (approximate based on removed file count)
  */
-export async function cleanBranch(
-  branchPath: string,
-  fixOwnership: boolean = true
-): Promise<{ filesRemoved: number }> {
+export async function cleanBranch(branchPath: string): Promise<{ filesRemoved: number }> {
   const { git } = createGit(branchPath);
 
   // Run git clean -fdx (force, directories, ignored files)
@@ -1613,53 +1617,7 @@ export async function cleanBranch(
   // CleanSummary has a files array with removed files
   const filesRemoved = Array.isArray(dryRunResult.files) ? dryRunResult.files.length : 0;
 
-  // In multi-user branches, fix ownership before cleaning
-  if (fixOwnership) {
-    try {
-      const { execSync } = await import('node:child_process');
-      const { existsSync } = await import('node:fs');
-      const os = await import('node:os');
-
-      // Verify branch path exists
-      if (!existsSync(branchPath)) {
-        throw new Error(`Branch path does not exist: ${branchPath}`);
-      }
-
-      // Get current user (who will own the files after chown)
-      // When running in executor via sudo -u, this returns the impersonated user (e.g., agorpg)
-      const currentUser = os.userInfo().username;
-
-      // Attempt to chown the branch to current user
-      // This allows git clean to remove files owned by other users
-      //
-      // IMPORTANT: This requires sudoers configuration:
-      // agor ALL=(ALL) NOPASSWD: /usr/bin/chown * /home/*/.agor/*
-      //
-      // The executor is already running as the daemon user (via sudo -u agorpg),
-      // so this is effectively: sudo -n chown -R agorpg: /path/to/branch
-      try {
-        const escapedPath = branchPath.replace(/'/g, "'\\''");
-        execSync(`sudo -n chown -R ${currentUser}: '${escapedPath}'`, {
-          stdio: 'pipe',
-          encoding: 'utf-8',
-        });
-        console.log(`[git.clean] Fixed ownership to ${currentUser} before clean`);
-      } catch (_chownError) {
-        // Chown failed - log but continue with git clean
-        // Git clean will still remove what it can
-        // This is expected in environments without sudo configuration
-        console.warn(
-          '[git.clean] Could not fix ownership (sudo not configured), continuing anyway'
-        );
-      }
-    } catch (error) {
-      // Ownership fix failed - log but continue
-      console.warn('[git.clean] Error fixing ownership, continuing with clean:', error);
-    }
-  }
-
   // Run git clean
-  // After ownership fix, this should be able to remove all files
   try {
     await git.clean('fdx');
   } catch (error) {
@@ -1674,7 +1632,7 @@ export async function cleanBranch(
     }
 
     // Warnings only - log but don't fail
-    // Some files couldn't be removed (multi-user env without sudo)
+    // Some files could not be removed by the current execution substrate.
     console.warn(
       '[git.clean] Completed with warnings (some files could not be removed):',
       errorMessage

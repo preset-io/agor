@@ -3,6 +3,13 @@ import type { SessionsServiceImpl } from '../declarations.js';
 
 import { markStoppedSessionPromptableNoDrain, stopSessionPreserveQueue } from './session-stop.js';
 
+const findActiveTasks = async (app: any, sessionId: string, params: unknown) => {
+  const result = await app
+    .service('tasks')
+    .find({ ...((params as object) ?? {}), query: { session_id: sessionId } });
+  return Array.isArray(result) ? result : result.data;
+};
+
 describe('markStoppedSessionPromptableNoDrain', () => {
   it('marks the session promptable without triggering queue processing', async () => {
     const calls: string[] = [];
@@ -44,6 +51,32 @@ describe('markStoppedSessionPromptableNoDrain', () => {
 });
 
 describe('stopSessionPreserveQueue', () => {
+  it('treats an already-idle session as an idempotent successful Stop', async () => {
+    const findQueued = vi.fn().mockResolvedValue([{ task_id: 'queued-task' }]);
+    const requestTermination = vi.fn();
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {} as never,
+          taskRepo: { findQueued } as never,
+          sessionsService: {
+            get: vi.fn().mockResolvedValue({ status: 'idle' }),
+            patch: vi.fn(),
+          } as never,
+          requestTermination: requestTermination as never,
+        },
+        'session-idle' as never
+      )
+    ).resolves.toEqual({
+      success: true,
+      status: 'idle',
+      reason: 'Session is already idle',
+      queuedTasksPreserved: 1,
+    });
+    expect(findQueued).toHaveBeenCalledWith('session-idle');
+    expect(requestTermination).not.toHaveBeenCalled();
+  });
+
   it('rejects process control for a historical removed-runtime session', async () => {
     const task = {
       task_id: 'task-cli',
@@ -66,6 +99,7 @@ describe('stopSessionPreserveQueue', () => {
             service: () => ({ find: vi.fn().mockResolvedValue({ data: [task] }) }),
           } as never,
           taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+          findActiveTasks: findActiveTasks as never,
           sessionsService: { get: vi.fn().mockResolvedValue(session), patch: vi.fn() } as never,
           requestTermination: requestTermination as never,
         } as never,
@@ -122,6 +156,7 @@ describe('stopSessionPreserveQueue', () => {
       {
         app: app as never,
         taskRepo: taskRepo as never,
+        findActiveTasks: findActiveTasks as never,
         sessionsService: sessionsService as never,
         requestTermination: requestTermination as never,
       },
@@ -182,6 +217,7 @@ describe('stopSessionPreserveQueue', () => {
       {
         app: app as never,
         taskRepo: taskRepo as never,
+        findActiveTasks: findActiveTasks as never,
         sessionsService: sessionsService as never,
         requestTermination: requestTermination as never,
       },
@@ -244,6 +280,7 @@ describe('stopSessionPreserveQueue', () => {
         {
           app: app as never,
           taskRepo: taskRepo as never,
+          findActiveTasks: findActiveTasks as never,
           sessionsService: sessionsService as never,
           requestTermination: requestTermination as never,
         },

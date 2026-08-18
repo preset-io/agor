@@ -324,26 +324,19 @@ function buildAllowlistedEnv(): Record<string, string> {
  *
  * This function:
  * 1. Starts with a minimal allowlisted subset of process.env
- * 2. Optionally strips user-identity vars (HOME/USER/LOGNAME/SHELL) for impersonation
- * 3. Resolves and merges user-specific encrypted environment variables from database
- * 4. Optionally merges additional environment variables
- * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
+ * 2. Resolves and merges user-specific encrypted environment variables from database
+ * 3. Optionally merges additional environment variables
+ * 4. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
  * @param additionalEnv - Additional env vars to merge (optional, highest priority)
- * @param forImpersonation - If true, strips HOME/USER/LOGNAME/SHELL so sudo -u can set them (default: false)
  * @returns Clean environment object ready for child process spawning
  *
  * @example
  * // For branch environment startup (with user)
  * const env = await createUserProcessEnvironment(branch.created_by, db);
  * spawn(command, { cwd, shell: true, env });
- *
- * @example
- * // For user impersonation (strips HOME/USER/LOGNAME/SHELL)
- * const env = await createUserProcessEnvironment(branch.created_by, db, undefined, true);
- * buildSpawnArgs(command, [], { asUser: 'alice', env });
  *
  * @example
  * // For branch environment with custom NODE_ENV
@@ -360,7 +353,6 @@ export async function createUserProcessEnvironment(
   userId?: UserID,
   db?: Database,
   additionalEnv?: Record<string, string>,
-  forImpersonation = false,
   /**
    * Gateway-level env vars (e.g., service account tokens).
    *
@@ -384,14 +376,6 @@ export async function createUserProcessEnvironment(
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
-
-  // For impersonation, strip user-identity vars so sudo -u can set them
-  const USER_IDENTITY_VARS = ['HOME', 'USER', 'LOGNAME', 'SHELL'];
-  if (forImpersonation) {
-    for (const identityVar of USER_IDENTITY_VARS) {
-      delete env[identityVar];
-    }
-  }
 
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];

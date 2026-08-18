@@ -19,6 +19,7 @@ vi.mock('@agor/core/db', () => ({
     if (!value || value.includes('/')) throw new Error('Invalid tenant id');
   },
   isPostgresDatabase: (db: any) => db.postgres === true,
+  isPostgresDatabaseHandle: (db: any) => db.postgres === true,
   runWithSystemDatabaseScope: async (
     _db: unknown,
     _reason: string,

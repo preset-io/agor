@@ -15,7 +15,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
-import { getConfigPath, isBranchRbacEnabled, loadConfigSync } from '@agor/core/config';
+import { getConfigPath } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -27,8 +27,7 @@ import {
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { createBranch } from '@agor/core/git';
-import type { RepoID, UUID } from '@agor/core/types';
-import { DirectExecutor, UnixIntegrationService } from '@agor/core/unix';
+import type { UUID } from '@agor/core/types';
 import chalk from 'chalk';
 
 interface TestUser {
@@ -78,21 +77,6 @@ async function main() {
   const boardRepo = new BoardRepository(db);
   const boardObjectRepo = new BoardObjectRepository(db);
 
-  // Setup Unix integration if RBAC is enabled
-  let unixIntegrationService: UnixIntegrationService | null = null;
-  const rbacEnabled = isBranchRbacEnabled();
-  if (rbacEnabled) {
-    const config = loadConfigSync();
-    const daemonUser = config.daemon?.unix_user || os.userInfo().username;
-    console.log(
-      chalk.cyan(`🔐 RBAC enabled - Unix integration active (daemon user: ${daemonUser})\n`)
-    );
-    unixIntegrationService = new UnixIntegrationService(db, new DirectExecutor(), {
-      enabled: true,
-      daemonUser,
-    });
-  }
-
   // Create users
   console.log(chalk.bold('1. Creating users...\n'));
 
@@ -115,7 +99,7 @@ async function main() {
         password: testUser.password,
         name: testUser.name,
         role: testUser.role || 'member',
-        unix_username: testUser.username, // Link to Unix user account
+        unix_username: testUser.username, // Delegated execution-home compatibility key
       });
 
       userIds[testUser.username] = user.user_id;
@@ -123,7 +107,7 @@ async function main() {
       console.log(chalk.green(`  ✓ Created ${testUser.name} (${testUser.email})`));
       console.log(chalk.gray(`    Password:      ${testUser.password}`));
       console.log(chalk.gray(`    User ID:       ${user.user_id.substring(0, 8)}`));
-      console.log(chalk.gray(`    Unix username: ${testUser.username}`));
+      console.log(chalk.gray(`    Execution home key: ${testUser.username}`));
     } catch (error) {
       console.error(chalk.red(`  ✗ Failed to create ${testUser.name}:`), error);
       process.exit(1);
@@ -146,19 +130,6 @@ async function main() {
 
   console.log(chalk.green(`  ✓ Found agor repo (${agorRepo.repo_id.substring(0, 8)})`));
 
-  // Ensure repo has Unix group (may have been created before RBAC was enabled)
-  if (unixIntegrationService && !agorRepo.unix_group) {
-    try {
-      const groupName = await unixIntegrationService.createRepoGroup(agorRepo.repo_id as RepoID);
-      console.log(chalk.gray(`    Created missing repo Unix group: ${groupName}`));
-    } catch (error) {
-      console.error(
-        chalk.yellow(
-          `    ⚠️  Failed to create repo group: ${error instanceof Error ? error.message : String(error)}`
-        )
-      );
-    }
-  }
   console.log('');
 
   // Find default board
@@ -286,30 +257,6 @@ async function main() {
       // Add owner
       await branchRepo.addOwner(branch.branch_id, ownerId);
 
-      // Unix Integration: Create group and add owner (same as daemon hook does)
-      if (unixIntegrationService) {
-        try {
-          // Add owner to repo group (for .git access)
-          await unixIntegrationService.addUserToRepoGroup(agorRepo.repo_id as RepoID, ownerId);
-
-          // Create branch group and add owner
-          const groupName = await unixIntegrationService.createBranchGroup(branch.branch_id);
-          await unixIntegrationService.addUserToBranchGroup(branch.branch_id, ownerId);
-
-          // Fix permissions on .git/worktrees/<name>/ directory
-          await unixIntegrationService.fixBranchGitDirPermissions(branch.branch_id);
-
-          console.log(chalk.gray(`    Unix group: ${groupName}`));
-        } catch (error) {
-          console.error(
-            chalk.yellow(
-              `    ⚠️  Unix integration failed: ${error instanceof Error ? error.message : String(error)}`
-            )
-          );
-          // Continue - app-layer RBAC is still functional
-        }
-      }
-
       // Create board object with position (spread branches horizontally with some jitter)
       const baseX = 0;
       const baseY = 0;
@@ -348,25 +295,6 @@ async function main() {
           // different permission levels in the branch_owners table
           if (additionalOwner.permission === 'all') {
             await branchRepo.addOwner(branch.branch_id, additionalUserId);
-            // Also add to Unix groups (repo + branch)
-            if (unixIntegrationService) {
-              try {
-                // Add to repo group (for .git access)
-                await unixIntegrationService.addUserToRepoGroup(
-                  agorRepo.repo_id as RepoID,
-                  additionalUserId
-                );
-                // Add to branch group
-                await unixIntegrationService.addUserToBranchGroup(
-                  branch.branch_id,
-                  additionalUserId
-                );
-              } catch {
-                console.error(
-                  chalk.yellow(`    ⚠️  Failed to add ${additionalOwner.username} to Unix groups`)
-                );
-              }
-            }
             console.log(
               chalk.gray(
                 `    + ${additionalOwner.username} (${additionalOwner.permission} permission)`

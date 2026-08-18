@@ -71,24 +71,171 @@
           },
           "type": {
             "type": "string",
-            "enum": ["user", "assistant", "system", "tool_use", "tool_result"]
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
           },
           "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "content_preview": {
             "type": "string"
           },
           "content": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
           },
-          "created_at": {
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "parent_tool_use_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "messagesCreate": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "type",
+          "role",
+          "index",
+          "timestamp",
+          "content_preview",
+          "content"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "file-history-snapshot",
+              "permission_request",
+              "input_request",
+              "daemon_restart",
+              "daemon_crash",
+              "widget_request"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timestamp": {
             "type": "string",
             "format": "date-time"
+          },
+          "content_preview": {
+            "type": "string"
+          },
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              },
+              {
+                "type": "object"
+              }
+            ]
+          },
+          "tool_uses": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "parent_tool_use_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
       "messagesList": {
         "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for messagesList. See @agor-live/client for the authoritative TypeScript type."
+        "required": ["total", "limit", "skip", "data"],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "skip": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/messages"
+            }
+          }
+        }
       },
       "boards": {
         "type": "object",
@@ -395,11 +542,6 @@
         "additionalProperties": true,
         "description": "Schema for gateway. See @agor-live/client for the authoritative TypeScript type."
       },
-      "local-actions": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for local-actions. See @agor-live/client for the authoritative TypeScript type."
-      },
       "agentic-tool-settings": {
         "type": "object",
         "additionalProperties": true,
@@ -590,11 +732,6 @@
         "additionalProperties": true,
         "description": "Schema for impersonate. See @agor-live/client for the authoritative TypeScript type."
       },
-      "bulk": {
-        "type": "object",
-        "additionalProperties": true,
-        "description": "Schema for bulk. See @agor-live/client for the authoritative TypeScript type."
-      },
       "streaming": {
         "type": "object",
         "additionalProperties": true,
@@ -629,6 +766,21 @@
         "type": "object",
         "additionalProperties": true,
         "description": "Schema for logsList. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "mcp-member-policy": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for mcp-member-policy. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "mcp-member-policyList": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for mcp-member-policyList. See @agor-live/client for the authoritative TypeScript type."
+      },
+      "connect": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Schema for connect. See @agor-live/client for the authoritative TypeScript type."
       },
       "health": {
         "type": "object",
@@ -1375,7 +1527,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/messages"
+                "$ref": "#/components/schemas/messagesCreate"
               }
             }
           }
@@ -6859,43 +7011,6 @@
         }
       }
     },
-    "/admin/local-actions": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/local-actions"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["admin"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/local-actions"
-              }
-            }
-          }
-        }
-      }
-    },
     "/agentic-tool-settings": {
       "get": {
         "parameters": [
@@ -8233,6 +8348,46 @@
         }
       }
     },
+    "/terminals/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID of terminals to remove",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/terminals"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Removes the resource with id.",
+        "summary": "Removes the resource with id",
+        "tags": ["terminals"],
+        "security": []
+      }
+    },
     "/session-env-selections": {
       "get": {
         "parameters": [
@@ -9237,43 +9392,6 @@
         }
       }
     },
-    "/messages/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["messages"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
-              }
-            }
-          }
-        }
-      }
-    },
     "/messages/streaming": {
       "post": {
         "parameters": [],
@@ -10097,43 +10215,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/_id"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/bulk": {
-      "post": {
-        "parameters": [],
-        "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bulk"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "not authenticated"
-          },
-          "500": {
-            "description": "general error"
-          }
-        },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
-        "tags": ["tasks"],
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/bulk"
               }
             }
           }
@@ -11672,6 +11753,156 @@
         "security": []
       }
     },
+    "/mcp-member-policy": {
+      "get": {
+        "parameters": [
+          {
+            "description": "Number of results to return",
+            "in": "query",
+            "name": "$limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of results to skip",
+            "in": "query",
+            "name": "$skip",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Property to sort results",
+            "in": "query",
+            "name": "$sort",
+            "style": "deepObject",
+            "schema": {
+              "type": "object"
+            }
+          },
+          {
+            "description": "Query parameters to filter",
+            "in": "query",
+            "name": "filter",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "$ref": "#/components/schemas/mcp-member-policy"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/mcp-member-policyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Retrieves a list of all resources from the service.",
+        "summary": "Retrieves a list of all resources from the service",
+        "tags": ["mcp-member-policy"],
+        "security": []
+      }
+    },
+    "/mcp-member-policy/{id}": {
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID of mcp-member-policy to update",
+            "schema": {
+              "type": "integer"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/mcp-member-policy"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "404": {
+            "description": "not found"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Updates the resource identified by id using data.",
+        "summary": "Updates the resource identified by id using data",
+        "tags": ["mcp-member-policy"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/mcp-member-policy"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp-catalog/connect": {
+      "post": {
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/connect"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
+        "tags": ["mcp-catalog"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/connect"
+              }
+            }
+          }
+        }
+      }
+    },
     "/sessions/{id}/env-selections": {
       "get": {
         "parameters": [
@@ -12140,6 +12371,10 @@
     {
       "name": "api",
       "description": "A api service"
+    },
+    {
+      "name": "mcp-member-policy",
+      "description": "A mcp-member-policy service"
     },
     {
       "name": "health",

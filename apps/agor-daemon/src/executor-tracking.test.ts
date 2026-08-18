@@ -43,6 +43,35 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       }
     });
 
+    it('waits through transient inspection uncertainty after cooperative quiescence', async () => {
+      const owner = {};
+      const inspectGroupForTest = vi
+        .fn<(pgid: number, signal?: 0 | NodeJS.Signals) => 'present' | 'absent' | 'unverified'>()
+        .mockReturnValueOnce('unverified')
+        .mockReturnValue('absent');
+      trackExecutorProcess(
+        {
+          sessionId: 'session-wrapper',
+          taskId: 'task-wrapper',
+          pid: process.pid,
+        },
+        owner
+      );
+      try {
+        await expect(
+          containExecutorProcess(
+            'session-wrapper',
+            'task-wrapper',
+            { preSignalGraceMs: 25, pollMs: 1, inspectGroupForTest },
+            owner
+          )
+        ).resolves.toEqual({ status: 'verified_absent' });
+        expect(inspectGroupForTest).toHaveBeenCalledTimes(2);
+      } finally {
+        untrackExecutorProcess('session-wrapper', 'task-wrapper', owner);
+      }
+    });
+
     it('kills a process group whose leader and descendant ignore SIGTERM', async () => {
       const script = `
         const { spawn } = require('node:child_process');
@@ -101,28 +130,6 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
           process.kill(-leader.pid, 'SIGKILL');
         } catch {}
         untrackExecutorProcess('session-orphan');
-      }
-    });
-
-    it('fails closed when cross-UID signaling is unavailable', async () => {
-      const leader = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
-        detached: true,
-        stdio: 'ignore',
-      });
-      if (!leader.pid) throw new Error('leader PID missing');
-      trackExecutorProcess({
-        sessionId: 'session-uid',
-        taskId: 'task-uid',
-        pid: leader.pid,
-        asUser: 'agor_executor',
-      });
-      try {
-        await expect(containExecutorProcess('session-uid', 'task-uid')).resolves.toMatchObject({
-          status: 'unverified',
-        });
-      } finally {
-        process.kill(-leader.pid, 'SIGKILL');
-        untrackExecutorProcess('session-uid');
       }
     });
 

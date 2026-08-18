@@ -21,7 +21,6 @@ export const OPENCODE_INTEGRATION = Object.freeze({
   capabilities: {
     supportsSessionFork: false,
     supportsChildSpawn: true,
-    supportsSessionImport: false,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   authentication: 'runtime-managed',

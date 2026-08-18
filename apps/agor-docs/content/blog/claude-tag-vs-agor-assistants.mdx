@@ -97,7 +97,7 @@ You are not asking one broadly-scoped teammate to infer the shape of the organiz
 | Slack UX | Tag `@Claude` in Slack; Claude responds in the thread. | Mention a configured Slack bot/channel; replies route back to the same Slack thread. |
 | Unit of identity | Claude operates under an organization/channel identity configured by admins. | Each teammate is a durable entity with its own name, avatar, identity files, memory, branch, board, schedules, and skills. |
 | Thread mapping | Channel/thread collaboration is core to the product. | Each platform thread maps to an Agor session; multiple Agor bots can participate in the same Slack thread with separate session mappings. |
-| Tool access | Admins configure tools, repositories, channels, spend limits, member access, memory, and audit views. | Per-teammate/per-channel agent config: model/harness, permission mode, MCP servers, env vars, service-account or user-aligned credentials, Knowledge grants, branch RBAC, and Unix isolation where needed. |
+| Tool access | Admins configure tools, repositories, channels, spend limits, member access, memory, and audit views. | Per-teammate/per-channel agent config: model/harness, permission mode, MCP servers, env vars, service-account or user-aligned credentials, Knowledge grants, branch RBAC, and sandboxed or delegated execution where needed. |
 | Memory model | Claude Tag keeps channel/workspace memory that admins can review, edit, or delete. | Teammates can keep file-based memory plus Knowledge namespaces with search, graph links, version history, and read/write controls. |
 | Work surface | Slack-first, with Claude surfaces and linked coding flows where configured. | Slack is one doorway into a visual workspace: boards, sessions, branches, environments, artifacts, comments, PRs, and session trees. |
 | Model ecosystem | Claude ecosystem. | Harness variety: Claude Code, Codex, Gemini, Copilot, OpenCode, Cursor, and MCP-native extensions. |
@@ -162,7 +162,7 @@ The questions get very concrete:
 - Which Knowledge namespaces can the HubSpot specialist read? Which can it write?
 - Can this Slack gateway run in a permissive permission mode, or should tool calls stay supervised?
 - Which MCP servers attach to this teammate?
-- Is this branch open to the team, restricted to owners, or isolated at the Unix user level?
+- Is this branch open to the team, restricted to owners, or isolated by the execution substrate?
 - When a scheduled teammate runs unattended, whose credentials and limits apply?
 
 Those details are not bureaucracy. They are how you make teammates useful enough to touch real systems without turning every Slack mention into an unbounded remote prompt seat.

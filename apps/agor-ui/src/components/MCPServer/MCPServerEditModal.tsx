@@ -1,8 +1,20 @@
-import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
-import { Form, Modal } from 'antd';
+import type {
+  AgorClient,
+  MCPScope,
+  MCPServer,
+  MCPTransport,
+  UpdateMCPServerInput,
+} from '@agor-live/client';
+import { Button, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { MCPServerFormFields } from './MCPServerFormFields';
+import {
+  describeMissingForSave,
+  firstFormErrorMessage,
+  missingMCPFieldLabels,
+  useFormRevision,
+} from './mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
 
 export interface MCPServerEditModalProps {
@@ -10,6 +22,14 @@ export interface MCPServerEditModalProps {
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
+  /**
+   * The transports this editor may switch to. Omit to offer all of them — a
+   * caller that knows the user is held to remote transports passes those, so
+   * the form does not invite a change the daemon will refuse.
+   */
+  offeredTransports?: MCPTransport[];
+  /** The scopes this editor may switch to, on the same terms. */
+  offeredScopes?: MCPScope[];
   onClose: () => void;
 }
 
@@ -35,15 +55,30 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
   open,
   client,
+  offeredTransports,
+  offeredScopes,
   onClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
+  // The form is filled in an effect, so its fields read blank on the first
+  // render. Gating on this keeps Save from flashing disabled while the modal
+  // animates in.
+  const [formHydrated, setFormHydrated] = useState(false);
+  const [formRevision, bumpFormRevision] = useFormRevision();
+
+  // Only ask the form once it is rendered and filled — an unmounted instance
+  // warns, and a half-hydrated one would flash Save disabled.
+  const missingRequiredFields =
+    open && formHydrated
+      ? missingMCPFieldLabels(form.getFieldsValue(true), { mode: 'edit', transport, authType })
+      : [];
+  const saveBlocked = missingRequiredFields.length > 0;
 
   // Hydrate the form when the modal opens or the user swaps to a different
   // server. Intentionally NOT keyed on `server` itself — that would clobber
@@ -98,6 +133,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
 
     form.setFieldsValue(formValues);
+    setFormHydrated(true);
+    bumpFormRevision();
   }, [open, server?.mcp_server_id, form]);
 
   const closeAndReset = () => {
@@ -106,6 +143,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     setAuthType('none');
     setTestResult(null);
     setPreserveAbsentDcrMode(false);
+    setFormHydrated(false);
     onClose();
   };
 
@@ -187,8 +225,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
   };
 
-  const handleSave = async () => {
-    if (!server || !client) return;
+  const saveFormValues = async (): Promise<boolean> => {
+    if (!server || !client) return false;
 
     try {
       await form.validateFields();
@@ -216,24 +254,50 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       updates.auth = buildAuthFromValues(values, { preserveAbsentDcrMode });
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
+      return true;
+    } catch (error) {
+      // Name the field, rather than letting a rejected validation surface as
+      // the generic message its non-Error shape would produce.
+      const errorMessage =
+        firstFormErrorMessage(error) ??
+        (error instanceof Error ? error.message : 'Failed to update server');
+      showError(errorMessage);
+      return false;
+    }
+  };
 
+  const handleSave = async () => {
+    if (await saveFormValues()) {
       showSuccess('MCP server updated successfully');
       closeAndReset();
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
-      showError(errorMessage);
     }
+  };
+
+  const prepareOAuthStart = async (): Promise<string | null> => {
+    if (!(await saveFormValues())) return null;
+    return server?.mcp_server_id ?? null;
   };
 
   return (
     <Modal
       title="Edit MCP Server"
       open={open}
-      onOk={handleSave}
       onCancel={closeAndReset}
-      okText="Save"
       width={600}
       destroyOnHidden
+      footer={
+        <Space>
+          <Button onClick={closeAndReset}>Cancel</Button>
+          {/* A disabled button can't host a tooltip of its own — hence the span. */}
+          <Tooltip title={saveBlocked ? describeMissingForSave(missingRequiredFields) : undefined}>
+            <span>
+              <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
+                Save
+              </Button>
+            </span>
+          </Tooltip>
+        </Space>
+      }
     >
       <Form
         form={form}
@@ -241,9 +305,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         style={{ marginTop: 16 }}
         onValuesChange={(changedValues) => {
           if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+          bumpFormRevision();
         }}
       >
         <MCPServerFormFields
+          offeredTransports={offeredTransports}
+          offeredScopes={offeredScopes}
           mode="edit"
           transport={transport}
           onTransportChange={setTransport}
@@ -255,6 +322,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           onTestConnection={handleTestConnection}
           testing={testing}
           testResult={testResult}
+          onPrepareOAuthStart={prepareOAuthStart}
+          formRevision={formRevision}
         />
       </Form>
     </Modal>

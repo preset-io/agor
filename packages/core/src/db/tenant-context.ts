@@ -2,15 +2,24 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { TenantID } from '../types/tenant';
 import type { Database } from './client';
 
-export interface TenantDatabaseScope {
+export interface TenantOwnedDatabaseScope {
   db: Database;
-  kind: 'tenant' | 'system';
+  kind: 'tenant';
+  /** Whether `db` is a native transaction handle rather than an identity-only scope. */
+  transactionActive: boolean;
   tenantId?: TenantID | string;
-  systemReason?: string;
-  systemCapability?: SystemDatabaseCapability;
-  postCommitCallbacks?: Array<() => Promise<void>>;
-  afterCommitCallbacks?: Array<() => Promise<void> | void>;
+  postCommitCallbacks: Array<() => Promise<void>>;
+  afterCommitCallbacks: Array<() => Promise<void> | void>;
 }
+
+export interface SystemDatabaseScope {
+  db: Database;
+  kind: 'system';
+  systemReason: string;
+  systemCapability?: SystemDatabaseCapability;
+}
+
+export type TenantDatabaseScope = TenantOwnedDatabaseScope | SystemDatabaseScope;
 
 /** Narrow RLS capabilities available to explicit system database work. */
 export type SystemDatabaseCapability =
@@ -25,8 +34,7 @@ export type SystemDatabaseCapability =
   | 'mcp_oauth_maintenance'
   | 'github_install_state_callback'
   | 'github_install_state_maintenance'
-  | 'upload_maintenance'
-  | 'mcp_catalog_ingestion';
+  | 'upload_maintenance';
 
 export interface TenantContextScope {
   tenantId: TenantID | string;
@@ -96,7 +104,7 @@ export function runWithoutTenantDatabaseScope<T>(work: () => T): T {
 
 export function enqueueTenantDatabasePostCommitCallback(callback: () => Promise<void>): boolean {
   const store = tenantDatabaseScope.getStore();
-  if (!store?.postCommitCallbacks) return false;
+  if (store?.kind !== 'tenant') return false;
   store.postCommitCallbacks.push(callback);
   return true;
 }
@@ -104,7 +112,7 @@ export function enqueueTenantDatabasePostCommitCallback(callback: () => Promise<
 /** Schedule non-DB work after the active transaction commits. */
 export function enqueueAfterTenantDatabaseCommit(callback: () => Promise<void> | void): boolean {
   const store = tenantDatabaseScope.getStore();
-  if (!store?.afterCommitCallbacks) return false;
+  if (store?.kind !== 'tenant') return false;
   store.afterCommitCallbacks.push(callback);
   return true;
 }

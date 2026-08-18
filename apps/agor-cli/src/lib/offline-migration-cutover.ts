@@ -1,5 +1,6 @@
 import {
   type Database,
+  getDatabaseInstanceDialect,
   OfflineMigrationCutoverRequiredError,
   pendingOfflineCutoverMigrations,
   runMigrations,
@@ -11,10 +12,11 @@ interface MigrationStatus {
 }
 
 export function requireOfflineCutoverAcknowledgement(
+  db: Database,
   status: MigrationStatus,
   acknowledged: boolean
 ): void {
-  const offlineMigrations = pendingOfflineCutoverMigrations(status);
+  const offlineMigrations = pendingOfflineCutoverMigrations(getDatabaseInstanceDialect(db), status);
   if (offlineMigrations.length > 0 && !acknowledged) {
     throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
   }

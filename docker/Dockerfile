@@ -31,7 +31,9 @@ RUN apt-get update && apt-get install -y \
   openssh-server \
   acl \
   ripgrep \
+  bubblewrap \
   && rm -rf /var/lib/apt/lists/*
+# bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
 
 # Configure SSH server for multi-user testing (used in postgres profile)
 RUN mkdir -p /run/sshd && \
@@ -79,28 +81,18 @@ RUN set -eux; \
       groupmod -n agor -g "${GID}" node; \
     fi; \
     usermod -g agor agor; \
-    # Grant passwordless sudo for fixing volume permissions and executor spawning
+    # Development image only: allow the entrypoint to repair bind-mount ownership.
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
     chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
     mkdir -p /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
-# Create 'agor_executor' user (unprivileged user for isolated SDK execution)
-# This user has no sudo privileges and limited permissions
-RUN useradd -m -s /bin/bash agor_executor && \
-    # Create home directory with restricted permissions
-    mkdir -p /home/agor_executor/.agor && \
-    chown -R agor_executor:agor_executor /home/agor_executor
-
-# Copy Zellij config for both users
+# Copy Zellij config for the daemon user.
 COPY docker/zellij-config.kdl /tmp/zellij-config.kdl
 RUN mkdir -p /home/agor/.config/zellij && \
-    mkdir -p /home/agor_executor/.config/zellij && \
     cp /tmp/zellij-config.kdl /home/agor/.config/zellij/config.kdl && \
-    cp /tmp/zellij-config.kdl /home/agor_executor/.config/zellij/config.kdl && \
     chown -R agor:agor /home/agor/.config && \
-    chown -R agor_executor:agor_executor /home/agor_executor/.config && \
     rm /tmp/zellij-config.kdl
 
 # Set working directory
@@ -159,7 +151,7 @@ FROM base AS production
 # Switch back to root to install global npm packages
 USER root
 
-# Install agor-live globally from npm
+# Install agor-live globally from npm.
 # This installs both the CLI and daemon binaries
 RUN npm install -g agor-live@latest
 
@@ -183,18 +175,13 @@ ENTRYPOINT ["docker-entrypoint-prod.sh"]
 # Builds agor-live from THIS checkout via packages/agor-live/build.sh (turbo
 # build → copies each package's dist/ into agor-live/dist/{core,git,cli,daemon,
 # executor,ui} — the exact layout the npm package ships), then produces a
-# self-contained prod deployment with `pnpm deploy`: agor-live's bin/ + dist/ +
-# prod-only node_modules, with no monorepo source, dev deps, or pnpm store.
+# immutable release tarballs, then installs those tarballs into an isolated
+# global prefix with lifecycle scripts disabled. The runtime therefore uses the
+# same scriptless artifact that npm users and release CI exercise.
 FROM base AS source-builder
 
 USER root
 WORKDIR /app
-
-# Native-module toolchain (node-pty etc.) for the deploy step's install
-# lifecycle. Confined to this throwaway builder — never in the runtime image.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential python3 \
-  && rm -rf /var/lib/apt/lists/*
 
 # Full monorepo source. .dockerignore keeps node_modules/, dist/ and .git out.
 COPY . .
@@ -207,27 +194,17 @@ COPY . .
 ARG AGOR_BUILD_SHA=""
 ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
 
-# Install workspace deps (dev deps needed for the turbo build), build agor-live
-# from source, then deploy a prod-only, self-contained tree to /opt/agor-live.
-# build.sh --skip-install avoids a redundant install; it also runs
-# check:agor-live-deps and check:pack, which gate the build. dist/ is in the
-# package's `files` allowlist, so `pnpm deploy` carries it into the output, and
-# agor-live's postinstall re-creates the @agor/{core,git} → dist symlinks there.
-# pnpm 11's explicit legacy deploy mode preserves that established packaged layout;
-# injected workspace packages would replace it with copies of workspace projects.
+# Install workspace deps (dev deps needed for the turbo build), build the exact
+# release artifacts, then perform a script-disabled install. Supplying the
+# locally packed client alongside agor-live keeps this pre-publication build
+# independent of registry publication order.
 RUN pnpm install --frozen-lockfile \
   && bash packages/agor-live/build.sh --skip-install \
-  && pnpm --filter=agor-live deploy --prod --legacy /opt/agor-live
-
-# `pnpm deploy` runs agor-live's postinstall against the workspace copy, not the
-# deploy output — so the @agor/{core,git} → dist symlinks it creates never land
-# in /opt/agor-live. Re-run the packaged postinstall (shipped via the package's
-# `files` allowlist) against the deployed tree so the symlink layout stays
-# defined in exactly one place. The script warns instead of failing, so assert
-# the links resolve — a broken image must fail the build, not the smoke test.
-RUN node /opt/agor-live/scripts/postinstall.js \
-  && test -e /opt/agor-live/node_modules/@agor/core \
-  && test -e /opt/agor-live/node_modules/@agor/git
+  && npm install -g --prefix /opt/agor-runtime --ignore-scripts --no-audit --no-fund \
+       packages/agor-live/release/agor-live-client-*.tgz \
+       packages/agor-live/release/agor-live-[0-9]*.tgz \
+  && test -d /opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core \
+  && test -d /opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/git
 
 # ============================================================================
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
@@ -242,17 +219,16 @@ FROM base AS production-source
 
 USER root
 
-# The one thing we keep from the builder: the self-contained agor-live tree.
-# Copied to the SAME path so its internal (relative) symlinks stay valid.
-COPY --chown=agor:agor --from=source-builder /opt/agor-live /opt/agor-live
+# The one thing we keep from the builder: the isolated global npm prefix.
+COPY --chown=agor:agor --from=source-builder /opt/agor-runtime /opt/agor-runtime
 
-# Put the bins on PATH (shebang: #!/usr/bin/env node); they resolve deps + dist
-# entirely within /opt/agor-live. pnpm deploy preserves a restrictive workspace
-# umask in some environments, so explicitly make the scripts readable as well
-# as executable by the unprivileged runtime user.
-RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
-  && ln -sf /opt/agor-live/bin/agor-daemon.js /usr/local/bin/agor-daemon \
-  && chmod a+rx /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
+# Put the npm-generated global bins on PATH. They resolve dependencies and the
+# bundled internal modules entirely within /opt/agor-runtime.
+RUN ln -sf /opt/agor-runtime/bin/agor /usr/local/bin/agor \
+  && ln -sf /opt/agor-runtime/bin/agor-daemon /usr/local/bin/agor-daemon \
+  && chmod a+rx \
+       /opt/agor-runtime/lib/node_modules/agor-live/bin/agor.js \
+       /opt/agor-runtime/lib/node_modules/agor-live/bin/agor-daemon.js
 
 # Reuse the production entrypoint (agor init → db migrate → exec agor-daemon).
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/

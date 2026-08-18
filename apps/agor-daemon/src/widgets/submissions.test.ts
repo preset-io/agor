@@ -15,7 +15,7 @@
  * mock, so we exercise the full state machine with a hand-rolled stub.
  */
 
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, NotFound } from '@agor/core/feathers';
 import type { Branch, Message, MessageID, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -37,6 +37,8 @@ interface MockEvent {
   event: string;
   payload: unknown;
 }
+
+const runInTenantDatabaseScope = <T>(work: () => Promise<T>) => work();
 
 function makeApp(
   records: { message: Message; session: Session; branch: Branch },
@@ -272,6 +274,70 @@ describe('resolveWidget', () => {
     _resetWidgetRegistryForTests();
   });
 
+  it('does not read authorization context for a non-widget message', async () => {
+    const fixtures = makeFixtures();
+    fixtures.message.type = 'user';
+    const { app, calls, resolutionStore } = makeApp(fixtures);
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
+      )
+    ).rejects.toThrow('is not a widget request');
+    expect(calls.map((call) => call.service)).toEqual(['messages']);
+  });
+
+  it('propagates message infrastructure errors instead of translating them to not found', async () => {
+    const infrastructureError = new Error('database unavailable');
+    const app = {
+      service: () => ({ get: async () => Promise.reject(infrastructureError) }),
+    };
+    const resolutionStore = {} as WidgetResolutionStore;
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
+      )
+    ).rejects.toBe(infrastructureError);
+  });
+
+  it('narrows message not-found errors to the widget lookup', async () => {
+    const app = {
+      service: () => ({ get: async () => Promise.reject(new NotFound('missing message')) }),
+    };
+    const resolutionStore = {} as WidgetResolutionStore;
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
+      )
+    ).rejects.toThrow('Widget widget-msg-1 not found');
+  });
+
   it('submits a pending widget: dispatches to applySubmit, patches status, queues auto-resume, broadcasts', async () => {
     const { applySubmit } = registerTestWidget();
     const fixtures = makeFixtures();
@@ -281,7 +347,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
 
     expect(result).toEqual({
@@ -355,7 +426,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
         { user_id: 'someone-else' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/session creator|prompt/);
   });
@@ -369,7 +445,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
       { user_id: 'someone-else' as UserID },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
     expect(result.status).toBe('submitted');
     const promptCall = calls.find(
@@ -391,7 +472,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/already submitted/);
   });
@@ -405,7 +491,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: {} },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/not registered/);
   });
@@ -419,7 +510,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'submit', body: { value: 'k', scope: 'global' } },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
 
     expect(result.auto_resume_queued).toBe(false);
@@ -436,7 +532,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
 
     expect(result.status).toBe('dismissed');
@@ -458,7 +559,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
 
     expect(result.status).toBe('dismissed');
@@ -485,7 +591,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'dismiss' },
         { user_id: 'creator-user-id' as UserID, role: 'member' },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/admin/i);
 
@@ -508,7 +619,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'dismiss' },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/admin/i);
 
@@ -528,7 +644,12 @@ describe('resolveWidget', () => {
       'widget-msg-1',
       { kind: 'dismiss' },
       { user_id: 'creator-user-id' as UserID, role: 'admin' },
-      { app: app as never, resolutionStore, isBranchOwner: async () => false }
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        isBranchOwner: async () => false,
+      }
     );
 
     expect(result.status).toBe('dismissed');
@@ -544,7 +665,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'k', scope: 'global' } },
         undefined,
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/Authentication/);
   });
@@ -559,7 +685,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { scope: 'invalid-scope' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toThrow(/Invalid submit/);
   });
@@ -580,7 +711,12 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       )
     ).rejects.toMatchObject({
       data: { field_errors: { HUBSPOT_API_KEY: 'Invalid saved value selection' } },
@@ -617,6 +753,7 @@ describe('resolveWidget', () => {
         {
           app: state.app as never,
           resolutionStore: state.resolutionStore,
+          runInTenantDatabaseScope,
           isBranchOwner: async () => false,
         }
       );
@@ -650,6 +787,7 @@ describe('resolveWidget', () => {
         {
           app: state.app as never,
           resolutionStore: state.resolutionStore,
+          runInTenantDatabaseScope,
           isBranchOwner: async () => false,
         }
       );
@@ -680,13 +818,23 @@ describe('resolveWidget', () => {
         'widget-msg-1',
         { kind: 'submit', body: { value: 'one', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       ),
       resolveWidget(
         'widget-msg-1',
         { kind: 'submit', body: { value: 'two', scope: 'global' } },
         { user_id: 'creator-user-id' as UserID },
-        { app: app as never, resolutionStore, isBranchOwner: async () => false }
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          isBranchOwner: async () => false,
+        }
       ),
     ]);
 

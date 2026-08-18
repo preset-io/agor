@@ -1,11 +1,14 @@
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   AGENTIC_TOOL_REPAIR_COMMAND,
+  assertManagedAgenticToolInstallReady,
   getAgenticToolInstallDir,
   type InstallableAgenticTool,
-  resolveManagedAgenticToolIntegration,
 } from '@agor/core/agentic-integrations';
-import { readManagedIntegrationManifest } from './agentic-tool-integrations.js';
+import {
+  assertManagedIntegrationPermissions,
+  readManagedIntegrationManifest,
+} from './agentic-tool-integrations.js';
 
 export type AgenticToolDiagnostic = {
   id: InstallableAgenticTool;
@@ -39,10 +42,8 @@ async function diagnoseManagedIntegration(
   }
 
   try {
-    const integration = await resolveManagedAgenticToolIntegration(tool, agorVersion);
-    if (integration.AGOR_INTEGRATION_VERSION !== agorVersion || !integration.sdk) {
-      throw new Error('integration module failed its version check');
-    }
+    await assertManagedIntegrationPermissions(tool, agorVersion);
+    await assertManagedAgenticToolInstallReady(tool, agorVersion, installDir);
     return {
       id: tool,
       name: definition.displayName,

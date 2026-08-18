@@ -1,12 +1,34 @@
 /**
- * `agor logout` - Shortcut for `agor auth logout`
+ * `agor logout` - Clear stored authentication token
  *
- * Top-level command for better UX
+ * Removes JWT token from disk
  */
 
-import Logout from './auth/logout';
+import { Command } from '@oclif/core';
+import chalk from 'chalk';
+import { clearToken, loadToken } from '../lib/auth';
 
-export default class LogoutShortcut extends Logout {
-  static description = 'Logout and clear stored authentication token';
+export default class Logout extends Command {
+  static description = 'Clear the current deployment connection';
+
   static examples = ['<%= config.bin %> <%= command.id %>'];
+
+  async run(): Promise<void> {
+    // Check if user is logged in
+    const storedAuth = await loadToken();
+
+    if (!storedAuth) {
+      this.log(chalk.dim('Not currently logged in'));
+      return;
+    }
+
+    // Clear token
+    await clearToken();
+
+    this.log('');
+    this.log(chalk.green('✓ Logged out successfully'));
+    this.log('');
+    this.log(chalk.dim('Token removed from ~/.agor/cli-token'));
+    this.log('');
+  }
 }

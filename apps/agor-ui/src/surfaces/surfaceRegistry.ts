@@ -1,7 +1,12 @@
 import { matchPath } from 'react-router-dom';
 import { surfaceTitle } from '../branding/brand';
 
-export type RouteSurfaceId = 'workspace' | 'knowledge' | 'artifact-fullscreen' | 'demo';
+export type RouteSurfaceId =
+  | 'workspace'
+  | 'knowledge'
+  | 'marketplace'
+  | 'artifact-fullscreen'
+  | 'demo';
 
 export interface RouteSurfaceDefinition {
   id: RouteSurfaceId;
@@ -65,6 +70,21 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
+export const MARKETPLACE_ROUTE_PATHS = ['/marketplace'] as const;
+
+export const MARKETPLACE_SURFACE = defineSurface({
+  id: 'marketplace',
+  label: 'Marketplace',
+  routePaths: MARKETPLACE_ROUTE_PATHS,
+  // Browsing the catalog reads a paginated global table, not the tenant's
+  // boards and sessions, so the workspace store stays cold until connect
+  // navigates into a session.
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+  branding: surfaceTitle('Marketplace'),
+});
+
 export const ARTIFACT_FULLSCREEN_ROUTE_PATHS = ['/a/:artifactShortId/fullscreen'] as const;
 
 export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
@@ -101,6 +121,7 @@ export const WORKSPACE_SURFACE = defineSurface({
 
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
+  MARKETPLACE_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

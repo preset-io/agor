@@ -11,7 +11,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  MCPCatalogEntryData,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -57,7 +56,7 @@ export const sessions = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
-    // Unix username for SDK impersonation (immutable once set)
+    // Immutable execution-home key (legacy column name)
     // Set from creator's unix_username at session creation time
     // NEVER changes, even if user's unix_username changes later
     // This ensures SDK session data remains accessible in the original home directory
@@ -363,6 +362,7 @@ export const tasks = sqliteTable(
   },
   (table) => ({
     sessionIdx: index('tasks_session_idx').on(table.session_id),
+    sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
@@ -510,6 +510,11 @@ export const messages = sqliteTable(
     // Indexes for efficient lookups
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
+    sessionMessageIdIdx: index('messages_session_message_id_idx').on(
+      table.session_id,
+      table.message_id
+    ),
+    taskMessageIdIdx: index('messages_task_message_id_idx').on(table.task_id, table.message_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
     timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
     sessionTimestampIdx: index('messages_session_timestamp_idx').on(
@@ -598,12 +603,8 @@ export const repos = sqliteTable(
       .notNull()
       .default('remote'),
 
-    // Unix group for repo-level git access (agor_rp_<short-id>)
-    // Users who have access to ANY branch in this repo get added to this group.
-    // Applied to repo Unix-group-managed paths:
-    // - repo root (non-recursive) for traversal into .git/worktrees/<name>
-    // - .git (recursive) for shared git objects/refs and git operations
-    unix_group: text('unix_group'),
+    // Retired nullable compatibility stamp retained for rollback/audit only.
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
 
     data: t
       .json<unknown>('data')
@@ -742,7 +743,7 @@ export const branches = sqliteTable(
     }).default('view'),
 
     // RBAC: OS-layer permissions (unix-user-modes.md)
-    unix_group: text('unix_group'), // e.g., 'agor_wt_abc123'
+    unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
     others_fs_access: text('others_fs_access', {
       enum: ['none', 'read', 'write'],
     })
@@ -817,10 +818,6 @@ export const branches = sqliteTable(
         // attribute the new child session to the parent owner instead of the
         // MCP-authenticated caller. See packages/core/src/types/branch.ts.
         dangerously_allow_session_sharing?: boolean;
-
-        // Unix integration
-        // Note: unix_gid was previously stored here but is now resolved dynamically
-        // via getGidFromGroupName(unix_group) at execution time. See id-lookups.ts.
       }>()
       .notNull(),
   },
@@ -979,8 +976,13 @@ export const users = sqliteTable(
       .notNull()
       .default('member'),
 
-    // Unix username for process impersonation (optional, app-enforced uniqueness)
+    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
     unix_username: text('unix_username'),
+
+    // Absolute host home dir used as the per-user sandbox overlay SOURCE under
+    // unix_user_mode: sandbox (home_mode: per_user). Null → canonical store
+    // <data_home>/tenants/<tenant>/homes/<user_id>. See types/user.ts.
+    filesystem_home: text('filesystem_home'),
 
     // Onboarding state
     onboarding_completed: t.bool('onboarding_completed').notNull().default(false),
@@ -1328,14 +1330,14 @@ export const mcpServers = sqliteTable(
     }).notNull(),
     enabled: t.bool('enabled').notNull().default(true),
 
-    // Scope foreign key
-    // For 'global' scope: which user owns this server
-    // For 'session' scope: use session_mcp_servers junction table (many-to-many)
+    // Owner of a private server, NULL for a shared one. Applies to both
+    // scopes: a private server is only ever resolved into, and attachable to,
+    // sessions its owner created.
     owner_user_id: text('owner_user_id', { length: 36 }),
 
     // Source tracking (materialized for queries)
     source: text('source', {
-      enum: ['user', 'imported', 'agor'],
+      enum: ['user', 'imported', 'agor', 'catalog'],
     }).notNull(),
 
     // JSON blob for configuration and capabilities
@@ -1345,6 +1347,9 @@ export const mcpServers = sqliteTable(
         display_name?: string;
         description?: string;
         import_path?: string;
+        // Catalog entry this server was installed from, by the registry name
+        // that outlives the entry row.
+        catalog_entry_name?: string;
 
         // Transport config
         command?: string;
@@ -1409,107 +1414,6 @@ export const mcpServers = sqliteTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
-  })
-);
-
-/**
- * MCP Catalog Entries table - browsable index of connectable MCP servers
- *
- * A mirror of the official MCP registry (breadth + reverse-DNS identity) with a
- * curated overlay from `packages/core/src/mcp-catalog/curated.yaml` (category,
- * capabilities, benefit copy, starter prompt, permission disclosure) joined on
- * by `name`.
- *
- * Holds no tenant data: every field originates from a public unauthenticated
- * HTTP registry or from a file checked into this repository. See the Postgres
- * schema for the tenancy rationale and the RLS contract.
- *
- * Columns are materialized when the marketplace filters or sorts on them; the
- * rest lives in `data`, matching `mcp_servers`.
- */
-export const mcpCatalogEntries = sqliteTable(
-  'mcp_catalog_entries',
-  {
-    // Primary identity
-    catalog_entry_id: text('catalog_entry_id', { length: 36 }).primaryKey(),
-    created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at').notNull(),
-
-    // Registry identity. `name` is the join key between the registry mirror and
-    // the curated overlay, so it is unique.
-    name: text('name').notNull(),
-    version: text('version'),
-    registry_updated_at: t.timestamp('registry_updated_at'),
-
-    // Registry presentation (materialized for search)
-    title: text('title'),
-    description: text('description'),
-    website_url: text('website_url'),
-    repository_url: text('repository_url'),
-
-    // Connect surface
-    transport: text('transport', {
-      enum: ['streamable-http', 'sse', 'stdio'],
-    }),
-    remote_url: text('remote_url'),
-    has_remote: t.bool('has_remote').notNull().default(false),
-    has_package: t.bool('has_package').notNull().default(false),
-
-    // Curation overlay
-    curated: t.bool('curated').notNull().default(false),
-    category: text('category'),
-    /**
-     * Curated capability tags as a delimiter-wrapped lowercase string
-     * (`|issues|repos|ci|`), matched with `LIKE '%|issues|%'`. See the Postgres
-     * schema for why this is denormalized rather than a join table.
-     */
-    capability_tags: text('capability_tags'),
-    benefit: text('benefit'),
-    starter_prompt: text('starter_prompt'),
-    permission_disclosure: text('permission_disclosure'),
-    icon_url: text('icon_url'),
-    verified: t.bool('verified').notNull().default(false),
-    /** 1 = most popular. Null sorts last. */
-    popularity_rank: integer('popularity_rank'),
-
-    // Auth probe results, cached so the connect UI knows which branch to render
-    // before the user clicks.
-    probed_auth_type: text('probed_auth_type', {
-      enum: ['none', 'oauth', 'credentials', 'unreachable', 'unknown'],
-    })
-      .notNull()
-      .default('unknown'),
-    probed_at: t.timestamp('probed_at'),
-    auth_server_origin: text('auth_server_origin'),
-
-    /**
-     * Registry lifecycle state, e.g. `active` or `deleted`.
-     *
-     * A real column rather than a blob key because the browse read filters on
-     * it: a withdrawn server left only in the blob still matches every query
-     * and, being curated, still sorts to the top of the catalog.
-     */
-    registry_status: text('registry_status'),
-
-    /**
-     * When a registry walk last returned this server.
-     *
-     * Stamped on every observation, including the `unchanged` fast path, so it
-     * answers "is this still published" rather than "when did this last
-     * change". A hard deletion leaves no record behind for a walk to notice, so
-     * a staleness sweep is the only way to reconcile one — and the column has to
-     * exist from the start, because adding it later leaves every row NULL and
-     * unable to distinguish "never observed" from "the registry dropped it".
-     */
-    last_registry_seen_at: t.timestamp('last_registry_seen_at'),
-
-    data: t.json<MCPCatalogEntryData>('data').notNull(),
-  },
-  (table) => ({
-    nameIdx: uniqueIndex('mcp_catalog_entries_name_unique').on(table.name),
-    categoryIdx: index('mcp_catalog_entries_category_idx').on(table.category),
-    popularityIdx: index('mcp_catalog_entries_popularity_idx').on(table.popularity_rank),
-    probedAtIdx: index('mcp_catalog_entries_probed_at_idx').on(table.probed_at),
   })
 );
 
@@ -2343,6 +2247,9 @@ export const kbDocuments = sqliteTable(
     updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    updated_by_session_id: text('updated_by_session_id', { length: 36 }),
+    updated_by_agentic_tool: text('updated_by_agentic_tool'),
+    updated_by_teammate_name: text('updated_by_teammate_name'),
     updated_at: t.timestamp('updated_at'),
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
@@ -2386,6 +2293,9 @@ export const kbDocumentVersions = sqliteTable(
     created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
     }),
+    created_by_session_id: text('created_by_session_id', { length: 36 }),
+    created_by_agentic_tool: text('created_by_agentic_tool'),
+    created_by_teammate_name: text('created_by_teammate_name'),
     created_at: t.timestamp('created_at').notNull(),
   },
   (table) => ({
@@ -2676,8 +2586,6 @@ export type BoardOwnerRow = typeof boardOwners.$inferSelect;
 export type BranchGroupGrantInsert = typeof branchGroupGrants.$inferInsert;
 export type MCPServerRow = typeof mcpServers.$inferSelect;
 export type MCPServerInsert = typeof mcpServers.$inferInsert;
-export type MCPCatalogEntryRow = typeof mcpCatalogEntries.$inferSelect;
-export type MCPCatalogEntryInsert = typeof mcpCatalogEntries.$inferInsert;
 export type SessionMCPServerRow = typeof sessionMcpServers.$inferSelect;
 export type SessionMCPServerInsert = typeof sessionMcpServers.$inferInsert;
 export type SessionEnvSelectionRow = typeof sessionEnvSelections.$inferSelect;

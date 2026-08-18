@@ -36,8 +36,7 @@ export function registerExecutorClientHooks(client: AgorClient): void {
         async (context) => {
           const path = String(context.path);
           const isTranscriptWrite =
-            (path === 'messages' && (context.method === 'create' || context.method === 'patch')) ||
-            (path === 'messages/bulk' && context.method === 'create');
+            path === 'messages' && (context.method === 'create' || context.method === 'patch');
           if (!isTranscriptWrite) return context;
 
           let byteSize: number;

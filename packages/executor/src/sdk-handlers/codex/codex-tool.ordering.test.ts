@@ -76,7 +76,8 @@ describe('CodexTool ordered transcript persistence', () => {
       }),
     };
     const messagesRepo = {
-      findBySessionId: vi.fn().mockResolvedValue([]),
+      findInitialUserMessagesByTaskId: vi.fn().mockResolvedValue([]),
+      getNextIndexBySessionId: vi.fn().mockResolvedValue(0),
     } as unknown as MessagesRepository;
     const sessionsRepo = {
       findById: vi.fn().mockResolvedValue(null),

@@ -20,16 +20,42 @@ import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
+  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
+  ProjectOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Divider,
+  Input,
+  List,
+  Modal,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
+import { McpLogo } from '../McpLogo';
+import { ToolIcon } from '../ToolIcon';
+
+/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
+const PERSONA_ICONS: Record<string, ReactNode> = {
+  developer: <CodeOutlined />,
+  pm: <ProjectOutlined />,
+  lead: <TeamOutlined />,
+  solo: <ThunderboltOutlined />,
+};
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -67,11 +93,23 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
 
+// Prefilled so the required workspace step never blocks on an empty field; the
+// user can rename it. Named the teammate and the board the wizard creates.
+const DEFAULT_TEAMMATE_NAME = 'Scout';
+
+// Surfaced when the workspace step needs the API but the socket client isn't
+// available. That step is required and has no Skip, so a bare early return
+// would leave its only button doing nothing at all.
+const NO_CLIENT_BOARD_ERROR =
+  "Can't reach the server right now - check your connection and try again.";
+
+// The workspace step creates the user's board + first teammate, so it is NOT
+// skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   persona: { number: 1, label: 'You', skippable: true },
   llm: { number: 2, label: 'AI', skippable: true },
-  workspace: { number: 3, label: 'Workspace', skippable: true },
-  integrations: { number: 4, label: 'Tools', skippable: true },
+  workspace: { number: 3, label: 'Workspace', skippable: false },
+  integrations: { number: 4, label: 'Tools', skippable: false },
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
@@ -80,7 +118,6 @@ const PERSONAS = ONBOARDING_PERSONAS;
 interface LlmOption {
   id: string;
   agent: AgenticToolName;
-  symbol: string;
   provider: string;
   title: string;
   description: string;
@@ -94,7 +131,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'claude',
     agent: 'claude-code',
-    symbol: '✦',
     provider: 'Anthropic',
     title: 'Claude',
     description: 'Best for complex coding, long context, and nuanced reasoning',
@@ -106,7 +142,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'openai',
     agent: 'codex',
-    symbol: '⬡',
     provider: 'OpenAI',
     title: 'GPT',
     description: 'Fast and strong at structured reasoning and code generation',
@@ -117,7 +152,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'gemini',
     agent: 'gemini',
-    symbol: '◈',
     provider: 'Google',
     title: 'Gemini',
     description: 'Excellent at multimodal tasks and very long context windows',
@@ -128,7 +162,6 @@ const LLM_OPTIONS: LlmOption[] = [
   {
     id: 'custom',
     agent: 'opencode',
-    symbol: openCodeOnboarding.symbol,
     provider: '',
     title: openCodeOnboarding.title,
     description: openCodeOnboarding.description,
@@ -141,20 +174,16 @@ const LLM_OPTIONS: LlmOption[] = [
 interface McpRecommendation {
   id: string;
   name: string;
-  emoji: string;
   description: string;
   docsUrl: string;
   featured?: boolean;
 }
-
-const MCP_DOCS_URL = 'https://agor.live/docs/mcp';
 
 const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
   developer: [
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -163,21 +192,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'sentry',
       name: 'Sentry',
-      emoji: '🚨',
       description: 'Let your AI read error traces and fix bugs straight from the issue.',
       docsUrl: 'https://agor.live/docs/mcp/sentry',
     },
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -186,7 +212,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -195,21 +220,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description: 'Pull customer context into sessions - your AI knows who you are building for.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
     },
     {
       id: 'amplitude',
       name: 'Amplitude',
-      emoji: '📈',
       description: 'Ask your AI what the data says without writing a single query.',
       docsUrl: 'https://agor.live/docs/mcp/amplitude',
     },
     {
       id: 'figma',
       name: 'Figma',
-      emoji: '🎨',
       description: 'Read design files and write feedback without switching tabs.',
       docsUrl: 'https://agor.live/docs/mcp/figma',
     },
@@ -218,7 +240,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -227,7 +248,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -235,7 +255,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description:
         'See what is in progress, what is blocked, and what shipped - without chasing updates.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
@@ -243,7 +262,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'datadog',
       name: 'Datadog',
-      emoji: '🐕',
       description: 'Get a live health read on your systems without pinging the on-call engineer.',
       docsUrl: 'https://agor.live/docs/mcp/datadog',
     },
@@ -252,7 +270,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -261,21 +278,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, push commits, and manage your repos hands-free.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'stripe',
       name: 'Stripe',
-      emoji: '💳',
       description: 'Ask your AI what revenue looks like today - no dashboard needed.',
       docsUrl: 'https://agor.live/docs/mcp/stripe',
     },
     {
       id: 'hubspot',
       name: 'HubSpot',
-      emoji: '🟠',
       description:
         'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
       docsUrl: 'https://agor.live/docs/mcp/hubspot',
@@ -285,7 +299,6 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'slack',
       name: 'Slack',
-      emoji: '💬',
       description:
         'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
       docsUrl: 'https://agor.live/docs/mcp/slack',
@@ -294,21 +307,18 @@ const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
     {
       id: 'github',
       name: 'GitHub',
-      emoji: '🐙',
       description: 'Open PRs, review code, and sync issues automatically.',
       docsUrl: 'https://agor.live/docs/mcp/github',
     },
     {
       id: 'linear',
       name: 'Linear',
-      emoji: '🎯',
       description: 'Pick up issues and update status automatically.',
       docsUrl: 'https://agor.live/docs/mcp/linear',
     },
     {
       id: 'notion',
       name: 'Notion',
-      emoji: '📝',
       description: 'Write and update docs as your AI works.',
       docsUrl: 'https://agor.live/docs/mcp/notion',
     },
@@ -555,7 +565,7 @@ export function OnboardingWizard({
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
-  const [teammateName, setTeammateName] = useState('');
+  const [teammateName, setTeammateName] = useState(DEFAULT_TEAMMATE_NAME);
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
@@ -586,7 +596,7 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
-    setTeammateName('');
+    setTeammateName(DEFAULT_TEAMMATE_NAME);
     setTeammateEmoji('🤖');
     setCreatedBoardId(null);
     setBoardError(null);
@@ -636,7 +646,7 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    setTeammateName('');
+    setTeammateName(DEFAULT_TEAMMATE_NAME);
     setCreatedBoardId(null);
   }, [open, user]);
 
@@ -790,7 +800,7 @@ export function OnboardingWizard({
       }
       case 'workspace':
         if (boardVerifying) return false;
-        return hasExistingBoard || teammateName.trim().length > 0;
+        return teammateName.trim().length > 0;
       case 'integrations':
         return true;
       case 'done':
@@ -806,7 +816,6 @@ export function OnboardingWizard({
     apiKey,
     authMethod,
     boardVerifying,
-    hasExistingBoard,
     teammateName,
   ]);
 
@@ -835,7 +844,6 @@ export function OnboardingWizard({
       }
       case 'workspace':
         if (boardVerifying) return null;
-        if (hasExistingBoard) return null;
         return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
       default:
         return null;
@@ -850,7 +858,6 @@ export function OnboardingWizard({
     apiKey,
     authMethod,
     boardVerifying,
-    hasExistingBoard,
     teammateName,
     llmSaving,
     boardCreating,
@@ -859,7 +866,7 @@ export function OnboardingWizard({
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return selectedPersona ? 'This is me →' : 'Continue →';
+        return 'Continue →';
       case 'llm': {
         if (
           selectedAgent &&
@@ -871,17 +878,15 @@ export function OnboardingWizard({
         return 'Connect →';
       }
       case 'workspace':
-        return hasExistingBoard ? 'Keep going →' : 'Continue →';
+        return 'Continue →';
       case 'integrations':
-        return 'Connect when done →';
+        return 'Continue →';
       case 'done':
         return completing ? 'Setting up your AI teammate…' : 'Open my board →';
     }
   }, [
     currentStep,
     completing,
-    hasExistingBoard,
-    selectedPersona,
     selectedAgent,
     agentHasKey,
     llmAuthVerified,
@@ -937,8 +942,18 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (currentStep === 'done') return;
+    // Skipping the LLM step must not leave a merely *highlighted* provider
+    // behind. Selecting a card sets `selectedAgent` before any key is entered,
+    // and completion reads a non-null agent as "there is a model to run on" —
+    // which would bootstrap the teammate's first session with no credentials.
+    // Clear it unless the provider is genuinely configured.
+    if (currentStep === 'llm' && selectedAgent && !agentHasKey(selectedAgent)) {
+      setSelectedAgent(null);
+      setApiKey('');
+      setLlmError(null);
+    }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
 
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
@@ -1017,11 +1032,39 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        if (hasExistingBoard) {
+        if (!teammateName.trim()) return;
+        // Board created earlier this pass (Back → edit → forward): rename the
+        // same board instead of creating a duplicate.
+        if (createdBoardId) {
+          if (!client) {
+            setBoardError(NO_CLIENT_BOARD_ERROR);
+            return;
+          }
+          setBoardCreating(true);
+          setBoardError(null);
+          try {
+            await client
+              .service('boards')
+              .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
+            if (user) saveOnboardingProgress({ boardId: createdBoardId });
+            goToStep('integrations');
+          } catch (err) {
+            setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
+          } finally {
+            setBoardCreating(false);
+          }
+          return;
+        }
+        // A board the user already had before onboarding is theirs — carry the
+        // teammate name forward without renaming their board.
+        if (verifiedBoard) {
           goToStep('integrations');
           return;
         }
-        if (!client || !teammateName.trim()) return;
+        if (!client) {
+          setBoardError(NO_CLIENT_BOARD_ERROR);
+          return;
+        }
         setBoardCreating(true);
         setBoardError(null);
         try {
@@ -1088,7 +1131,6 @@ export function OnboardingWizard({
     authMethod,
     onCheckAuth,
     onUpdateUser,
-    hasExistingBoard,
     client,
     teammateName,
     teammateEmoji,
@@ -1221,7 +1263,9 @@ export function OnboardingWizard({
                   width: '100%',
                 }}
               >
-                <div style={{ fontSize: 24, marginBottom: 8 }}>{persona.emoji}</div>
+                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
+                  {PERSONA_ICONS[persona.id]}
+                </div>
                 <div
                   style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
                 >
@@ -1296,15 +1340,7 @@ export function OnboardingWizard({
                     gap: 12,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 20,
-                      flexShrink: 0,
-                      color: TEXT_SECONDARY,
-                    }}
-                  >
-                    {option.symbol}
-                  </span>
+                  <ToolIcon tool={option.agent} size={22} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
@@ -1605,124 +1641,64 @@ export function OnboardingWizard({
     <div>
       {renderStepBadge('Name your AI teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Give your AI teammate a name and an avatar. They get their own board to work on - you can
-        change everything anytime.
+        An AI teammate is your assistant for getting work done. Each board is recommended to have
+        one primary teammate — give yours a name and an avatar. You can change everything anytime.
       </Paragraph>
 
-      {/* Concept pills */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
-        {[
-          { emoji: '🌿', term: 'Branch', def: 'isolated workspace per task' },
-          { emoji: '💬', term: 'Session', def: 'conversation with your AI' },
-          { emoji: '📋', term: 'Board', def: 'kanban view of all branches' },
-        ].map(({ emoji, term, def }) => (
-          <div
-            key={term}
-            style={{
-              background:
-                'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)',
-              border: '1px solid rgba(255,255,255,0.13)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              borderRadius: 20,
-              padding: '4px 12px',
-              fontSize: 12,
-              color: TEXT_SECONDARY,
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09)',
-            }}
-          >
-            {emoji} <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> - {def}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div>
+          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
+            Teammate name
+          </Text>
+          <div style={{ display: 'flex', gap: 0 }}>
+            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
+            <Input
+              aria-label="Teammate name"
+              placeholder="e.g. Rusty, Ada, Scout…"
+              value={teammateName}
+              onChange={(e) => setTeammateName(e.target.value)}
+              style={{
+                background: 'rgba(0,0,0,0.3)',
+                borderColor: 'rgba(255,255,255,0.12)',
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                flex: 1,
+              }}
+            />
           </div>
-        ))}
+          {hasExistingBoard && (
+            <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
+              They'll join your existing board
+              {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
+            </Text>
+          )}
+        </div>
       </div>
 
-      {hasExistingBoard ? (
-        <div
+      {/* Glossary — reference text, not interactive */}
+      <Divider titlePlacement="start" plain style={{ margin: '24px 0 12px' }}>
+        <Text
           style={{
-            background: 'rgba(16,185,129,0.08)',
-            border: '1px solid rgba(16,185,129,0.25)',
-            borderRadius: 10,
-            padding: '14px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
+            color: TEXT_MUTED,
+            fontSize: 11,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
           }}
         >
-          <CheckCircleOutlined style={{ color: SUCCESS_GREEN, fontSize: 18 }} />
-          <div>
-            <Text style={{ color: SUCCESS_GREEN, fontWeight: 500, fontSize: 14 }}>
-              Board already set up
-            </Text>
-            <div>
-              <Text style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-                {verifiedBoard?.name || 'Your board is ready.'}
-              </Text>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div>
-            <Text
-              style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-            >
-              Teammate name
-            </Text>
-            <div style={{ display: 'flex', gap: 0 }}>
-              <EmojiPickerInput
-                value={teammateEmoji}
-                onChange={setTeammateEmoji}
-                defaultEmoji="🤖"
-              />
-              <Input
-                aria-label="Teammate name"
-                placeholder="e.g. Rusty, Ada, Scout…"
-                value={teammateName}
-                onChange={(e) => setTeammateName(e.target.value)}
-                style={{
-                  background: 'rgba(0,0,0,0.3)',
-                  borderColor: 'rgba(255,255,255,0.12)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                  flex: 1,
-                }}
-              />
-            </div>
-          </div>
-          {(() => {
-            const chosenOption = LLM_OPTIONS.find((o) => o.agent === selectedAgent);
-            return (
-              <div
-                style={{
-                  background: GLASS_CARD_BG,
-                  border: GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  boxShadow: GLASS_CARD_SHADOW,
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                  display: 'flex',
-                  gap: 10,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
-                <div>
-                  <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                    Board's AI tool
-                  </Text>
-                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
-                    Each board runs on one AI tool for every session created here.
-                    {chosenOption
-                      ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
-                      : ' Connect your AI in the previous step.'}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-      )}
+          Quick reference
+        </Text>
+      </Divider>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {[
+          { term: 'Branch', def: 'isolated workspace per task' },
+          { term: 'Session', def: 'conversation with your AI' },
+          { term: 'Board', def: 'kanban view of all branches' },
+        ].map(({ term, def }) => (
+          <Text key={term} style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
+            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
+          </Text>
+        ))}
+      </div>
 
       {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
     </div>
@@ -1732,91 +1708,61 @@ export function OnboardingWizard({
     const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
     return (
       <div>
-        {renderStepBadge('Connect your tools via MCP')}
+        {renderStepBadge('Recommended tools')}
 
-        {/* General MCP intro */}
+        {/* General MCP intro — plain helper text, not a card */}
         <div
           style={{
-            padding: '10px 14px',
             marginBottom: 16,
-            background: GLASS_CARD_BG,
-            border: GLASS_CARD_BORDER,
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            boxShadow: GLASS_CARD_SHADOW,
-            borderRadius: 10,
             fontSize: 12,
             color: TEXT_SECONDARY,
             lineHeight: 1.6,
           }}
         >
-          Agor connects your AI to external tools using{' '}
-          <Typography.Link
-            href={MCP_DOCS_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 12 }}
-          >
-            MCP (Model Context Protocol)
-          </Typography.Link>
-          . You set each one up yourself in{' '}
-          <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>Settings - MCP</span>. Here are the
-          ones that work well for you.
+          These are the tools we recommend for your work. You can connect any of them via MCP — just
+          ask your AI teammate to help set them up.
         </div>
 
-        {/* Persona-curated MCP recommendations — informational, no selection */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {recs.map((rec) => (
-            <div
-              key={rec.id}
-              style={{
-                background: GLASS_CARD_BG,
-                border: GLASS_CARD_BORDER,
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                borderRadius: 12,
-                boxShadow: GLASS_CARD_SHADOW,
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  padding: '12px 16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                }}
-              >
-                <span style={{ fontSize: 20, flexShrink: 0 }}>{rec.emoji}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
-                      {rec.name}
-                    </span>
-                    {rec.featured && (
-                      <Tag
-                        color="processing"
-                        style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
-                      >
-                        Recommended
-                      </Tag>
-                    )}
-                  </div>
-                  <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
-                    {rec.description}
-                  </div>
+        {/* Persona-curated MCP recommendations — informational list, no selection */}
+        <List
+          dataSource={recs}
+          renderItem={(rec) => (
+            <List.Item style={{ padding: '10px 4px', gap: 12 }}>
+              <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
+                    {rec.name}
+                  </span>
+                  {rec.featured && (
+                    <Tag
+                      color="processing"
+                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
+                    >
+                      Recommended
+                    </Tag>
+                  )}
+                </div>
+                <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
+                  {rec.description}
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            </List.Item>
+          )}
+        />
       </div>
     );
   };
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    const workspaceReady = hasExistingBoard;
+    // The checklist sits under "You're ready to build.", the one place in the
+    // wizard that should sound like a welcome, so it names the teammate. The
+    // wizard itself has only created/confirmed the board here — the teammate is
+    // seeded by the app shell right after this step resolves, best-effort — but
+    // the friendlier word is the deliberate call. The board still gates it:
+    // without one there is nowhere to seed a teammate into.
+    const teammateReady = hasExistingBoard;
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1894,7 +1840,11 @@ export function OnboardingWizard({
         <Paragraph
           style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
         >
-          Open your board to start your first AI session.
+          {/* Without a model there is no first session to open — the completion
+              handler deliberately stops at the board. Don't promise one. */}
+          {aiConnected
+            ? 'Open your board to start your first AI session.'
+            : 'Open your board to get started. Connect an AI model in Settings whenever you are ready.'}
         </Paragraph>
 
         {/* Summary checklist */}
@@ -1918,9 +1868,9 @@ export function OnboardingWizard({
               hint: 'Add in Settings - AI & Agents',
             },
             {
-              label: 'Workspace ready',
-              done: workspaceReady,
-              hint: 'Create a board in Settings',
+              label: 'Teammate ready',
+              done: teammateReady,
+              hint: 'Create a board anytime from the sidebar',
             },
             {
               label: 'MCP tools',

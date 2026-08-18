@@ -53,6 +53,6 @@ export const guideNavigation: Record<string, NavigationItem> = {
   'daemon-ha': 'Daemon High Availability',
   'multi-tenant-filesystem': 'Multi-Tenant Filesystem',
   'tenant-data-portability': 'Tenant Data Portability',
-  'multiplayer-unix-isolation': 'Full Multiplayer Mode',
+  'multiplayer-unix-isolation': 'Execution Isolation',
   'containerized-execution': 'Containerized Execution',
 };

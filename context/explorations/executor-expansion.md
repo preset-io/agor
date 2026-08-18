@@ -1,5 +1,10 @@
 # Executor Expansion: Unified Isolation Pivot Point
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🔬 Exploration → Design
 **Created:** 2025-12-17
 **Target:** Agor Cloud + Agor Local
@@ -924,14 +929,15 @@ agor ALL=(root) NOPASSWD: /usr/bin/chgrp -R agor_* *
 
 ### Current State
 
-- `session_serialization false` in config (deliberately disabled)
+- `session_serialization true` with bounded viewport/scrollback resurrection
 - Daemon spawns PTY connected to Zellij directly
-- Session lost if daemon restarts
-- Concern was "stale tabs reappear after deletion"
+- Live PIDs and in-memory shell state are lost if the owning runtime dies
+- Serialized state lives under the effective user's home cache
 
 ### Target State
 
 - Enable `session_serialization true` - embrace serialization
+- Enable viewport serialization with a bounded 1,000-line scrollback
 - Executor attaches to Zellij session
 - Executor exits when modal closes (PTY disconnects)
 - Zellij automatically serializes session to disk
@@ -945,11 +951,10 @@ agor ALL=(root) NOPASSWD: /usr/bin/chgrp -R agor_* *
 // Enable session persistence - executor model embraces this
 session_serialization true
 
-// Store sessions in AGOR_DATA_HOME (shared storage for k8s)
-session_folder "/data/agor/zellij/sessions"
-
-// Scrollback is serialized up to this limit
-scroll_buffer_size 10000
+pane_viewport_serialization true
+scrollback_lines_to_serialize 1000
+serialization_interval 1
+on_force_close "quit"
 ```
 
 Note: `serialize_on_disconnect` is not a real Zellij option - serialization happens automatically when enabled.
@@ -1055,17 +1060,20 @@ Note: `serialize_on_disconnect` is not a real Zellij option - serialization happ
 
 ### Phase 5: Zellij Integration (2 weeks)
 
-**Goal:** Zellij sessions via executor with persistence
+**Goal:** Zellij sessions via executor with bounded home-backed resurrection
 
-- [ ] Enable `session_serialization` in Zellij config
-- [ ] Configure `session_folder` to AGOR_DATA_HOME/zellij
-- [ ] Add `zellij.attach` command handler
-  - [ ] Feathers auth, env var resolution
-  - [ ] Zellij session attach/create
-  - [ ] PTY connection back to daemon
-- [ ] Update TerminalsService to spawn executor
-- [ ] Test session survival across executor restarts
-- [ ] Update Zellij config deployment (Docker, k8s)
+- [x] Enable layout, viewport, and bounded scrollback serialization
+- [x] Keep serialization in Zellij's effective-user home cache
+- [x] Put the live socket directory under that same home for supported
+      same-host replicas (`ZELLIJ_SOCKET_DIR`); do not treat it as cross-host IPC
+- [x] Add `zellij.attach` command handler
+  - [x] Feathers auth, env var resolution
+  - [x] Stable tenant/user/branch session create-or-attach
+  - [x] PTY connection back to daemon
+- [x] Update TerminalsService to spawn executor
+- [x] Test resurrection after executor/daemon replacement separately from PTY
+      transport persistence
+- [x] Update Docker and Unix-integration Zellij defaults
 
 ### Phase 6: Remote Execution Template (2 weeks)
 
@@ -1228,11 +1236,14 @@ AGOR_DAEMON_HOST=0.0.0.0
 
 **Decision:** Enable `session_serialization true` in Zellij config.
 
-Zellij handles serialization automatically - we just enable the flag and set the session folder:
+Zellij handles serialization automatically in the effective user's home cache:
 
 ```kdl
 session_serialization true
-session_folder "/data/agor/zellij/sessions"  // Under AGOR_DATA_HOME
+pane_viewport_serialization true
+scrollback_lines_to_serialize 1000
+serialization_interval 1
+on_force_close "quit"
 ```
 
 The previous concern ("stale tabs reappear after deletion") was because we were fighting serialization. With the executor model, we embrace it:
@@ -1241,7 +1252,9 @@ The previous concern ("stale tabs reappear after deletion") was because we were 
 - Zellij serializes current state to disk
 - Next attach restores from serialized state
 
-Zellij serializes: tab layout, pane arrangement, scroll buffer (limited by `scroll_buffer_size`).
+Zellij serializes the tab/pane layout, cwd, viewport, and bounded scrollback. It
+does not restore live PIDs, shell variables, or a running process exactly where
+it stopped.
 
 ### D2: Transaction Boundaries (Executor Does Everything)
 

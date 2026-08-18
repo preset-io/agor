@@ -1566,6 +1566,37 @@ describe('createBranchAsClone', () => {
       .catch(() => false);
     expect(alternatesExists).toBe(false);
   });
+
+  it('falls back to a plain clone when referencePath is a shallow repository', async () => {
+    await seedRemoteWithBranches();
+
+    const shallowReference = path.join(tempDir, 'shallow-reference');
+    await simpleGit().clone(`file://${remoteDir}`, shallowReference, [
+      '--branch',
+      'main',
+      '--single-branch',
+      '--depth',
+      '1',
+    ]);
+    expect((await simpleGit(shallowReference).revparse(['--is-shallow-repository'])).trim()).toBe(
+      'true'
+    );
+
+    const targetPath = path.join(tempDir, 'wt-shallow-reference');
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      referencePath: shallowReference,
+    });
+
+    expect(result.ref).toBe('main');
+    const alternatesExists = await fs
+      .access(path.join(targetPath, '.git', 'objects', 'info', 'alternates'))
+      .then(() => true)
+      .catch(() => false);
+    expect(alternatesExists).toBe(false);
+  });
 });
 
 describe('categorizeGitError', () => {

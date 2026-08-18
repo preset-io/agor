@@ -30,6 +30,7 @@ import {
 import { getTimeMs } from '../../utils/entityTime';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { getBoardEmoji } from '../BoardTile';
 import { BoardPill, BranchPill, SessionPill, TeammatePill, UserPill } from '../Pill';
 import { glassCardStyle } from './homeStyles';
 import type { HomePageProps } from './types';
@@ -84,6 +85,7 @@ const ActivityRow = memo(function ActivityRow({
   session,
   branch,
   board,
+  boardEmoji,
   actor,
   onBoardClick,
   onBranchClick,
@@ -94,6 +96,7 @@ const ActivityRow = memo(function ActivityRow({
   session?: Session;
   branch?: Branch;
   board?: Board;
+  boardEmoji?: string;
   actor?: User;
 }) {
   const { token } = theme.useToken();
@@ -146,6 +149,7 @@ const ActivityRow = memo(function ActivityRow({
             <Text type="secondary">on</Text>
             <BoardPill
               board={board}
+              emoji={boardEmoji}
               compact
               onClick={() => onBoardClick(board.board_id)}
               style={CLICKABLE_PILL_STYLE}
@@ -186,6 +190,7 @@ const ActivityRow = memo(function ActivityRow({
             <Text type="secondary">on</Text>
             <BoardPill
               board={board}
+              emoji={boardEmoji}
               compact
               onClick={() => onBoardClick(board.board_id)}
               style={CLICKABLE_PILL_STYLE}
@@ -355,6 +360,7 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
                     session={session}
                     branch={branch}
                     board={board}
+                    boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
                     actor={actor}
                     onBoardClick={onBoardClick}
                     onBranchClick={onBranchClick}
@@ -371,6 +377,7 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
                   dttm={item.dttm}
                   branch={branch}
                   board={board}
+                  boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
                   actor={actor}
                   onBoardClick={onBoardClick}
                   onBranchClick={onBranchClick}

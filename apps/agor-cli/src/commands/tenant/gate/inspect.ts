@@ -28,6 +28,7 @@ import {
 const EXIT_CONTINUITY_FAILED = 3;
 
 export default class TenantGateInspect extends Command {
+  static override summary = 'Inspect a tenant write gate';
   static override description =
     "Inspect a tenant's write gate. With --expect-generation, also verify the gate is still held at " +
     'that exact generation (fail-closed on loss or replacement); exit 3 if not. PostgreSQL-only.';

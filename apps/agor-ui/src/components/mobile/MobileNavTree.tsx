@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { BoardCollapse } from '../BoardCollapse';
+import { getBoardEmoji } from '../BoardTile';
 
 const { Text } = Typography;
 
@@ -100,6 +101,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
           return {
             key: board.board_id,
             board,
+            emoji: getBoardEmoji(board, branchById),
             badge: (
               <Space size={8}>
                 <Badge

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -8,8 +8,8 @@ import {
   getAgenticToolSelectionManifestPath,
   inspectManagedAgenticToolAlignment,
 } from '@agor/core/agentic-integrations';
-import { load as loadYaml } from '@agor/core/yaml';
-import { spawn as spawnPty } from 'node-pty';
+import { dump as dumpYaml, load as loadYaml } from '@agor/core/yaml';
+import { spawn as spawnPty } from '@lydell/node-pty';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertInitSupportsConfiguredDatabase,
@@ -87,6 +87,8 @@ function createInitEnvironment(
   // must resolve daemon status only from the fixture's HOME/config, exactly as
   // a fresh shell would.
   delete env.DAEMON_URL;
+  delete env.AGOR_API_KEY;
+  delete env.AGOR_DEPLOYMENT_ID;
   delete env.PORT;
   delete env.AGOR_CONFIG_PATH;
   return env as Record<string, string>;
@@ -94,20 +96,23 @@ function createInitEnvironment(
 
 async function runInteractiveInit(
   home: string,
-  fixtureBin: string
+  fixtureBin: string,
+  managedTools = true
 ): Promise<{
   exitCode: number;
   output: string;
 }> {
   const cliRoot = join(import.meta.dirname, '..', '..');
   const tsxCli = fileURLToPath(import.meta.resolve('tsx/cli'));
+  const env = createInitEnvironment(home, {
+    PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}`,
+  });
+  if (!managedTools) delete env.AGOR_MANAGED_AGENTIC_TOOLS;
   const terminal = spawnPty(process.execPath, [tsxCli, join(cliRoot, 'bin', 'dev.ts'), 'init'], {
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: createInitEnvironment(home, {
-      PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}`,
-    }),
+    env,
   });
 
   let output = '';
@@ -172,12 +177,44 @@ async function runInitWithoutPty(
     output += data;
   });
   return await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (exitCode) => resolve({ exitCode, output: stripTerminalControl(output) }));
+    let timedOut = false;
+    let forceKill: NodeJS.Timeout | undefined;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+      forceKill.unref();
+    }, 20_000);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      reject(error);
+    });
+    child.once('close', (exitCode) => {
+      clearTimeout(timeout);
+      if (forceKill) clearTimeout(forceKill);
+      if (timedOut) {
+        reject(
+          new Error(`Timed out waiting for noninteractive init:\n${stripTerminalControl(output)}`)
+        );
+      } else {
+        resolve({ exitCode, output: stripTerminalControl(output) });
+      }
+    });
   });
 }
 
-async function runInteractiveReinit(home: string): Promise<{
+async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve()))
+  );
+}
+
+async function runInteractiveReinit(
+  home: string,
+  fixtureBin?: string
+): Promise<{
   exitCode: number;
   output: string;
 }> {
@@ -187,12 +224,15 @@ async function runInteractiveReinit(home: string): Promise<{
     cwd: cliRoot,
     cols: 100,
     rows: 40,
-    env: createInitEnvironment(home),
+    env: createInitEnvironment(home, {
+      ...(fixtureBin ? { PATH: `${fixtureBin}${delimiter}${process.env.PATH ?? ''}` } : {}),
+    }),
   });
 
   let output = '';
-  let confirmedDeletion = false;
+  let selectedReinitAction = false;
   let skippedAdmin = false;
+  let selectedTools = false;
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       terminal.kill();
@@ -203,13 +243,19 @@ async function runInteractiveReinit(home: string): Promise<{
     terminal.onData((data) => {
       output += data;
       const plain = stripTerminalControl(output);
-      if (!confirmedDeletion && plain.includes('Delete all existing data and re-initialize?')) {
-        confirmedDeletion = true;
-        terminal.write('y\r');
+      if (!selectedReinitAction && plain.includes('How would you like to re-initialize?')) {
+        selectedReinitAction = true;
+        // Accept the recommended backup-and-reinitialize action.
+        terminal.write('\r');
       }
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
         terminal.write('n\r');
+      }
+      if (!selectedTools && plain.includes('Which agentic tools should this deployment support?')) {
+        selectedTools = true;
+        // Move from Claude Code to Codex, select it, then submit.
+        terminal.write('\u001B[B \r');
       }
     });
     terminal.onExit(({ exitCode }) => {
@@ -236,6 +282,7 @@ describe('safe init state detection', () => {
     expect(
       isFreshInitState({
         baseExists: true,
+        configExists: false,
         databaseExists: false,
         reposExist: false,
         branchesExist: false,
@@ -247,9 +294,22 @@ describe('safe init state detection', () => {
     expect(
       isFreshInitState({
         baseExists: true,
+        configExists: true,
         databaseExists: true,
         reposExist: true,
         branchesExist: true,
+      })
+    ).toBe(false);
+  });
+
+  it('treats a config-only directory as an existing deployment boundary', () => {
+    expect(
+      isFreshInitState({
+        baseExists: true,
+        configExists: true,
+        databaseExists: false,
+        reposExist: false,
+        branchesExist: false,
       })
     ).toBe(false);
   });
@@ -300,6 +360,19 @@ describe('initial agentic tool selection', () => {
     }
   );
 
+  it('rejects --local instead of mixing per-directory data with global config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-local-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    await mkdir(home);
+
+    const result = await runInitWithoutPty(home, ['--local']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.output).toContain('agor init --local` is no longer supported');
+    await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30_000);
+
   it('rejects a non-TTY interactive invocation before creating partial state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-nontty-'));
     temporaryDirectories.push(root);
@@ -311,7 +384,7 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('Interactive `agor init` requires a TTY');
     await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 30_000);
 
   it('requires an explicit fresh headless policy before creating partial state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-headless-'));
@@ -324,54 +397,71 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode).toBe(2);
     expect(result.output).toContain('requires an explicit agentic-tool policy');
     await expect(access(join(home, '.agor'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 30_000);
 
   it('refuses to unlink a live daemon database, then safely re-initializes after it stops', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-reinit-pty-'));
     temporaryDirectories.push(root);
     const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
     await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
 
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('{"status":"ok"}');
+      response.end('{"service":"agor-daemon","status":"ok"}');
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Test server has no TCP port');
 
-    const firstInit = await runInitWithoutPty(home, [
-      '--non-interactive',
-      '--agentic-tools',
-      'none',
-      '--daemon-host',
-      '127.0.0.1',
-      '--daemon-port',
-      String(address.port),
-    ]);
-    expect(firstInit.exitCode, firstInit.output).toBe(0);
+    try {
+      const firstInit = await runInitWithoutPty(home, [
+        '--non-interactive',
+        '--agentic-tools',
+        'none',
+        '--daemon-host',
+        '127.0.0.1',
+        '--daemon-port',
+        String(address.port),
+      ]);
+      expect(firstInit.exitCode, firstInit.output).toBe(0);
+      const originalConfig = loadYaml(
+        await readFile(join(home, '.agor', 'config.yaml'), 'utf8')
+      ) as { daemon?: { deployment_id?: string; jwtSecret?: string } };
 
-    const refused = await runInteractiveReinit(home);
-    expect(refused.exitCode, refused.output).toBe(2);
-    expect(refused.output).toContain('The Agor daemon is running');
-    expect(refused.output).toContain('agor daemon stop');
-    await expect(access(join(home, '.agor', 'agor.db'))).resolves.toBeUndefined();
+      const refused = await runInteractiveReinit(home, fixtureBin);
+      expect(refused.exitCode, refused.output).toBe(2);
+      expect(refused.output).toContain('The Agor daemon is running');
+      expect(refused.output).toContain('agor daemon stop');
+      await expect(access(join(home, '.agor', 'agor.db'))).resolves.toBeUndefined();
 
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve()))
-    );
-    await writeFile(join(home, '.agor', 'agor.db-wal'), 'stale WAL fixture');
-    await writeFile(join(home, '.agor', 'agor.db-shm'), 'stale SHM fixture');
+      await closeServer(server);
+      await writeFile(join(home, '.agor', 'agor.db-wal'), 'stale WAL fixture');
+      await writeFile(join(home, '.agor', 'agor.db-shm'), 'stale SHM fixture');
 
-    const reinitialized = await runInteractiveReinit(home);
-    expect(reinitialized.exitCode, reinitialized.output).toBe(0);
-    expect(reinitialized.output).toContain('Migrations complete');
-    expect(reinitialized.output).toContain('Agor initialized successfully');
-    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
-      agentic_tools?: { installed?: string[] };
-    };
-    expect(config.agentic_tools?.installed).toEqual([]);
-  }, 40_000);
+      const reinitialized = await runInteractiveReinit(home, fixtureBin);
+      expect(reinitialized.exitCode, reinitialized.output).toBe(0);
+      expect(reinitialized.output).toContain('Migrations complete');
+      expect(reinitialized.output).toContain('Agor initialized successfully');
+      expect(reinitialized.output).toContain('Backing up existing installation');
+      expect(reinitialized.output).toContain(`Moved ${join(home, '.agor')} to`);
+      const backupDir = (await readdir(home)).find((entry) => entry.startsWith('.agor.bkp.'));
+      expect(backupDir).toBeDefined();
+      await expect(access(join(home, backupDir!, 'agor.db-wal'))).resolves.toBeUndefined();
+      await expect(access(join(home, backupDir!, 'agor.db-shm'))).resolves.toBeUndefined();
+      const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+        agentic_tools?: { installed?: string[] };
+        daemon?: { deployment_id?: string; jwtSecret?: string };
+      };
+      expect(config.agentic_tools?.installed).toEqual(['codex']);
+      expect(config.daemon?.deployment_id).toBeTruthy();
+      expect(config.daemon?.deployment_id).not.toBe(originalConfig.daemon?.deployment_id);
+      expect(config.daemon?.jwtSecret).not.toBe(originalConfig.daemon?.jwtSecret);
+    } finally {
+      await closeServer(server);
+    }
+  }, 60_000);
 
   it('drives the real CLI through a pseudo-TTY, persists declarative policy, and proves managed readiness', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-pty-'));
@@ -386,6 +476,8 @@ describe('initial agentic tool selection', () => {
     expect(result.exitCode, result.output).toBe(0);
     expect(result.output).toContain('Agentic tool packages');
     expect(result.output).toContain('Provider credentials are configured after the daemon starts.');
+    expect(result.output).toContain('Use ↑/↓ to move, Space to select, and Enter to continue.');
+    expect(result.output).not.toContain("Sandbox agents' filesystem access");
     expect(result.output).toContain('Select at least one agentic tool, or press Ctrl+C to exit.');
     expect(result.output).toContain('Configured: codex');
     expect(result.output).toContain('Codex installed');
@@ -408,6 +500,85 @@ describe('initial agentic tool selection', () => {
       else process.env.AGOR_AGENTIC_TOOLS_DIR = previousToolsDirectory;
     }
   }, 35_000);
+
+  it('always shows the tool selector for an interactive source/development init', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-source-tools-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const result = await runInteractiveInit(home, fixtureBin, false);
+
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Which agentic tools should this deployment support?');
+    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(config.agentic_tools?.installed).toEqual(['codex']);
+  }, 35_000);
+
+  it('backs up a config-only install so interactive tool changes persist in a fresh config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-config-only-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const firstInit = await runInitWithoutPty(home, [
+      '--non-interactive',
+      '--agentic-tools',
+      'none',
+    ]);
+    expect(firstInit.exitCode, firstInit.output).toBe(0);
+    await rm(join(home, '.agor', 'agor.db'), { force: true });
+    await rm(join(home, '.agor', 'repos'), { recursive: true, force: true });
+    await rm(join(home, '.agor', 'worktrees'), { recursive: true, force: true });
+
+    const result = await runInteractiveReinit(home, fixtureBin);
+
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Backing up existing installation');
+    expect(result.output).toContain('Re-initialization affects the entire installation');
+    expect(result.output).toContain('including config.yaml');
+    const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(config.agentic_tools?.installed).toEqual(['codex']);
+  }, 60_000);
+
+  it('prompts an upgraded local install for tools before destructive re-initialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-reinit-tools-'));
+    temporaryDirectories.push(root);
+    const home = join(root, 'home');
+    const fixtureBin = join(root, 'bin');
+    await mkdir(home, { recursive: true });
+    await writeFixtureNpm(fixtureBin);
+
+    const firstInit = await runInitWithoutPty(home, [
+      '--non-interactive',
+      '--agentic-tools',
+      'none',
+    ]);
+    expect(firstInit.exitCode, firstInit.output).toBe(0);
+
+    const configPath = join(home, '.agor', 'config.yaml');
+    const legacyConfig = loadYaml(await readFile(configPath, 'utf8')) as Record<string, unknown>;
+    delete legacyConfig.agentic_tools;
+    await writeFile(configPath, dumpYaml(legacyConfig), 'utf8');
+
+    const result = await runInteractiveReinit(home, fixtureBin);
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toContain('Which agentic tools should this deployment support?');
+    expect(result.output).toContain('Configured: codex');
+
+    const freshConfig = loadYaml(await readFile(configPath, 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(freshConfig.agentic_tools?.installed).toEqual(['codex']);
+  }, 60_000);
 
   it('preserves the declarative choice and prints one recovery command when install fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-init-pty-failure-'));

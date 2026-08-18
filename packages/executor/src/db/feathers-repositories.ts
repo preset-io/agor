@@ -14,14 +14,17 @@ import type {
   MCPServerFilters,
   MCPServerID,
   Message,
+  MessageCreate,
   MessageID,
   Repo,
   Session,
   SessionID,
   SessionMCPServer,
   SessionUpdate,
+  TaskID,
   User,
 } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 
 /**
  * Messages Repository - proxies to 'messages' Feathers service
@@ -29,32 +32,34 @@ import type {
 export class FeathersMessagesRepository {
   constructor(private client: AgorClient) {}
 
-  async findBySessionId(sessionId: SessionID): Promise<Message[]> {
-    const service = this.client.service('messages');
-    const result = await service.find({
+  /** The daemon may have pre-written the Task's prompt; fetch only that guard row. */
+  async findInitialUserMessagesByTaskId(taskId: TaskID): Promise<Message[]> {
+    const result = await this.client.service('messages').find({
       query: {
-        session_id: sessionId,
+        task_id: taskId,
+        role: MessageRole.USER,
         $sort: { index: 1 },
-        $limit: 10000,
+        $limit: 1,
       },
     });
     return Array.isArray(result) ? result : result.data;
   }
 
   /**
-   * Total messages in a session, without transferring any of them.
-   *
-   * `$limit: 0` makes the service answer from `total`, which counts the whole
-   * result set rather than the returned page — a page length stops being the
-   * count once a session exceeds the service's pagination limit.
+   * Next append index without transferring the session transcript. Indexes can
+   * be sparse after deletes, so row count is not a safe replacement for max+1.
    */
-  async countBySessionId(sessionId: SessionID): Promise<number> {
-    const service = this.client.service('messages');
-    const result = await service.find({
-      query: { session_id: sessionId, $limit: 0 },
+  async getNextIndexBySessionId(sessionId: SessionID): Promise<number> {
+    const result = await this.client.service('messages').find({
+      query: {
+        session_id: sessionId,
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
+      },
     });
-    if (Array.isArray(result)) return result.length;
-    return typeof result.total === 'number' ? result.total : 0;
+    const messages = Array.isArray(result) ? result : result.data;
+    return messages.length > 0 ? messages[0].index + 1 : 0;
   }
 
   async findById(messageId: MessageID): Promise<Message | null> {
@@ -66,9 +71,9 @@ export class FeathersMessagesRepository {
     }
   }
 
-  async create(message: Omit<Message, 'message_id'>): Promise<Message> {
+  async create(message: MessageCreate): Promise<Message> {
     const service = this.client.service('messages');
-    return await service.create(message as Partial<Message>);
+    return await service.create(message);
   }
 }
 

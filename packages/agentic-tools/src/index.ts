@@ -23,10 +23,10 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     apiKeyName: 'ANTHROPIC_API_KEY',
     authentication: 'api-key',
     keyCreationUrl: 'https://platform.claude.com/settings/keys',
+    billingUrl: 'https://platform.claude.com/settings/billing',
     capabilities: {
       supportsSessionFork: true,
       supportsChildSpawn: true,
-      supportsSessionImport: true,
       reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
       defaultReasoningEffort: 'high',
     },
@@ -40,7 +40,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: true,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
       reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
   }),
@@ -53,7 +52,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
   opencode: defineIntegration(OPENCODE_INTEGRATION),
@@ -66,7 +64,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
   cursor: defineIntegration({
@@ -78,7 +75,6 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
     capabilities: {
       supportsSessionFork: false,
       supportsChildSpawn: true,
-      supportsSessionImport: false,
     },
   }),
 }) satisfies AgenticToolIntegrationRegistry;
@@ -126,6 +122,14 @@ export const AGENTIC_TOOL_KEY_CREATION_URL = Object.freeze(
   Object.fromEntries(
     Object.values(AGENTIC_TOOL_INTEGRATIONS).flatMap((integration) =>
       integration.keyCreationUrl ? [[integration.name, integration.keyCreationUrl]] : []
+    )
+  ) as Partial<Record<AgenticToolName, string>>
+);
+
+export const AGENTIC_TOOL_BILLING_URL = Object.freeze(
+  Object.fromEntries(
+    Object.values(AGENTIC_TOOL_INTEGRATIONS).flatMap((integration) =>
+      integration.billingUrl ? [[integration.name, integration.billingUrl]] : []
     )
   ) as Partial<Record<AgenticToolName, string>>
 );

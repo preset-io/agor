@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,38 @@ export function getAgorHome(): string {
  */
 export function getPidFilePath(): string {
   return path.join(getAgorHome(), 'daemon.pid');
+}
+
+export function getDaemonIdentityFilePath(): string {
+  return path.join(getAgorHome(), 'daemon.instance');
+}
+
+export interface ManagedDaemonIdentity {
+  instanceId: string;
+  daemonUrl?: string;
+  configPath?: string;
+}
+
+export function getManagedDaemonIdentity(): ManagedDaemonIdentity | null {
+  try {
+    const value = fs.readFileSync(getDaemonIdentityFilePath(), 'utf8').trim();
+    if (!value) return null;
+    if (!value.startsWith('{')) return { instanceId: value };
+    const parsed = JSON.parse(value) as Partial<ManagedDaemonIdentity>;
+    return typeof parsed.instanceId === 'string' && parsed.instanceId
+      ? {
+          instanceId: parsed.instanceId,
+          ...(typeof parsed.daemonUrl === 'string' ? { daemonUrl: parsed.daemonUrl } : {}),
+          ...(typeof parsed.configPath === 'string' ? { configPath: parsed.configPath } : {}),
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getManagedDaemonInstanceId(): string | null {
+  return getManagedDaemonIdentity()?.instanceId ?? null;
 }
 
 /**
@@ -69,6 +102,8 @@ export function getDaemonPid(): number | null {
   } catch {
     // Process not found, clean up stale PID file
     fs.unlinkSync(pidFile);
+    const identityFile = getDaemonIdentityFilePath();
+    if (fs.existsSync(identityFile)) fs.unlinkSync(identityFile);
     return null;
   }
 }
@@ -81,7 +116,11 @@ export function getDaemonPid(): number | null {
  * @returns PID of started daemon
  * @throws Error if daemon already running or failed to start
  */
-export function startDaemon(daemonPath: string, extraEnv?: Record<string, string>): number {
+export function startDaemon(
+  daemonPath: string,
+  extraEnv?: Record<string, string>,
+  identity?: Omit<ManagedDaemonIdentity, 'instanceId'>
+): number {
   // Check if already running
   const existingPid = getDaemonPid();
   if (existingPid !== null) {
@@ -105,6 +144,7 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
   const logStream = fs.openSync(logFile, 'a');
 
   // Spawn daemon in detached mode
+  const managedInstanceId = randomUUID();
   const child = spawn('node', [daemonPath], {
     detached: true,
     stdio: ['ignore', logStream, logStream],
@@ -112,6 +152,7 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
       ...process.env,
       NODE_ENV: 'production',
       ...extraEnv,
+      AGOR_MANAGED_DAEMON_INSTANCE_ID: managedInstanceId,
     },
   });
 
@@ -120,6 +161,11 @@ export function startDaemon(daemonPath: string, extraEnv?: Record<string, string
 
   // Write PID file
   fs.writeFileSync(getPidFilePath(), child.pid!.toString());
+  fs.writeFileSync(
+    getDaemonIdentityFilePath(),
+    JSON.stringify({ instanceId: managedInstanceId, ...identity } satisfies ManagedDaemonIdentity),
+    { mode: 0o600 }
+  );
 
   // Close log stream (child process keeps it open)
   fs.closeSync(logStream);
@@ -177,6 +223,8 @@ export function stopDaemon(): boolean {
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile);
     }
+    const identityFile = getDaemonIdentityFilePath();
+    if (fs.existsSync(identityFile)) fs.unlinkSync(identityFile);
 
     return true;
   } catch (error) {

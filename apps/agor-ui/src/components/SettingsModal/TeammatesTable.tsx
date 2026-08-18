@@ -1,4 +1,11 @@
-import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type {
+  Board,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  Session,
+  User,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, Popover, Space, Table, Tooltip, Typography, theme } from 'antd';
@@ -17,13 +24,7 @@ interface TeammatesTableProps {
   boardById: Map<string, Board>;
   sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onRowClick?: (branch: Branch) => void;
   onCreateTeammate?: () => void;
   /** Close the parent Settings modal so the canvas isn't obscured by

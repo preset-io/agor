@@ -1,4 +1,5 @@
 import {
+  createTenantScopedDatabaseProxy,
   getCurrentTenantDatabase,
   getCurrentTenantId,
   type KnowledgeEmbeddingRoutingCursor,
@@ -34,6 +35,24 @@ describe('Knowledge embedding topology defaults', () => {
 });
 
 describe('Knowledge embedding routing traversal', () => {
+  it('inspects a guarded PostgreSQL handle without opening a tenant unit', async () => {
+    const db = createTenantScopedDatabaseProxy({ transaction: vi.fn() } as never, {
+      requireScope: true,
+      label: 'guarded Knowledge indexer database',
+    });
+    const indexer = new KnowledgeEmbeddingIndexer(db, {
+      distributedMode: true,
+      discoverHighWater: async () => ({
+        createdAt: '2030-01-01T00:00:00.000Z',
+        tenantId: 'tenant-a',
+        unitId: 'unit-a' as never,
+      }),
+      discover: async () => ({ refs: [], nextCursor: null }),
+    });
+
+    await expect(indexer.checkOnce()).resolves.toMatchObject({ candidates: 0, failures: 0 });
+  });
+
   it('holds one high-water through every page and snapshots a new one only after wrap', async () => {
     const highWaterA: KnowledgeEmbeddingRoutingCursor = {
       createdAt: '2030-01-01T00:00:00.000Z',

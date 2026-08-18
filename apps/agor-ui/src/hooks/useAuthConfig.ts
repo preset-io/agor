@@ -38,14 +38,19 @@ export interface FeaturesConfig {
    * Defaults to true when the daemon config key is unset.
    */
   webTerminal?: boolean;
+  /** Process/runtime ownership contract advertised by the daemon. */
+  webTerminalCapability?: {
+    enabled: boolean;
+    mode: 'owner-local-ephemeral' | 'disabled';
+    reason?: string;
+  };
   /**
    * How managed environment lifecycle fields are handled by this instance.
    * Defaults to 'hybrid': shell commands and URL webhooks are both supported.
    */
   managedEnvsExecutionMode?: ManagedEnvExecutionMode;
   /**
-   * True when the daemon runs in a multi-user Unix isolation mode
-   * (insulated/strict). The UI uses this to hide "trust everyone on this
+   * True when the daemon enforces the local multi-user filesystem sandbox. The UI uses this to hide "trust everyone on this
    * instance" surfaces (e.g. the `instance` scope option in the artifact
    * consent modal). Server-side gates are the source of truth.
    */

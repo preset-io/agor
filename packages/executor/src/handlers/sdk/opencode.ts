@@ -73,8 +73,11 @@ export async function executeOpenCodeTask(params: {
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;
     if (!branch?.path) throw new Error('OpenCode requires an Agor branch working directory');
 
-    const messages = await repos.messages.findBySessionId(sessionId);
-    await createUserMessage(sessionId, prompt, taskId, messages.length, repos.messagesService, {
+    const [messages, sessionNextIndex] = await Promise.all([
+      repos.messages.findInitialUserMessagesByTaskId(taskId),
+      repos.messages.getNextIndexBySessionId(sessionId),
+    ]);
+    await createUserMessage(sessionId, prompt, taskId, sessionNextIndex, repos.messagesService, {
       messageSource: params.messageSource,
       existingMessages: messages,
       tasksService: repos.tasksService,
@@ -155,7 +158,7 @@ export async function executeOpenCodeTask(params: {
 
     if (params.abortController.signal.aborted) return;
 
-    const finalIndex = (await repos.messages.findBySessionId(sessionId)).length;
+    const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
     await repos.messagesService.create({
       message_id: assistantMessageId,
       session_id: sessionId,

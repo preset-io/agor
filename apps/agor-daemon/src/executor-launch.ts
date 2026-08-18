@@ -1,20 +1,26 @@
 import { homedir } from 'node:os';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-import { getBaseUrl, resolveDeploymentAgenticToolPolicy } from '@agor/core/config';
+import {
+  getBaseUrl,
+  resolveDeploymentAgenticToolPolicy,
+  resolveExecutionSecurityMode,
+} from '@agor/core/config';
 import {
   BranchRepository,
   GatewayChannelRepository,
   getCurrentTenantId,
   MCPServerRepository,
+  RepoRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   shortId,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { getMcpServerAvailabilityForSession } from '@agor/core/mcp';
 import { renderMcpAuthMissingContext } from '@agor/core/templates/mcp-auth-missing';
-import type { SessionID } from '@agor/core/types';
+import type { SessionID, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type { SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
@@ -34,6 +40,7 @@ import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import type { ExecuteTaskData } from './services/sessions.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 
@@ -54,6 +61,14 @@ export function createExecuteHandler(
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
+  // Only delegated execution reads the creator's home key back; local modes
+  // do not consume the compatibility stamp.
+  const unixIdentityGuard = resolveExecutionSecurityMode(config).requiresExecutionHomeKey
+    ? {
+        loadCreator: (tenantDb: TenantScopedDatabase) => (userId: string) =>
+          new UsersRepository(tenantDb).findById(userId),
+      }
+    : undefined;
 
   return async (
     sessionId: string,
@@ -68,11 +83,11 @@ export function createExecuteHandler(
       sessionsService,
       sessionId,
       params,
-      deploymentAgenticToolPolicy
+      deploymentAgenticToolPolicy,
+      unixIdentityGuard
     );
     // Older direct-launch test harnesses omit deployment metadata; the live
-    // register-services context always supplies it. Keep the HA permission
-    // guard whenever that authoritative deployment context is present.
+    // register-services context always supplies it.
     if (ctx.deployment) {
       assertHaTaskPermissionSupported(ctx.deployment, {
         session,
@@ -120,63 +135,117 @@ export function createExecuteHandler(
         branchId: session.branch_id,
         // Executor JWTs authenticate on every daemon API call over the runtime
         // connection, so low per-call max-use limits make normal execution
-        // fail after startup. Keep expiry + in-memory revocation for these
-        // scoped runtime credentials; revisit max-use semantics once they can
-        // be counted per connection/task instead of per service method.
+        // fail after startup. Keep expiry + revocation for these scoped runtime
+        // credentials; reconnect reuses the same token and does not consume a
+        // separate connection allowance. Bounded tokens retain per-validation
+        // use counting for compatibility.
         maxUses: -1,
       }
     );
 
     const taskId = data.taskId;
 
-    // Get branch path
+    // Get branch path (+ authoritative base repo path for the sandbox) and, for
+    // RBAC-aware mounting, the session OWNER's effective filesystem access to
+    // the branch. The filesystem sandbox binds `<baseRepoPath>/.git` writable so
+    // worktree commits work; we resolve `repo.local_path` from Agor's own DB
+    // state rather than parsing the on-disk `.git` pointer (deterministic, and
+    // unaffected if a worktree's origin/gitdir is later rewritten).
+    const sandboxCfg = config.execution?.sandbox;
+    const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
+    let sandboxBaseRepoPath: string | undefined;
+    const sandboxWorktreesRoot =
+      sandboxCfg?.enabled === true
+        ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
+        : undefined;
+    // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
+    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
+    // to 'write' when RBAC is off (open-access behavior).
+    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (session.branch_id) {
-      const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
-        const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
-        return branch?.path;
+      const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const branchRepo = new BranchRepository(tenantDb);
+        const branch = await branchRepo.findById(session.branch_id);
+        if (!branch?.path) return undefined;
+        let baseRepoPath: string | undefined;
+        // Only linked worktrees need the shared git dir; a self-standing clone
+        // carries its own `.git` inside the branch dir.
+        if (branch.storage_mode !== 'clone' && branch.repo_id) {
+          const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
+          baseRepoPath = repo?.local_path ?? undefined;
+        }
+        let fsAccess: 'write' | 'read' | 'none' = 'write';
+        if (rbacOn && session.created_by) {
+          const access = await branchRepo.resolveUserAccess(branch, session.created_by as UUID);
+          fsAccess =
+            access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
+        }
+        return { path: branch.path, baseRepoPath, fsAccess };
       });
-      if (!branchPath)
+      if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
-      cwd = branchPath;
+      cwd = branchMounts.path;
+      sandboxBaseRepoPath = branchMounts.baseRepoPath;
+      principalBranchAccess = branchMounts.fsAccess;
+      // Under the sandbox, 'none' means the branch would not be mounted at all,
+      // so the task cannot operate on it. Fail fast with a clear message rather
+      // than letting bwrap abort on a missing chdir target.
+      if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
+        throw new Error(
+          `The session owner has no filesystem access to branch ${session.branch_id}. ` +
+            'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
+            'the filesystem sandbox.'
+        );
+      }
     }
 
-    // Determine Unix user for executor
-    const {
-      getHomedirFromUsername,
-      resolveUnixUserForImpersonation,
-      validateResolvedUnixUser,
-      UnixUserNotFoundError,
-    } = await import('@agor/core/unix');
+    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
+    // the SESSION OWNER (not the prompter): the home carries the owner's tool
+    // auth/state, so prompting another user's session runs against the owner's
+    // home. The SOURCE is the owner's `filesystem_home`
+    // if set (the migration points it at their existing /home/<user> so no files
+    // move), else the canonical store (see resolveOwnerHomeStore). Only computed
+    // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
+    let sandboxHomeStore: string | undefined;
+    if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
+      if (!session.created_by) {
+        throw new Error(
+          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
+            'with a shared home (fail closed).'
+        );
+      }
+      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(session.created_by as string)
+          .then((u) => u?.filesystem_home?.trim() || undefined)
+      );
+      sandboxHomeStore = resolveOwnerHomeStore({
+        config,
+        tenantId,
+        ownerUserId: session.created_by,
+        filesystemHome: ownerFilesystemHome,
+      });
+    }
+
+    // Resolve the optional delegated home key reported to an external launcher.
+    // Local execution always runs as the daemon user.
+    const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const configExecutorUser = config.execution?.executor_unix_user;
-    const prompterUnixUser = prompterUser.unix_username;
+    const sessionUnixUser = session.unix_username;
 
-    const impersonationResult = resolveUnixUserForImpersonation({
+    const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      userUnixUsername: prompterUnixUser,
-      executorUnixUser: configExecutorUser,
+      executionHomeKey: sessionUnixUser,
     });
 
-    const executorUnixUser = impersonationResult.unixUser;
-    const executorHomeDir = executorUnixUser ? getHomedirFromUsername(executorUnixUser) : homedir();
+    const executorHomeDir = homedir();
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;
     const permissionModeForPayload =
       effectivePermissionMode === 'default' ? undefined : effectivePermissionMode;
-
-    // Validate Unix user
-    try {
-      validateResolvedUnixUser(unixUserMode, executorUnixUser);
-    } catch (err) {
-      if (err instanceof UnixUserNotFoundError) {
-        throw new Error(
-          `${(err as InstanceType<typeof UnixUserNotFoundError>).message}. Ensure the Unix user is created before attempting to execute sessions.`
-        );
-      }
-      throw err;
-    }
 
     // Resolve user environment variables
     const { createUserProcessEnvironment } = await import('@agor/core/config');
@@ -225,7 +294,6 @@ export function createExecuteHandler(
         prompterUserId,
         tenantDb,
         undefined,
-        !!executorUnixUser,
         gatewayEnv,
         sessionId as SessionID
       );
@@ -302,6 +370,7 @@ export function createExecuteHandler(
 
     const openCodeLaunch = (() => {
       if (session.agentic_tool !== 'opencode') return undefined;
+      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
       if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
       return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
         tenantId,
@@ -331,6 +400,12 @@ export function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        // Authoritative sandbox mount inputs (consumed in spawn-executor →
+        // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
+        sandboxBaseRepoPath,
+        sandboxHomeStore,
+        sandboxWorktreesRoot,
+        principalBranchAccess,
       },
     };
 
@@ -345,7 +420,7 @@ export function createExecuteHandler(
 
     let localExecutorPid: number | undefined;
     const executorOptions = (nativeState?: NativeStateSpawn): SpawnExecutorOptions => ({
-      asUser: executorUnixUser || undefined,
+      delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
       templateVariables: {
@@ -353,12 +428,6 @@ export function createExecuteHandler(
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: prompterUserId,
-        // Mode-resolved identity for the execution substrate: the sudo user in
-        // insulated/strict, the session's unix_username in delegated (no sudo),
-        // and unset in simple. Supersedes the interim
-        // `prompterUnixUser || executorUnixUser` ordering from #2082, which
-        // shadowed insulated mode's configured executor identity.
-        unix_user: impersonationResult.reportedUnixUser || undefined,
       },
       onSpawn: (child, spawnContext) => {
         nativeState?.markSpawned();
@@ -369,7 +438,6 @@ export function createExecuteHandler(
               sessionId,
               taskId,
               pid: child.pid,
-              ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
             },
             app
           );
@@ -470,8 +538,8 @@ export function createExecuteHandler(
 
         try {
           // Launcher callbacks can outlive the tenant transaction that spawned
-          // them. Leave any inherited DB scope before revoking the task-scoped
-          // token outside that stale request transaction.
+          // them. Leave any inherited DB scope before opening the fresh
+          // tenant scope derived from the verified token claim.
           await runWithoutTenantDatabaseScope(() =>
             appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
           );
@@ -515,3 +583,5 @@ export function createExecuteHandler(
     };
   };
 }
+
+// ============================================================================

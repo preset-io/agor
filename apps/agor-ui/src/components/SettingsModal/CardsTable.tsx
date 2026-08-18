@@ -22,9 +22,12 @@ import {
   theme,
 } from 'antd';
 import { useMemo, useState } from 'react';
+import { useAgorStore } from '@/store/agorStore';
+import { selectBranchById } from '@/store/selectors';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
@@ -51,6 +54,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const branchById = useAgorStore(selectBranchById);
 
   // State
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
@@ -211,11 +215,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       width: 180,
       render: (boardId: string) => {
         const board = boardById.get(boardId);
+        const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
         return (
           <Typography.Text type="secondary">
             {board ? (
               <HighlightMatch
-                text={`${board.icon ? `${board.icon} ` : ''}${board.name}`}
+                text={`${boardEmoji ? `${boardEmoji} ` : ''}${board.name}`}
                 query={cardSearchTerm}
               />
             ) : (
@@ -261,7 +266,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       <Form.Item label="Name" style={{ marginBottom: 24 }}>
         <Flex gap={8}>
           <Form.Item name="emoji" noStyle>
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="📋" />
+            <FormEmojiPickerInput fieldName="emoji" defaultEmoji="📋" />
           </Form.Item>
           <Form.Item name="name" noStyle rules={[{ required: true, message: 'Name is required' }]}>
             <Input placeholder="e.g. Support Ticket" style={{ flex: 1 }} />

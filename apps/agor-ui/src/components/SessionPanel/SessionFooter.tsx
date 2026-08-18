@@ -30,7 +30,18 @@ import {
   ToolOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Badge,
+  Button,
+  Divider,
+  Popover,
+  Space,
+  Spin,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
@@ -1487,6 +1498,21 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Popover>
             )}
           </div>
+        )}
+
+        {/* Unauthorized MCP servers block their tools silently — surface it as an
+            error the user must fix, right above the composer. */}
+        {unauthedMcpServers.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            message={
+              unauthedMcpServers.length === 1
+                ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
+                : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`
+            }
+            style={{ marginBottom: token.sizeUnit * 2, borderRadius: token.borderRadius }}
+          />
         )}
 
         {/* Row 2 — Prompt textarea */}

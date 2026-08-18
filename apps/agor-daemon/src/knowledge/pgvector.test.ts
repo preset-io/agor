@@ -1,4 +1,8 @@
-import type { Database } from '@agor/core/db';
+import {
+  createTenantScopedDatabaseProxy,
+  type Database,
+  MissingTenantDatabaseScopeError,
+} from '@agor/core/db';
 import { describe, expect, it, vi } from 'vitest';
 import { ensureKnowledgePgvectorStorage, getKnowledgePgvectorCapability } from './pgvector';
 
@@ -9,6 +13,20 @@ function fakePostgresDb(execute: (query: unknown) => unknown | Promise<unknown>)
 }
 
 describe('Knowledge pgvector capability detection', () => {
+  it('can identify a guarded PostgreSQL handle before a tenant unit is active', async () => {
+    const db = createTenantScopedDatabaseProxy(
+      fakePostgresDb(() => []),
+      {
+        requireScope: true,
+        label: 'guarded pgvector database',
+      }
+    );
+
+    await expect(getKnowledgePgvectorCapability(db)).rejects.toBeInstanceOf(
+      MissingTenantDatabaseScopeError
+    );
+  });
+
   it('treats postgres-js array results as available when extension and storage exist', async () => {
     const db = fakePostgresDb(() => [
       {

@@ -24,6 +24,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { getBoardEmoji } from '../BoardTile';
 import { Tag } from '../Tag';
 import { type BranchActions, EventItem } from './EventItem';
 
@@ -205,14 +206,18 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
           <Tag color="blue" style={{ fontSize: 10, marginLeft: 4 }}>
             BETA
           </Tag>
-          {currentBoard && (
-            <Tag
-              icon={currentBoard.icon ? <span>{currentBoard.icon}</span> : undefined}
-              style={{ fontSize: 11, marginLeft: 4 }}
-            >
-              {currentBoard.name}
-            </Tag>
-          )}
+          {currentBoard &&
+            (() => {
+              const boardEmoji = getBoardEmoji(currentBoard, branchById);
+              return (
+                <Tag
+                  icon={boardEmoji ? <span>{boardEmoji}</span> : undefined}
+                  style={{ fontSize: 11, marginLeft: 4 }}
+                >
+                  {currentBoard.name}
+                </Tag>
+              );
+            })()}
         </Space>
         {onToggleCollapse && (
           <Button

@@ -128,7 +128,7 @@ export function validateScheduleConfig() {
  * Today `schedules.created_by` is both audit attribution ("scheduled by")
  * and execution identity ("run as"). That makes it security-sensitive:
  * patching or manually triggering another user's schedule means controlling
- * an agent that will execute with that user's Agor MCP token / Unix identity.
+ * an agent that will execute with that user's Agor MCP token and credential route.
  *
  * External callers may therefore only modify/run schedules they created.
  * Superadmins remain an ops escape hatch for modifying schedule definitions,

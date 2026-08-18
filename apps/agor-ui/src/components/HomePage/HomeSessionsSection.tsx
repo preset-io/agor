@@ -15,6 +15,7 @@ import {
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { getBoardEmoji } from '../BoardTile';
 import { BoardPill, BranchPill } from '../Pill';
 import { SessionSearchToolbar } from '../SessionSearchControls';
 import { glassCardStyle } from './homeStyles';
@@ -31,11 +32,13 @@ const HomeSessionRow = memo(function HomeSessionRow({
   session,
   branch,
   board,
+  boardEmoji,
   onSessionClick,
 }: {
   session: Session;
   branch?: Branch;
   board?: Board;
+  boardEmoji?: string;
   onSessionClick: (sessionId: string) => void;
 }) {
   const { token } = theme.useToken();
@@ -78,7 +81,7 @@ const HomeSessionRow = memo(function HomeSessionRow({
       {/* Pills row — indented to align under the title text */}
       {hasTags && (
         <Space size={4} style={{ paddingLeft: 13 }}>
-          {board && <BoardPill board={board} compact />}
+          {board && <BoardPill board={board} emoji={boardEmoji} compact />}
           {branch && <BranchPill branch={branch.name} compact />}
         </Space>
       )}
@@ -178,6 +181,7 @@ export const HomeSessionsSection: React.FC<
                   session={session}
                   branch={branch}
                   board={board}
+                  boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
                   onSessionClick={onSessionClick}
                 />
               );

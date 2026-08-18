@@ -11,12 +11,10 @@ const cursorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@agor/core/config', () => configMocks);
-vi.mock('@cursor/sdk', () => ({
-  Cursor: {
-    models: {
-      list: cursorMocks.modelsList,
-    },
-  },
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn().mockImplementation(async () => ({
+    Cursor: { models: { list: cursorMocks.modelsList } },
+  })),
 }));
 
 import { CursorModelsService } from './cursor-models.js';

@@ -179,6 +179,41 @@ describe('ClaudePromptService background task query lifetime', () => {
     expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
   });
 
+  it('settles the terminal turn even when getContextUsage never responds', async () => {
+    vi.useFakeTimers();
+    try {
+      const query = fakeQuery([sdkResult('terminal-result')]);
+      // Reproduce the production hang: the control request is issued (stdin is
+      // held open for it) but the subprocess never answers it.
+      query.getContextUsage.mockReturnValue(new Promise(() => {}));
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+
+      const events: Array<{ type: string }> = [];
+      const drained = (async () => {
+        for await (const event of service().promptSessionStreaming(sessionId, 'prompt')) {
+          events.push(event);
+        }
+      })();
+
+      // Advance past the bounded getContextUsage budget; without the timeout the
+      // generator would never break out of its for-await loop.
+      await vi.advanceTimersByTimeAsync(ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS + 10);
+      await drained;
+
+      expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
+      // No context snapshot is yielded when the request times out.
+      expect(events.filter((event) => event.type === 'context_usage')).toHaveLength(0);
+      // Input is still released so the subprocess can close stdin and exit.
+      expect(query.releaseInput).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases input and balances watchdog activity when cancellation interrupts a task', async () => {
     const query = fakeQuery(async function* () {
       yield {

@@ -87,7 +87,7 @@ import {
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
@@ -2374,10 +2374,10 @@ export class GatewayService {
         gatewaySource.last_message_only = true;
       }
 
-      // In strict/delegated, refuse to create a gateway session for a user
+      // In delegated mode, refuse to create a gateway session for a user
       // without a unix_username — it would fail at prompt time (or silently
       // share an identity in hosted deployments).
-      assertUnixUsernameSatisfiesMode(
+      assertExecutionHomeKeySatisfiesMode(
         user.unix_username,
         resolveExecutionSecurityMode().unixUserMode,
         `gateway user ${user.user_id}`
@@ -2389,7 +2389,7 @@ export class GatewayService {
         description: data.text,
         branch_id: channel.target_branch_id,
         created_by: user.user_id,
-        // Stamp session with creator's unix_username for executor impersonation.
+        // Stamp session with creator's immutable execution-home key.
         // Normally set by the setSessionUnixUsername hook, but that hook skips
         // internal calls (no provider). Gateway sessions are internal, so we
         // must set it explicitly. When user alignment is active, this uses the

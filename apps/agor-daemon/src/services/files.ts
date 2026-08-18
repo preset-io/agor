@@ -8,13 +8,15 @@
 
 import {
   BranchRepository,
+  requireCurrentTenantId,
+  runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -90,25 +92,42 @@ export class FilesService {
       return [];
     }
 
-    try {
-      // Fetch session to get branch_id
-      const session = await this.sessionRepo.findById(sessionId);
-      if (!session) {
-        return [];
-      }
+    // Keep repository and identity reads inside a short tenant transaction.
+    // The executor call below is deliberately outside this scope. Resolve the
+    // identity before opening the unit of work and never turn boundary failures
+    // into an empty autocomplete response.
+    const tenantId = requireCurrentTenantId(
+      'Missing active tenant context for files database access'
+    );
+    const resolved = await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+      const cached = params as Partial<RBACParams>;
+      const session =
+        cached.session?.session_id === sessionId
+          ? cached.session
+          : await this.sessionRepo.findById(sessionId);
+      if (!session) return null;
 
-      // Fetch branch to validate it still exists before crossing the executor boundary.
-      const branch = await this.branchRepo.findById(session.branch_id);
-      if (!branch?.path) {
-        return [];
-      }
-
-      const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
-      );
+      const branch =
+        cached.branch?.branch_id === session.branch_id
+          ? cached.branch
+          : await this.branchRepo.findById(session.branch_id);
+      if (!branch?.path) return null;
 
       const currentUserId = params.user?.user_id as UserID | undefined;
       const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+        this.db,
+        currentUser ?? currentUserId,
+        this.app.get('config')
+      );
+      return { branchId: branch.branch_id, delegatedHomeKey };
+    });
+    if (!resolved) return [];
+
+    try {
+      const sessionToken = generateScopedServiceToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      );
 
       const result = await runExecutorCommand(
         {
@@ -116,21 +135,16 @@ export class FilesService {
           sessionToken,
           daemonUrl: getDaemonUrl(),
           params: {
-            branchId: branch.branch_id,
+            branchId: resolved.branchId,
             search,
             limit: MAX_FILE_RESULTS,
           },
         },
         {
           logPrefix: `[FilesService ${sessionId}]`,
-          // In strict mode, autocomplete runs as the requesting Unix user.
-          // In simple/insulated mode this stays undefined so default installs
-          // do not require sudo and configured executor defaults can apply.
-          asUser: await resolveExecutorReadAsUser(
-            this.db,
-            currentUser ?? currentUserId,
-            this.app.get('config')
-          ),
+          // Delegated mode passes the caller's stable execution-home key to
+          // the external launcher. Local modes do not select a host identity.
+          delegatedHomeKey: resolved.delegatedHomeKey,
         }
       );
 

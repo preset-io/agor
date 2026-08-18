@@ -9,7 +9,6 @@ import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
-import { MCP_CATALOG_CATEGORIES, MCP_CATALOG_PROBED_AUTH_TYPES } from '../types/mcp-catalog';
 
 /**
  * Query validator with type coercion enabled
@@ -18,6 +17,16 @@ import { MCP_CATALOG_CATEGORIES, MCP_CATALOG_PROBED_AUTH_TYPES } from '../types/
 export const queryValidator = new Ajv({
   coerceTypes: true, // Auto-convert "123" -> 123, "true" -> true, etc.
   removeAdditional: 'all', // Remove unknown properties (defense against injection)
+  useDefaults: true,
+});
+
+/**
+ * Message queries reject unknown fields instead of silently removing them.
+ * Silently turning a misspelled filter into a broad transcript query is both
+ * surprising and potentially expensive.
+ */
+export const strictQueryValidator = new Ajv({
+  coerceTypes: true,
   useDefaults: true,
 });
 
@@ -121,28 +130,152 @@ export const sessionQuerySchema = createQuerySchema(
 /**
  * Task query schema
  */
-export const taskQuerySchema = createQuerySchema(
-  Type.Object({
-    task_id: Type.Optional(CommonSchemas.uuid),
-    session_id: Type.Optional(CommonSchemas.uuid),
-    status: Type.Optional(
+const taskSortDirection = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+export const taskQuerySchema = Type.Intersect(
+  [
+    Type.Object({
+      task_id: Type.Optional(
+        Type.Union([
+          CommonSchemas.uuid,
+          Type.Object(
+            {
+              $gt: Type.Optional(CommonSchemas.uuid),
+              $lte: CommonSchemas.uuid,
+            },
+            { additionalProperties: false }
+          ),
+        ])
+      ),
+      session_id: Type.Optional(CommonSchemas.uuid),
+      status: Type.Optional(
+        Type.Union([
+          Type.Literal('queued'),
+          Type.Literal('created'),
+          Type.Literal('dispatching'),
+          Type.Literal('running'),
+          Type.Literal('stopping'),
+          Type.Literal('awaiting_permission'),
+          Type.Literal('awaiting_input'),
+          Type.Literal('timed_out'),
+          Type.Literal('completed'),
+          Type.Literal('failed'),
+          Type.Literal('stopped'),
+        ])
+      ),
+      created_at: Type.Optional(CommonSchemas.timestamp),
+    }),
+    Type.Object({
+      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+      // Retained for compatible exact-Session callers. The shared client now
+      // hydrates Tasks with a Task-ID high-water keyset instead of OFFSET.
+      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+      $sort: Type.Optional(
+        Type.Partial(
+          Type.Object(
+            {
+              task_id: taskSortDirection,
+              session_id: taskSortDirection,
+              status: taskSortDirection,
+              created_at: taskSortDirection,
+              created_by: taskSortDirection,
+            },
+            { additionalProperties: false }
+          )
+        )
+      ),
+      $select: Type.Optional(Type.Array(Type.String())),
+    }),
+  ],
+  { additionalProperties: false }
+);
+
+const messageTypeSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+  Type.Literal('file-history-snapshot'),
+  Type.Literal('permission_request'),
+  Type.Literal('input_request'),
+  Type.Literal('daemon_restart'),
+  Type.Literal('daemon_crash'),
+  Type.Literal('widget_request'),
+]);
+const messageRoleSchema = Type.Union([
+  Type.Literal('user'),
+  Type.Literal('assistant'),
+  Type.Literal('system'),
+]);
+const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+const messageSelectableFieldSchema = Type.Union(
+  [
+    'message_id',
+    'session_id',
+    'task_id',
+    'type',
+    'role',
+    'index',
+    'timestamp',
+    'content_preview',
+    'content',
+    'tool_uses',
+    'parent_tool_use_id',
+    'metadata',
+  ].map((field) => Type.Literal(field))
+);
+
+/**
+ * Message list contract. `$limit` is accepted above the service ceiling so
+ * Feathers can clamp it consistently. Exact hydration uses the bounded
+ * message_id range above; `$skip` remains for compatible exact-transcript
+ * callers, while MessagesService rejects broad deep offsets.
+ */
+export const messageQuerySchema = Type.Object(
+  {
+    message_id: Type.Optional(
       Type.Union([
-        Type.Literal('queued'),
-        Type.Literal('created'),
-        Type.Literal('dispatching'),
-        Type.Literal('running'),
-        Type.Literal('stopping'),
-        Type.Literal('awaiting_permission'),
-        Type.Literal('awaiting_input'),
-        Type.Literal('timed_out'),
-        Type.Literal('completed'),
-        Type.Literal('failed'),
-        Type.Literal('stopped'),
+        CommonSchemas.uuid,
+        Type.Object(
+          {
+            $gt: Type.Optional(CommonSchemas.uuid),
+            $lte: CommonSchemas.uuid,
+          },
+          { additionalProperties: false }
+        ),
       ])
     ),
-    created_at: Type.Optional(CommonSchemas.timestamp),
-    updated_at: Type.Optional(CommonSchemas.timestamp),
-  })
+    session_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          { $in: Type.Array(CommonSchemas.uuid, { maxItems: 1_000 }) },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
+    task_id: Type.Optional(CommonSchemas.uuid),
+    type: Type.Optional(messageTypeSchema),
+    role: Type.Optional(messageRoleSchema),
+    $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    $sort: Type.Optional(
+      Type.Object(
+        {
+          message_id: Type.Optional(sortDirectionSchema),
+          session_id: Type.Optional(sortDirectionSchema),
+          type: Type.Optional(sortDirectionSchema),
+          role: Type.Optional(sortDirectionSchema),
+          index: Type.Optional(sortDirectionSchema),
+          timestamp: Type.Optional(sortDirectionSchema),
+          created_at: Type.Optional(sortDirectionSchema),
+        },
+        { additionalProperties: false }
+      )
+    ),
+    $select: Type.Optional(
+      Type.Array(messageSelectableFieldSchema, { maxItems: 12, uniqueItems: true })
+    ),
+  },
+  { additionalProperties: false }
 );
 
 /**
@@ -259,74 +392,47 @@ export const mcpServerQuerySchema = createQuerySchema(
     ),
     enabled: Type.Optional(Type.Boolean()),
     source: Type.Optional(
-      Type.Union([Type.Literal('user'), Type.Literal('imported'), Type.Literal('agor')])
+      Type.Union([
+        Type.Literal('user'),
+        Type.Literal('imported'),
+        Type.Literal('agor'),
+        Type.Literal('catalog'),
+      ])
     ),
-    usableByUserId: Type.Optional(CommonSchemas.uuid),
     ownerless: Type.Optional(CommonSchemas.boolean),
     // Executor/session-token callers pass this so hooks can inject the
     // task creator's per-user OAuth token instead of the session owner's.
     forUserId: Type.Optional(CommonSchemas.uuid),
+    // Narrows a listing to shared servers plus one user's private ones.
+    // Trusted callers set it; on an external member request the service hooks
+    // overwrite whatever arrived with the caller's own id.
+    usableByUserId: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
 
 /**
- * MCP catalog query schema
+ * MCP catalog query schema: deliberately empty.
  *
- * The catalog's filters reach SQL, so validation is also the injection
- * boundary: `removeAdditional: 'all'` drops anything not listed here before a
- * value can be interpolated into a LIKE pattern or an ORDER BY.
+ * `find` takes no parameters — it returns the whole catalog and the browser
+ * narrows it — so there is nothing here to name. The schema stays registered
+ * rather than being deleted because `removeAdditional: 'all'` is what makes
+ * that contract enforced instead of merely documented: a `search=` or `$skip=`
+ * from a tab left open across the deploy that removed them is stripped here, so
+ * it cannot reach `find` and be quietly ignored one layer further in.
+ *
+ * Stripping rather than rejecting is the deliberate choice: the stale tab gets
+ * the full catalog and renders it, and recovers on reload. A 400 would blank
+ * the Marketplace for anyone mid-deploy.
  */
-export const mcpCatalogQuerySchema = Type.Intersect(
-  [
-    Type.Object({
-      catalog_entry_id: Type.Optional(CommonSchemas.uuid),
-      name: Type.Optional(Type.String({ maxLength: 512 })),
-      search: Type.Optional(Type.String({ maxLength: 128 })),
-      category: Type.Optional(
-        Type.Union(MCP_CATALOG_CATEGORIES.map((category) => Type.Literal(category)))
-      ),
-      capability: Type.Optional(Type.String({ maxLength: 64 })),
-      verified: Type.Optional(Type.Boolean()),
-      curated: Type.Optional(Type.Boolean()),
-      has_remote: Type.Optional(Type.Boolean()),
-      probed_auth_type: Type.Optional(
-        Type.Union(MCP_CATALOG_PROBED_AUTH_TYPES.map((value) => Type.Literal(value)))
-      ),
-      // Asking for a lifecycle state by name opts out of the default exclusion
-      // of withdrawn servers, so it has to survive validation rather than be
-      // stripped as an unknown key.
-      registry_status: Type.Optional(Type.String({ maxLength: 32 })),
-      sort: Type.Optional(
-        Type.Union([
-          Type.Literal('popularity'),
-          Type.Literal('name'),
-          Type.Literal('recently_updated'),
-          Type.Literal('relevance'),
-        ])
-      ),
-    }),
-    // Deliberately not `createQuerySchema`: that shape also advertises `$sort`
-    // and `$select`, and this service honours neither. Ordering is the domain
-    // `sort` above, which maps onto indexed SQL; a caller-supplied `$sort` over
-    // arbitrary columns would silently do nothing. Listing only what is
-    // implemented keeps the schema an accurate contract rather than a wish.
-    Type.Object({
-      // Mirrors MCP_CATALOG_PAGINATION.MAX_LIMIT in the catalog service. Every
-      // row carries curation copy and registry metadata, so a page bound the
-      // shared schema would allow is a multi-megabyte response.
-      $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-      $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
-    }),
-  ],
-  { additionalProperties: false }
-);
+export const mcpCatalogQuerySchema = Type.Object({}, { additionalProperties: false });
 
 /**
  * Create validators for each schema
  */
 export const sessionQueryValidator = getValidator(sessionQuerySchema, queryValidator);
-export const taskQueryValidator = getValidator(taskQuerySchema, queryValidator);
+export const taskQueryValidator = getValidator(taskQuerySchema, strictQueryValidator);
+export const messageQueryValidator = getValidator(messageQuerySchema, strictQueryValidator);
 export const branchQueryValidator = getValidator(branchQuerySchema, queryValidator);
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);
 export const userQueryValidator = getValidator(userQuerySchema, queryValidator);

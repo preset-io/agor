@@ -1,5 +1,6 @@
 import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
@@ -66,7 +67,6 @@ import {
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from '../CodexAuth';
-import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -411,7 +411,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       form.setFieldsValue({
         email: userData.email,
         name: userData.name,
-        emoji: userData.emoji,
         role: userData.role,
         unix_username: userData.unix_username,
         groupIds: [],
@@ -672,7 +671,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       const toValidate: string[] = [];
-      if (panels.has('profile')) toValidate.push('email', 'name', 'emoji', 'role');
+      if (panels.has('profile')) toValidate.push('email', 'name', 'role');
       if (panels.has('security')) toValidate.push('unix_username');
       if (toValidate.length) await form.validateFields(toValidate);
 
@@ -681,10 +680,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       let preferencesTouched = false;
 
       if (panels.has('profile')) {
-        const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+        const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
         updates.email = values.email;
         updates.name = values.name;
-        updates.emoji = values.emoji;
         updates.role = values.role;
         if (values.useSlackAvatar === false) {
           nextPreferences.use_slack_avatar = false;
@@ -1109,7 +1107,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'security',
       },
       {
-        label: 'Unix username',
+        label: 'Execution home key',
         kind: 'setting',
         keywords: 'impersonation os process user',
         panelKey: 'security',
@@ -1443,13 +1441,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name">
-          <Space.Compact style={{ width: '100%' }}>
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-            <Form.Item name="name" noStyle>
-              <Input placeholder="John Doe" />
-            </Form.Item>
-          </Space.Compact>
+        <FieldRow label="Name" name="name">
+          <Input placeholder="John Doe" />
         </FieldRow>
 
         <FieldRow
@@ -1468,7 +1461,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          tooltip="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
+          tooltip="Shows your Slack-synced profile image instead of your initials tile. Turns off automatically if Slack sync is removed."
         >
           <Switch />
         </FieldRow>
@@ -1530,19 +1523,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
 
         <FieldRow
-          label="Unix username"
+          label="Execution home key"
           name="unix_username"
           help={
             isAdmin
-              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+              ? 'Transitional home key used only by delegated execution'
               : 'Maintained by administrators'
           }
           rules={[
             {
-              pattern: /^[a-z0-9_-]+$/,
-              message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+              pattern: EXECUTION_HOME_KEY_PATTERN,
+              message:
+                'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
             },
-            { max: 32, message: 'Unix username must be 32 characters or less' },
+            { max: 32, message: 'Execution home key must be 32 characters or less' },
           ]}
         >
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />

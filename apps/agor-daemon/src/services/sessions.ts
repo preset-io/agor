@@ -65,7 +65,7 @@ import {
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { assertUnixUsernameSatisfiesMode } from '@agor/core/unix';
+import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -526,8 +526,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
             added_at: new Date(),
           },
         });
-      } catch {
-        console.warn(`Skipped MCP server ${serverId} during ${label}`);
+      } catch (error) {
+        // Dropping one server rather than failing the whole session is the
+        // established behaviour here, and the right one for inherited and
+        // default selections. Say why, though: "skipped" alone cannot tell an
+        // ownership refusal from a deleted row or a database fault, and the
+        // first of those is the only one a user can act on.
+        console.warn(
+          `Skipped MCP server ${serverId} during ${label}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
   }
@@ -585,8 +594,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * `unix_username` is stamped explicitly here (not via a Feathers hook)
    * because fork()/spawn() call `this.create(...)` directly, which bypasses
    * the `before.create` hook pipeline — so `setSessionUnixUsername` never
-   * fires for these paths. Omitting unix_username silently breaks strict-mode
-   * deployments where the executor refuses to launch without one.
+   * fires for these paths. Omitting unix_username breaks delegated deployments where the launcher requires one.
    *
    * Resolution rules (kept aligned with the hook's behavior on normal creates):
    * - Internal call (no provider) → inherit parent.unix_username. The scheduler /
@@ -605,12 +613,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
     // Internal call (no transport provider) → service-to-service or scheduler.
-    // Preserve parent attribution. The strict/delegated unix_username
+    // Preserve parent attribution. The delegated execution-home key
     // requirement still applies: an internal fork/spawn of a null-stamped
     // parent must fail here, not later at prompt time.
     if (!params?.provider) {
       const inheritedUnixUsername = parent.unix_username ?? null;
-      assertUnixUsernameSatisfiesMode(
+      assertExecutionHomeKeySatisfiesMode(
         inheritedUnixUsername,
         resolveExecutionSecurityMode().unixUserMode,
         `the parent session's owner (${parent.created_by})`
@@ -660,7 +668,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       } catch (err) {
         // If we can't load the caller user, fail closed rather than silently
         // creating a session with no unix_username (which would hang forever
-        // in strict mode).
+        // in delegated mode).
         throw new Forbidden(
           `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -673,11 +681,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       result.usedLegacySharing
     ) as Session['unix_username'];
 
-    // In strict/delegated, a child stamped null would fail at prompt time (or
+    // In delegated mode, a child stamped null would fail at prompt time (or
     // silently share an identity in hosted deployments) — reject at fork/spawn
     // time with an actionable error instead. Also covers legacy sharing
     // inheriting a null stamp from a pre-migration parent.
-    assertUnixUsernameSatisfiesMode(
+    assertExecutionHomeKeySatisfiesMode(
       unixUsername,
       resolveExecutionSecurityMode().unixUserMode,
       `the attributed user (${createdBy})`
@@ -723,7 +731,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.
-        // Strict-mode deployments refuse to launch sessions with null unix_username.
+        // Delegated deployments refuse to launch sessions with a null home key.
         genealogy: {
           forked_from_session_id: parent.session_id,
           fork_point_task_id: data.task_id as TaskID,
@@ -901,7 +909,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         created_by, // See resolveChildIdentity — defaults to caller, not parent owner
         unix_username, // Stamped by resolveChildIdentity — this.create() bypasses
         // the setSessionUnixUsername hook so we must set it explicitly here.
-        // Strict-mode deployments refuse to launch sessions with null unix_username.
+        // Delegated deployments refuse to launch sessions with a null home key.
         genealogy: {
           parent_session_id: parent.session_id,
           spawn_point_task_id: data.task_id as TaskID,

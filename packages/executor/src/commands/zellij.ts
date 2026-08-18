@@ -4,23 +4,23 @@
  * These handlers manage Zellij terminal sessions for users.
  *
  * Architecture:
- * - One executor per user (spawned when user opens first terminal)
- * - Executor owns a single PTY running `zellij attach`
- * - Zellij manages multiple tabs (one per branch)
- * - PTY I/O streams over Feathers channel: user/${userId}/terminal
+ * - One executor per process-local branch attachment
+ * - Executor owns a single PTY running a Zellij create-or-attach command
+ * - Zellij serializes bounded branch-shell context in the effective user home
+ * - PTY I/O streams over an owner-local, qualified Socket.IO room
  *
  * Lifecycle:
  * 1. User opens terminal modal → daemon spawns executor with zellij.attach
  * 2. Executor connects to daemon, joins user's terminal channel
- * 3. Executor spawns PTY with zellij attach
+ * 3. Executor spawns a PTY that creates or attaches to the scoped Zellij session
  * 4. PTY output → channel → browser; browser input → channel → PTY
- * 5. User opens another branch → daemon sends zellij.tab command
- * 6. User closes all terminals → daemon kills executor
+ * 5. User closes the attachment → daemon kills the PTY bridge
  */
 
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
-import type { IPty } from 'node-pty';
+import { shortId } from '@agor/core/db';
+import type { IPty } from '@lydell/node-pty';
 import type { ExecutorResult, ZellijAttachPayload, ZellijTabPayload } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
 import { createExecutorClient } from '../services/feathers-client.js';
@@ -29,7 +29,7 @@ import type { CommandOptions } from './index.js';
 
 /**
  * Global PTY process - only one per executor instance
- * (executor is per-user, so one PTY per user)
+ * (executor is per attachment, so one PTY bridge per attachment)
  */
 let ptyProcess: IPty | null = null;
 let feathersClient: AgorClient | null = null;
@@ -71,6 +71,87 @@ let bridgeHealthy = false;
  * can't race an un-booted zellij, and gates the reconnect re-announce.
  */
 let zellijAttached = false;
+
+/**
+ * Zellij resurrection metadata can contain terminal viewport/scrollback.
+ * Keep its directory private to the effective execution home. Shared-home
+ * modes intentionally share that directory and therefore do not claim stronger
+ * isolation than the rest of the shared home.
+ */
+export function ensurePrivateZellijCacheDirectory(directory: string): void {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+}
+
+/**
+ * Lifecycle invariants for an Agor-managed attach. Pass these explicitly so
+ * existing persistent homes receive the current resurrection contract without
+ * overwriting their user-owned Zellij configuration.
+ */
+export function buildZellijLaunchArgs(sessionName: string, sessionKnown: boolean): string[] {
+  const lifecycleOptions = [
+    'options',
+    '--on-force-close',
+    'quit',
+    '--session-serialization',
+    'true',
+    '--serialize-pane-viewport',
+    'true',
+    '--scrollback-lines-to-serialize',
+    '1000',
+    '--serialization-interval',
+    '1',
+  ];
+  if (sessionKnown) return ['attach', sessionName, ...lifecycleOptions];
+
+  // `attach --create` creates a session that Zellij 0.43 does not persist for
+  // resurrection. Start through the new-session path instead. The attach flag
+  // closes the active-session race between replicas sharing the same home.
+  return ['--session', sessionName, ...lifecycleOptions, '--attach-to-session', 'true'];
+}
+
+export function zellijListingHasSession(listing: string, sessionName: string): boolean {
+  return listing.split(/\r?\n/).some((line) => {
+    const normalized = line.trim();
+    return normalized === sessionName || normalized.startsWith(`${sessionName} `);
+  });
+}
+
+function isZellijSessionKnown(
+  sessionName: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawn('zellij', ['list-sessions', '--no-formatting'], {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let stdout = '';
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const finish = (known: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      resolve(known);
+    };
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+    proc.on('exit', () => finish(zellijListingHasSession(stdout, sessionName)));
+    proc.on('error', () => finish(false));
+    timeout = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* already exited */
+      }
+      finish(false);
+    }, 3000);
+  });
+}
 
 /**
  * A single-shot grace window that holds an executor alive across a socket
@@ -116,9 +197,10 @@ export function createReconnectGrace(opts: {
  * repeatedly (initial spawn + every reconnect) — the daemon treats it as
  * idempotent readiness.
  */
-function emitTerminalReady(socket: AgorClient['io'], userId: string): void {
+function emitTerminalReady(socket: AgorClient['io'], userId: string, terminalId: string): void {
   socket.emit('terminal:ready', {
     userId,
+    terminalId,
     sessionName: currentSessionName ?? undefined,
     tabName: currentTabName,
   });
@@ -238,7 +320,7 @@ export async function handleZellijAttach(
   payload: ZellijAttachPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { userId, sessionName, tabName, cols, rows } = payload.params;
+  const { userId, terminalId, channel, sessionName, tabName, cols, rows } = payload.params;
   const effectiveUser = resolveEffectiveUserInfo();
   const cwd = payload.params.cwd || effectiveUser.homedir;
 
@@ -271,10 +353,9 @@ export async function handleZellijAttach(
   }
 
   try {
-    // Connect to daemon. On reconnect, the socket is fresh: it has left the
-    // terminal channel room and a restarted daemon has forgotten this
-    // executor. Re-join and re-announce readiness once re-authenticated so
-    // input keeps flowing and the daemon rediscovers the live bridge.
+    // Connect to the owning daemon. A transient connection can reauthenticate
+    // only to the same boot; the token's owner fence rejects replica/boot
+    // adoption and the grace timer then tears down this bridge.
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     feathersClient = await createExecutorClient(daemonUrl, payload.sessionToken, {
       // Fires only after a reconnect RE-AUTHENTICATES (not on raw transport
@@ -286,20 +367,20 @@ export async function handleZellijAttach(
         graceController?.onReconnect();
         const s = feathersClient?.io;
         if (!s) return;
-        s.emit('join', `user/${userId}/terminal`);
-        if (ptyProcess && zellijAttached) emitTerminalReady(s, userId);
+        s.emit('join', channel);
+        if (ptyProcess && zellijAttached) emitTerminalReady(s, userId, terminalId);
       },
     });
     _currentUserId = userId;
     // Initial connect + authenticate already succeeded inside createExecutorClient.
     bridgeHealthy = true;
 
-    console.log(`[zellij.attach] Connected to daemon, joining channel user/${userId}/terminal`);
+    console.log(`[zellij.attach] Connected to owner daemon for terminal ${shortId(terminalId)}`);
 
     // Join the user's terminal channel
     // The daemon will route terminal events through this channel
     const socket = feathersClient.io;
-    socket.emit('join', `user/${userId}/terminal`);
+    socket.emit('join', channel);
 
     graceController = createReconnectGrace({
       graceMs: DISCONNECT_GRACE_MS,
@@ -329,12 +410,17 @@ export async function handleZellijAttach(
       graceController?.onDisconnect();
     });
 
-    // Import node-pty dynamically (native module)
-    // Using upstream microsoft/node-pty (no engines cap, supports Node 24/25)
-    const nodePty: typeof import('node-pty') = await import('node-pty');
-
-    // Build zellij command - config path added after fs/actualHome are defined below
-    const zellijArgs = ['attach', sessionName, '--create'];
+    // PTY support is optional so an unsupported platform cannot block Agor's
+    // base installation or non-terminal workflows.
+    let nodePty: typeof import('@lydell/node-pty');
+    try {
+      nodePty = await import('@lydell/node-pty');
+    } catch (error) {
+      throw new Error(
+        'Web terminal PTY support is unavailable. Run `agor doctor` or see https://agor.live/guide/extended-install#optional-web-terminal-runtime',
+        { cause: error }
+      );
+    }
 
     // Build clean environment for Zellij
     // CRITICAL: Strip existing Zellij env vars to prevent "attach to current session" error
@@ -350,13 +436,34 @@ export async function handleZellijAttach(
     const userShell = effectiveUser.shell;
     console.log(`[zellij.attach] User home: ${actualHome}, shell: ${userShell}`);
 
-    // Ensure Zellij cache directory exists - useradd -m creates home but not .cache/zellij
+    // Ensure the selected execution home contains Zellij's private cache directory.
     // Zellij needs this for plugin data, session info, and session serialization
     const zellijCacheDir = `${actualHome}/.cache/zellij`;
     if (!fs.existsSync(zellijCacheDir)) {
       console.log(`[zellij.attach] Creating Zellij cache directory: ${zellijCacheDir}`);
-      fs.mkdirSync(zellijCacheDir, { recursive: true });
     }
+    ensurePrivateZellijCacheDirectory(zellijCacheDir);
+    // Put the live server socket beside the shared effective-home cache rather
+    // than in container-local /tmp. This lets same-host daemon containers see
+    // one Zellij server for the stable tenant/user/branch name. It is not a
+    // cross-host protocol: topologies whose home is a network filesystem must
+    // still advertise terminal capability=false unless one workspace runtime
+    // owns both the socket and PTY.
+    const zellijSocketDir = `${zellijCacheDir}/sockets`;
+    ensurePrivateZellijCacheDirectory(zellijSocketDir);
+    process.env.ZELLIJ_SOCKET_DIR = zellijSocketDir;
+
+    const zellijEnv = {
+      ...cleanEnv,
+      TERM: 'xterm-256color',
+      SHELL: userShell, // Explicit shell - Zellij needs this to spawn terminal panes
+      HOME: actualHome, // Ensure Zellij uses correct home for cache/config
+      XDG_CACHE_HOME: `${actualHome}/.cache`, // Explicit cache dir
+      XDG_CONFIG_HOME: `${actualHome}/.config`, // Explicit config dir
+      ZELLIJ_SOCKET_DIR: zellijSocketDir,
+    };
+    const sessionKnown = await isZellijSessionKnown(sessionName, cwd, zellijEnv);
+    const zellijArgs = buildZellijLaunchArgs(sessionName, sessionKnown);
 
     // Zellij will use ~/.config/zellij/config.kdl by default
     // The docker entrypoint copies Agor's default config there on user creation
@@ -371,14 +478,7 @@ export async function handleZellijAttach(
       cols: cols || 80,
       rows: rows || 24,
       cwd,
-      env: {
-        ...cleanEnv,
-        TERM: 'xterm-256color',
-        SHELL: userShell, // Explicit shell - Zellij needs this to spawn terminal panes
-        HOME: actualHome, // Ensure Zellij uses correct home for cache/config
-        XDG_CACHE_HOME: `${actualHome}/.cache`, // Explicit cache dir
-        XDG_CONFIG_HOME: `${actualHome}/.config`, // Explicit config dir
-      },
+      env: zellijEnv,
     });
 
     ptyProcess = pty;
@@ -394,7 +494,7 @@ export async function handleZellijAttach(
     // is NOT announced here — it's emitted only after waitForZellijReady
     // confirms zellij's attach actually booted (see below).
     const outputCoalescer = createOutputCoalescer((data) => {
-      socket.emit('terminal:output', { userId, data });
+      socket.emit('terminal:output', { userId, terminalId, data });
     });
     pty.onData((chunk) => outputCoalescer.push(chunk));
 
@@ -408,6 +508,7 @@ export async function handleZellijAttach(
       // Notify daemon that terminal ended
       socket.emit('terminal:exit', {
         userId,
+        terminalId,
         exitCode,
         signal,
       });
@@ -423,8 +524,8 @@ export async function handleZellijAttach(
 
     // Daemon retires a duplicate executor: disconnect first so pty.onExit can't
     // relay a spurious terminal:exit to the browser, then exit (no reconnect).
-    socket.on('terminal:shutdown', (data: { userId: string }) => {
-      if (data.userId !== userId) return;
+    socket.on('terminal:shutdown', (data: { userId: string; terminalId: string }) => {
+      if (data.userId !== userId || data.terminalId !== terminalId) return;
       graceController?.cancel();
       feathersClient?.io.disconnect();
       feathersClient = null;
@@ -433,24 +534,27 @@ export async function handleZellijAttach(
     });
 
     // Listen for input from browser via channel
-    socket.on('terminal:input', (data: { userId: string; input: string }) => {
-      if (data.userId === userId && ptyProcess) {
+    socket.on('terminal:input', (data: { userId: string; terminalId: string; input: string }) => {
+      if (data.userId === userId && data.terminalId === terminalId && ptyProcess) {
         ptyProcess.write(data.input);
       }
     });
 
     // Same-size resize (browser's reconnect redraw) emits no SIGWINCH — force a repaint.
-    socket.on('terminal:resize', (data: { userId: string; cols: number; rows: number }) => {
-      if (data.userId !== userId || !ptyProcess) return;
-      const unchanged = data.cols === currentPtyCols && data.rows === currentPtyRows;
-      currentPtyCols = data.cols;
-      currentPtyRows = data.rows;
-      if (unchanged) {
-        forceZellijRepaint(ptyProcess, data.cols, data.rows);
-      } else {
-        ptyProcess.resize(data.cols, data.rows);
+    socket.on(
+      'terminal:resize',
+      (data: { userId: string; terminalId: string; cols: number; rows: number }) => {
+        if (data.userId !== userId || data.terminalId !== terminalId || !ptyProcess) return;
+        const unchanged = data.cols === currentPtyCols && data.rows === currentPtyRows;
+        currentPtyCols = data.cols;
+        currentPtyRows = data.rows;
+        if (unchanged) {
+          forceZellijRepaint(ptyProcess, data.cols, data.rows);
+        } else {
+          ptyProcess.resize(data.cols, data.rows);
+        }
       }
-    });
+    );
 
     // Listen for tab commands from the daemon when the user switches branches.
     socket.on('terminal:tab', async (data: { action: string; tabName: string; cwd?: string }) => {
@@ -467,12 +571,14 @@ export async function handleZellijAttach(
     });
 
     // Listen for redraw requests (when client reconnects)
-    socket.on('terminal:redraw', (data: { userId: string }) => {
-      if (data.userId === userId) forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
+    socket.on('terminal:redraw', (data: { userId: string; terminalId: string }) => {
+      if (data.userId === userId && data.terminalId === terminalId) {
+        forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
+      }
     });
 
     // Confirm zellij's attach is actually operational before announcing
-    // readiness and creating the initial tab. `zellij attach --create` boots
+    // readiness and creating the initial tab. A new Zellij session boots
     // the session asynchronously — node-pty returning a PID does NOT mean the
     // session server is up. We probe with a lightweight `zellij action` until
     // it succeeds, THEN ack ready, so the daemon's tab choreography never
@@ -485,6 +591,7 @@ export async function handleZellijAttach(
         if (feathersClient?.io.connected) {
           feathersClient.io.emit('terminal:error', {
             userId,
+            terminalId,
             message: 'Terminal failed to start: zellij session did not become ready',
           });
         }
@@ -496,7 +603,7 @@ export async function handleZellijAttach(
         return;
       }
       zellijAttached = true;
-      emitTerminalReady(socket, userId);
+      emitTerminalReady(socket, userId, terminalId);
 
       // Reattaching to an existing session does not repaint on its own; nudge a
       // resize so the frame and pane content draw without the user hitting Enter.
@@ -533,7 +640,8 @@ export async function handleZellijAttach(
         pid: pty.pid,
         sessionName,
         userId,
-        channel: `user/${userId}/terminal`,
+        terminalId,
+        channel,
       },
     };
   } catch (error) {
@@ -544,7 +652,7 @@ export async function handleZellijAttach(
     // of hanging on "connecting" forever — the readiness ack never arrives on
     // this path.
     if (feathersClient?.io.connected) {
-      feathersClient.io.emit('terminal:error', { userId, message: errorMessage });
+      feathersClient.io.emit('terminal:error', { userId, terminalId, message: errorMessage });
     }
 
     // Cancel any pending teardown timer so a failed attach doesn't keep the

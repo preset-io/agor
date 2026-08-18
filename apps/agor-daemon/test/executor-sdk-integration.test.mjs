@@ -52,7 +52,7 @@ try {
 
   const config = {
     execution: {
-      run_as_unix_user: false, // No sudo required
+      unix_user_mode: 'simple',
     },
   };
 

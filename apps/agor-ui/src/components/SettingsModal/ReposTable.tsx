@@ -178,7 +178,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
           <Empty description="No repositories yet">
             <Typography.Text type="secondary">
               Click "New Repository" to clone a remote repo or switch to "Local" mode to link an
-              existing clone. You can also run <code>agor repo add-local &lt;path&gt;</code> from
+              existing clone. You can also run <code>agor local add-repo &lt;path&gt;</code> from
               the CLI.
             </Typography.Text>
           </Empty>

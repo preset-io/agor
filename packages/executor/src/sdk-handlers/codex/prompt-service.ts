@@ -750,9 +750,9 @@ export class CodexPromptService {
       // Resolve the Authorization header via the shared MCP auth helper —
       // covers bearer / JWT (with token-mint) / OAuth (with cached & DB
       // tokens). Codex passes the bearer through `bearer_token_env_var`,
-      // not a header map, so we extract the bearer token and route it via
-      // an env var. Non-bearer schemes log a warning since Codex's CLI
-      // only supports bearer auth.
+      // while custom headers use `env_http_headers`, so secret values stay
+      // out of the SDK's generated `--config` arguments. Non-bearer schemes
+      // log a warning since Codex's CLI only supports bearer auth.
       try {
         const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
@@ -761,7 +761,26 @@ export class CodexPromptService {
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
-          serverConfig.headers = customHeaders;
+          // Codex's streamable-HTTP MCP config takes `env_http_headers`: a map
+          // of header NAME -> the NAME of an env var whose value Codex reads at
+          // runtime. (It will not accept literal header values here the way
+          // Claude's `.mcp.json` `headers` object does — that indirection is
+          // also what keeps secrets out of the SDK-generated `--config` argv.)
+          // The env var name itself is arbitrary to Codex; we synthesize a
+          // unique one per session + server + position so concurrent sessions
+          // and multi-header servers don't clobber each other in the shared
+          // process.env. The index (not the header name) keys the suffix
+          // because header names like `X-API-Key` aren't valid env-var
+          // identifiers.
+          const envHttpHeaders: Record<string, string> = {};
+          for (const [index, [headerName, headerValue]] of Object.entries(
+            customHeaders
+          ).entries()) {
+            const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}_HEADER_${index + 1}`;
+            process.env[envVarName] = headerValue;
+            envHttpHeaders[headerName] = envVarName;
+          }
+          serverConfig.env_http_headers = envHttpHeaders;
           codexDebug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
         if (authHeader) {
@@ -1042,7 +1061,13 @@ export class CodexPromptService {
       | CodexSandboxMode
       | undefined;
     const configuredSandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
-    const sandboxMode = sandboxModeEnvOverride ?? configuredSandboxMode;
+    // When Agor wraps the whole executor in its own OS-level sandbox (SRT), do
+    // NOT let Codex start its own nested bwrap — run full-access INSIDE Agor's
+    // sandbox, which already enforces the filesystem/network boundary. One layer.
+    const outerSandbox = process.env.AGOR_OUTER_SANDBOX === '1';
+    const sandboxMode: CodexSandboxMode = outerSandbox
+      ? 'danger-full-access'
+      : (sandboxModeEnvOverride ?? configuredSandboxMode);
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
     // Apps can mutate remote systems outside the filesystem sandbox. Only
@@ -1083,6 +1108,9 @@ export class CodexPromptService {
     );
 
     const codexConfigPayload: CodexConfigObject = {
+      // Agor owns durable task continuation. Codex goals can automatically
+      // continue after an internal answer without completing the SDK turn.
+      features: { goals: false },
       model_instructions_file: instructionsFile,
       ...(Object.keys(mcpServersConfig).length > 0 ? { mcp_servers: mcpServersConfig } : {}),
       // Codex Apps (for example the GitHub connector supplied by a plugin)

@@ -12,10 +12,10 @@ describe('Executor Integration', () => {
   const spawnedExecutors: string[] = [];
 
   beforeAll(() => {
-    // Create pool with minimal config (no impersonation)
+    // Create pool with trusted local execution.
     const config: AgorConfig = {
       execution: {
-        run_as_unix_user: false, // Disabled for testing (no sudo required)
+        unix_user_mode: 'simple',
       },
     };
 
@@ -171,29 +171,4 @@ describe('Executor Integration', () => {
     // Cleanup
     executor.client.offNotification('test_event');
   }, 10000);
-});
-
-describe('Executor Impersonation', () => {
-  it('should detect impersonation mode', () => {
-    // Test with impersonation disabled
-    const configDisabled: AgorConfig = {
-      execution: {
-        run_as_unix_user: false,
-      },
-    };
-
-    const poolDisabled = new ExecutorPool(configDisabled);
-    expect(poolDisabled).toBeDefined();
-
-    // Test with impersonation enabled (will fallback if sudo not available)
-    const configEnabled: AgorConfig = {
-      execution: {
-        run_as_unix_user: true,
-        executor_unix_user: 'agor_test',
-      },
-    };
-
-    const poolEnabled = new ExecutorPool(configEnabled);
-    expect(poolEnabled).toBeDefined();
-  });
 });

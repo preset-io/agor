@@ -59,6 +59,7 @@ import {
   AGENTIC_TOOL_NAMES,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
+  isValidExecutionHomeKey,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
@@ -234,6 +235,7 @@ interface CreateUserData {
   emoji?: string;
   role?: UserRole;
   unix_username?: string;
+  filesystem_home?: string;
   must_change_password?: boolean;
   avatar_url?: string | null;
   avatar?: string | null;
@@ -252,6 +254,7 @@ interface UpdateUserData {
   emoji?: string;
   role?: UserRole;
   unix_username?: string;
+  filesystem_home?: string;
   must_change_password?: boolean;
   avatar_url?: string | null;
   avatar?: string | null;
@@ -276,6 +279,13 @@ interface UpdateUserData {
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
   default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
   default_mcp_server_ids?: string[];
+}
+
+function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
+  if (value === undefined || isValidExecutionHomeKey(value)) return;
+  throw new BadRequest(
+    'Execution home key must start with a lowercase letter or underscore, contain only lowercase letters, numbers, hyphens, or underscores, and be at most 32 characters.'
+  );
 }
 
 /**
@@ -400,6 +410,7 @@ export class UsersService {
    * Create new user
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -429,6 +440,7 @@ export class UsersService {
         emoji: data.emoji || defaultEmoji,
         role,
         unix_username: data.unix_username,
+        filesystem_home: data.filesystem_home,
         must_change_password: data.must_change_password ?? false,
         created_at: now,
         updated_at: now,
@@ -452,6 +464,7 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 
@@ -476,6 +489,7 @@ export class UsersService {
     if (data.emoji !== undefined) updates.emoji = data.emoji;
     if (data.role) updates.role = data.role;
     if (data.unix_username !== undefined) updates.unix_username = data.unix_username;
+    if (data.filesystem_home !== undefined) updates.filesystem_home = data.filesystem_home;
     if (data.onboarding_completed !== undefined)
       updates.onboarding_completed = data.onboarding_completed;
 

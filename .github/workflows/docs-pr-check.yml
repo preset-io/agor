@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'apps/agor-docs/**'
+      - 'README.md'
+      - 'docker/README.md'
+      - 'packages/agor-live/README.md'
+      - 'apps/agor-cli/src/commands/daemon/restart.ts'
       - 'pnpm-lock.yaml'
       - '.github/workflows/docs-pr-check.yml'
 

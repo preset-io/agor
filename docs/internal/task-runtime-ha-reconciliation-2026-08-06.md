@@ -1,5 +1,7 @@
 # Task runtime HA reconciliation
 
+> **Historical audit record.** Unix impersonation, sudoers, POSIX projection, and related paths cited below were removed in 0.25; file pointers describe the audited revision, not the current tree.
+
 **Checkpoint date:** 2026-08-07
 **Base dependencies:** scheduler HA PR [#2174](https://github.com/preset-io/agor/pull/2174), merged as `f48e929e`, and Session queue HA PR [#2180](https://github.com/preset-io/agor/pull/2180), merged as `a1dc2c15`.
 
@@ -106,8 +108,9 @@ Initial HA support for process tracking is intentionally narrow:
 - Local process handles are scoped to one daemon application via a `WeakMap`; tests can construct two applications in one process without sharing ownership accidentally.
 - Only the daemon with the matching tracked PID/PGID may claim local verified absence.
 - Missing local tracking is **not** absence proof.
+- After cooperative quiescence, local containment gives the process wrapper a brief exit grace. This includes transient `EPERM` inspection in strict mode while a root-owned `sudo` wrapper unwinds; only a subsequent explicit absence result is authoritative.
 - A non-owner waits a short grace period for the owner, then may reclaim the durable request, but containment remains `unverified` without an authoritative handle. The Task stays `stopping`.
-- A branch owner/admin may force-fail an unverified Task by typing its short ID. This does not convert the evidence to verified.
+- A branch owner/admin may force-fail an unverified Task by typing the stable literal `STOP`. This changes durable status only; it does not convert the evidence to verified or guarantee process termination.
 - Local executors are detached from the daemon process, but survival still depends on the execution substrate. If the substrate survives launcher loss, they may reconnect and heartbeat through another replica. The checked-in shared-local Compose smoke stack does not guarantee survival when the whole daemon container is lost.
 - Standalone graceful shutdown retains local PGID containment. A shared
   replica does not intentionally kill its detached executors, allowing a

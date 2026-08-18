@@ -33,10 +33,6 @@ import { DistributedHealthMonitor } from './services/distributed-health-monitor.
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
-import {
-  MCPCatalogIngestionWorker,
-  resolveMCPCatalogOptions,
-} from './services/mcp-catalog-ingestion.js';
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
@@ -708,7 +704,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
   if (config.execution?.allow_web_terminal !== false) {
     const unixMode = config.execution?.unix_user_mode ?? 'simple';
-    // Delegated mode does not impersonate either: without an executor command
+    // Without an executor command
     // template routing terminals elsewhere, a local terminal still runs as the
     // daemon user, so the same warning applies.
     const terminalRunsAsDaemon =
@@ -719,12 +715,30 @@ export async function startup(ctx: StartupContext): Promise<void> {
         `\x1b[33m⚠️  SECURITY: allow_web_terminal is enabled (default) with unix_user_mode=${unixMode}.\x1b[0m\n` +
           '   Any member-role user can open a shell running as the daemon user, with read\n' +
           '   access to ~/.agor/config.yaml, agor.db, and the JWT secret.\n' +
-          "   Recommended: set execution.unix_user_mode to 'insulated' or 'strict' to\n" +
-          '   isolate terminal sessions from the daemon process, or set\n' +
+          "   Recommended: set execution.unix_user_mode to 'sandbox' to isolate\n" +
+          '   terminal sessions from daemon state, or set\n' +
           '   execution.allow_web_terminal: false to disable the web terminal entirely.'
       );
     } else {
       console.log(`🖥️  Web terminal enabled (members+, unix mode: ${unixMode})`);
+    }
+  }
+
+  // Isolation-mode banner.
+  {
+    const unixMode = config.execution?.unix_user_mode ?? 'simple';
+    if (unixMode === 'sandbox') {
+      const sandboxEnabled = config.execution?.sandbox?.enabled === true;
+      console.log(
+        '🧰 unix_user_mode=sandbox — OS isolation via the executor filesystem sandbox ' +
+          `(RBAC on, per-user home overlay). sandbox.enabled=${sandboxEnabled}.`
+      );
+      if (process.platform !== 'linux') {
+        console.warn(
+          `\x1b[33m⚠️  unix_user_mode=sandbox requires Linux (bubblewrap); platform is ${process.platform}. ` +
+            'Sessions will fail to start if sandbox.fail_if_unavailable is true (the default in this mode).\x1b[0m'
+        );
+      }
     }
   }
 
@@ -787,17 +801,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
   knowledgeEmbeddingIndexer.start();
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
-
-  // 8b. Start MCP catalog ingestion. The catalog is global, so this runs once
-  // per daemon regardless of tenancy mode; it enters an explicit system
-  // database scope rather than any tenant's.
-  const mcpCatalogIngestion = new MCPCatalogIngestionWorker(
-    db,
-    resolveMCPCatalogOptions(config.mcp_catalog)
-  );
-  mcpCatalogIngestion.start();
-  app.set('mcpCatalogIngestion', mcpCatalogIngestion);
-  console.log('📚 MCP catalog ingestion scheduled');
 
   // 9. Initialize gateway listeners. Static mode preserves the historical
   // tenant. Auth-resolved mode performs narrow global ID discovery, then
@@ -869,9 +872,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();
       }
-
-      console.log('📚 Stopping MCP catalog ingestion...');
-      mcpCatalogIngestion.stop();
 
       // Stop scheduler
       if (schedulerService) {

@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   boardObjectQueryValidator,
   branchQueryValidator,
+  mcpCatalogQueryValidator,
   mcpServerQueryValidator,
+  messageQueryValidator,
   sessionQueryValidator,
+  taskQueryValidator,
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
@@ -120,6 +123,69 @@ describe('sessionQueryValidator', () => {
   });
 });
 
+describe('messageQueryValidator', () => {
+  it('coerces supported pagination and preserves a bounded session set', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: { $in: ['019e8e1c', '019e8e1d'] },
+          message_id: { $gt: '019e8e1a', $lte: '019e8e1f' },
+          task_id: '019e8e1e',
+          role: 'assistant',
+          $limit: '1000',
+          $skip: '12000',
+          $sort: { index: '-1' },
+          $select: ['message_id', 'content'],
+        },
+      },
+    };
+
+    await typedValidateQuery(messageQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      session_id: { $in: ['019e8e1c', '019e8e1d'] },
+      message_id: { $gt: '019e8e1a', $lte: '019e8e1f' },
+      task_id: '019e8e1e',
+      role: 'assistant',
+      $limit: 1000,
+      $skip: 12000,
+      $sort: { index: -1 },
+      $select: ['message_id', 'content'],
+    });
+  });
+
+  it('rejects unknown filters instead of broadening the query', async () => {
+    const context = { params: { query: { task: '019e8e1e' } } };
+    await expect(typedValidateQuery(messageQueryValidator)(context)).rejects.toThrow();
+  });
+});
+
+describe('taskQueryValidator', () => {
+  it('preserves bounded hydration cursors and rejects unsupported fields', async () => {
+    const valid = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+          $limit: '1000',
+        },
+      },
+    };
+    await typedValidateQuery(taskQueryValidator)(valid);
+    expect(valid.params.query).toEqual({
+      session_id: '019e8e1c',
+      task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+      $limit: 1000,
+    });
+
+    await expect(
+      typedValidateQuery(taskQueryValidator)({
+        params: { query: { session_id: '019e8e1c', updated_at: 123 } },
+      })
+    ).rejects.toThrow();
+  });
+});
+
 describe('mcpServerQueryValidator', () => {
   it('preserves forUserId for executor per-user OAuth token injection', async () => {
     const context = {
@@ -140,5 +206,39 @@ describe('mcpServerQueryValidator', () => {
       enabled: true,
       forUserId: '019e8e1c',
     });
+  });
+});
+
+describe('mcpCatalogQueryValidator', () => {
+  it('strips every filter, because the catalog read takes no parameters', async () => {
+    // `find` returns the whole catalog and the browser narrows it. A tab left
+    // open across the deploy that removed these still sends them; stripping
+    // here is what stops them reaching a method that would ignore them
+    // silently, which is how a filter ends up looking like it works.
+    const context = {
+      params: {
+        query: {
+          search: 'linear',
+          category: 'dev-tools',
+          capability: 'issues',
+          auth_types: ['none', 'unknown'],
+          sort: 'name',
+          $limit: 24,
+          $skip: 48,
+          unknown: 'removed',
+        },
+      },
+    };
+
+    await typedValidateQuery(mcpCatalogQueryValidator)(context);
+
+    expect(context.params.query).toEqual({});
+  });
+
+  it('accepts an empty query rather than rejecting the only call there is', async () => {
+    const context = { params: { query: {} } };
+
+    await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).resolves.not.toThrow();
+    expect(context.params.query).toEqual({});
   });
 });

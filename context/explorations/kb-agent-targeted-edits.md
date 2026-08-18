@@ -1,5 +1,10 @@
 # Knowledge Base Agent Targeted Edits
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🔬 Exploration / design.
 **Created:** 2026-06-06
 **Scope:** DB-backed Knowledge documents and agent/MCP editing workflows. This is not an implementation plan for artifacts generally, but it borrows lessons from the artifact land/publish round trip.

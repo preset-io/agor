@@ -13,6 +13,7 @@ export interface AgenticToolIntegration {
   authentication: 'api-key' | 'runtime-managed';
   apiKeyName?: ApiKeyName;
   keyCreationUrl?: string;
+  billingUrl?: string;
   sdkVersion?: string;
   unverifiedTerminationReason?: string;
   /** Integration-owned model resolution and persisted-shape policy. */

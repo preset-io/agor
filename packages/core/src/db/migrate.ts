@@ -19,15 +19,22 @@
  * **Single source of truth:** packages/core/src/db/schema.ts
  */
 
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
-import { insert, isPostgresDatabase, isSQLiteDatabase } from './database-wrapper';
+import {
+  getDatabaseInstanceDialect,
+  insert,
+  isPostgresDatabase,
+  isSQLiteDatabase,
+} from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
+import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-scope';
 
 /**
@@ -43,11 +50,161 @@ export class MigrationError extends Error {
   }
 }
 
-const OFFLINE_CUTOVER_MIGRATIONS = new Set([
-  '0074_knowledge_embedding_claims',
-  '0078_mcp_oauth_pending_flows',
-  '0082_github_install_state',
+/** Maximum length of an automation-facing migration impact summary. */
+export const MIGRATION_IMPACT_SUMMARY_MAX_LENGTH = 200;
+
+export type MigrationImpactClassification =
+  | 'schema'
+  | 'data'
+  | 'protocol'
+  | 'performance'
+  | 'unknown';
+export type MigrationUserAction = 'none' | 'required' | 'unknown';
+export type MigrationRollbackCompatibility = 'compatible' | 'incompatible' | 'unknown';
+
+/** Bounded metadata maintained by the migration runtime, never inferred from SQL or CLI text. */
+export interface MigrationImpact {
+  classification: MigrationImpactClassification;
+  userAction: MigrationUserAction;
+  rollbackCompatibility: MigrationRollbackCompatibility;
+  summary: string;
+}
+
+export interface MigrationImpactPolicy {
+  requiresOfflineCutover: boolean;
+  impact: Readonly<MigrationImpact>;
+}
+
+export interface PendingMigrationIntrospection {
+  name: string;
+  requiresOfflineCutover: boolean;
+  impact: MigrationImpact;
+}
+
+/** Stable, versioned contract returned by migration status tooling. */
+export interface MigrationStatusIntrospection {
+  schemaVersion: 1;
+  dialect: DatabaseDialect;
+  appliedMigrations: string[];
+  pendingMigrations: PendingMigrationIntrospection[];
+  requiresOfflineCutover: boolean;
+  databaseAheadOfBinary: boolean;
+}
+
+function defineMigrationImpact(impact: MigrationImpact): Readonly<MigrationImpact> {
+  if (impact.summary.length > MIGRATION_IMPACT_SUMMARY_MAX_LENGTH) {
+    throw new Error(
+      `Migration impact summary exceeds ${MIGRATION_IMPACT_SUMMARY_MAX_LENGTH} characters`
+    );
+  }
+  return Object.freeze(impact);
+}
+
+const UNKNOWN_MIGRATION_IMPACT = defineMigrationImpact({
+  classification: 'unknown',
+  userAction: 'unknown',
+  rollbackCompatibility: 'unknown',
+  summary: 'Migration impact metadata is unavailable.',
+});
+
+const QUEUED_MESSAGES_MIGRATION_POLICY: MigrationImpactPolicy = {
+  requiresOfflineCutover: false,
+  impact: defineMigrationImpact({
+    classification: 'data',
+    userAction: 'required',
+    rollbackCompatibility: 'compatible',
+    summary: 'Queued work interrupted by the migration may need to be submitted again.',
+  }),
+};
+
+export function createMigrationImpactRegistry(
+  entries: ReadonlyArray<readonly [string, MigrationImpactPolicy]>
+): {
+  impacts: ReadonlyMap<string, MigrationImpactPolicy>;
+  offlineCutoverMigrations: ReadonlySet<string>;
+} {
+  const impacts = new Map(entries);
+  const offlineCutoverMigrations = new Set(
+    entries.filter(([, policy]) => policy.requiresOfflineCutover).map(([name]) => name)
+  );
+  return { impacts, offlineCutoverMigrations };
+}
+
+const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  ['0030_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
+  ['0040_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
+  ...[
+    '0074_knowledge_embedding_claims',
+    '0078_mcp_oauth_pending_flows',
+    '0082_github_install_state',
+  ].map(
+    (name) =>
+      [
+        name,
+        {
+          requiresOfflineCutover: true,
+          impact: defineMigrationImpact({
+            classification: 'protocol',
+            userAction: 'required',
+            rollbackCompatibility: 'incompatible',
+            summary: 'Requires a coordinated offline cutover and is not rollback compatible.',
+          }),
+        },
+      ] as const
+  ),
+  [
+    '0083_transcript_hydration_keysets',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'performance',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary: 'Requires a coordinated offline cutover to build indexes; rollback is compatible.',
+      }),
+    },
+  ],
 ]);
+
+const NO_OFFLINE_ACTION_SUMMARY =
+  'No offline cutover is required for this database and migration state.';
+
+export function getMigrationImpact(name: string): MigrationImpact {
+  return MIGRATION_IMPACT_REGISTRY.impacts.get(name)?.impact ?? UNKNOWN_MIGRATION_IMPACT;
+}
+
+export function introspectMigrationStatus(
+  dialect: DatabaseDialect,
+  status: {
+    pending: readonly string[];
+    applied: readonly string[];
+    dbAheadOfBinary: boolean;
+  }
+): MigrationStatusIntrospection {
+  const offline = new Set(pendingOfflineCutoverMigrations(dialect, status));
+  const pendingMigrations = status.pending.map((name) => {
+    const requiresOfflineCutover = offline.has(name);
+    const registeredPolicy = MIGRATION_IMPACT_REGISTRY.impacts.get(name);
+    const registeredImpact = registeredPolicy?.impact ?? UNKNOWN_MIGRATION_IMPACT;
+    const impact =
+      registeredPolicy?.requiresOfflineCutover === true && !requiresOfflineCutover
+        ? defineMigrationImpact({
+            ...registeredImpact,
+            userAction: 'none',
+            summary: NO_OFFLINE_ACTION_SUMMARY,
+          })
+        : registeredImpact;
+    return { name, requiresOfflineCutover, impact };
+  });
+  return {
+    schemaVersion: 1,
+    dialect,
+    appliedMigrations: [...status.applied],
+    pendingMigrations,
+    requiresOfflineCutover: pendingMigrations.some((migration) => migration.requiresOfflineCutover),
+    databaseAheadOfBinary: status.dbAheadOfBinary,
+  };
+}
 
 export interface RunMigrationsOptions {
   /**
@@ -69,14 +226,19 @@ export class OfflineMigrationCutoverRequiredError extends MigrationError {
   }
 }
 
-export function pendingOfflineCutoverMigrations(status: {
-  pending: readonly string[];
-  applied: readonly string[];
-}): string[] {
+export function pendingOfflineCutoverMigrations(
+  dialect: DatabaseDialect,
+  status: {
+    pending: readonly string[];
+    applied: readonly string[];
+  }
+): string[] {
   // A genuinely fresh database cannot have an old worker using the pre-claim
   // protocol, so first installation remains automatic.
-  if (status.applied.length === 0) return [];
-  return status.pending.filter((tag) => OFFLINE_CUTOVER_MIGRATIONS.has(tag));
+  if (dialect !== 'postgresql' || status.applied.length === 0) return [];
+  return status.pending.filter((tag) =>
+    MIGRATION_IMPACT_REGISTRY.offlineCutoverMigrations.has(tag)
+  );
 }
 
 function getRootCause(error: unknown): unknown {
@@ -177,17 +339,21 @@ async function _bootstrapMigrations(db: Database): Promise<void> {
 function getMigrationsFolder(db: Database): string {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
-  const isProduction = __dirname.includes('/dist/');
   const dialect = isSQLiteDatabase(db) ? 'sqlite' : 'postgres';
 
-  // Detect if running from bundled structure (agor-live package)
-  // In bundled package: dist/core/db/index.js → go up 1 level to dist/core/
-  // In monorepo dev: src/db/migrate.ts → go up 2 levels to packages/core/
-  // In monorepo prod: dist/db/migrate.js → go up 2 levels to packages/core/
-  const isBundled = __dirname.includes('/dist/core/');
-  const levelsUp = isProduction && isBundled ? '..' : '../..';
-
-  return join(__dirname, levelsUp, 'drizzle', dialect);
+  // tsup can place this module at an entry root or under db/, while source
+  // execution places it under src/db/. Resolve by the shipped data instead of
+  // inferring a topology from directory names; this also supports @agor/core
+  // as a normal bundled dependency rather than a postinstall-created symlink.
+  const candidates = [
+    join(__dirname, 'drizzle', dialect),
+    join(__dirname, '..', 'drizzle', dialect),
+    join(__dirname, '../..', 'drizzle', dialect),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(join(candidate, 'meta', '_journal.json'))) ??
+    candidates[0]
+  );
 }
 
 /**
@@ -301,13 +467,14 @@ export async function runMigrations(
   try {
     console.log('Running database migrations...');
 
+    const dialect = getDatabaseInstanceDialect(db);
     const migrationsFolder = getMigrationsFolder(db);
     console.log(`Using migrations folder: ${migrationsFolder}`);
-    console.log(`Database dialect: ${isSQLiteDatabase(db) ? 'sqlite' : 'postgres'}`);
+    console.log(`Database dialect: ${dialect === 'sqlite' ? 'sqlite' : 'postgres'}`);
 
-    if (isPostgresDatabase(db) && options.allowOfflineCutover !== true) {
+    if (dialect === 'postgresql' && options.allowOfflineCutover !== true) {
       const status = await checkMigrationStatus(db);
-      const offlineMigrations = pendingOfflineCutoverMigrations(status);
+      const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', status);
       if (offlineMigrations.length > 0) {
         throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
       }

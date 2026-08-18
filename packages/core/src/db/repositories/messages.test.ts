@@ -1,15 +1,18 @@
 /**
  * MessagesRepository Tests
  *
- * Tests for CRUD operations on conversation messages with bulk operations,
- * range filtering, and JSON data field handling.
+ * Tests for CRUD operations on conversation messages, range filtering, and
+ * JSON data field handling.
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
+import { select, update } from '../database-wrapper';
+import { messages as messagesTable } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -50,6 +53,15 @@ function createMessageData(overrides?: {
     tool_uses: overrides?.tool_uses,
     metadata: overrides?.metadata,
   };
+}
+
+async function createMessages(
+  repository: MessagesRepository,
+  messageList: Message[]
+): Promise<Message[]> {
+  const created: Message[] = [];
+  for (const message of messageList) created.push(await repository.create(message));
+  return created;
 }
 
 /**
@@ -119,6 +131,21 @@ async function createTestTask(db: any, sessionId: SessionID): Promise<TaskID> {
 // ============================================================================
 
 describe('MessagesRepository.create', () => {
+  dbTest('rejects noncanonical supplied IDs before SQLite persistence', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+
+    await expect(
+      messages.create(
+        createMessageData({
+          session_id: sessionId,
+          message_id: `${generateId()}-overlength` as MessageID,
+        })
+      )
+    ).rejects.toThrow('message_id must be a canonical full UUID');
+    await expect(messages.findBySessionId(sessionId)).resolves.toEqual([]);
+  });
+
   dbTest('sanitizes PostgreSQL-invalid Unicode in JSON and preview fields', async ({ db }) => {
     const actualNul = String.fromCharCode(0);
     const loneHighSurrogate = String.fromCharCode(0xd800);
@@ -175,6 +202,28 @@ describe('MessagesRepository.create', () => {
     expect(created.task_id).toBeUndefined();
   });
 
+  dbTest('rejects a Task from a different Session during create', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const messageSessionId = await createTestSession(db);
+    const taskSessionId = await createTestSession(db);
+    const taskId = await createTestTask(db, taskSessionId);
+
+    await expect(
+      messages.create(createMessageData({ session_id: messageSessionId, task_id: taskId }))
+    ).rejects.toThrow('task_id must belong to the Message Session');
+  });
+
+  dbTest('rejects a taskless Message whose parent Session does not exist', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    await expect(
+      messages.create(
+        createMessageData({
+          session_id: '99999999-9999-7999-8999-999999999999' as SessionID,
+        })
+      )
+    ).rejects.toThrow('session_id must belong to the current tenant');
+  });
+
   dbTest('should store all JSON fields (content, tool_uses, metadata)', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
@@ -211,51 +260,6 @@ describe('MessagesRepository.create', () => {
     expect(created.content).toEqual(contentBlocks);
     expect(created.tool_uses).toEqual(toolUses);
     expect(created.metadata).toEqual(metadata);
-  });
-});
-
-// ============================================================================
-// CreateMany (Bulk Insert)
-// ============================================================================
-
-describe('MessagesRepository.createMany', () => {
-  dbTest('sanitizes every row in bulk inserts', async ({ db }) => {
-    const repository = new MessagesRepository(db);
-    const sessionId = await createTestSession(db);
-    const created = await repository.createMany([
-      createMessageData({ session_id: sessionId, index: 0, content: 'a\0' }),
-      createMessageData({ session_id: sessionId, index: 1, content: 'b\ud800' }),
-    ]);
-    expect(created.map((message) => message.content)).toEqual(['a�', 'b�']);
-  });
-  dbTest('should bulk insert multiple messages and preserve order', async ({ db }) => {
-    const messages = new MessagesRepository(db);
-    const sessionId = await createTestSession(db);
-
-    const messageList = Array.from({ length: 10 }, (_, i) =>
-      createMessageData({
-        session_id: sessionId,
-        index: i,
-        content: `Message ${i}`,
-      })
-    );
-
-    const created = await messages.createMany(messageList);
-
-    expect(created).toHaveLength(10);
-    created.forEach((msg, i) => {
-      expect(msg.index).toBe(i);
-      expect(msg.content).toBe(`Message ${i}`);
-    });
-  });
-
-  dbTest('should throw error for empty array', async ({ db }) => {
-    const messages = new MessagesRepository(db);
-
-    // Drizzle's .values() requires at least one value
-    await expect(messages.createMany([])).rejects.toThrow(
-      'values() must be called with at least one value'
-    );
   });
 });
 
@@ -380,6 +384,139 @@ describe('MessagesRepository.findAll', () => {
 
     const visible = await messages.findAll({ visibleToUserId: viewerId });
     expect(visible.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
+
+    const visiblePage = await messages.findPage({ visibleToUserId: viewerId, limit: 1, skip: 0 });
+    expect(visiblePage.total).toBe(1);
+    expect(visiblePage.data.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
+  });
+});
+
+describe('MessagesRepository.findPage', () => {
+  dbTest('counts exact matches and hydrates only the ordered page', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    await createMessages(
+      messages,
+      Array.from({ length: 32 }, (_, index) =>
+        createMessageData({
+          session_id: sessionId,
+          index,
+          role: MessageRole.ASSISTANT,
+          content: {
+            index,
+            payload: new Array(100).fill(`message-${index}`),
+          } as unknown as Message['content'],
+        })
+      )
+    );
+
+    const client = (
+      db as unknown as {
+        $client: { execute: (...args: unknown[]) => Promise<unknown> };
+      }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await messages.findPage({
+      sessionId,
+      role: MessageRole.ASSISTANT,
+      sort: { index: 1 },
+      limit: 2,
+      skip: 7,
+    });
+
+    expect(page.total).toBe(32);
+    expect(page.data.map((message) => message.index)).toEqual([7, 8]);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
+  });
+
+  dbTest('appends message_id to preserve stable ordering across tied pages', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const tiedMessages = [
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000003' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000001' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+      createMessageData({
+        message_id: '00000000-0000-0000-0000-000000000002' as MessageID,
+        session_id: sessionId,
+        index: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+    ];
+    await createMessages(messages, tiedMessages);
+    for (const tiedMessage of tiedMessages) {
+      await update(db, messagesTable)
+        .set({ created_at: new Date('2026-01-01T00:00:00.000Z') })
+        .where(eq(messagesTable.message_id, tiedMessage.message_id))
+        .run();
+    }
+
+    const firstPage = await messages.findPage({
+      sessionId,
+      sort: { created_at: -1 },
+      limit: 2,
+      skip: 0,
+    });
+    const secondPage = await messages.findPage({
+      sessionId,
+      sort: { created_at: -1 },
+      limit: 2,
+      skip: 2,
+    });
+
+    expect(firstPage.data.map((message) => message.message_id)).toEqual([
+      tiedMessages[1].message_id,
+      tiedMessages[2].message_id,
+    ]);
+    expect(secondPage.data.map((message) => message.message_id)).toEqual([
+      tiedMessages[0].message_id,
+    ]);
+    expect([...firstPage.data, ...secondPage.data].map((message) => message.message_id)).toEqual(
+      [...tiedMessages]
+        .sort((left, right) => left.message_id.localeCompare(right.message_id))
+        .map((message) => message.message_id)
+    );
+  });
+
+  dbTest('projects selected fields in the repository page query', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await messages.create(
+      createMessageData({
+        session_id: sessionId,
+        content: 'large payload that an ID-only hydration pass must not decode',
+      })
+    );
+
+    const idsOnly = await messages.findPage({
+      sessionId,
+      select: ['message_id'],
+      limit: 10,
+    });
+    expect(idsOnly).toEqual({ total: 1, data: [{ message_id: created.message_id }] });
+
+    const contentOnly = await messages.findPage({
+      sessionId,
+      select: ['message_id', 'content'],
+      limit: 10,
+    });
+    expect(contentOnly).toEqual({
+      total: 1,
+      data: [{ message_id: created.message_id, content: created.content }],
+    });
   });
 });
 
@@ -486,7 +623,26 @@ describe('MessagesRepository.findByRange', () => {
 // ============================================================================
 
 describe('MessagesRepository.update', () => {
-  dbTest('should update message fields and preserve unchanged fields', async ({ db }) => {
+  dbTest('preserves the immutable database creation timestamp', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.create(createMessageData({ session_id: sessionId }));
+    const originalCreatedAt = new Date('2024-01-02T03:04:05.000Z');
+    await update(db, messagesTable)
+      .set({ created_at: originalCreatedAt })
+      .where(eq(messagesTable.message_id, created.message_id))
+      .run();
+
+    await repository.update(created.message_id, { content_preview: 'patched' });
+
+    const row = await select(db, { created_at: messagesTable.created_at })
+      .from(messagesTable)
+      .where(eq(messagesTable.message_id, created.message_id))
+      .one();
+    expect(row?.created_at).toEqual(originalCreatedAt);
+  });
+
+  dbTest('updates mutable content while preserving immutable identity fields', async ({ db }) => {
     const messages = new MessagesRepository(db);
     const sessionId = await createTestSession(db);
 
@@ -502,12 +658,33 @@ describe('MessagesRepository.update', () => {
     const updated = await messages.update(created.message_id, {
       content: 'Updated',
       role: MessageRole.ASSISTANT,
+      type: 'system',
+      index: 99,
     });
 
     expect(updated.content).toBe('Updated');
-    expect(updated.role).toBe(MessageRole.ASSISTANT);
+    expect(updated.role).toBe(MessageRole.USER);
+    expect(updated.type).toBe(data.type);
     expect(updated.index).toBe(5); // Preserved
     expect(updated.metadata).toEqual({ model: 'claude-3' }); // Preserved
+  });
+
+  dbTest('serializes patches so distinct mutable fields are not lost', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const created = await repository.create(
+      createMessageData({ session_id: sessionId, content: 'before', metadata: { before: true } })
+    );
+
+    await Promise.all([
+      repository.update(created.message_id, { content: 'after' }),
+      repository.update(created.message_id, { metadata: { patched: true } }),
+    ]);
+
+    await expect(repository.findById(created.message_id)).resolves.toMatchObject({
+      content: 'after',
+      metadata: { patched: true },
+    });
   });
 
   dbTest('sanitizes all JSON and preview fields on finalization update', async ({ db }) => {
@@ -561,38 +738,6 @@ describe('MessagesRepository.update', () => {
 });
 
 // ============================================================================
-// AssignToTask
-// ============================================================================
-
-describe('MessagesRepository.assignToTask', () => {
-  dbTest('should assign and reassign message to task', async ({ db }) => {
-    const messages = new MessagesRepository(db);
-    const sessionId = await createTestSession(db);
-    const taskId1 = await createTestTask(db, sessionId);
-    const taskId2 = await createTestTask(db, sessionId);
-
-    const data = createMessageData({
-      session_id: sessionId,
-      content: 'Test content',
-      index: 5,
-      metadata: { model: 'claude-3' },
-    });
-    const created = await messages.create(data);
-
-    // Assign to first task
-    const updated1 = await messages.assignToTask(created.message_id, taskId1);
-    expect(updated1.task_id).toBe(taskId1);
-    expect(updated1.content).toBe('Test content'); // Preserved
-
-    // Reassign to second task
-    const updated2 = await messages.assignToTask(created.message_id, taskId2);
-    expect(updated2.task_id).toBe(taskId2);
-    expect(updated2.index).toBe(5); // Preserved
-    expect(updated2.metadata).toEqual({ model: 'claude-3' }); // Preserved
-  });
-});
-
-// ============================================================================
 // Delete
 // ============================================================================
 
@@ -631,7 +776,7 @@ describe('MessagesRepository.deleteBySessionId', () => {
     const messageList = Array.from({ length: 100 }, (_, i) =>
       createMessageData({ session_id: sessionId1, index: i })
     );
-    await messages.createMany(messageList);
+    await createMessages(messages, messageList);
 
     // Create messages for session2
     await messages.create(createMessageData({ session_id: sessionId2, index: 0 }));

@@ -3,7 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
-import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const claudeQueryMock = vi.hoisted(() => vi.fn());
 
@@ -37,13 +37,13 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
 });
 
 vi.mock('./codex-auth-shared.js', () => ({
-  resolveCodexUnixIdentity: vi.fn(),
+  resolveCodexCredentialRoute: vi.fn(),
 }));
 
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const inspectCodexAuthViaExecutorMock = vi.mocked(inspectCodexAuthViaExecutor);
-const resolveCodexUnixIdentityMock = vi.mocked(resolveCodexUnixIdentity);
+const resolveCodexCredentialRouteMock = vi.mocked(resolveCodexCredentialRoute);
 const TEST_DB = { run: vi.fn() } as never;
 
 function mockClaudeAccount(account: Record<string, unknown> | null) {
@@ -251,10 +251,10 @@ describe('check-auth codex auth.json probe', () => {
 
   beforeEach(() => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
-    resolveCodexUnixIdentityMock.mockResolvedValue({
+    resolveCodexCredentialRouteMock.mockResolvedValue({
       ok: true,
       unixUser: null,
-      reportedUnixUser: null,
+      delegatedHomeKey: null,
       userId: 'user-1' as never,
     });
   });
@@ -296,7 +296,7 @@ describe('check-auth codex auth.json probe', () => {
   });
 
   it('identity resolution failure → unknown; missing unix_username → unauthenticated', async () => {
-    resolveCodexUnixIdentityMock.mockResolvedValue({
+    resolveCodexCredentialRouteMock.mockResolvedValue({
       ok: false,
       reason: 'resolve-failed',
       message: 'x',
@@ -305,7 +305,7 @@ describe('check-auth codex auth.json probe', () => {
       'unknown'
     );
 
-    resolveCodexUnixIdentityMock.mockResolvedValue({
+    resolveCodexCredentialRouteMock.mockResolvedValue({
       ok: false,
       reason: 'missing-username',
       message: 'x',

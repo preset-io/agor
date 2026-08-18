@@ -152,7 +152,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         permission_source: row.permission_source ?? 'override',
         others_can: row.others_can ?? undefined,
         others_fs_access: row.others_fs_access ?? undefined,
-        unix_group: row.unix_group ?? undefined,
         // Branch storage mode
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,
@@ -208,7 +207,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       permission_source: branch.permission_source ?? 'override',
       others_can: branch.others_can ?? 'session',
       others_fs_access: branch.others_fs_access ?? null,
-      unix_group: branch.unix_group ?? null,
       // Branch storage mode (default 'worktree' matches schema default)
       storage_mode: branch.storage_mode ?? 'worktree',
       clone_depth: branch.clone_depth ?? null,
@@ -422,6 +420,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
+   * Return the complete branch inventory for one repository without transport
+   * pagination. Repository deletion uses this after locking the parent row so
+   * every database-cascaded removal has a corresponding tombstone.
+   */
+  async findAllByRepoId(repoId: UUID): Promise<Branch[]> {
+    return this.findAll({ repo_id: repoId });
   }
 
   /**
