@@ -7,6 +7,12 @@ export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
 export type ResolvedSdkWatchdogConfig = Required<
   NonNullable<AgorExecutionSettings['sdk_watchdog']>
 >;
+export type ResolvedClaudeBackgroundTaskConfig = Required<
+  NonNullable<AgorExecutionSettings['claude_background_tasks']>
+>;
+
+export const CLAUDE_BACKGROUND_TASK_SILENCE_TIMEOUT_MS = 30 * 60_000;
+export const CLAUDE_BACKGROUND_TASK_SETTLED_GRACE_MS = 2 * 60_000;
 
 export interface ResolvedExecutorHeartbeatConfig {
   enabled: boolean;
@@ -68,6 +74,24 @@ export function resolveDispatchConnectTimeoutMs(execution?: AgorExecutionSetting
     EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS,
     'execution.dispatch_connect_timeout_ms'
   );
+}
+
+export function resolveClaudeBackgroundTaskConfig(
+  execution?: AgorExecutionSettings
+): ResolvedClaudeBackgroundTaskConfig {
+  const raw = execution?.claude_background_tasks;
+  return {
+    silence_timeout_ms: positiveSafeInteger(
+      raw?.silence_timeout_ms,
+      CLAUDE_BACKGROUND_TASK_SILENCE_TIMEOUT_MS,
+      'execution.claude_background_tasks.silence_timeout_ms'
+    ),
+    settled_grace_ms: positiveSafeInteger(
+      raw?.settled_grace_ms,
+      CLAUDE_BACKGROUND_TASK_SETTLED_GRACE_MS,
+      'execution.claude_background_tasks.settled_grace_ms'
+    ),
+  };
 }
 
 export function resolveSdkWatchdogConfig(

@@ -98,7 +98,22 @@ describe('buildResolvedConfigSlice', () => {
           abort_grace_ms: 15_000,
           claude_idle_timeout_ms: 3_600_000,
         },
+        claude_background_tasks: {
+          silence_timeout_ms: 1_800_000,
+          settled_grace_ms: 120_000,
+        },
       },
+    });
+  });
+
+  it('carries configured Claude background-task bounds through to the executor', async () => {
+    await writeConfigYaml(
+      'execution:\n  claude_background_tasks:\n    silence_timeout_ms: 5400000\n    settled_grace_ms: 30000\n'
+    );
+    const slice = buildResolvedConfigSlice(loadConfigSync());
+    expect(slice.execution?.claude_background_tasks).toEqual({
+      silence_timeout_ms: 5_400_000,
+      settled_grace_ms: 30_000,
     });
   });
 

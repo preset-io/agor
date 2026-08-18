@@ -52,6 +52,12 @@ export const ResolvedConfigSliceSchema = z.object({
           claude_idle_timeout_ms: z.number().int().positive().nullable(),
         })
         .optional(),
+      claude_background_tasks: z
+        .object({
+          silence_timeout_ms: z.number().int().positive(),
+          settled_grace_ms: z.number().int().positive(),
+        })
+        .optional(),
     })
     .optional(),
 

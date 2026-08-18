@@ -890,7 +890,32 @@ execution:
 `observe` records what would have fired. Use `enforce` only after reviewing
 real-workload diagnostics for false positives; `disabled` is the rollback
 switch. Unknown SDK events fail open while they continue, permission/input
-waits pause the clock, and known active Claude tools are not timed out.
+waits pause the clock, and known active Claude tools are not timed out. A Claude
+background task relaxes the idle check to plain SDK silence rather than
+suspending it, so a task that never reports completion cannot disarm the
+watchdog for the rest of the query.
+
+### Claude Background Tasks
+
+A finished Claude turn is held open while its background Agent, Workflow, or
+shell tasks are still running, so the SDK can wake another turn with their
+output. Two last-resort bounds stop a task that never reports a terminal signal
+from wedging the Task in `running` forever:
+
+```yaml
+execution:
+  claude_background_tasks:
+    silence_timeout_ms: 1800000 # 30m: tasks outstanding, stream silent
+    settled_grace_ms: 120000 # 2m: nothing outstanding, waiting for the next turn
+```
+
+Both bound only that held-open window, and only while the stream is quiet. Any
+SDK message re-arms them, a resumed top-level turn lifts them entirely until the
+next held result, and a rate-limit reset or API retry the SDK announces extends
+them by the wait it declared. They are not a model-thinking timeout: a turn that
+has resumed is never force-settled, however long it then runs. Raise
+`silence_timeout_ms` if you run background agents that stay quiet on the parent
+stream for longer than half an hour.
 
 SDK activity facts share the existing executor heartbeat transport. Disabling
 `execution.executor_heartbeat.enabled` therefore disables persisted pulse

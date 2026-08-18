@@ -5,8 +5,12 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
+import {
+  type ResolvedClaudeBackgroundTaskConfig,
+  resolveClaudeBackgroundTaskConfig,
+} from '@agor/core/config';
 import { shortId } from '@agor/core/db';
-import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
+import type { PermissionMode, SDKMessage, SDKResultMessage } from '@agor/core/sdk';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -49,6 +53,53 @@ export interface PromptResult {
   outputTokens: number;
 }
 
+/**
+ * Whether a message proves the *top-level* model turn resumed, as opposed to
+ * background noise arriving while it stays finished.
+ *
+ * Only these lift the bounded-read regime below, and only at the top level:
+ * traffic forwarded from a subagent (`parent_tool_use_id` set) means background
+ * work is progressing, not that the model started thinking again, and must keep
+ * the silence budget armed so a background agent that dies mid-flight is still
+ * contained.
+ */
+function resumesTopLevelTurn(message: SDKMessage): boolean {
+  if (message.type !== 'assistant' && message.type !== 'user' && message.type !== 'stream_event') {
+    return false;
+  }
+  return message.parent_tool_use_id === null || message.parent_tool_use_id === undefined;
+}
+
+/**
+ * How long the SDK has told us it intends to be quiet, as an absolute epoch ms.
+ *
+ * A rejected rate limit and an API retry are both waits the SDK announces once
+ * and then sits out in complete silence — `SDKRateLimitEvent` is documented as
+ * firing only "when rate limit info changes", and `system/api_retry` fires once
+ * per attempt with the delay it is about to sleep. Without this the silence
+ * budget would kill a turn that was going to resume on its own, and a five-hour
+ * limit reset would do it every time.
+ */
+function announcedQuietUntil(message: SDKMessage, now: number): number | undefined {
+  if (message.type === 'rate_limit_event') {
+    const info = message.rate_limit_info;
+    if (info?.status !== 'rejected') return undefined;
+    // resetsAt is seconds since epoch.
+    if (typeof info.resetsAt === 'number') return info.resetsAt * 1_000;
+    // A rejection we cannot date is the one remaining false-kill window: the
+    // budget still applies, so say so where a force-settle can be traced to it.
+    console.warn(
+      `⚠️  Rate limit rejected with no resetsAt (type: ${info.rateLimitType ?? 'unknown'}); ` +
+        `a held turn stays bound by the background-task silence budget`
+    );
+    return undefined;
+  }
+  if (message.type === 'system' && message.subtype === 'api_retry') {
+    return now + message.retry_delay_ms;
+  }
+  return undefined;
+}
+
 export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
@@ -64,32 +115,6 @@ export class ClaudePromptService {
    * yet still bounds the hang; on timeout we settle the turn without a context
    * snapshot rather than wedge the query. */
   static readonly CONTEXT_USAGE_TIMEOUT_MS = 15_000;
-
-  /**
-   * Upper bound on SDK silence while a successful turn is held open for
-   * background tasks.
-   *
-   * The `await-background-tasks` disposition deliberately keeps the query
-   * generator open past the model's `end_turn` so a background Agent or
-   * Workflow can wake another turn on the same query. That wait had no
-   * deadline, so a task ID that never received a terminal signal wedged the
-   * turn forever: the Task stayed `running`, the executor kept heartbeating,
-   * and everything queued behind it — including cross-session callbacks —
-   * never drained.
-   *
-   * This is a *silence* budget, not a total one: every message the query yields
-   * re-arms it, so a background task still streaming progress, subagent
-   * output, or its own turns is never cut short. Only a stream that has gone
-   * completely quiet — the shape every observed hang had — is force-settled,
-   * and a background shell that is designed to outlive the turn settles the
-   * turn instead of owning it.
-   *
-   * 10 minutes sits well past the longest gap healthy background work produces
-   * (the SDK emits `tool_progress` while a single tool call is in flight, and
-   * forwards subagent tool_use/tool_result blocks as they land) while still
-   * letting a wedged session — and everything queued behind it — recover
-   * inside a working session rather than never. */
-  static readonly BACKGROUND_TASK_SILENCE_TIMEOUT_MS = 10 * 60_000;
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -108,9 +133,42 @@ export class ClaudePromptService {
     private messagesService?: MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
     private usersRepo?: UsersRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    /**
+     * Last-resort bounds on the query a finished turn holds open for its
+     * background tasks. See {@link ClaudePromptService.nextReadTimeoutMs}.
+     */
+    private backgroundTasksConfig: ResolvedClaudeBackgroundTaskConfig = resolveClaudeBackgroundTaskConfig()
   ) {
     // No client initialization needed - Agent SDK is stateless
+  }
+
+  /**
+   * Budget for the next read while a finished turn is held open for background
+   * tasks — the only state in which reads are bounded at all.
+   *
+   * Two tiers, because the two waits are nothing alike:
+   *
+   * - **Tasks outstanding** → `silence_timeout_ms` (30m). The tasks may
+   *   legitimately be working with nothing to say on the parent stream, so this
+   *   is a genuine last resort. Every message re-arms it.
+   * - **Nothing outstanding** → `settled_grace_ms` (2m). The last task settled
+   *   and `resultDisposition` is not recomputed until another `result` arrives,
+   *   so if the SDK does not wake a continuation turn nothing ever re-checks
+   *   and the query sits on zero work. All that legitimately remains here is
+   *   local scheduling plus the first message of the next turn.
+   *
+   * A wait the SDK announced (rate-limit reset, API retry backoff) is added on
+   * top of whichever tier applies, so an expected silence is never mistaken for
+   * a wedge. A rejected rate limit with no `resetsAt` gets no extension — the
+   * tier still applies — which is the one remaining false-kill window.
+   */
+  private nextReadTimeoutMs(activeTaskCount: number, quietUntil: number): number {
+    const tierMs =
+      activeTaskCount > 0
+        ? this.backgroundTasksConfig.silence_timeout_ms
+        : this.backgroundTasksConfig.settled_grace_ms;
+    return tierMs + Math.max(0, quietUntil - Date.now());
   }
 
   /**
@@ -299,27 +357,33 @@ If you continue to see authentication errors, please contact your Agor administr
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
 
     const iterator = result[Symbol.asyncIterator]();
-    // Set once a successful result is held back for background tasks. From
-    // that point the query is alive only on their behalf, so every read is
-    // bounded — the model has already finished responding.
-    let awaitingBackgroundTasks = false;
+    // True only while a successful result is held back and the model has not
+    // resumed. Reads are bounded exclusively inside that window: it is the one
+    // state in which nothing is left to wait for but background work.
+    let turnHeldForBackgroundTasks = false;
+    // Absolute epoch ms the SDK has announced it will be silent until.
+    let quietUntil = 0;
     // A force-settled query is presumed wedged; do not block teardown on it.
     let queryIsWedged = false;
 
     try {
       while (true) {
-        const next = awaitingBackgroundTasks
-          ? await awaitWithTimeout(
-              iterator.next(),
-              ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS
-            )
-          : await iterator.next();
+        const timeoutMs = turnHeldForBackgroundTasks
+          ? this.nextReadTimeoutMs(backgroundTasks.activeTaskCount, quietUntil)
+          : undefined;
+        const next =
+          timeoutMs === undefined
+            ? await iterator.next()
+            : await awaitWithTimeout(iterator.next(), timeoutMs);
 
         if (next === AWAIT_TIMEOUT) {
+          const leaked = backgroundTasks.activeTaskIds;
           console.warn(
-            `⚠️  No SDK activity for ${ClaudePromptService.BACKGROUND_TASK_SILENCE_TIMEOUT_MS}ms with ` +
-              `${backgroundTasks.activeTaskCount} background task(s) still unsettled ` +
-              `[${backgroundTasks.activeTaskIds.join(', ')}]; force-settling the turn`
+            leaked.length > 0
+              ? `⚠️  No SDK activity for ${timeoutMs}ms with ${leaked.length} background task(s) ` +
+                  `still unsettled [${leaked.join(', ')}]; force-settling the turn`
+              : `⚠️  Every background task settled but the SDK did not resume within ${timeoutMs}ms; ` +
+                  `force-settling the turn`
           );
           // Same escape hatch a non-success result already takes: stop
           // deferring, settle what the turn produced, and let the SDK close.
@@ -333,6 +397,13 @@ If you continue to see authentication errors, please contact your Agor administr
         }
         if (next.done) break;
         const msg = next.value;
+
+        // The model is producing again, so the turn is no longer merely parked
+        // on background work: stop bounding reads until the next held result.
+        // Without this, a resumed turn that thinks for a long time or makes one
+        // long silent tool call would be force-settled mid-flight.
+        if (resumesTopLevelTurn(msg)) turnHeldForBackgroundTasks = false;
+        quietUntil = Math.max(quietUntil, announcedQuietUntil(msg, Date.now()) ?? 0);
 
         reportSdkActivity(onActivity, 'claude-code', msg.type);
         const lifecycleTransition = backgroundTasks.observe(msg);
@@ -383,7 +454,7 @@ If you continue to see authentication errors, please contact your Agor administr
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
             if (resultDisposition === 'await-background-tasks') {
-              awaitingBackgroundTasks = true;
+              turnHeldForBackgroundTasks = true;
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active ` +
                   `[${backgroundTasks.activeTaskIds.join(', ')}]; keeping SDK query alive`

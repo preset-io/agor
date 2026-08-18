@@ -9,6 +9,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { ResolvedClaudeBackgroundTaskConfig } from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
 import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
@@ -184,7 +185,8 @@ export class ClaudeTool implements ITool {
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
     usersRepo?: import('../../db/feathers-repositories').UsersRepository,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    backgroundTaskConfig?: ResolvedClaudeBackgroundTaskConfig
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -201,7 +203,8 @@ export class ClaudeTool implements ITool {
         messagesService,
         mcpEnabled,
         usersRepo,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        backgroundTaskConfig
       );
     }
   }

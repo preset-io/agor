@@ -459,6 +459,36 @@ export interface AgorExecutionSettings {
     claude_idle_timeout_ms?: number | null;
   };
 
+  /**
+   * Last-resort bounds on the Claude query that a finished model turn keeps
+   * open for its background tasks.
+   *
+   * A successful `result` is held back while Agent / Workflow / background
+   * shell tasks are still running, so the SDK can wake another turn with their
+   * output. Both values bound only that window, and only while the stream is
+   * silent: any SDK message re-arms them, a resumed top-level turn lifts them
+   * entirely, and a rate-limit or API-retry wait the SDK announces extends
+   * them. They exist so a task that never reports a terminal signal cannot
+   * wedge the Task in `running` forever — they are not a general
+   * model-thinking timeout.
+   */
+  claude_background_tasks?: {
+    /**
+     * Silence budget while background tasks are still outstanding
+     * (default 1800000 = 30 minutes). Long, because those tasks can
+     * legitimately work for a long time with nothing to say on the parent
+     * stream.
+     */
+    silence_timeout_ms?: number;
+    /**
+     * Grace for the SDK to wake a continuation turn after the last background
+     * task settles and no work is outstanding (default 120000 = 2 minutes).
+     * Short, because all that remains is local scheduling plus the first
+     * message of the next turn.
+     */
+    settled_grace_ms?: number;
+  };
+
   dispatch_connect_timeout_ms?: number | null;
 
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */

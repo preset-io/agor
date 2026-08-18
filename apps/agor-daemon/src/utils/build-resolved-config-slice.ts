@@ -7,6 +7,7 @@
 import {
   type AgorConfig,
   type ResolvedConfigSlice,
+  resolveClaudeBackgroundTaskConfig,
   resolveExecutorHeartbeatConfig,
   resolveSdkWatchdogConfig,
 } from '@agor/core/config';
@@ -49,6 +50,7 @@ export function buildResolvedConfigSlice(config: DeepReadonly<AgorConfig>): Reso
     interval_ms: heartbeat.interval_ms,
   };
   executionSlice.sdk_watchdog = resolveSdkWatchdogConfig(config.execution);
+  executionSlice.claude_background_tasks = resolveClaudeBackgroundTaskConfig(config.execution);
   if (Object.keys(executionSlice).length > 0) slice.execution = executionSlice;
 
   const hostIpAddress = config.daemon?.host_ip_address;
