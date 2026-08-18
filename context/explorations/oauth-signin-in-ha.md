@@ -1,8 +1,9 @@
 # Enabling Codex and Claude subscription OAuth sign-in in HA
 
 Status: **design proposal, not implemented.** August 2026.
-Revision 3 — PRECONDITION A resolved by infra; two new EFS-derived requirements
-verified against the code. See [Revision history](#revision-history).
+Revision 4 — **both preconditions now resolved**: A by infra (shared EFS), B by
+empirical probe (the device poll is re-fetchable). See
+[Revision history](#revision-history).
 
 Scope: make the two provider subscription sign-in flows — Codex device auth
 (`codex-auth/device`) and Claude subscription OAuth (`claude-auth/oauth`, added
@@ -15,8 +16,10 @@ paste flows.
 
 Throughout, **VERIFIED** means read from the tree at this commit with a
 `file:line` citation. **DESIGN** means proposed and not yet built.
-**PRECONDITION** means an external fact this design depends on that has *not*
-been established and must be before the corresponding phase ships.
+**PRECONDITION** means an external fact this design depends on which the repo
+alone cannot settle. Both preconditions raised by earlier revisions — A
+(credential substrate) and B (device-poll semantics) — are now **resolved**;
+see §1.6 and §1.12. Their residuals are tracked in §9.
 
 ---
 
@@ -44,9 +47,10 @@ been established and must be before the corresponding phase ships.
 6. **Recommended: go straight to Phase 2 — durable PostgreSQL attempt state,
    serving the general topology.** With A resolved, Phase 1's affinity-scoped
    stopgap buys only a few days of earlier `shared-local` availability and is now
-   optional. Codex poll-lease *resumption* still stays gated behind proving
-   provider semantics (PRECONDITION B); until proven, owner death in the approval
-   window is `ambiguous` and the user restarts.
+   optional. **PRECONDITION B is also resolved** (§1.12): the device-token poll
+   was measured re-fetchable, so Codex poll-lease resumption is unblocked and
+   owner death before the exchange is recoverable. Exactly-once lives entirely at
+   the exchange claim.
 
 ---
 
@@ -137,9 +141,13 @@ the attempt be *findable*.
 **(b) Codex receives the authorization code as an unprompted side effect of a
 poll.** `pollDeviceToken()` (`:137-157`) returns `{authorizationCode, codeVerifier}`
 the moment the user approves. That value exists only in the polling replica's
-heap until something durably records it. This is the crux of §2.3: **the
-observation itself may be the consuming event**, and Agor cannot assume
-re-polling reproduces it.
+heap until something durably records it.
+
+Revision 2 treated this as potentially *consumptive* — that observing approval
+might itself burn the code. **That worst case has been empirically refuted**
+(§1.12): re-polling after approval returns the same `authorization_code` and
+`code_verifier`. The poll is re-fetchable; the single-use step is the exchange
+alone. §2.3 is built on that measured behavior.
 
 Note also that the Codex `usercode` response parses only `device_auth_id`,
 `user_code`, and `interval` (`:115-128`) — **there is no `expires_in`**. Lifetime
@@ -192,9 +200,10 @@ topology, not only under affinity. So:
 - **Claude subscription OAuth in HA is no longer stopgap-shaped.** Its only
   remaining blocker is durable attempt state (§2.4). Once that lands it works on
   `external` with no affinity dependency.
-- **Codex** likewise gets its credential side unblocked; its remaining
-  constraint is the poller/approval-window semantics (PRECONDITION B, §2.3) —
-  which limits *resumption*, not enablement.
+- **Codex** likewise gets its credential side unblocked. Its approval-window
+  question (PRECONDITION B) has since also been resolved favorably (§1.12), so
+  Codex has no remaining precondition either — durable attempt state is the only
+  blocker for both providers.
 - Phase 3 as originally written (a blocked scoping exercise) **collapses into
   Phase 2** for the credential side; see §8.
 
@@ -435,6 +444,59 @@ Because both providers now share `writeCredentialFileAtomically()`, this is
   contract, with *"Owner loss ends the Agor attachment… requires an explicit
   Reconnect"* (`context/explorations/web-terminal-ownership-ha.md`).
 
+### 1.12 PRECONDITION B — measured: the device-token poll is re-fetchable
+
+**Probe run 2026-08-18** against the live OpenAI device endpoints with a real
+Codex subscription account, client_id `app_EMoamEEZ73f0CkXaXp7hrann`.
+`POST https://auth.openai.com/api/accounts/deviceauth/token` with
+`{device_auth_id, user_code}` — the exact request our `pollDeviceToken()` issues
+(`codex-device-auth.ts:141-147`):
+
+| Step | Result |
+| --- | --- |
+| Polls #1–#5 (before approval) | HTTP **403**, body key `error` |
+| Poll #6 (after in-browser approval) | HTTP **200**, body keys `{authorization_code, code_challenge, code_verifier, status, user_code, user_code_expiration}` |
+| **Re-polls #1, #2, #3 (after approval)** | **HTTP 200, all returning the SAME `authorization_code` and `code_verifier`** |
+
+Secrets redacted; the exchange was deliberately **not** performed, so no token
+was minted and the authorization code was never consumed.
+
+**Three findings.**
+
+1. **Observing approval is NOT consumptive.** The worst-case assumption behind
+   revision 2's `ambiguous`-on-owner-death default is **disproven**. A replica
+   that takes over a lease can re-poll the same `device_auth_id` / `user_code`
+   and receive the same code and verifier back.
+2. **Exactly-once lives entirely at the exchange.** The single-use step is
+   `POST /oauth/token` (`codex-device-auth.ts:165-191`); the poll is freely
+   repeatable. So the **atomic one-shot exchange claim is the correct and
+   sufficient exactly-once mechanism**, and poll-resume is safe alongside it.
+   This is a cleaner separation than r2 assumed: the lease governs *who polls*
+   (an efficiency and rate-limit concern), while the claim governs *who
+   exchanges* (the correctness concern).
+3. **`403` as "pending" is confirmed** — matching the existing comment *"403/404
+   are the server's 'authorization pending' signals for this endpoint"*
+   (`codex-device-auth.ts:136`), and the provider-supplied `code_verifier` in the
+   200 body confirms §1.5's reading of `:151`.
+
+**Residual, stated honestly.** The probe ran from a **single egress IP**. It
+proves *idempotency*; it does **not** prove *cross-replica-IP tolerance*. The
+assessment is that this is very likely fine — RFC 8628 device flow is designed
+for a *separate* device to poll, the request carries only `device_auth_id` +
+`user_code`, and no cookie or IP binding was observed — but it is unproven.
+
+**Design stance:** assume re-fetchable (proven) and **keep `ambiguous → restart`
+as the fallback** if a cross-replica re-poll ever fails in practice. A clean
+cross-IP test needs a second egress host; it is a nice-to-have, not a blocker.
+
+**Noted but out of scope:** the 200 body carries `user_code_expiration`, a real
+provider-supplied expiry. Our poll parses only `authorization_code` and
+`code_verifier` (`codex-device-auth.ts:148-156`) and the lifetime stays the fixed
+15-minute local constant (§1.5). Adopting the provider's value would be an
+accuracy improvement, but it is a separate change and does not affect this
+design — §1.5's point stands, since it was about the *usercode* response, which
+still has no expiry field (`:115-128`).
+
 ---
 
 ## 2. Design
@@ -521,28 +583,40 @@ with terminals `failed` / `expired` / `ambiguous` / `superseded`.
 | --- | --- | --- | --- | --- | --- |
 | 1 | *(create)* → `pending` | In one tx: `UPDATE … SET is_current=false, status='superseded' WHERE tenant/user AND is_current`, then `INSERT` with `attempt_generation = prev+1`, `expires_at = now() + 15min` (DB clock) | `deviceAuthId`, `userCode` sealed | Nothing issued yet; user retries | n/a |
 | 2 | acquire poll lease | `UPDATE … SET poll_lease_owner=?, poll_lease_expires_at=now()+L WHERE attempt_id=? AND status='pending' AND is_current AND (poll_lease_expires_at IS NULL OR poll_lease_expires_at <= now()) RETURNING *` | unchanged | No owner polls until lease is free; attempt still valid | Lease re-acquire is safe |
-| 3 | `pending` → `approval_observed` | `UPDATE … SET status='approval_observed', sealed_material=? WHERE attempt_id=? AND status='pending' AND attempt_generation=? AND poll_lease_owner=? AND poll_lease_expires_at > now()` | + `authorizationCode`, `codeVerifier` (both provider-supplied) | **DANGEROUS — see below** | **No** |
+| 3 | `pending` → `approval_observed` | `UPDATE … SET status='approval_observed', sealed_material=? WHERE attempt_id=? AND status='pending' AND attempt_generation=? AND poll_lease_owner=? AND poll_lease_expires_at > now()` | + `authorizationCode`, `codeVerifier` (both provider-supplied) | **Recoverable** — a new lease owner re-polls and gets the same code back (§1.12) | **Yes — the poll is re-fetchable** |
 | 4 | `approval_observed` → `exchanging` | one-shot: `UPDATE … SET status='exchanging', claim_id=? WHERE attempt_id=? AND status='approval_observed' AND is_current AND attempt_generation=?` | unchanged | Abandoned `exchanging` → `ambiguous` after timeout | **No** — authorization codes are single-use |
 | 5 | `exchanging` → `persisting` | `UPDATE … SET status='persisting', sealed_material=? WHERE attempt_id=? AND status='exchanging' AND claim_id=?` | tokens sealed (separate purpose domain), code cleared | Crash before commit → `ambiguous`; tokens lost, user restarts | **No** |
 | 6 | `persisting` → `succeeded` | re-validate `(attempt_generation, claim_id, status='persisting', is_current)` **immediately before** the credential write **and again before** the user-method mutation; then `UPDATE … SET status='succeeded', sealed_material=NULL` | cleared | See §2.5 filesystem gap | Write is idempotent (same tokens, same path) |
 
-**Transition 3 is the one that must not over-promise.** The provider returns the
-authorization code in the poll response. Whether that response is
-single-delivery — i.e. whether *observing* approval consumes it — is
-**PRECONDITION B, unverified**. Therefore:
+**Transition 3 was the feared one; the probe defused it.** The provider returns
+the authorization code in the poll response, and re-polling after approval
+returns the *same* code and verifier (§1.12). So:
 
-- **Default (until B is proven): lease takeover of a `pending` attempt whose
-  lease expired transitions it to `ambiguous`, not back to polling.** The user
-  restarts sign-in. Owner death anywhere in the approval window is a restart, not
-  a transparent resume.
-- Rationale: if re-polling does *not* reproduce the code, a resuming owner silently
-  hangs until expiry; if the code *can* be delivered twice, two owners may both
-  proceed. Neither is acceptable without evidence.
-- Resumable polling (a genuine availability win) may be enabled **only** after B
-  is proven, and even then only for a `pending` attempt that has never reached
-  `approval_observed`.
-- Make lease expiry rare rather than relying on takeover: short renew interval
-  (~15 s) against a generous lease (~60 s), well inside the 15-minute window.
+- **Lease takeover of a `pending` attempt whose lease expired resumes polling.**
+  The new owner re-polls the same `device_auth_id` / `user_code`. If the user has
+  already approved, the very first re-poll returns the code and the attempt
+  proceeds to transition 4 — owner death before the exchange is **recoverable**,
+  not a restart.
+- **`ambiguous → restart` is retained as the FALLBACK**, not the default. A
+  re-poll that returns a terminal provider error, or that keeps returning
+  `pending` past `expires_at`, resolves the attempt to `ambiguous`/`expired` and
+  the user restarts. This is what covers the unproven cross-IP case (§1.12) — if
+  a different egress IP is in fact rejected, the failure is a clean restart, not
+  a hang or a double-spend.
+- **Double-polling is now a non-issue for correctness.** If a slow owner and a
+  new lease owner briefly both poll, both simply receive the same code. Only one
+  can win transition 4's one-shot claim, and only that winner exchanges. The
+  lease remains worthwhile for rate-limit hygiene and to keep one clear owner,
+  but it is no longer load-bearing for exactly-once.
+- Still make lease expiry rare rather than relying on takeover: short renew
+  interval (~15 s) against a generous lease (~60 s), well inside the 15-minute
+  window.
+
+**Where exactly-once actually lives.** The authorization code is single-use at
+`POST /oauth/token` only. Transition 4's atomic claim is therefore the complete
+exactly-once mechanism: freely repeatable poll, exactly-once exchange. Transitions
+4–6 are unchanged by the probe — a crash *during or after* the exchange is still
+`ambiguous` and is still never replayed.
 
 **Retry policy.** The existing `exchangeWithOneRetry` (`:199`) must stay
 *within a single claim holder* — one process, one `claim_id`. A retry must never
@@ -749,7 +823,9 @@ about the key, the backups, or the decrypt window.
       terminal rows, enqueue the §2.5 delete pass.
 - [ ] One-shot claim on every unreplayable step; codes never replayed after
       `ambiguous`.
-- [ ] Codex poll lease single-owner; resumption disabled until PRECONDITION B.
+- [ ] Codex poll lease single-owner. Resumption is **enabled** (§1.12), with
+      `ambiguous → restart` retained as the fallback when a re-poll fails.
+      Exactly-once is enforced by the exchange claim, not by the lease.
 - [ ] Newer attempt fences older via `attempt_generation`; logout invalidates
       atomically (§2.5).
 - [ ] Fleet-shared stable `AGOR_MASTER_SECRET`; whole-cohort/offline cutover for
@@ -777,7 +853,12 @@ be covered — the two-pool PostgreSQL harness in
 
 **Crash windows**
 - [ ] Death after approval observed, before the durable `approval_observed`
-      commit → `ambiguous`, user restarts (never silently resumed).
+      commit → a new lease owner **re-polls and recovers the same code** (§1.12),
+      and the attempt completes. Assert the exchange still happens exactly once.
+- [ ] Re-poll fallback: stub the provider to reject or keep returning `pending`
+      after approval → the attempt resolves `ambiguous`/`expired` and the user
+      restarts, with no hang and no second exchange. This is the cross-IP
+      safety net (§1.12 residual).
 - [ ] Death during `exchanging` → `ambiguous` after timeout; the authorization
       code is never retried.
 - [ ] Death during `persisting` → `ambiguous`; §2.5 delete pass removes any file
@@ -826,7 +907,8 @@ be covered — the two-pool PostgreSQL harness in
 ## 7. Recommendation
 
 **Go to Phase 2 — durable PostgreSQL attempt state — and treat Phase 1 as
-optional. Codex resumable-lease stays gated behind PRECONDITION B.**
+optional. Both preconditions are now resolved, so Codex's resumable lease folds
+into Phase 2 rather than trailing it.**
 
 Resolving PRECONDITION A changed the calculus. Previously Phase 1 was the only
 thing that could ship soon, because `external` was blocked on an unknown
@@ -842,8 +924,10 @@ deploys, and now needs no topology caveat. Its cost is the blast-radius change
 (§5.2), a migration/rollout, and the two §1.10 obligations — of which R2 is one
 fix in one shared function.
 
-Codex is not held back by the credential side either; its remaining constraint is
-approval-window semantics, which limits *resumption*, not enablement.
+Codex is no longer held back on either side. The credential home is confirmed
+(§1.6) and the approval-window worst case is refuted (§1.12), so its resumable
+lease is buildable now — with the exchange claim carrying exactly-once and
+`ambiguous → restart` as the fallback.
 
 **Push-back on one review point.** The review asked to drop the boot-ID protocol
 and drain machinery entirely. Agreed on both — but *not* on dropping attempt
@@ -877,7 +961,8 @@ and that replica loss aborts an in-flight sign-in.
 ### Phase 2 — durable attempt state (~2-3 weeks)
 Migration + RLS; repository with atomic claim, lease, `maintain()`; authority
 service with the new seal purpose domain; Claude state machine (§2.4); Codex
-state machine (§2.3) with resumption **disabled**; durable logout/replacement
+state machine (§2.3) with resumption **enabled** (§1.12) and the re-poll failure
+fallback; durable logout/replacement
 fencing incl. the filesystem-gap delete passes (§2.5); keep the local Map for
 SQLite/standalone as MCP OAuth does; §6 test matrix.
 **Risk: medium-high** — migration, rollout ordering, blast-radius change.
@@ -894,9 +979,15 @@ Phase 2:
 - End-to-end validation on the real EFS substrate (sign in on replica A, run on
   replica B), which Compose cannot exercise.
 
-### Phase 4 — Codex resumable polling (blocked on PRECONDITION B)
-Only after provider poll semantics are established. Until then, owner death in
-the approval window is `ambiguous` by design, not by omission.
+### Phase 4 — Codex resumable polling — **unblocked; folded into Phase 2**
+PRECONDITION B is resolved (§1.12): the poll is re-fetchable, so resumption is
+safe to build alongside the state machine rather than as a follow-on. It is no
+longer a separate phase. Ship it with the `ambiguous → restart` fallback, which
+also covers the unproven cross-egress-IP case.
+
+Optional follow-up (not a blocker): re-run the §1.12 probe from a **second
+egress host** to close the cross-IP question directly. If it ever fails in
+production, the fallback already degrades to a clean restart.
 
 ### Rollout / flagging
 Enablement is config-derived; no new feature flag. A deployment opts in by
@@ -922,10 +1013,17 @@ different capabilities — prefer an offline cutover to a rolling one.
   `session.unix_username`. Nothing constrains them to match, and
   `dangerously_allow_session_sharing` makes divergence reachable. Needs the
   equality assertion in §1.10 R1. (Design flag; no code change now.)
-- **PRECONDITION B — Codex device-poll semantics.** Whether observing approval
-  consumes the authorization code, and whether re-polling reproduces it, is
-  unverified. **Must verify before enabling resumable polling.** Until then,
-  owner death in the approval window ⇒ `ambiguous` ⇒ user restarts. (§2.3)
+- **PRECONDITION B — RESOLVED (2026-08-18).** Measured against the live OpenAI
+  device endpoints: re-polling after approval returns the **same**
+  `authorization_code` and `code_verifier`, so observing approval is **not**
+  consumptive and owner death before the exchange is recoverable. Exactly-once is
+  carried by the exchange claim alone. (§1.12, §2.3)
+- **Residual from B — cross-egress-IP tolerance.** The probe ran from a single
+  egress IP, so it proves idempotency, not that a *different* replica's IP is
+  accepted. Assessed low-risk (device flow is designed for a separate polling
+  device; the request carries only `device_auth_id` + `user_code`; no cookie/IP
+  binding observed) and covered by the `ambiguous → restart` fallback. A
+  second-egress-host probe would close it; nice-to-have, not a blocker.
 - Whether `shared-local` should remain a permanently supported sign-in topology
   or Phase 1's code is deleted once Phase 2 lands.
 - Whether transiently sealing exchanged tokens (§2.3 step 5) is worth the
@@ -955,7 +1053,18 @@ lands:
 
 ## Revision history
 
-- **r3** (this revision) — **PRECONDITION A resolved** by infra: prod HA runs a
+- **r4** (this revision) — **PRECONDITION B resolved** by empirical probe against
+  the live OpenAI device endpoints (2026-08-18, §1.12): re-polling after approval
+  returns the **same** `authorization_code` and `code_verifier`, refuting r2's
+  worst-case assumption that observing approval might consume the code. Codex
+  transition 3 changes from "DANGEROUS / `ambiguous`" to **recoverable via
+  re-poll**, with `ambiguous → restart` retained as the fallback covering the
+  unproven cross-egress-IP case. Recorded the clean separation this buys: the
+  **lease governs who polls; the exchange claim governs who exchanges and is the
+  complete exactly-once mechanism.** Phase 4 is unblocked and folds into Phase 2.
+  Both preconditions are now closed. Also noted the poll response carries
+  `user_code_expiration`, which our code does not parse (out of scope).
+- **r3** — **PRECONDITION A resolved** by infra: prod HA runs a
   shared-EFS RWX PVC with `persistent-per-user` and per-tenant/user `subPath`
   isolation (§1.6). Consequence: Claude sign-in in HA is no longer stopgap-shaped
   — durable attempt state is its only remaining blocker, in the general topology.
