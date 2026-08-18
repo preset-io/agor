@@ -1,32 +1,23 @@
-# Auto-bump the Homebrew formula when a new agor-live version ships to npm.
+# Experimental helper for refreshing the unsupported Homebrew formula.
 #
 # Why this exists:
-#   The formula in `Formula/agor-live.rb` pins `url` + `sha256` to a specific
-#   npm tarball. Every release of `agor-live` makes the formula stale until a
-#   human remembers to bump it. This workflow makes the bump automatic.
+#   Homebrew is not currently a documented or release-gated installation
+#   channel. Keep this workflow manual until the formula has a supported smoke
+#   matrix and a reviewed ownership/release contract. It must not be coupled to
+#   npm publishing: an experimental formula failure cannot fail an npm release.
 #
 # Strategy:
-#   1. Poll npm for the latest `agor-live` version (daily cron + on-demand).
+#   1. On demand, read the latest `agor-live` version from npm.
 #   2. Diff against the version currently pinned in the formula.
 #   3. If different, download the tarball, compute sha256, rewrite the two
 #      lines in the formula, open a PR.
 #
-# Note on the 24h supply-chain delay:
-#   The formula passes `--min-release-age=1` to npm install, which refuses to
-#   install package versions less than ~24h old. This is intentional supply-
-#   chain protection. Bumping the formula immediately after publish is still
-#   correct — by the time most users `brew install`, the cooldown has lapsed.
-#   Early adopters who try within the first day will hit a `notarget` error;
-#   that's expected and documented in the install guide.
+# The current formula and its dependency-install policy require validation
+# before this can become release automation.
 
-name: Bump Homebrew formula
+name: Refresh experimental Homebrew formula
 
 on:
-  schedule:
-    # Daily at 14:00 UTC — a few hours after the typical npm publish window.
-    # A newly opened PR may still need the 24h `--min-release-age` cooldown
-    # to lapse before the bumped formula is installable.
-    - cron: '0 14 * * *'
   workflow_dispatch:
 
 permissions:
@@ -96,12 +87,8 @@ jobs:
             - **New:** `${{ steps.bump.outputs.version }}`
             - **sha256:** `${{ steps.bump.outputs.sha }}`
 
-            **Heads up:** the formula's `--min-release-age=1` (npm's 1-day
-            supply-chain delay) means `brew install agor-live` against this
-            version will fail with a `notarget` error until ~24h after the
-            npm publish. That's intentional. By the time this PR is reviewed
-            and merged the cooldown will almost always have lapsed; if you
-            merge early, the next install attempt within that window will
-            surface the npm error verbatim (no harm done — re-run succeeds).
+            This formula is experimental and is not part of the supported npm
+            release path. Validate installation and lifecycle behavior before
+            merging this update.
           labels: |
             dependencies

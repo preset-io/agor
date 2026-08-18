@@ -7,7 +7,7 @@ import InstallTabs from '../../components/InstallTabs.mdx';
 
 # Extended Installation
 
-The [Getting Started](/guide/getting-started) guide covers the recommended npm installation. This page covers everything else for **users and teams** running Agor, including Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
+The [Getting Started](/guide/getting-started) guide covers the recommended npm installation. This page covers everything else for **users and teams** running Agor, including optional companions, deployment alternatives, authentication options, and edge-case configurations.
 
 > Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development). It covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
 
@@ -21,15 +21,11 @@ Agor supports Node releases that are Current, Active LTS, or Maintenance LTS ups
 the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
 Upstream EOL releases such as Node 25 are not supported production runtimes.
 
-The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
-
 ## Install paths
 
 Use whichever install method fits your setup:
 
 <InstallTabs />
-
-Homebrew is a convenience path for macOS/Linux users; npm remains the canonical cross-platform install path used throughout the docs.
 
 ---
 
