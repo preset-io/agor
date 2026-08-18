@@ -33,6 +33,16 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.25.2 (2026-08-18)
+
+### Fixes
+
+- **Remote user listing honors the active login** — `agor user list` now uses the shared authenticated daemon client instead of opening the local database. CLI architecture regressions prevent connection commands from bypassing that client boundary.
+
+### Chores
+
+- **Align the 0.25.2 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version.
+
 ## 0.25.1 (2026-08-18)
 
 > [!WARNING]
