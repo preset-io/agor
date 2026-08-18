@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
-    "dev": "NODE_NO_WARNINGS=1 tsx bin/dev.ts",
+    "dev": "NODE_NO_WARNINGS=1 NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--conditions=source\" tsx bin/dev.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
