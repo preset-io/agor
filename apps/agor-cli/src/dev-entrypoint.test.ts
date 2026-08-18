@@ -49,4 +49,24 @@ describe('CLI development entrypoint', () => {
       await rm(home, { recursive: true, force: true });
     }
   }, 35_000);
+
+  it('keeps root topic summaries concise and purpose-oriented', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agor-cli-help-'));
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, NO_COLOR: '1' };
+    delete env.AGOR_OUTER_SANDBOX;
+    try {
+      const { stdout } = await execFileAsync('pnpm', ['dev', '--help'], {
+        cwd: new URL('..', import.meta.url),
+        env,
+        timeout: 30_000,
+      });
+
+      expect(stdout).toContain('tenant');
+      expect(stdout).toContain('Manage local tenant data operations');
+      expect(stdout).toContain('Manage branches and their environments');
+      expect(stdout).not.toContain('Permanently delete all data belonging to a single tenant');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 35_000);
 });

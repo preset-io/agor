@@ -47,6 +47,49 @@
     "hooks": {
       "command_not_found": "./dist/hooks/command-not-found.js",
       "prerun": "./dist/hooks/prerun.js"
+    },
+    "topics": {
+      "auth": {
+        "description": "Manage authentication"
+      },
+      "board": {
+        "description": "Manage boards"
+      },
+      "branch": {
+        "description": "Manage branches and their environments"
+      },
+      "daemon": {
+        "description": "Manage the local daemon lifecycle"
+      },
+      "db": {
+        "description": "Manage local database migrations"
+      },
+      "local": {
+        "description": "Run local and offline maintenance"
+      },
+      "mcp": {
+        "description": "Manage MCP servers"
+      },
+      "repo": {
+        "description": "Manage repositories"
+      },
+      "session": {
+        "description": "Inspect agent sessions"
+      },
+      "telemetry": {
+        "description": "Manage community telemetry"
+      },
+      "tenant": {
+        "description": "Manage local tenant data operations",
+        "subtopics": {
+          "gate": {
+            "description": "Manage tenant write gates"
+          }
+        }
+      },
+      "user": {
+        "description": "Manage user accounts"
+      }
     }
   }
 }
