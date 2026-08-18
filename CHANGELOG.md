@@ -35,7 +35,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Fixes
 
-- **Local CLI inspection no longer requires login** — `agor open` and `agor version` now target the local deployment by default, retain `--local` as a compatibility alias, and use the connected deployment only with `--remote`. ([#2464](https://github.com/preset-io/agor/issues/2464))
+- **Local CLI inspection no longer requires login** — `agor open` and `agor version` now target the local deployment by default, retain `--local` as a compatibility alias, and use the connected deployment only with `--remote`. ([#2468](https://github.com/preset-io/agor/pull/2468))
 
 ## 0.25.2 (2026-08-18)
 
