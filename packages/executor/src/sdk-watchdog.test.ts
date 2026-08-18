@@ -92,6 +92,25 @@ describe('SdkWatchdog', () => {
     });
   });
 
+  it.each([
+    ['permission.resolved', 'permission wait'],
+    ['rate_limit.resolved', 'rate-limit block'],
+  ])('resumes from a %s that ends a %s', (resumeDetail) => {
+    const { watchdog, decisions } = harness();
+    watchdog.record('sdk_started');
+    vi.advanceTimersByTime(400);
+    watchdog.record('waiting');
+    // A pause has no clock of its own, so without a resume the watchdog would
+    // stay disarmed for the rest of the query.
+    vi.advanceTimersByTime(60_000);
+    expect(decisions).toEqual([]);
+    watchdog.record('sdk_started', resumeDetail);
+    vi.advanceTimersByTime(599);
+    expect(decisions).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(decisions[0]?.reason).toBe('no_first_progress');
+  });
+
   it('preserves the remaining timeout across a permission wait', () => {
     const { watchdog, decisions } = harness();
     watchdog.record('sdk_started');

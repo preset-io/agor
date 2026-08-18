@@ -105,6 +105,18 @@ const assistantMessage = (uuid: string, parentToolUseId: string | null = null): 
     session_id: 'sdk-session',
   }) as SDKMessage;
 
+const rateLimitEvent = (
+  status: string,
+  resetsAt?: number,
+  rateLimitType = 'five_hour'
+): SDKMessage =>
+  ({
+    type: 'rate_limit_event',
+    rate_limit_info: { status, rateLimitType, resetsAt },
+    uuid: `rate-limit-${status}`,
+    session_id: 'sdk-session',
+  }) as SDKMessage;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const never = () => new Promise(() => {});
 
@@ -439,7 +451,8 @@ describe('ClaudePromptService background task query lifetime', () => {
         yield taskNotification('task-1');
         yield sdkResult('continuation-result');
       });
-      const run = drain(query);
+      const activity = vi.fn();
+      const run = drain(query, activity);
 
       await vi.advanceTimersByTimeAsync(SILENCE_MS + 1_000);
       expect(run.settled()).toBe(false);
@@ -447,6 +460,58 @@ describe('ClaudePromptService background task query lifetime', () => {
       await run.done;
 
       expect(run.resultUuids()).toEqual(['parent-result', 'continuation-result']);
+    });
+  });
+
+  it('pulses the rate-limit block once and leaves it standing for the whole wait', async () => {
+    await withFakeTimers(async () => {
+      const resetsAt = Math.floor(Date.now() / 1_000) + 5 * 60 * 60;
+      // The block lands mid-turn, before any result: no held turn, nothing
+      // bounded — the pulse is the whole point here.
+      const query = fakeQuery(async function* () {
+        yield rateLimitEvent('rejected', resetsAt);
+        // The SDK emits nothing at all across the block, which is exactly why
+        // the pulse has to be sticky rather than event-driven.
+        await sleep(5 * 60 * 60 * 1_000);
+        yield assistantMessage('back-after-reset');
+        yield sdkResult('done');
+      });
+      const activity = vi.fn();
+      const run = drain(query, activity);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      const waits = activity.mock.calls.filter(([kind]) => kind === 'waiting');
+      expect(waits).toEqual([['waiting', 'rate_limit.five_hour']]);
+      // Nothing after it, so the heartbeat keeps re-sending this pulse and the
+      // session reads as blocked rather than silent, for hours if need be.
+      expect(activity.mock.calls.at(-1)).toEqual(['waiting', 'rate_limit.five_hour']);
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 60 * 1_000);
+      await run.done;
+
+      // The pause the block installed is lifted, or the watchdog would stay
+      // disarmed for the rest of the query.
+      expect(activity).toHaveBeenCalledWith('sdk_started', 'rate_limit.resolved');
+    });
+  });
+
+  it('sanitizes an unexpected rate-limit type into a bounded pulse detail', async () => {
+    await withFakeTimers(async () => {
+      // The daemon rejects a detail outside [A-Za-z0-9._:/-] with a BadRequest,
+      // and the heartbeat re-sends the latest pulse on every beat — so one bad
+      // detail would fail every later heartbeat write, not just its own.
+      const query = fakeQuery(async function* () {
+        yield rateLimitEvent('rejected', undefined, 'weird type!! 🚫');
+        yield sdkResult('done');
+      });
+      const activity = vi.fn();
+      const run = drain(query, activity);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await run.done;
+      const [[, detail]] = activity.mock.calls.filter(([kind]) => kind === 'waiting');
+      expect(detail).toMatch(/^[A-Za-z0-9._:/-]+$/);
+      expect(Buffer.byteLength(detail as string, 'utf8')).toBeLessThanOrEqual(128);
     });
   });
 

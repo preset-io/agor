@@ -61,8 +61,29 @@ const PROGRESS = new Set([
   'copilot:assistant.turn_end',
 ]);
 
-function boundedDetail(value: string): string {
+/**
+ * Coerce a detail into the bounded identifier the daemon accepts.
+ *
+ * `tasks.reportRuntimeTelemetry` rejects anything outside `[A-Za-z0-9._:/-]`
+ * or over 128 bytes with a BadRequest, and the heartbeat re-sends the latest
+ * pulse on every beat — so one unsanitized detail would fail every subsequent
+ * heartbeat write, not just its own.
+ */
+export function boundedDetail(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128) || 'unknown';
+}
+
+/**
+ * Details that lift a `waiting` pause.
+ *
+ * A pause has no clock of its own, so a pause with no matching resume disables
+ * the watchdog for the rest of the query. Every producer of a `waiting` pulse
+ * therefore owes a resume on the other side of its wait.
+ */
+const PAUSE_RESUME_DETAILS = new Set(['permission.resolved', 'rate_limit.resolved']);
+
+function liftsWait(kind: ExecutorPulseKind, detail?: string): boolean {
+  return kind === 'sdk_started' && detail !== undefined && PAUSE_RESUME_DETAILS.has(detail);
 }
 
 export function mapSdkActivity(
@@ -196,7 +217,7 @@ export class SdkWatchdog {
       return;
     }
     const pausedAt = this.state.pausedAt;
-    if (pausedAt !== undefined && !(kind === 'sdk_started' && detail === 'permission.resolved')) {
+    if (pausedAt !== undefined && !liftsWait(kind, detail)) {
       return;
     }
     const resumed = pausedAt !== undefined;
@@ -208,7 +229,7 @@ export class SdkWatchdog {
       this.state.pausedAt = undefined;
     }
     this.state.startedAt ??= now;
-    if (!(resumed && kind === 'sdk_started' && detail === 'permission.resolved')) {
+    if (!(resumed && liftsWait(kind, detail))) {
       this.state.lastRawAt = now;
     }
     if (kind === 'unknown_activity') this.state.unknownCount++;

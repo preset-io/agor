@@ -21,7 +21,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
-import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { boundedDetail, reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -80,6 +80,11 @@ function resumesTopLevelTurn(message: SDKMessage): boolean {
  * budget would kill a turn that was going to resume on its own, and a five-hour
  * limit reset would do it every time.
  */
+/** Prefix marking a pulse detail as a rate-limit block, for the UI to key off. */
+export const RATE_LIMIT_PULSE_PREFIX = 'rate_limit.';
+/** Resume signal that lifts the watchdog pause the block pulse installs. */
+export const RATE_LIMIT_RESOLVED_DETAIL = 'rate_limit.resolved';
+
 function announcedQuietUntil(message: SDKMessage, now: number): number | undefined {
   if (message.type === 'rate_limit_event') {
     const info = message.rate_limit_info;
@@ -363,6 +368,9 @@ If you continue to see authentication errors, please contact your Agor administr
     let turnHeldForBackgroundTasks = false;
     // Absolute epoch ms the SDK has announced it will be silent until.
     let quietUntil = 0;
+    // Whether the session is currently blocked on a rate limit, so the pulse
+    // says "blocked", not "hung", and so the pause gets its matching resume.
+    let rateLimitBlocked = false;
     // A force-settled query is presumed wedged; do not block teardown on it.
     let queryIsWedged = false;
 
@@ -402,10 +410,31 @@ If you continue to see authentication errors, please contact your Agor administr
         // on background work: stop bounding reads until the next held result.
         // Without this, a resumed turn that thinks for a long time or makes one
         // long silent tool call would be force-settled mid-flight.
-        if (resumesTopLevelTurn(msg)) turnHeldForBackgroundTasks = false;
+        const modelResumed = resumesTopLevelTurn(msg);
+        if (modelResumed) turnHeldForBackgroundTasks = false;
         quietUntil = Math.max(quietUntil, announcedQuietUntil(msg, Date.now()) ?? 0);
 
         reportSdkActivity(onActivity, 'claude-code', msg.type);
+        // Emitted after the generic activity pulse so it wins as the sticky
+        // latest pulse: the heartbeat re-sends that pulse every beat, which is
+        // the only reason a block stays visible through a wait the SDK spends
+        // in complete silence.
+        const rateLimit = msg.type === 'rate_limit_event' ? msg.rate_limit_info : undefined;
+        if (rateLimit?.status === 'rejected') {
+          if (!rateLimitBlocked) {
+            rateLimitBlocked = true;
+            onActivity?.(
+              'waiting',
+              boundedDetail(`${RATE_LIMIT_PULSE_PREFIX}${rateLimit.rateLimitType ?? 'unknown'}`)
+            );
+          }
+        } else if (rateLimitBlocked && (rateLimit !== undefined || modelResumed)) {
+          // The limit lifted, or the model started producing again. Both end the
+          // block; the resume is mandatory because a `waiting` pulse pauses the
+          // watchdog until something explicitly lifts it.
+          rateLimitBlocked = false;
+          onActivity?.('sdk_started', RATE_LIMIT_RESOLVED_DETAIL);
+        }
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
         if (
