@@ -237,6 +237,7 @@ async function runInteractiveReinit(
   let output = '';
   let selectedReinitAction = false;
   let skippedAdmin = false;
+  let declinedSandbox = false;
   let selectedTools = false;
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -255,6 +256,10 @@ async function runInteractiveReinit(
       }
       if (!skippedAdmin && plain.includes('Set up your admin account now?')) {
         skippedAdmin = true;
+        terminal.write('n\r');
+      }
+      if (!declinedSandbox && plain.includes('Sandbox agents')) {
+        declinedSandbox = true;
         terminal.write('n\r');
       }
       if (!selectedTools && plain.includes('Which agentic tools should this deployment support?')) {
@@ -534,12 +539,10 @@ describe('initial agentic tool selection', () => {
     expect(result.output).toContain('Which agentic tools should this deployment support?');
     expect(result.output).toContain('Configured: codex');
 
-    const preservedConfig = loadYaml(await readFile(configPath, 'utf8')) as Record<string, unknown>;
-    expect(preservedConfig.agentic_tools).toBeUndefined();
-    const manifest = JSON.parse(
-      await readFile(join(home, '.agor', 'agentic-tools', 'selection.json'), 'utf8')
-    ) as { installed: string[] };
-    expect(manifest.installed).toEqual(['codex']);
+    const freshConfig = loadYaml(await readFile(configPath, 'utf8')) as {
+      agentic_tools?: { installed?: string[] };
+    };
+    expect(freshConfig.agentic_tools?.installed).toEqual(['codex']);
   }, 60_000);
 
   it('preserves the declarative choice and prints one recovery command when install fails', async () => {

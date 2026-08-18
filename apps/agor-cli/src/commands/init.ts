@@ -201,43 +201,6 @@ export default class Init extends Command {
     return path;
   }
 
-  /**
-   * Count rows in database tables for display
-   */
-  private async getDbStats(dbPath: string): Promise<{
-    sessions: number;
-    tasks: number;
-    messages: number;
-    repos: number;
-  } | null> {
-    let closeDatabase: (() => void) | undefined;
-    try {
-      const { createDatabaseAsync, select, sessions, tasks, messages, repos } = await import(
-        '@agor/core/db'
-      );
-      const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
-      const client = (db as unknown as { $client?: { close?: () => void } }).$client;
-      closeDatabase = () => client?.close?.();
-
-      // Count rows by selecting all and measuring length
-      const sessionRows = await select(db).from(sessions).all();
-      const taskRows = await select(db).from(tasks).all();
-      const messageRows = await select(db).from(messages).all();
-      const repoRows = await select(db).from(repos).all();
-
-      return {
-        sessions: sessionRows.length,
-        tasks: taskRows.length,
-        messages: messageRows.length,
-        repos: repoRows.length,
-      };
-    } catch {
-      return null;
-    } finally {
-      closeDatabase?.();
-    }
-  }
-
   private closeSQLiteDatabase(db: unknown): void {
     (db as { $client?: { close?: () => void } }).$client?.close?.();
   }
@@ -415,7 +378,6 @@ export default class Init extends Command {
       }
 
       // Gather information about what exists
-      const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
       const repos = reposExist ? await this.listDirs(reposDir) : [];
       const branches = branchesExist ? await this.listDirs(branchesDir) : [];
 
@@ -423,14 +385,7 @@ export default class Init extends Command {
       this.log(chalk.bold.red('⚠  Re-initialization will delete:'));
       this.log('');
 
-      if (dbExists && dbStats) {
-        this.log(`${chalk.cyan('  Database:')} ${dbPath}`);
-        this.log(
-          chalk.dim(
-            `    ${dbStats.sessions} sessions, ${dbStats.tasks} tasks, ${dbStats.messages} messages, ${dbStats.repos} repos`
-          )
-        );
-      } else if (dbExists) {
+      if (dbExists) {
         this.log(`${chalk.cyan('  Database:')} ${dbPath}`);
       }
 
