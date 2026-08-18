@@ -3,6 +3,8 @@
 **Date:** 2026-08-17
 **Branch:** `catalog-expansion-research`
 **Outcome:** `curated.yaml` grows from 50 entries / 48 installable to **62 entries / 60 installable**.
+**Addendum 2026-08-18:** §10 audits all six `auth_type: none` entries against the
+Browserbase failure mode — all six pass, no value changed. §11 sizes a rank re-rank.
 
 ---
 
@@ -105,11 +107,33 @@ loader test's 0.2 floor.
   and bulk-suppress profiles, which is a live customer-facing write.
 - `popularity_rank` 51–62. Ranks 1–50 were all taken; appending rather than
   re-ranking keeps the diff reviewable, at the cost of implying Netlify is less
-  popular than Kagi. Worth a re-rank pass separately, not folded into this one.
+  popular than Kagi. Sized in §11 — a re-rank renumbers ~50 of 62 entries and
+  needs Smithery data I do not have, so it is not folded into this one.
 
 ---
 
 ## 3. Rejected
+
+> **How to read §3.1 and §3.3 — READ THIS BEFORE COPYING ANY URL FROM THEM.**
+>
+> Everything in §2 is probed and shipped. Everything in §3 is **not shipped**,
+> and much of it is **not probed either**. Many rows below name a corrected URL
+> — a host or path a vendor's documentation gives, which my probe never
+> touched. Those are leads, not findings, and they are labelled:
+>
+> - **`UNVERIFIED CANDIDATE`** — a real documented URL that nothing here has
+>   dialled. It may 404, need a key, or not be an MCP server at all. It must go
+>   through §1 (three probes + vendor docs) **and** §10 (tools actually work)
+>   before it can enter `curated.yaml`.
+> - **`NOT A CANDIDATE`** — per-tenant or templated, so there is no fixed URL a
+>   static catalogue could ever carry. Not worth re-researching.
+>
+> §3.3 is different again: those endpoints _were_ probed, but against the
+> `initialize` bar only, before §10 existed.
+>
+> Copying an unprobed URL out of a document full of probed ones is precisely
+> how this file came to assert, falsely, that all 48 endpoints had been reached
+> unauthenticated. Do not restart that.
 
 ### 3.1 Rejected — host does not resolve or endpoint does not answer (`unreachable`)
 
@@ -117,40 +141,44 @@ Every one of these was a plausible `mcp.<vendor>` guess or a recollected URL.
 All were probed once; `unreachable` at single-digit ms is DNS failure, higher
 values are connection failure or a non-2xx.
 
-| Vendor        | Endpoint probed                    | Verdict     | Reason rejected                                                                                 |
-| ------------- | ---------------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
-| Pinecone      | `https://mcp.pinecone.io/mcp`      | unreachable | host does not resolve; real endpoint is per-assistant, `<ASSISTANT_HOST>/mcp/assistants/<NAME>` |
-| Perplexity    | `https://mcp.perplexity.ai/mcp`    | unreachable | host does not resolve; docs now name `api.perplexity.ai/mcp` (bearer only)                      |
-| Twilio        | `https://mcp.twilio.com/mcp`       | unreachable | wrong path — the real one is `/docs`, see §3.3                                                  |
-| LaunchDarkly  | `https://mcp.launchdarkly.com/mcp` | unreachable | real path is `/mcp/launchdarkly`, not retried                                                   |
-| Snyk          | `https://mcp.snyk.io/mcp`          | unreachable | Snyk states outright it offers no hosted remote server                                          |
-| Upstash       | `https://mcp.upstash.io/mcp`       | unreachable | stdio only                                                                                      |
-| Jina AI       | `https://mcp.jina.ai/mcp`          | unreachable | real path is `/v1`, not retried                                                                 |
-| Elastic       | `https://mcp.elastic.co/mcp`       | unreachable | per-deployment (`{KIBANA_URL}/api/agent_builder/mcp`)                                           |
-| Redis         | `https://mcp.redis.io/mcp`         | unreachable | stdio only                                                                                      |
-| Zendesk       | `https://mcp.zendesk.com/mcp`      | unreachable | per-tenant (`{subdomain}.zendesk.com/api/mcp`); no vendor endpoint doc exists                   |
-| Plaid         | `https://mcp.plaid.com/mcp`        | unreachable | real host is `api.dashboard.plaid.com/mcp/`, client-credentials only                            |
-| Shopify (dev) | `https://mcp.shopify.dev/mcp`      | unreachable | no such host                                                                                    |
-| Fly.io        | `https://mcp.fly.io/mcp`           | unreachable | stdio only, binds 127.0.0.1                                                                     |
-| DigitalOcean  | `https://mcp.digitalocean.com/mcp` | unreachable | nine per-service hosts, `<svc>.mcp.digitalocean.com`, bearer-token only                         |
-| Railway       | `https://mcp.railway.com/mcp`      | unreachable | real URL is the bare `https://mcp.railway.com/`                                                 |
-| Doppler       | `https://mcp.doppler.com/mcp`      | unreachable | no vendor-documented remote endpoint found                                                      |
-| Statsig       | `https://mcp.statsig.com/mcp`      | unreachable | real URL is `api.statsig.com/v1/mcp`                                                            |
-| Front         | `https://mcp.front.com/mcp`        | unreachable | real host is `mcp.frontapp.com`; needs a pre-registered confidential client                     |
-| Calendly      | `https://mcp.calendly.com/mcp`     | unreachable | real URL is the bare `https://mcp.calendly.com`                                                 |
-| Gusto         | `https://mcp.gusto.com/mcp`        | unreachable | only an Embedded-partner docs assistant exists                                                  |
-| Coda          | `https://mcp.coda.io/mcp`          | unreachable | moved to `docs.superhuman.com/apis/mcp` mid-rebrand                                             |
-| Todoist       | `https://mcp.todoist.com/mcp`      | unreachable | real host is `ai.todoist.net/mcp`                                                               |
-| Better Stack  | `https://mcp.betterstack.com/mcp`  | unreachable | real URL is the bare `https://mcp.betterstack.com`                                              |
-| Dynatrace     | `https://mcp.dynatrace.com/mcp`    | unreachable | per-environment                                                                                 |
-| Turso         | `https://mcp.turso.tech/mcp`       | unreachable | real host is `mcp.turso.ai/mcp`                                                                 |
-| PlanetScale   | `https://mcp.planetscale.com/mcp`  | unreachable | real host is `mcp.pscale.dev/mcp/planetscale`                                                   |
-| MotherDuck    | `https://mcp.motherduck.com/mcp`   | unreachable | real URL is `api.motherduck.com/mcp`                                                            |
-| Metabase      | `https://mcp.metabase.com/mcp`     | unreachable | per-instance (`{your-metabase}/api/metabase-mcp`)                                               |
-| dbt Labs      | `https://mcp.getdbt.com/mcp`       | unreachable | per-tenant (`{DBT_HOST}/api/ai/v1/mcp/`) plus required headers                                  |
-| ElevenLabs    | `https://mcp.elevenlabs.io/mcp`    | unreachable | real URL is `api.elevenlabs.io/v1/mcp`                                                          |
-| Modal         | `https://mcp.modal.com/mcp`        | unreachable | Modal documents only how to host your own; no vendor server                                     |
-| Braintrust    | `https://mcp.braintrust.dev/mcp`   | unreachable | real URL is `api.braintrust.dev/mcp` (EU: `api-eu.`)                                            |
+**Every corrected URL in the right-hand column is an `UNVERIFIED CANDIDATE`.**
+The verdict column applies to the endpoint in the "Endpoint probed" column and
+to nothing else.
+
+| Vendor        | Endpoint probed                    | Verdict     | Reason rejected                                                                                                                                  |
+| ------------- | ---------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pinecone      | `https://mcp.pinecone.io/mcp`      | unreachable | host does not resolve; real endpoint is per-assistant, `<ASSISTANT_HOST>/mcp/assistants/<NAME>` — **NOT A CANDIDATE**: no fixed URL to catalogue |
+| Perplexity    | `https://mcp.perplexity.ai/mcp`    | unreachable | host does not resolve; docs now name `api.perplexity.ai/mcp` (bearer only) — **UNVERIFIED CANDIDATE**, not probed                                |
+| Twilio        | `https://mcp.twilio.com/mcp`       | unreachable | wrong path — the real one is `mcp.twilio.com/docs`, which WAS probed 3x (`none`) and is in §3.3                                                  |
+| LaunchDarkly  | `https://mcp.launchdarkly.com/mcp` | unreachable | real path is `/mcp/launchdarkly`, not retried — **UNVERIFIED CANDIDATE**, not probed                                                             |
+| Snyk          | `https://mcp.snyk.io/mcp`          | unreachable | Snyk states outright it offers no hosted remote server                                                                                           |
+| Upstash       | `https://mcp.upstash.io/mcp`       | unreachable | stdio only                                                                                                                                       |
+| Jina AI       | `https://mcp.jina.ai/mcp`          | unreachable | real path is `/v1`, not retried — **UNVERIFIED CANDIDATE**, not probed                                                                           |
+| Elastic       | `https://mcp.elastic.co/mcp`       | unreachable | per-deployment (`{KIBANA_URL}/api/agent_builder/mcp`) — **NOT A CANDIDATE**: no fixed URL to catalogue                                           |
+| Redis         | `https://mcp.redis.io/mcp`         | unreachable | stdio only                                                                                                                                       |
+| Zendesk       | `https://mcp.zendesk.com/mcp`      | unreachable | per-tenant (`{subdomain}.zendesk.com/api/mcp`); no vendor endpoint doc exists — **NOT A CANDIDATE**: no fixed URL to catalogue                   |
+| Plaid         | `https://mcp.plaid.com/mcp`        | unreachable | real host is `api.dashboard.plaid.com/mcp/`, client-credentials only — **UNVERIFIED CANDIDATE**, not probed                                      |
+| Shopify (dev) | `https://mcp.shopify.dev/mcp`      | unreachable | no such host                                                                                                                                     |
+| Fly.io        | `https://mcp.fly.io/mcp`           | unreachable | stdio only, binds 127.0.0.1                                                                                                                      |
+| DigitalOcean  | `https://mcp.digitalocean.com/mcp` | unreachable | nine per-service hosts, `<svc>.mcp.digitalocean.com`, bearer-token only — **NOT A CANDIDATE**: no fixed URL to catalogue                         |
+| Railway       | `https://mcp.railway.com/mcp`      | unreachable | real URL is the bare `https://mcp.railway.com/` — **UNVERIFIED CANDIDATE**, not probed                                                           |
+| Doppler       | `https://mcp.doppler.com/mcp`      | unreachable | no vendor-documented remote endpoint found                                                                                                       |
+| Statsig       | `https://mcp.statsig.com/mcp`      | unreachable | real URL is `api.statsig.com/v1/mcp` — **UNVERIFIED CANDIDATE**, not probed                                                                      |
+| Front         | `https://mcp.front.com/mcp`        | unreachable | real host is `mcp.frontapp.com`; needs a pre-registered confidential client — **UNVERIFIED CANDIDATE**, not probed                               |
+| Calendly      | `https://mcp.calendly.com/mcp`     | unreachable | real URL is the bare `https://mcp.calendly.com` — **UNVERIFIED CANDIDATE**, not probed                                                           |
+| Gusto         | `https://mcp.gusto.com/mcp`        | unreachable | only an Embedded-partner docs assistant exists                                                                                                   |
+| Coda          | `https://mcp.coda.io/mcp`          | unreachable | moved to `docs.superhuman.com/apis/mcp` mid-rebrand — **UNVERIFIED CANDIDATE**, not probed                                                       |
+| Todoist       | `https://mcp.todoist.com/mcp`      | unreachable | real host is `ai.todoist.net/mcp` — **UNVERIFIED CANDIDATE**, not probed                                                                         |
+| Better Stack  | `https://mcp.betterstack.com/mcp`  | unreachable | real URL is the bare `https://mcp.betterstack.com` — **UNVERIFIED CANDIDATE**, not probed                                                        |
+| Dynatrace     | `https://mcp.dynatrace.com/mcp`    | unreachable | per-environment                                                                                                                                  |
+| Turso         | `https://mcp.turso.tech/mcp`       | unreachable | real host is `mcp.turso.ai/mcp` — **UNVERIFIED CANDIDATE**, not probed                                                                           |
+| PlanetScale   | `https://mcp.planetscale.com/mcp`  | unreachable | real host is `mcp.pscale.dev/mcp/planetscale` — **UNVERIFIED CANDIDATE**, not probed                                                             |
+| MotherDuck    | `https://mcp.motherduck.com/mcp`   | unreachable | real URL is `api.motherduck.com/mcp` — **UNVERIFIED CANDIDATE**, not probed                                                                      |
+| Metabase      | `https://mcp.metabase.com/mcp`     | unreachable | per-instance (`{your-metabase}/api/metabase-mcp`) — **NOT A CANDIDATE**: no fixed URL to catalogue                                               |
+| dbt Labs      | `https://mcp.getdbt.com/mcp`       | unreachable | per-tenant (`{DBT_HOST}/api/ai/v1/mcp/`) plus required headers — **NOT A CANDIDATE**: no fixed URL to catalogue                                  |
+| ElevenLabs    | `https://mcp.elevenlabs.io/mcp`    | unreachable | real URL is `api.elevenlabs.io/v1/mcp` — **UNVERIFIED CANDIDATE**, not probed                                                                    |
+| Modal         | `https://mcp.modal.com/mcp`        | unreachable | Modal documents only how to host your own; no vendor server                                                                                      |
+| Braintrust    | `https://mcp.braintrust.dev/mcp`   | unreachable | real URL is `api.braintrust.dev/mcp` (EU: `api-eu.`) — **UNVERIFIED CANDIDATE**, not probed                                                      |
 
 Several of these are "wrong path, real server" rather than "no server". They are
 listed with the corrected URL so the next pass starts from it rather than
@@ -172,10 +200,17 @@ Browserbase is the specific failure mode this catalog should keep in mind: a
 `none` verdict means _the handshake was accepted_, not _the server is usable
 without an account_. The probe cannot tell those apart, so curation has to.
 
-### 3.3 Rejected — verified and documented, but not shipped this round
+### 3.3 Deferred — probed and documented, but not shipped this round
 
-These all passed both bars. They were left out only to land on exactly 60
-installable, and are the shortlist for the next pass — no re-research needed.
+These passed both bars in §1. They were left out only to land on exactly 60
+installable, and are the shortlist for the next pass.
+
+**They are still not clearable for paste.** Every one of them predates §10, so
+none has been checked for the Browserbase failure mode. The three that probe
+`none` in particular — and any future candidate that does — must go through
+§10's tools-actually-work check before shipping, not just §1's handshake. Rows
+whose "Category it would fill" column flags a URL disagreement are
+`UNVERIFIED CANDIDATE` on that alternate URL.
 
 | Vendor                | Endpoint                         | Runs | Verdict     | Category it would fill                                                                                                                        |
 | --------------------- | -------------------------------- | ---- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -478,7 +513,205 @@ category block each belongs to. Reproduced here so the report stands alone.
 
 ---
 
-## 9. Sources
+## 10. Audit of the six `auth_type: none` entries
+
+Added 2026-08-18, after the twelve above shipped.
+
+The Browserbase rejection in §3.2 rests on a claim that applies to the catalog
+as it already stands, not only to what it refused: **a `none` verdict means the
+handshake was accepted, not that the server is usable without an account.**
+Until OAuth auto-mode lands, the `none` entries are the entire installable set,
+so if any of them were Browserbase-shaped, Connect would succeed and install a
+server whose every tool fails — and that would be the only thing a user could
+install.
+
+### 10.1 What was tested, and what it does and does not establish
+
+`initialize` is not evidence; that is the whole point of §3.2. So for each of
+the six I ran the full client sequence — `initialize` → `notifications/initialized`
+→ `tools/list` → **one `tools/call`** with benign, read-only arguments, no
+credentials, and read the vendor's documentation alongside it.
+
+What a successful `tools/call` establishes: the server accepted an
+unauthenticated caller, dispatched a real tool, and returned real data. That is
+materially stronger than a handshake and stronger than `tools/list` (which
+Browserbase would also pass — it advertises its tools before refusing to run
+them).
+
+What it does **not** establish:
+
+- **That it will keep working.** Every one of these is a free tier the vendor
+  can change, and four of the six say so in their own docs.
+- **That every tool works.** One tool was called per server, chosen to be cheap
+  and read-only. A server could gate its expensive tools differently.
+- **That it works at volume.** Two of the six returned quota language
+  unprompted. A user hitting a rate limit sees tool failures that look exactly
+  like the Browserbase failure mode, just later.
+
+### 10.2 Results — all six pass
+
+| Entry                          | `tools/list` | Tool called (benign args)                                             | Result                                                              | Verdict            |
+| ------------------------------ | ------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------ |
+| `com.context7/mcp`             | 2 tools      | `resolve-library-id` (`query: "react hooks"`, `libraryName: "react"`) | Returned a real library index — `/reactjs/react.dev`, 6064 snippets | **Genuinely open** |
+| `com.deepwiki/mcp`             | 3 tools      | `read_wiki_structure` (`modelcontextprotocol/servers`)                | Returned the real wiki page tree                                    | **Genuinely open** |
+| `co.huggingface/hf-mcp-server` | 4 tools      | `hub_repo_search` (`query: "bert"`, `limit: 1`)                       | Returned `google-bert/bert-base-cased` with live download counts    | **Genuinely open** |
+| `ai.exa/exa`                   | 2 tools      | `web_search_exa` (`"model context protocol"`, 1 result)               | Returned a real search hit with page highlights                     | **Genuinely open** |
+| `com.firecrawl/mcp`            | 3 tools      | `firecrawl_scrape` (`https://example.com`)                            | Returned scraped markdown + metadata                                | **Genuinely open** |
+| `io.github.clerk/mcp-server`   | 2 tools      | `list_clerk_sdk_snippets` (no args)                                   | Returned the real snippet bundle index                              | **Genuinely open** |
+
+**None of the six is Browserbase-shaped.** Every one dispatched a real tool
+unauthenticated and returned real data. The commercial ones you were right to
+suspect — Exa and Firecrawl — both run a documented keyless tier rather than a
+handshake that leads nowhere.
+
+Two methodology notes, so the table is not read as cleaner than it was:
+
+- Context7's first two calls failed with `Input validation error`. That was my
+  error, not a refusal — its schema requires **both** `query` and `libraryName`,
+  and I sent one each time. The third call, with both, succeeded. A wrong
+  argument and an auth refusal are not the same thing, and a validation error
+  arriving at all is itself weak evidence the call was authorised enough to be
+  validated.
+- Hugging Face's first call was `hf_whoami`, which is the auth-status tool and
+  therefore the tool most likely to answer anonymously — too weak to conclude
+  from. It did return a useful admission, quoted below, but the verdict above
+  rests on the second call to `hub_repo_search`, which is a substantive tool.
+
+### 10.3 What the vendors say — every one documents the keyless tier
+
+The docs agree with the probes, which is the outcome that matters: this is
+designed behaviour, not an oversight to be caught later.
+
+- **Hugging Face** — the server says it in-band, unprompted:
+  _"The Hugging Face tools are being used anonymously and may be rate limited.
+  … create a free account and enjoy higher rate limits."_
+- **Exa** — _"Exa MCP's free plan covers casual use."_ On exhaustion: 429 with
+  _"You've hit the free plan rate limit. Add your own API key to continue."_
+  Keys go in an `x-api-key` **header**, not the URL.
+- **Firecrawl** — keyless access is one of three documented paths, giving
+  _"Search, Scrape, and Parse within daily limits."_ The docs also say the key
+  must never go in the MCP URL.
+- **Context7** — works without a key at an anonymous rate limit; a free key
+  raises limits and adds private-repo access. Community issues report the
+  anonymous limit biting in practice (~1,000 calls/month, 20/day while blocked).
+- **DeepWiki** — free, no authentication, public repositories only. Private
+  repos require the separate Devin MCP server and a Devin API key.
+- **Clerk** — a documentation server: two tools, public content, no tenant data.
+
+So all six are _rate-limited_ free tiers rather than _unauthenticated_ ones in
+the sense the catalog implies. That distinction is the recommendation below.
+
+### 10.4 Recommendation — do not flip any value; the schema is missing a state
+
+Per your instruction I changed nothing. My recommendation is that **no
+`auth_type` value here is wrong and none should be flipped.** `none` is the
+honest answer to the question `auth_type` actually asks — "what does this
+endpoint require of a client in order to connect" — and for all six the answer
+is genuinely "nothing".
+
+The gap is that `auth_type` is being asked to carry a second question it was
+never defined to answer: _how well does this work without an account?_ Today's
+four values cannot distinguish:
+
+1. **Open and complete** — Clerk, DeepWiki. No account exists to have; a key
+   would buy nothing.
+2. **Open but metered** — Context7, Exa, Firecrawl, Hugging Face. Full tool
+   surface, free tier, and a key lifts limits or unlocks private data.
+3. **Open handshake, closed tools** — Browserbase, Storyblok. Connect succeeds;
+   every tool fails. **Currently indistinguishable from 1 and 2**, which is why
+   §3.2 had to be a human judgement rather than a rule.
+
+Categories 1 and 2 are both fine to ship and the difference is a curation-copy
+matter — arguably `permission_disclosure` should mention metering, as Tavily's
+and Kagi's already do, and Context7's and Firecrawl's currently do not. It is
+category 3 that is dangerous, and it is dangerous precisely because nothing in
+the file or the probe can express it.
+
+Three options, in the order I would consider them:
+
+- **Cheapest, and worth doing regardless:** extend the connect-time probe from
+  `initialize` to `initialize` + `tools/list` + optionally one tool call. This
+  catches nothing today — all six pass — but it is the only mechanical defence
+  against a category-3 entry being added later, or a category-2 vendor sliding
+  into category 3 when it monetises. Note it does not catch a metered server
+  whose quota is exhausted, which will look like category 3 at connect time.
+- **A curation field**, e.g. `free_tier: complete | metered` alongside
+  `auth_type`, stated by the entry and shown in the marketplace. Honest, cheap,
+  reviewable — but it is another hand-maintained claim about a third party that
+  the file cannot keep current, which is the failure this catalog already had
+  once.
+- **Do nothing to the schema**, and keep §3.2 as a curation rule enforced by
+  review. Fine while a human reviews every addition; it fails silently the day
+  the catalog admits entries nobody vetted.
+
+This interacts with the sibling branch's OAuth auto-mode work, which is why I
+am flagging rather than proposing a diff: if auto-mode makes `oauth` entries
+installable, the `none` entries stop being the whole installable set and the
+urgency of the above drops considerably.
+
+### 10.5 One incidental finding
+
+`com.firecrawl/mcp` ships `https://mcp.firecrawl.dev/mcp`, but Firecrawl's
+current docs name `https://mcp.firecrawl.dev/v2/mcp`. I sent one `initialize`
+to the documented path: it answers, and reports the **identical build** —
+`firecrawl-fastmcp` version `3.24.0` — so `/mcp` is a live alias of `/v2/mcp`
+rather than a different or older server. Nothing is broken. But the shipped URL
+is the undocumented one, which is the same shape as the Netlify case in §5, and
+an unversioned alias is the one more likely to be retired. Low priority;
+switching to `/v2/mcp` would be a one-line change.
+
+---
+
+## 11. What a `popularity_rank` re-rank would actually change
+
+Deferred from §2.2, where the append to 51–62 is explained. Sizing it, since
+the question is whether it is worth a pass.
+
+**The visible symptom.** `popularity` is the marketplace's default sort, so
+today Netlify (51), Postman (52), Miro (53) and Tavily (54) all render below
+Kagi (50), Globalping (48) and Apify (49). For four mainstream vendors that is
+plainly wrong as an ordering claim.
+
+**Roughly where they would land.** My estimate, by general prominence rather
+than by data — see the caveat below:
+
+| Entry       | Now | Estimate | Would move above                           |
+| ----------- | --- | -------- | ------------------------------------------ |
+| Netlify     | 51  | ~13–16   | Semgrep 24, Buildkite 31, Auth0 38, Wix 44 |
+| Postman     | 52  | ~18–22   | most of the productivity tail              |
+| Tavily      | 54  | ~20–25   | Firecrawl 26, Apify 49, Kagi 50            |
+| Miro        | 53  | ~25–30   | Monday 33, ClickUp 36, Canva 42            |
+| Render      | 56  | ~28–33   | Buildkite 31                               |
+| Algolia     | 55  | ~30–35   | —                                          |
+| Cloudinary  | 57  | ~33–38   | Box 40                                     |
+| Klaviyo     | 60  | ~38–43   | Resend 37                                  |
+| Axiom       | 59  | ~40–45   | Amplitude 47, Globalping 48                |
+| Clerk       | 58  | ~45–50   | —                                          |
+| Customer.io | 61  | ~45–50   | —                                          |
+| incident.io | 62  | ~45–50   | PagerDuty 46 is the comparator             |
+
+**The cost.** Ranks 1–50 are dense with no gaps, and `popularity_rank` is
+`z.int().positive()`, so there is no room to slot anything in. Inserting eight
+entries above rank 40 renumbers everything below the highest insertion —
+**roughly 50 of 62 entries get a new number.** There is no cheap partial
+version of this.
+
+**Why I would not do it on intuition.** The file's header says the existing
+ranks are "hand-assigned, informed by relative install volume on Smithery." I
+do not have those numbers. A re-rank by my sense of vendor prominence would
+replace a data-informed ordering with a guess, across 50 lines, in a diff where
+a reviewer cannot check any single line — exactly the shape of change that put
+the false header into this file in the first place.
+
+**Recommendation:** worth a pass, but only one that starts by pulling fresh
+Smithery figures for all 62. If that data is not available, the honest
+alternative is to leave the append in place and accept that `popularity_rank`
+means "roughly, and newest last" — or to drop the rank on new entries entirely
+and let them sort last explicitly, which is at least not a false claim.
+
+---
+
+## 12. Sources
 
 Vendor documentation each accepted entry's endpoint, transport and scopes were
 taken from:
