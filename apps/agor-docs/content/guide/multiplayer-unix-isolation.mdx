@@ -9,11 +9,11 @@ Agor separates **application authorization** from the **execution boundary**. Br
 
 ## Supported modes
 
-| Mode | Boundary | Use case |
-|---|---|---|
-| `simple` | none beyond daemon-user permissions | trusted personal installation |
-| `sandbox` | fail-closed bubblewrap filesystem mounts | shared Linux host |
-| `delegated` | operator-supplied external substrate | hosted/containerized execution |
+| Mode        | Boundary                                 | Use case                       |
+| ----------- | ---------------------------------------- | ------------------------------ |
+| `simple`    | none beyond daemon-user permissions      | trusted personal installation  |
+| `sandbox`   | fail-closed bubblewrap filesystem mounts | shared Linux host              |
+| `delegated` | operator-supplied external substrate     | hosted/containerized execution |
 
 The former `strict` and `insulated` modes were removed in Agor 0.25. Agor no longer creates host users or groups, changes passwords, repairs ACLs, creates per-user symlinks, or launches executors through sudo.
 
@@ -69,27 +69,29 @@ Prefer `{tenant_id}` and `{user_id}`. `{unix_user}` remains temporarily as an op
 
 `others_can` controls non-owner access:
 
-| Value | Meaning |
-|---|---|
-| `none` | no access |
-| `view` | read branch, session, task, and message data |
-| `session` | create and prompt the caller's own sessions |
-| `prompt` | prompt sessions created by other users |
-| `all` | full branch/session control |
+| Value     | Meaning                                      |
+| --------- | -------------------------------------------- |
+| `none`    | no access                                    |
+| `view`    | read branch, session, task, and message data |
+| `session` | create and prompt the caller's own sessions  |
+| `prompt`  | prompt sessions created by other users       |
+| `all`     | full branch/session control                  |
 
 `session` is the safe collaboration default. Keep `dangerously_allow_session_sharing` off unless cross-user credential execution is explicitly intended.
 
 ## Migrating from 0.24
 
-Run the migration while still on the latest 0.24.x bridge release:
+There is no published 0.24 bridge release for this conversion. Treat the 0.25.1 upgrade as an offline cutover:
 
-```bash
-scripts/strict-to-sandbox-migration.sh --help
-scripts/strict-to-sandbox-migration.sh --prepare-only
-scripts/strict-to-sandbox-migration.sh --apply
-```
+1. While still on 0.24.7, drain work, stop **every** daemon connected to the database, and take tested database, configuration, and storage backups.
+2. Install the 0.25.1 software without starting its daemon, then run `agor db migrate --offline-cutover` from 0.25.1.
+3. Obtain the 0.25.1 [`sandbox-home-migration-preflight.sh`](https://github.com/preset-io/agor/blob/v0.25.1/scripts/sandbox-home-migration-preflight.sh) and [`strict-to-sandbox-migration.sh`](https://github.com/preset-io/agor/blob/v0.25.1/scripts/strict-to-sandbox-migration.sh). Review the [full operator runbook](https://github.com/preset-io/agor/blob/v0.25.1/context/guides/migrate-strict-to-sandbox.md).
+4. Run both scripts' read-only checks, then use `--prepare-only` to create and inspect the ownership manifest, config backup, ownership plan, and progress journal. Apply with `--apply --resume` only after that checkpoint is preserved.
+5. Start only 0.25.1 daemons, then verify one real task for every configured agentic tool.
 
-Verify sandbox launches and user home contents before installing 0.25. Version 0.25 refuses `strict`, `insulated`, and `opportunistic` configuration values with migration guidance; it does not downgrade them to `simple`.
+The migration scripts are Linux/GNU-specific reference tooling. They only detect the configured systemd service, so independently verify that foreground and alternate-service daemons are stopped. They do not cross nested mount points, and the ownership manifest is not an automatic rollback tool. Keep host users, groups, sudoers, and all recovery artifacts through a production soak. The safest full rollback is to stop 0.25.1 and restore the complete pre-upgrade backup.
+
+Version 0.25 refuses `strict`, `insulated`, and `opportunistic` configuration values; it does not downgrade them to `simple`. For migration help, bring the dry-run output and deployment layout to [Discord](https://discord.gg/Qh4TrFQZpd) before applying filesystem changes.
 
 Historical `unix_group` database values remain nullable for rollback and audit but are no longer written or interpreted. `unix_username` remains temporarily as the delegated home key and immutable session stamp.
 

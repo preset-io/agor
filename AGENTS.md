@@ -229,8 +229,10 @@ execution:
   create a host account, invoke sudo, or claim that a command template itself
   supplies isolation.
 
-The removed `strict` and `insulated` modes are rejected at startup. Migrate an
-old installation with the latest 0.24.x bridge release before upgrading.
+The removed `strict` and `insulated` modes are rejected at startup. There is no
+published 0.24 bridge release; migrate an old installation as an offline
+0.24.7 → 0.25.1 cutover using `context/guides/migrate-strict-to-sandbox.md` and
+the scripts from the 0.25.1 source tree.
 
 Relevant options include:
 

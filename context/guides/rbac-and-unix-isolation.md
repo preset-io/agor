@@ -69,10 +69,11 @@ delegated home-key contract. Their effective namespace is tenant-local.
 
 ## Migration
 
-Use the latest 0.24.x bridge release and
+There is no published 0.24 bridge release. Perform an offline 0.24.7 → 0.25.1
+cutover using
 [`context/guides/migrate-strict-to-sandbox.md`](migrate-strict-to-sandbox.md)
-before starting 0.25. The migration scripts are historical compatibility tools,
-not active host-management APIs.
+and the scripts from the 0.25.1 source tree. They are historical compatibility
+tools, not active host-management APIs.
 
 ## Key implementation files
 

@@ -31,29 +31,48 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ## Unreleased
 
+## 0.25.1 (2026-08-18)
+
+> [!WARNING]
+> This is a breaking upgrade for deployments using `execution.unix_user_mode: strict` or `insulated`. Read [Why Agor is leaving Unix impersonation behind](https://agor.live/blog/why-agor-is-leaving-unix-impersonation-behind) and the migration notes below before upgrading. Take tested database, configuration, and storage backups; drain work; and stop every Agor daemon before changing ownership or running migrations.
+
 ### Breaking
 
-- **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite the deployment-owned YAML file. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
-- **Agentic tool installs now support declarative and legacy local-managed policy** — fresh interactive init selects from every allowlisted integration, writes `agentic_tools.installed` once, and reconciles before success; fresh headless init requires an explicit list, `all`, or `none`. Older configs that omit the YAML key retain interactive `agor install` through a private host-local manifest. `agor install --sync` repairs declarative state and `agor doctor` remains read-only.
+- **Unix impersonation is removed** — `strict` and `insulated` no longer start; Agor no longer creates host users/groups, changes passwords, manages sudoers or ACLs, or launches executors through `sudo`. Use `simple` for trusted single-user hosts, `sandbox` for fail-closed Linux filesystem isolation, or `delegated` for an operator-owned external execution substrate. ([#2362](https://github.com/preset-io/agor/pull/2362), [#2375](https://github.com/preset-io/agor/pull/2375))
+  - There is no published 0.24 bridge release. From 0.24.7, keep the old daemon stopped, install the 0.25.1 software, run the 0.25.1 database migrations, then use the 0.25.1 migration scripts before starting the new daemon.
+  - Review the [operator runbook](context/guides/migrate-strict-to-sandbox.md), run [`sandbox-home-migration-preflight.sh`](scripts/sandbox-home-migration-preflight.sh), and run [`strict-to-sandbox-migration.sh`](scripts/strict-to-sandbox-migration.sh) without `--apply` first. The scripts are Linux/GNU-specific reference tooling, not a one-command upgrade or rollback mechanism.
+  - The ownership conversion makes the daemon user the owner while preserving groups, modes, and ACLs. It is mount-bounded and does not traverse nested mount points; inventory and migrate those separately. The generated ownership manifest is recovery evidence, not an automatic rollback tool.
+  - The script only detects an active configured systemd service. Administrators must independently verify that no foreground, alternate-service, or otherwise unmanaged daemon is running.
+  - Keep host users, groups, sudoers, and recovery artifacts through a production soak; do not use `--teardown` during the initial migration. The safest full rollback is to stop 0.25.1 and restore the complete pre-upgrade database, configuration, and storage backup.
+- **Every daemon now has a deployment identity** — `daemon.deployment_id` is a required UUID used to bind daemon health, CLI lifecycle ownership, and login credentials to the intended deployment. New installs generate it; interactive `agor daemon start`/`restart` can back up and update a legacy config, while non-interactive starts refuse and print a ready-to-paste UUID snippet. Existing CLI logins must authenticate again. ([#2379](https://github.com/preset-io/agor/pull/2379))
+- **CLI targeting is explicitly local or remote** — one stored login targets one deployment. Local administration is refused while logged into a different deployment, preventing commands from combining local filesystem state with an unrelated remote API. `agor login` requires an explicit target (or confirmation of the detected local deployment). ([#2379](https://github.com/preset-io/agor/pull/2379))
+- **`config.yaml` is immutable after initialization** — daemon startup, telemetry, Docker entrypoints, upgrades, APIs, MCP, and UI flows no longer rewrite deployment-owned YAML. Configure stable JWT/master secrets with environment variables or YAML before startup. The mutating `agor config set/get/unset` commands are removed; `agor config --yaml` materializes the effective read-only configuration. Existing Docker environment overrides are resolved in memory instead of being written to YAML.
+- **Agentic tool installs are version-aligned and declarative** — fresh interactive init selects integrations and writes `agentic_tools.installed`; fresh headless init requires an explicit list, `all`, or `none`. `agor install --sync` installs or repairs the selected 0.25.1 package set, and `agor doctor` remains read-only. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 ### Features
 
-- **Version-aligned agentic tool installs** — keeps the base npm install lean and adds init/config selection plus `agor install` reconciliation for isolated Claude, Codex, Copilot, Gemini, OpenCode, and Cursor integrations. ([#2201](https://github.com/preset-io/agor/pull/2201))
+- **Fail-closed filesystem sandboxing** — Linux shared-host deployments can isolate per-user homes, branch access, sibling worktrees, and daemon secrets with bubblewrap while deriving mounts from application RBAC. ([#2362](https://github.com/preset-io/agor/pull/2362))
+- **Curated MCP marketplace catalog** — ships a checked-in catalog with validated connection probing and a single shared search implementation. ([#2344](https://github.com/preset-io/agor/pull/2344))
+- **Machine-readable database migration status** — exposes migration readiness and blocks daemon starts with actionable guidance when required migrations are pending. ([#2363](https://github.com/preset-io/agor/pull/2363))
 
 ### Fixes
 
-- **Collision-safe Unix group names** — new branch/repo groups use canonical 24-character short IDs while persisted legacy names remain authoritative. Existing `strict`/`insulated` installations should run `sudo agor local fix-group-uuids --only-dups` (preview with `--dry-run`); an optional run without `--only-dups` migrates every legacy group and safely cleans verified legacy orphans.
-- **Reliable fresh and destructive init** — interactive init requires an intentional nonempty agentic-tool selection, persists the immutable deployment policy, and finishes package reconciliation before success. Destructive re-init now refuses a live daemon, closes SQLite inspection handles, and removes WAL/SHM sidecars before replacing the database.
+- **Safe daemon lifecycle and re-initialization** — daemon start/stop/status/restart and init now share canonical effective-config URL resolution, distinguish Agor from unrelated port listeners, retain a narrow confirmed stop path for legacy managed daemons, and avoid treating successful oclif exits as failures. Re-init checks for a live daemon before prompting and offers an atomic timestamped backup of the entire install directory before starting fresh. ([#2379](https://github.com/preset-io/agor/pull/2379))
+- **Reliable local development CLI entrypoints** — package-local and workspace-root dev commands resolve source exports consistently, and CLI/daemon package versions are released together. ([#2379](https://github.com/preset-io/agor/pull/2379))
+- **Masked configuration diagnostics** — config inspection reports sandbox-masked paths without leaking secrets. ([#2367](https://github.com/preset-io/agor/pull/2367))
+- **Reliable shallow-clone refs** — branch creation and remote alignment handle shallow repository refs correctly. ([#2365](https://github.com/preset-io/agor/pull/2365))
+- **OAuth confidential-client support** — MCP OAuth connections can use confidential clients where required. ([#2364](https://github.com/preset-io/agor/pull/2364))
 - **Reliable cold-cache global installs** — removes deprecated transitive trees and bundled agent runtimes from `agor-live`, bundles selected high-fanout pure-JS dependencies, and adds package-content and low-file-descriptor installation checks. ([#2201](https://github.com/preset-io/agor/pull/2201))
 
 ### Chores
 
-- **Prepare agor-live 0.24.1** — bumps `agor-live`, `@agor-live/client`, and all six version-aligned agentic-tool integration packages together.
+- **Align the 0.25.1 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version.
 
-- **Prepare agor-live 0.24.0** — bumps `agor-live`, `@agor-live/client`, and the version-aligned `@agor/*` integration packages together. ([#2201](https://github.com/preset-io/agor/pull/2201))
+Need help with a `strict`/`insulated` deployment? Bring the dry-run output and your deployment layout to [Discord](https://discord.gg/Qh4TrFQZpd) before applying filesystem changes.
 
-- **Prepare agor-live patch release** — bumps `agor-live` and `@agor-live/client` to 0.23.2 and keeps the standalone agor-live package lock in sync. ([#1857](https://github.com/preset-io/agor/pull/1857))
-- **Refresh Claude tooling and agor-live patch versions** — bumps Claude Code CLI, Claude Agent SDK, and Anthropic SDK pins; adds Claude Sonnet 5 to the Claude model fallback catalog; and bumps `agor-live` / `@agor-live/client` to 0.23.1. ([#1727](https://github.com/preset-io/agor/pull/1727))
+## 0.25.0 (skipped)
+
+0.25.0 was prepared internally but never published to npm or Homebrew. Do not install or target it: 0.25.1 is the first published release containing the 0.25 changes, and upgrades should go directly from the latest published 0.24 release to 0.25.1 using the migration guidance above.
 
 ## 0.23.0 (TBD)
 
