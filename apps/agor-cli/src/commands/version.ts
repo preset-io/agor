@@ -1,90 +1,65 @@
-/**
- * `agor version` - Print daemon build identity
- *
- * Reports the build SHA so operators can verify which deploy is live.
- * Resolution order mirrors the daemon's loadBuildInfo():
- *   1. /health (when the daemon is reachable)
- *   2. <daemon-dist>/.build-info file (offline fallback)
- *   3. 'dev' (source-mode contributors)
- */
+/** `agor version` - Print the selected daemon's build identity. */
 
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { getDaemonUrl } from '@agor/core/config';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import {
+  resolveConnectedDeploymentTarget,
+  resolveLocalDeploymentTarget,
+} from '../lib/deployment-target.js';
 
 interface HealthBuildInfo {
   buildSha?: string;
   builtAt?: string | null;
+  deploymentId?: string;
   version?: string;
 }
 
 export default class Version extends Command {
-  static description = 'Show daemon build SHA + CLI package version';
+  static description = 'Show the connected daemon version';
 
-  static examples = ['<%= config.bin %> <%= command.id %>'];
+  static examples = [
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --local',
+  ];
+
+  static flags = {
+    local: Flags.boolean({ description: 'Inspect the locally configured daemon', default: false }),
+  };
 
   async run(): Promise<void> {
-    await this.parse(Version);
-    // 1. Try the running daemon first — this is what the UI sees.
-    const daemonUrl = await getDaemonUrl();
-    const liveInfo = await fetchHealth(daemonUrl);
-    if (liveInfo?.buildSha) {
-      this.log(`${chalk.bold('Daemon (live):')} ${chalk.cyan(liveInfo.buildSha)}`);
-      if (liveInfo.builtAt) this.log(`  built: ${chalk.dim(liveInfo.builtAt)}`);
-      if (liveInfo.version) this.log(`  pkg version: ${chalk.dim(liveInfo.version)}`);
-      this.log(`  source: ${chalk.dim(`/health @ ${daemonUrl}`)}`);
-      return;
+    const { flags } = await this.parse(Version);
+    const target = flags.local
+      ? await resolveLocalDeploymentTarget()
+      : await resolveConnectedDeploymentTarget();
+    if (!target) {
+      this.error('Not connected. Run agor login --url <daemon-url>.');
     }
 
-    // 2. Daemon not reachable — fall back to the .build-info file. This works
-    //    in agor-live installs even when the daemon is stopped.
-    const fileInfo = await readBuildInfoFile();
-    if (fileInfo?.sha) {
-      this.log(`${chalk.bold('Daemon (file):')} ${chalk.cyan(fileInfo.sha)}`);
-      if (fileInfo.builtAt) this.log(`  built: ${chalk.dim(fileInfo.builtAt)}`);
-      this.log(`  source: ${chalk.dim('<daemon-dist>/.build-info (daemon not running)')}`);
-      return;
+    const info = await fetchHealth(target.url);
+    if (!info) this.error(`The daemon at ${target.url} is not reachable.`);
+    if (info.deploymentId !== target.deploymentId) {
+      this.error(
+        flags.local
+          ? `The local daemon identity at ${target.url} does not match config.yaml.`
+          : `The daemon identity at ${target.url} changed. Run agor login --url ${target.url} again.`
+      );
     }
 
-    // 3. No daemon, no file — this is a source checkout that hasn't been built.
-    this.log(
-      `${chalk.bold('Daemon:')} ${chalk.yellow('dev')} ${chalk.dim('(no .build-info; daemon offline)')}`
-    );
+    this.log(`${chalk.bold('Daemon:')} ${chalk.cyan(info.version ?? 'unknown version')}`);
+    if (info.buildSha) this.log(`  build: ${chalk.dim(info.buildSha)}`);
+    if (info.builtAt) this.log(`  built: ${chalk.dim(info.builtAt)}`);
+    this.log(`  deployment: ${chalk.dim(target.deploymentId)}`);
+    this.log(`  source: ${chalk.dim(`/health @ ${target.url}`)}`);
   }
 }
 
 async function fetchHealth(daemonUrl: string): Promise<HealthBuildInfo | null> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
-    const res = await fetch(`${daemonUrl}/health`, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    return (await res.json()) as HealthBuildInfo;
+    const response = await fetch(`${daemonUrl}/health`, { signal: AbortSignal.timeout(1000) });
+    if (!response.ok) return null;
+    const body = (await response.json()) as HealthBuildInfo & { service?: string };
+    return body.service === 'agor-daemon' ? body : null;
   } catch {
     return null;
   }
-}
-
-async function readBuildInfoFile(): Promise<{ sha?: string; builtAt?: string | null } | null> {
-  // Look next to the CLI bundle. In agor-live, `cli/` and `daemon/` are
-  // siblings under dist/, so the file lives at ../daemon/.build-info.
-  const cliDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(cliDir, '../daemon/.build-info'),
-    join(cliDir, '../../daemon/.build-info'),
-  ];
-  for (const path of candidates) {
-    try {
-      const raw = await readFile(path, 'utf-8');
-      const parsed = JSON.parse(raw) as { sha?: string; builtAt?: string | null };
-      if (parsed.sha) return parsed;
-    } catch {
-      // try next
-    }
-  }
-  return null;
 }

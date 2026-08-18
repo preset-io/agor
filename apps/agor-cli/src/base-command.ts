@@ -4,13 +4,13 @@
  * Reduces boilerplate by providing common functionality like daemon connection checking.
  */
 
-import { normalizeHttpBaseUrl } from '@agor/core/utils/url';
 import type { AgorClient } from '@agor-live/client';
 import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
 import { loadToken } from './lib/auth';
 import { probeAgorDaemon } from './lib/daemon-probe.js';
+import { resolveConnectedDeploymentTarget } from './lib/deployment-target.js';
 
 /**
  * Base command with daemon connection utilities
@@ -26,7 +26,8 @@ export abstract class BaseCommand extends Command {
   protected async connectToDaemon(): Promise<AgorClient> {
     const storedAuth = await loadToken();
     const apiKey = getApiKeyFromEnv();
-    if (!storedAuth && !apiKey) {
+    const target = await resolveConnectedDeploymentTarget();
+    if (!target) {
       this.error(
         chalk.red('✗ Not authenticated') +
           '\n\n' +
@@ -35,35 +36,18 @@ export abstract class BaseCommand extends Command {
           chalk.cyan('agor login --url <daemon-url>')
       );
     }
-    const environmentTarget =
-      apiKey && process.env.DAEMON_URL && process.env.AGOR_DEPLOYMENT_ID
-        ? {
-            url: normalizeHttpBaseUrl(process.env.DAEMON_URL, 'DAEMON_URL'),
-            origin: new URL(process.env.DAEMON_URL).origin,
-            deploymentId: process.env.AGOR_DEPLOYMENT_ID,
-          }
-        : null;
-    const target = apiKey ? environmentTarget : storedAuth?.target;
-    if (!target) {
-      this.error('Environment API-key authentication requires DAEMON_URL and AGOR_DEPLOYMENT_ID.');
-    }
     const daemonUrl = target.url;
     this.daemonUrl = daemonUrl;
     const probe = await probeAgorDaemon(daemonUrl);
 
     if (!probe.running) {
       this.log(
-        chalk.red('✗ Daemon not running') +
+        chalk.red('✗ Connected deployment is not reachable') +
           '\n\n' +
-          chalk.bold('To start the daemon:') +
-          '\n  ' +
-          chalk.cyan('cd apps/agor-daemon && pnpm dev') +
-          '\n\n' +
-          chalk.bold('To configure daemon URL:') +
-          '\n  ' +
-          chalk.cyan('set DAEMON_URL=<url>, or edit ~/.agor/config.yaml') +
-          '\n  ' +
-          chalk.gray(`Current: ${this.daemonUrl}`)
+          chalk.gray(`Target: ${this.daemonUrl}`) +
+          (target.source === 'environment'
+            ? '\n\nCheck AGOR_API_KEY, DAEMON_URL, and AGOR_DEPLOYMENT_ID.'
+            : `\n\nSelect another deployment with:\n  ${chalk.cyan('agor login --url <daemon-url>')}`)
       );
       this.exit(1);
     }

@@ -46,7 +46,8 @@ function materializeDatabaseEnvironment(config: AgorConfig): AgorConfig {
 }
 
 export default class ConfigIndex extends Command {
-  static description = 'Show the current effective configuration (YAML + environment + defaults)';
+  static description =
+    'Show the effective local deployment configuration (YAML + environment + defaults)';
 
   static examples = [
     '<%= config.bin %> <%= command.id %>',

@@ -7,11 +7,10 @@ import { executionPolicyFor } from './execution-policy';
 describe('executionPolicyFor', () => {
   it.each([
     ['login', 'bootstrap'],
-    ['auth:login', 'bootstrap'],
     ['daemon:start', 'local'],
     ['db:migrate', 'local'],
-    ['repo:add-local', 'local'],
-    ['branch:cd', 'local'],
+    ['local:add-repo', 'local'],
+    ['local:create-admin', 'local'],
     ['repo:list', 'connection'],
     ['session:list', 'connection'],
     ['user:list', 'connection'],
@@ -40,7 +39,7 @@ describe('executionPolicyFor', () => {
 
   it('routes remote service commands through the shared BaseCommand client', () => {
     const commandsDir = resolve(import.meta.dirname, '../commands');
-    const storedAuthOnlyCommands = new Set(['auth:whoami', 'open', 'whoami']);
+    const targetOnlyCommands = new Set(['open', 'version']);
     const violations = globSync('**/*.ts', { cwd: commandsDir })
       .filter((path) => !path.endsWith('.test.ts') && !path.endsWith('/index.ts'))
       .flatMap((path) => {
@@ -48,14 +47,27 @@ describe('executionPolicyFor', () => {
           .replace(/\.ts$/, '')
           .replace(/\/index$/, '')
           .replaceAll('/', ':');
-        if (
-          executionPolicyFor(commandId) !== 'connection' ||
-          storedAuthOnlyCommands.has(commandId)
-        ) {
+        if (executionPolicyFor(commandId) !== 'connection' || targetOnlyCommands.has(commandId)) {
           return [];
         }
         const source = readFileSync(resolve(commandsDir, path), 'utf8');
         return source.includes('extends BaseCommand') ? [] : [commandId];
+      });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('never mixes local database construction with a daemon client', () => {
+    const commandsDir = resolve(import.meta.dirname, '../commands');
+    const violations = globSync('**/*.ts', { cwd: commandsDir })
+      .filter((path) => !path.endsWith('.test.ts'))
+      .flatMap((path) => {
+        const source = readFileSync(resolve(commandsDir, path), 'utf8');
+        const constructsDatabase = /\b(?:createDatabase|createDatabaseAsync|getDatabaseUrl)\b/.test(
+          source
+        );
+        const constructsClient = /\b(?:connectToDaemon|createRestClient)\b/.test(source);
+        return constructsDatabase && constructsClient ? [path] : [];
       });
 
     expect(violations).toEqual([]);

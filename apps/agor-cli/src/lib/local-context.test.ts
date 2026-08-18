@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertLocalContextUnlocked,
   assertLocalContextUnlockedWhenIdentified,
@@ -18,7 +18,14 @@ describe('assertLocalContextUnlocked', () => {
     ).resolves.toBe(undefined);
   });
 
-  beforeEach(() => vi.mocked(loadToken).mockReset());
+  beforeEach(() => {
+    vi.mocked(loadToken).mockReset();
+    vi.stubEnv('AGOR_API_KEY', '');
+    vi.stubEnv('AGOR_DEPLOYMENT_ID', '');
+    vi.stubEnv('DAEMON_URL', '');
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it('allows logged-out local administration', async () => {
     vi.mocked(loadToken).mockResolvedValue(null);
@@ -56,6 +63,17 @@ describe('assertLocalContextUnlocked', () => {
       user: { user_id: 'u1', email: 'max@example.com', role: 'admin' },
       expiresAt: Date.now() + 1000,
     });
+    await expect(
+      assertLocalContextUnlocked({ daemon: { deployment_id: deploymentId } })
+    ).rejects.toThrow('Local administration is locked');
+  });
+
+  it('locks local administration for a different API-key environment target', async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.stubEnv('AGOR_API_KEY', 'agor_sk_test');
+    vi.stubEnv('AGOR_DEPLOYMENT_ID', '019c9999-5678-7123-8123-123456789abc');
+    vi.stubEnv('DAEMON_URL', 'https://cloud.agor.live');
+
     await expect(
       assertLocalContextUnlocked({ daemon: { deployment_id: deploymentId } })
     ).rejects.toThrow('Local administration is locked');

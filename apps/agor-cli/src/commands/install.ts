@@ -27,8 +27,7 @@ import {
 } from '../lib/agentic-tool-integrations.js';
 
 export default class Install extends Command {
-  static description =
-    'After init, select or reconcile agentic tool packages without recreating Agor';
+  static description = 'Select or reconcile agentic tool packages in the local installation';
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --sync',

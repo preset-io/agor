@@ -1,5 +1,5 @@
 /**
- * `agor user create-admin` - Create bootstrap admin user
+ * `agor local create-admin` - Create bootstrap admin user
  */
 
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 
-export default class UserCreateAdmin extends Command {
+export default class LocalCreateAdmin extends Command {
   static description = 'Create a bootstrap superadmin user';
 
   static examples = [
@@ -53,7 +53,7 @@ export default class UserCreateAdmin extends Command {
   };
 
   async run(): Promise<void> {
-    const { flags } = await this.parse(UserCreateAdmin);
+    const { flags } = await this.parse(LocalCreateAdmin);
 
     try {
       // Get database connection URL

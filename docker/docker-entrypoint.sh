@@ -236,7 +236,7 @@ pnpm agor db migrate --yes
 
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring development admin user exists..."
-ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --dev-default 2>&1)
+ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin --dev-default 2>&1)
 echo "$ADMIN_OUTPUT"
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)

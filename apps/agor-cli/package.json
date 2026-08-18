@@ -49,9 +49,6 @@
       "prerun": "./dist/hooks/prerun.js"
     },
     "topics": {
-      "auth": {
-        "description": "Manage authentication"
-      },
       "board": {
         "description": "Manage boards"
       },
@@ -65,7 +62,7 @@
         "description": "Manage local database migrations"
       },
       "local": {
-        "description": "Run local and offline maintenance"
+        "description": "Run local filesystem operations"
       },
       "mcp": {
         "description": "Manage MCP servers"

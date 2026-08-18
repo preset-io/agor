@@ -49,6 +49,7 @@ import {
 } from '../lib/agentic-tool-integrations.js';
 import { getDaemonPid, getManagedDaemonIdentity } from '../lib/daemon-manager.js';
 import { probeAgorDaemon } from '../lib/daemon-probe.js';
+import { assertLocalContextUnlockedWhenIdentified } from '../lib/local-context.js';
 
 export function isFreshInitState(state: {
   baseExists: boolean;
@@ -306,6 +307,9 @@ export default class Init extends Command {
 
     // Determine base directory early
     const baseDir = join(homedir(), '.agor');
+    if (await this.pathExists(join(baseDir, 'config.yaml'))) {
+      await assertLocalContextUnlockedWhenIdentified(await loadConfig());
+    }
 
     // If --skip-if-exists and directory already exists, handle config and exit
     if (

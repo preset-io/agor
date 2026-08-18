@@ -4,25 +4,35 @@
 
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Command } from '@oclif/core';
+import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
-import { loadToken } from '../lib/auth.js';
 import { getUIUrl } from '../lib/context.js';
 import { probeAgorDaemon } from '../lib/daemon-probe.js';
+import {
+  resolveConnectedDeploymentTarget,
+  resolveLocalDeploymentTarget,
+} from '../lib/deployment-target.js';
 
 const execAsync = promisify(exec);
 
 export default class Open extends Command {
-  static description = 'Open Agor UI in browser';
+  static description = 'Open the connected deployment in a browser';
 
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
+  static flags = {
+    local: Flags.boolean({ description: 'Open the locally configured deployment', default: false }),
+  };
+
   async run(): Promise<void> {
-    const auth = await loadToken();
-    if (!auth) {
+    const { flags } = await this.parse(Open);
+    const target = flags.local
+      ? await resolveLocalDeploymentTarget()
+      : await resolveConnectedDeploymentTarget();
+    if (!target) {
       this.error('Not connected. Run agor login --url <daemon-url>.');
     }
-    const daemonUrl = auth.target.url;
+    const daemonUrl = target.url;
 
     const probe = await probeAgorDaemon(daemonUrl);
 
@@ -33,9 +43,11 @@ export default class Open extends Command {
       this.log('');
       this.exit(1);
     }
-    if (probe.deploymentId !== auth.target.deploymentId) {
+    if (probe.deploymentId !== target.deploymentId) {
       this.error(
-        `The daemon identity at ${daemonUrl} changed. Run agor login --url ${daemonUrl} again.`
+        flags.local
+          ? `The local daemon identity at ${daemonUrl} does not match config.yaml.`
+          : `The daemon identity at ${daemonUrl} changed. Run agor login --url ${daemonUrl} again.`
       );
     }
 

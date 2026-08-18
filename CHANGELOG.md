@@ -35,6 +35,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## 0.25.2 (2026-08-18)
 
+### Breaking
+
+- **CLI commands now have one explicit deployment context** — root help separates local administration from commands targeting the connected deployment. `repo add-local` moves to `local add-repo`, `user create-admin` moves to `local create-admin`, and the obsolete `branch cd`, `auth …`, and `whoami` commands are removed. `open` and `version` target the current login by default and accept `--local` only as an explicit override. ([#2391](https://github.com/preset-io/agor/pull/2391))
+
 ### Fixes
 
 - **Remote user listing honors the active login** — `agor user list` now uses the shared authenticated daemon client instead of opening the local database. CLI architecture regressions prevent connection commands from bypassing that client boundary. ([#2391](https://github.com/preset-io/agor/pull/2391))

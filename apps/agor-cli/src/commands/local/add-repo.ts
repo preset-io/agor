@@ -1,5 +1,5 @@
 /**
- * `agor repo add-local <path>` - Register an existing local git repository
+ * `agor local add-repo <path>` - Register an existing local git repository
  *
  * Reuses the user's existing clone without copying files.
  */
@@ -8,7 +8,7 @@ import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 
-export default class RepoAddLocal extends BaseCommand {
+export default class LocalAddRepo extends BaseCommand {
   static description = 'Add an existing local git repository to Agor';
 
   static examples = [
@@ -34,7 +34,7 @@ export default class RepoAddLocal extends BaseCommand {
   };
 
   async run(): Promise<void> {
-    const { args, flags } = await this.parse(RepoAddLocal);
+    const { args, flags } = await this.parse(LocalAddRepo);
     const client = await this.connectToDaemon();
 
     try {

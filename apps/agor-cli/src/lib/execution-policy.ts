@@ -1,24 +1,9 @@
 export type ExecutionPolicy = 'bootstrap' | 'connection' | 'local';
 
-const BOOTSTRAP_COMMANDS = new Set([
-  'help',
-  'version',
-  'init',
-  'login',
-  'logout',
-  'auth:login',
-  'auth:logout',
-]);
+const BOOTSTRAP_COMMANDS = new Set(['help', 'init', 'login', 'logout']);
 
 const LOCAL_PREFIXES = ['daemon:', 'db:', 'local:', 'tenant:', 'telemetry:'];
-const LOCAL_COMMANDS = new Set([
-  'config',
-  'doctor',
-  'install',
-  'branch:cd',
-  'repo:add-local',
-  'user:create-admin',
-]);
+const LOCAL_COMMANDS = new Set(['config', 'doctor', 'install']);
 
 /** Every command is resolved to one context before its implementation runs. */
 export function executionPolicyFor(commandId: string): ExecutionPolicy {
