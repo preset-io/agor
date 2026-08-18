@@ -36,6 +36,18 @@ describe('EmojiPickerInput', () => {
     expect(onChange).toHaveBeenCalledWith('😀');
   });
 
+  it('uses a native keyboard-focusable button and closes on Escape', async () => {
+    render(<EmojiPickerInput value="🤖" onChange={() => {}} />);
+    const tile = screen.getByRole('button', { name: 'Choose emoji' });
+    tile.focus();
+    expect(tile).toHaveFocus();
+    fireEvent.click(tile);
+    expect(await screen.findByLabelText('pick smile')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.getByLabelText('pick smile')).not.toBeVisible());
+    expect(tile).toHaveFocus();
+  });
+
   it('does not open the picker when disabled', async () => {
     render(<EmojiPickerInput value="🤖" onChange={() => {}} disabled />);
     const tile = screen.getByRole('button', { name: 'Choose emoji' });
