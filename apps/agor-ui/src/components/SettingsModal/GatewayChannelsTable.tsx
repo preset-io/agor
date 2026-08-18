@@ -1244,9 +1244,14 @@ const SlackSetupWizard: React.FC<{
           </Form.Item>
         )}
 
-        <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
-          What this app will be able to do
+        <Typography.Text strong style={{ fontSize: 13 }}>
+          {`Required Slack Scopes & Events (${scopes.length} scopes, ${events.length} events)`}
         </Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
+          Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+          <code>app_mention</code>, not <code>message.*</code> channel events. You copy the full
+          manifest on the next step.
+        </Typography.Paragraph>
         {scopeList}
       </div>
 
