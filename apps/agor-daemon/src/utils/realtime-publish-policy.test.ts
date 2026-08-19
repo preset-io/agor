@@ -95,18 +95,46 @@ describe('source scan: every registered path is declared', () => {
     'string', // a typeof comparison
   ]);
 
-  const REGISTRATION_CALL =
-    /(?:\bapp\.use|\brouteApp\.use|\bctx\.app\.use|registerAuthenticatedRoute|registerLongAuthenticatedRoute|registerAuthenticatedRouteBase)\(/;
+  /**
+   * Match on the CALL, never on the receiver.
+   *
+   * `.use(` catches `app.use`, `routeApp.use`, `ctx.app.use`, `this.app.use`,
+   * `feathersApp.use`, `(app as any).use` and anything else a future helper
+   * names its Feathers application — including one built on the generic
+   * `app.use(path, service)` inside `registerAuthenticatedRoute`
+   * (`utils/authorization.ts`). Anchoring on a list of receiver identifiers
+   * made a registration through any other name invisible to this scan, and if
+   * such a service were also flag-gated the startup assertion would not see it
+   * either.
+   *
+   * `\.use\(\s*['"\`]` requires a string literal to open the argument list,
+   * which drops `app.use(cors(...))`-style middleware without a path while
+   * keeping every path-first registration.
+   */
+  const REGISTRATION_CALL = /\.use\(\s*['"`]|\bregister\w*AuthenticatedRoute\w*\(|\.use\($/;
+
+  /** Extract every registered path from one file's source. Pure, so it can be driven against a fixture. */
+  function extractRegisteredPaths(source: string): Array<{ path: string; line: number }> {
+    const lines = source.split('\n');
+    const found: Array<{ path: string; line: number }> = [];
+    lines.forEach((line, index) => {
+      const start = line.search(REGISTRATION_CALL);
+      if (start < 0) return;
+      // The path is the first string literal of the call. It sits on the same
+      // line for `app.use('/x', …)` and a line or two down for the multi-line
+      // `registerAuthenticatedRoute(\n  app,\n  '/x',` form.
+      const window = [line.slice(start), ...lines.slice(index + 1, index + 5)].join('\n');
+      const literal = window.match(/['"]([^'"\n]*)['"]/);
+      if (!literal) return;
+      found.push({ path: literal[1].replace(/^\/+/, '').replace(/\/+$/, ''), line: index + 1 });
+    });
+    return found;
+  }
 
   function registeredPathsInSource(): Map<string, string> {
     const files = execFileSync(
       'grep',
-      [
-        '-rlE',
-        'app\\.use\\(|registerAuthenticatedRoute|registerLongAuthenticatedRoute',
-        DAEMON_SRC,
-        '--include=*.ts',
-      ],
+      ['-rlE', '\\.use\\(|register\\w*AuthenticatedRoute', DAEMON_SRC, '--include=*.ts'],
       { encoding: 'utf8' }
     )
       .trim()
@@ -115,22 +143,50 @@ describe('source scan: every registered path is declared', () => {
 
     const found = new Map<string, string>();
     for (const file of files) {
-      const lines = readFileSync(file, 'utf8').split('\n');
-      lines.forEach((line, index) => {
-        const start = line.search(REGISTRATION_CALL);
-        if (start < 0) return;
-        // The path is the first string literal of the call. It sits on the same
-        // line for `app.use('/x', …)` and a line or two down for the multi-line
-        // `registerAuthenticatedRoute(\n  app,\n  '/x',` form.
-        const window = [line.slice(start), ...lines.slice(index + 1, index + 5)].join('\n');
-        const literal = window.match(/['"]([^'"\n]*)['"]/);
-        if (!literal) return;
-        const path = literal[1].replace(/^\/+/, '').replace(/\/+$/, '');
-        if (!found.has(path)) found.set(path, `${relative(DAEMON_SRC, file)}:${index + 1}`);
-      });
+      for (const { path, line } of extractRegisteredPaths(readFileSync(file, 'utf8'))) {
+        if (!found.has(path)) found.set(path, `${relative(DAEMON_SRC, file)}:${line}`);
+      }
     }
     return found;
   }
+
+  it('catches a registration through any receiver, not just `app`', () => {
+    // The whole point of matching on `.use(` rather than a list of receiver
+    // names. Each of these is a real Feathers service registration that the
+    // receiver-anchored matcher missed; a flag-gated one would then have been
+    // invisible to BOTH this scan and the startup assertion.
+    const fixture = [
+      "  feathersApp.use('/renamed-receiver', svc);",
+      "  (app as any).use('/cast-receiver', svc);",
+      "  this.app.use('/this-receiver', svc);",
+      "  server.app.use('/nested-receiver', svc);",
+      '  someApp.use(',
+      "    '/multiline-receiver',",
+      '    svc',
+      '  );',
+      "  registerLongAuthenticatedRoute(app, '/long-route', svc);",
+    ].join('\n');
+
+    expect(extractRegisteredPaths(fixture).map((entry) => entry.path)).toEqual([
+      'renamed-receiver',
+      'cast-receiver',
+      'this-receiver',
+      'nested-receiver',
+      'multiline-receiver',
+      'long-route',
+    ]);
+  });
+
+  it('ignores middleware mounted without a path', () => {
+    // `.use(` alone would sweep these in and force junk into the ignore lists.
+    const fixture = [
+      '  app.use(cors({ origin: true }));',
+      '  app.use(express.json({ limit: someLimit }));',
+      '  app.use(createDynamicCompressionMiddleware() as never);',
+    ].join('\n');
+
+    expect(extractRegisteredPaths(fixture)).toEqual([]);
+  });
 
   it('finds the registration call sites at all', () => {
     // Guards the scan itself: a refactor that renames the helpers would
