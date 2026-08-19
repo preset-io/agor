@@ -69,6 +69,7 @@ import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
@@ -153,6 +154,15 @@ export interface DaemonStartOptions {
  * or from main.ts with no args for direct execution.
  */
 export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
+  await runWithStartupMetricsOwner((ownMetrics) =>
+    startDaemonWithOwnedMetrics(options, ownMetrics)
+  );
+}
+
+async function startDaemonWithOwnedMetrics(
+  options: DaemonStartOptions | undefined,
+  ownMetrics: OwnStartupMetrics
+): Promise<void> {
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
@@ -359,6 +369,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
         deploymentMode: deployment.mode,
         deploymentId,
       });
+  ownMetrics(metrics);
   app.set('metrics', metrics);
   reconcileTrackedExecutorGauge(app);
   if (unsafeHaMetricsIdentity) {

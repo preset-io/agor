@@ -86,19 +86,30 @@ export function createDaemonMetrics(
   }
 }
 
+function isDaemonMetrics(candidate: unknown): candidate is DaemonMetrics {
+  if (!candidate || typeof candidate !== 'object') return false;
+  const metrics = candidate as Partial<DaemonMetrics>;
+  return (
+    typeof metrics.enabled === 'boolean' &&
+    typeof metrics.increment === 'function' &&
+    typeof metrics.decrement === 'function' &&
+    typeof metrics.gauge === 'function' &&
+    typeof metrics.histogram === 'function' &&
+    typeof metrics.timing === 'function' &&
+    typeof metrics.distribution === 'function' &&
+    typeof metrics.startTimer === 'function' &&
+    typeof metrics.flush === 'function' &&
+    typeof metrics.close === 'function'
+  );
+}
+
 /** Resolve application-owned metrics without introducing a process singleton. */
 export function getDaemonMetrics(owner: object | null | undefined): DaemonMetrics {
   try {
     const metrics = (owner as { get?: (name: 'metrics') => unknown } | null | undefined)?.get?.(
       'metrics'
     );
-    if (
-      metrics &&
-      typeof metrics === 'object' &&
-      typeof (metrics as Partial<DaemonMetrics>).increment === 'function'
-    ) {
-      return metrics as DaemonMetrics;
-    }
+    if (isDaemonMetrics(metrics)) return metrics;
   } catch {
     // Test doubles and partially constructed apps may reject unknown settings.
   }

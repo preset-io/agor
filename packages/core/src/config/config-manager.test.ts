@@ -689,6 +689,10 @@ describe('loadConfig', () => {
     __resetConfigCacheForTests();
     await fs.writeFile(configPath, yaml.dump({ metrics: { statsd: { surprise: true } } }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/metrics\.statsd\.surprise/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: true }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics must be an object/);
   });
 
   it('accepts a deployment-owned agentic tool package list', async () => {

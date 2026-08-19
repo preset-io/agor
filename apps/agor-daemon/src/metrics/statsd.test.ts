@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildStatsDClientOptions,
   createDaemonMetrics,
+  getDaemonMetrics,
   NOOP_METRICS,
   resolveMetricsWorkIdentity,
   StatsDDaemonMetrics,
@@ -183,5 +184,12 @@ describe('StatsD daemon metrics', () => {
     ).toBe(NOOP_METRICS);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('constructor failure'));
     warn.mockRestore();
+  });
+
+  it('rejects partially shaped application metrics dependencies', () => {
+    expect(getDaemonMetrics({ get: () => ({ increment: vi.fn() }) })).toBe(NOOP_METRICS);
+
+    const metrics = new StatsDDaemonMetrics(new FakeStatsDClient());
+    expect(getDaemonMetrics({ get: () => metrics })).toBe(metrics);
   });
 });

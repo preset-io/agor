@@ -878,6 +878,9 @@ importers:
       handlebars:
         specifier: '>=4.7.9 <5'
         version: 4.7.9
+      hot-shots:
+        specifier: ^17.1.0
+        version: 17.1.0
       inquirer:
         specifier: ^12.10.0
         version: 12.10.0(@types/node@26.1.1)

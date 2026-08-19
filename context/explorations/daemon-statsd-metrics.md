@@ -69,14 +69,16 @@ Both passive boundaries are needed:
   `route.path` is code-defined and accepted only in a strict bounded grammar;
   `baseUrl` is never used because a parameterized router mount can expose its
   concrete matched ID or slug there.
-- The global Feathers around hook observes logical service/method/result for
-  REST and Socket.IO. Calls without `params.provider` are internal and skipped;
-  authentication entity lookups are also skipped using their existing internal
-  marker because Feathers deliberately preserves their provider. A REST request
-  intentionally produces one HTTP signal and one Feathers signal because they
-  describe different layers. The high-frequency `/health` service is the one
-  exception: its HTTP signal is retained and its duplicate Feathers signal is
-  suppressed.
+- The global Feathers around hook observes the outermost logical
+  service/method/result for REST, Socket.IO, and MCP. An `AsyncLocalStorage`
+  request scope suppresses service-to-service fan-out even when Agor preserves
+  the caller's `params.provider`; calls without a provider are also internal
+  and skipped. Authentication entity lookups retain their existing explicit
+  internal marker as defense for framework work that can enter independently.
+  A REST request intentionally produces one HTTP signal and one Feathers signal
+  because they describe different layers. The high-frequency `/health` service
+  is the one exception: its HTTP signal is retained and its duplicate Feathers
+  signal is suppressed.
 
 Static/UI traffic, CSP reports, and the OAuth callback are intentionally
 outside the first metric set. The middleware runs before API body parsing, so
@@ -102,8 +104,8 @@ The default prefix is `agor.daemon.`. Names below omit that prefix.
 | `executor.launch.duration_ms`                | distribution   | `mode`                                                     | Execute-handler entry through preparation to child spawn                                |
 | `executor.process_exits`                     | count          | `mode`, `outcome`                                          | Local executor/templated launcher child exit callback                                   |
 | `task.settlements`                           | count          | `mode`, `status`                                           | Terminal Task transition observed by the Tasks service                                  |
-| `task.execution.duration_ms`                 | distribution   | same                                                       | `started_at` to `completed_at`                                                          |
-| `task.connected.duration_ms`                 | distribution   | same                                                       | `executor_connected_at` to `completed_at`                                               |
+| `task.dispatch_to_settlement.duration_ms`    | distribution   | same                                                       | `started_at` to `completed_at`                                                          |
+| `task.connected_to_settlement.duration_ms`   | distribution   | same                                                       | `executor_connected_at` to `completed_at`                                               |
 | `background_job.runs`                        | count          | `job`, `outcome`                                           | Bounded startup post-job completion                                                     |
 | `background_job.duration_ms`                 | distribution   | same                                                       | Startup post-job wall time                                                              |
 
@@ -158,6 +160,9 @@ new immutable first-progress timestamp or event at the executor/SDK boundary.
 
 - Construction happens once at daemon composition. Disabled config never
   creates a socket.
+- A startup ownership guard closes an initialized exporter if later database,
+  service, route, worker, or listener startup fails before lifecycle ownership
+  transfers to the registered shutdown handler.
 - Hot-shots receives an error handler; every adapter call also catches
   synchronous failures. Initialization failure falls back to no-op.
 - UDP loss or an absent Agent never changes product behavior.

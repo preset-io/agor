@@ -869,6 +869,12 @@ function validateConfig(config: AgorConfig): void {
     'last_usage_summary_day',
     'last_reported_version',
   ]);
+  if (
+    config.metrics !== undefined &&
+    (!config.metrics || typeof config.metrics !== 'object' || Array.isArray(config.metrics))
+  ) {
+    throw new Error('Config error: metrics must be an object');
+  }
   only(config.metrics, 'metrics', ['statsd']);
   only(config.metrics?.statsd, 'metrics.statsd', [
     'enabled',

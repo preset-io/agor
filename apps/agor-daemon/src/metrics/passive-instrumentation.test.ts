@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { TaskDispatchClaimResult } from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
 import type { HookContext, Task } from '@agor/core/types';
 import type express from 'express';
 import { describe, expect, it, vi } from 'vitest';
@@ -137,6 +138,40 @@ describe('Feathers metrics hook', () => {
 
     expect(next).toHaveBeenCalledTimes(2);
     expect(metrics.calls).toEqual([]);
+  });
+
+  it('records only the outer request when internal fan-out preserves provider', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+    const innerNext = vi.fn(async () => undefined);
+    const serviceApp = feathers();
+    serviceApp.use('sessions', {
+      async get() {
+        await innerNext();
+        return { session_id: 'not-emitted' };
+      },
+    });
+    serviceApp.use('tasks', {
+      async patch(_id: string, _data: unknown, params: { provider?: string }) {
+        await serviceApp.service('sessions').get('not-emitted', params);
+        return { task_id: 'not-emitted' };
+      },
+    });
+    serviceApp.hooks({ around: { all: [hook] } });
+
+    await serviceApp.service('tasks').patch('not-emitted', {}, { provider: 'socketio' });
+
+    expect(innerNext).toHaveBeenCalledOnce();
+    expect(metrics.calls).toHaveLength(2);
+    expect(metrics.calls.map((call) => call.name)).toEqual([
+      'feathers.requests',
+      'feathers.request.duration_ms',
+    ]);
+    expect(metrics.calls[0]?.tags).toMatchObject({
+      service: 'tasks',
+      method: 'patch',
+      transport: 'socketio',
+    });
   });
 });
 
@@ -349,8 +384,8 @@ describe('Task/executor lifecycle metrics', () => {
       ['executor.dispatch_to_connected.duration_ms', 3_000],
       ['executor.request_to_connected.duration_ms', 5_000],
       ['task.settlements', 1],
-      ['task.execution.duration_ms', 13_000],
-      ['task.connected.duration_ms', 10_000],
+      ['task.dispatch_to_settlement.duration_ms', 13_000],
+      ['task.connected_to_settlement.duration_ms', 10_000],
     ]);
     expect(JSON.stringify(metrics.calls)).not.toContain('never-emitted');
     expect(metrics.calls.every((call) => !call.tags || !('task_id' in call.tags))).toBe(true);

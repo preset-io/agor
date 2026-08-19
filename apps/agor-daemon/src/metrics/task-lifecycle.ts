@@ -43,10 +43,10 @@ export function recordTaskSettlement(metrics: DaemonMetrics, task: Task): void {
 
   const executionDuration = durationBetween(task.started_at, task.completed_at);
   if (executionDuration !== undefined) {
-    metrics.distribution('task.execution.duration_ms', executionDuration, tags);
+    metrics.distribution('task.dispatch_to_settlement.duration_ms', executionDuration, tags);
   }
   const connectedDuration = durationBetween(task.executor_connected_at, task.completed_at);
   if (connectedDuration !== undefined) {
-    metrics.distribution('task.connected.duration_ms', connectedDuration, tags);
+    metrics.distribution('task.connected_to_settlement.duration_ms', connectedDuration, tags);
   }
 }
