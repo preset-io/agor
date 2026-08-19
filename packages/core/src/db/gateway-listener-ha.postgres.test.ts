@@ -8,7 +8,7 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { ChannelType, GatewayChannelID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
@@ -67,7 +67,18 @@ async function seedChannel(
       target_branch_id: branch.branch_id,
       channel_key: generateId(),
       enabled: true,
-      config: channelType === 'slack' ? { bot_token: 'xoxb-test', app_token: 'xapp-test' } : {},
+      config:
+        channelType === 'slack'
+          ? { bot_token: 'xoxb-test', app_token: 'xapp-test' }
+          : channelType === 'discord'
+            ? {
+                bot_token: 'discord-test',
+                application_id: '111111111111111111',
+                guild_id: '222222222222222222',
+                allowed_channel_ids: ['333333333333333333'],
+                allowed_user_ids: ['444444444444444444'],
+              }
+            : {},
     });
     return { channel, user, branch };
   });
@@ -278,7 +289,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
     await seedChannel(db, tenantB);
-    const unsupported = await seedChannel(db, tenantA, { channelType: 'discord' });
+    const discord = await seedChannel(db, tenantA, { channelType: 'discord' });
 
     const refs = await runWithSystemDatabaseScope(
       db,
@@ -288,14 +299,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
       { capability: 'gateway_listener_discovery' }
     );
     expect(refs).toContainEqual({ channel_id: a.channel.id, tenant_id: tenantA });
-    expect(refs.some((ref) => ref.channel_id === unsupported.channel.id)).toBe(false);
+    expect(refs).toContainEqual({ channel_id: discord.channel.id, tenant_id: tenantA });
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidates(
         100
       );
       expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
-      expect(candidates.some((channel) => channel.id === unsupported.channel.id)).toBe(false);
+      expect(candidates.some((channel) => channel.id === discord.channel.id)).toBe(true);
 
       await new GatewayChannelRepository(scoped).claimListener({
         channelId: a.channel.id,
@@ -334,6 +345,156 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
         )
       ).toBeNull();
     });
+  });
+
+  it('suppresses every member of a pre-existing duplicate Discord application group', async () => {
+    const tenantId = `gateway-duplicate-${generateId()}` as TenantID;
+    const { channel, user, branch } = await seedChannel(db, tenantId, {
+      channelType: 'discord',
+    });
+
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      const repo = new GatewayChannelRepository(scoped);
+      const duplicate = await repo.create({
+        id: generateId() as GatewayChannelID,
+        name: 'Legacy duplicate Discord row',
+        channel_type: 'discord',
+        created_by: user.user_id,
+        agor_user_id: user.user_id,
+        target_branch_id: branch.branch_id,
+        channel_key: generateId(),
+        enabled: false,
+      });
+      await update(scoped, gatewayChannels)
+        .set({
+          enabled: true,
+          config: {
+            bot_token: 'intentionally-not-encrypted',
+            application_id: '111111111111111111',
+            guild_id: '222222222222222222',
+            allowed_channel_ids: ['333333333333333333'],
+            allowed_user_ids: ['444444444444444444'],
+          },
+        })
+        .where(eq(gatewayChannels.id, duplicate.id))
+        .run();
+    });
+
+    const selectedColumns: string[][] = [];
+    const decryptErrors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const refs = await runWithSystemDatabaseScope(
+      db,
+      'duplicate Discord discovery proof',
+      (systemDb) => {
+        const observedSystemDb = new Proxy(systemDb as object, {
+          get(target, property, receiver) {
+            if (property === 'select') {
+              return (columns: Record<string, unknown>) => {
+                selectedColumns.push(Object.keys(columns));
+                return (target as { select: (fields: Record<string, unknown>) => unknown }).select(
+                  columns
+                );
+              };
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        return new GatewayListenerDiscoveryRepository(
+          observedSystemDb as never
+        ).findEnabledTenantRefs({ limit: 1_000 });
+      },
+      { capability: 'gateway_listener_discovery' }
+    );
+    expect(selectedColumns).toEqual([
+      ['channel_id', 'tenant_id', 'application_id'],
+      ['channel_id', 'tenant_id'],
+    ]);
+    expect(
+      decryptErrors.mock.calls.some(([message]) => String(message).includes('Failed to decrypt'))
+    ).toBe(false);
+    decryptErrors.mockRestore();
+    expect(refs.some((ref) => ref.channel_id === channel.id)).toBe(false);
+    expect(refs.some((ref) => ref.tenant_id === tenantId)).toBe(false);
+  });
+
+  it('advances past a duplicate batch and discovers a valid Discord row in another tenant', async () => {
+    const duplicateTenant = `aaa-gateway-duplicate-${generateId()}` as TenantID;
+    const laterTenant = `zzz-gateway-valid-${generateId()}` as TenantID;
+    const { channel, user, branch } = await seedChannel(db, duplicateTenant, {
+      channelType: 'discord',
+    });
+
+    await runWithTenantDatabaseScope(db, duplicateTenant, async (scoped) => {
+      const repo = new GatewayChannelRepository(scoped);
+      for (let index = 0; index < 24; index += 1) {
+        const duplicate = await repo.create({
+          id: generateId() as GatewayChannelID,
+          name: `Legacy duplicate Discord row ${index}`,
+          channel_type: 'discord',
+          created_by: user.user_id,
+          agor_user_id: user.user_id,
+          target_branch_id: branch.branch_id,
+          channel_key: generateId(),
+          enabled: false,
+        });
+        await update(scoped, gatewayChannels)
+          .set({
+            enabled: true,
+            config: {
+              application_id: '111111111111111111',
+              guild_id: '222222222222222222',
+              allowed_channel_ids: ['333333333333333333'],
+              allowed_user_ids: ['444444444444444444'],
+            },
+          })
+          .where(eq(gatewayChannels.id, duplicate.id))
+          .run();
+      }
+    });
+
+    const valid = await seedChannel(db, laterTenant, { channelType: 'discord' });
+    const refs = await runWithSystemDatabaseScope(
+      db,
+      'duplicate Discord batch-boundary discovery proof',
+      (systemDb) =>
+        new GatewayListenerDiscoveryRepository(systemDb).findEnabledTenantRefs({ limit: 25 }),
+      { capability: 'gateway_listener_discovery' }
+    );
+
+    expect(refs).toContainEqual({ channel_id: valid.channel.id, tenant_id: laterTenant });
+    expect(refs.some((ref) => ref.tenant_id === duplicateTenant)).toBe(false);
+    expect(refs.some((ref) => ref.channel_id === channel.id)).toBe(false);
+  });
+
+  it('serializes concurrent enabled Discord application admission per tenant', async () => {
+    const tenantId = `gateway-admission-${generateId()}` as TenantID;
+    const { user, branch } = await seedChannel(db, tenantId, { channelType: 'slack' });
+    const config = {
+      bot_token: 'discord-test',
+      application_id: '777777777777777777',
+      guild_id: '888888888888888888',
+      allowed_channel_ids: ['999999999999999999'],
+      allowed_user_ids: ['444444444444444444'],
+    };
+    const results = await Promise.allSettled(
+      [0, 1].map((index) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new GatewayChannelRepository(scoped).create({
+            id: generateId() as GatewayChannelID,
+            name: `Concurrent Discord ${index}`,
+            channel_type: 'discord',
+            created_by: user.user_id,
+            agor_user_id: user.user_id,
+            target_branch_id: branch.branch_id,
+            channel_key: generateId(),
+            enabled: true,
+            config,
+          })
+        )
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
   });
 
   it('revokes ownership on disable or credential/config rotation', async () => {

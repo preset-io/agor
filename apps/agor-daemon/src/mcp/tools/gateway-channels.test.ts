@@ -2387,6 +2387,63 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
   });
 
+  it('exposes a maintainer-only, secret-free Discord beta setup guide', async () => {
+    const tools = await captureTools('admin');
+    expect(tools.agor_gateway_discord_setup.cfg.annotations).toMatchObject({
+      readOnlyHint: true,
+    });
+    const result = await tools.agor_gateway_discord_setup.handler({
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      allowedChannelIds: ['333333333333333333'],
+      allowedUserIds: ['444444444444444444'],
+      allowedRoleIds: [],
+      outbound: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.config_hint).toEqual({
+      application_id: '111111111111111111',
+      guild_id: '222222222222222222',
+      allowed_channel_ids: ['333333333333333333'],
+      allowed_user_ids: ['444444444444444444'],
+      allowed_role_ids: [],
+      outbound_enabled: true,
+      default_outbound_target: 'channel:333333333333333333',
+    });
+    expect(payload.validation).toEqual({ ok: true, errors: [] });
+    expect(JSON.stringify(payload)).not.toContain('bot_token');
+  });
+
+  it('keeps Discord setup and channel creation admin-only', async () => {
+    const memberTools = await captureTools('member');
+    await expect(
+      memberTools.agor_gateway_discord_setup.handler({
+        applicationId: '111111111111111111',
+        guildId: '222222222222222222',
+        allowedChannelIds: ['333333333333333333'],
+      })
+    ).rejects.toThrow(/admin role required/);
+
+    const createSchema = memberTools.agor_gateway_channels_create.cfg.inputSchema;
+    expect(
+      createSchema.safeParse({
+        name: 'Discord beta',
+        channelType: 'discord',
+        targetBranchId: 'branch-1',
+        agorUserId: 'user-1',
+        enabled: false,
+        config: {
+          application_id: '111111111111111111',
+          guild_id: '222222222222222222',
+          allowed_channel_ids: ['333333333333333333'],
+          allowed_user_ids: ['444444444444444444'],
+          allowed_role_ids: [],
+        },
+      }).success
+    ).toBe(true);
+  });
+
   it('generates a DM-only manifest matching the core generator', async () => {
     const tools = await captureTools('admin');
     const result = await tools.agor_gateway_slack_manifest_generate.handler(dmOnly);

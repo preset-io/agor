@@ -10,10 +10,14 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   getRequiredSecretFields,
   type UUID,
+  validateDiscordConfig,
 } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { describe, expect, it, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { update } from '../database-wrapper';
+import { gatewayChannels } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
@@ -88,6 +92,43 @@ describe('GatewayChannelRepository', () => {
       expect(channel.enabled).toBe(false);
       expect(channel.config.bot_token).toBeUndefined();
     });
+
+    dbTest(
+      'allows an incomplete disabled Discord draft but requires a fixed user when enabled',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const draft = await repo.create({
+          name: 'Draft Discord',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          enabled: false,
+        });
+
+        const configuredDraft = await repo.update(draft.id, {
+          config: {
+            bot_token: 'discord-token',
+            application_id: '666666666666666666',
+            guild_id: '222222222222222222',
+            allowed_channel_ids: ['333333333333333333'],
+            allowed_user_ids: ['444444444444444444'],
+            allowed_role_ids: [],
+          },
+        });
+
+        await expect(repo.update(configuredDraft.id, { enabled: true })).rejects.toThrow(
+          'a fixed agor_user_id is required'
+        );
+
+        const enabled = await repo.update(configuredDraft.id, {
+          enabled: true,
+          agor_user_id: generateId() as UUID,
+        });
+        expect(enabled.enabled).toBe(true);
+        expect(enabled.agor_user_id).toBeDefined();
+      }
+    );
 
     dbTest('rejects an enabled channel created without secrets', async ({ db }) => {
       const branch = await seedBranch(db);
@@ -283,6 +324,134 @@ describe('GatewayChannelRepository', () => {
       expect(
         getRequiredSecretFields('slack', { outbound_enabled: true, enable_channels: true })
       ).toEqual(['bot_token', 'app_token']);
+      expect(getRequiredSecretFields('discord', {})).toEqual(['bot_token']);
+    });
+  });
+
+  describe('Discord beta configuration', () => {
+    const discordConfig = {
+      bot_token: 'discord-secret',
+      application_id: '111111111111111111',
+      guild_id: '222222222222222222',
+      allowed_channel_ids: ['333333333333333333'],
+      allowed_user_ids: ['444444444444444444'],
+    };
+
+    it('shares browser-safe structural validation with the daemon', () => {
+      const withoutToken: Record<string, unknown> = { ...discordConfig, bot_token: undefined };
+      expect(validateDiscordConfig(withoutToken)).toEqual({
+        ok: false,
+        errors: ['bot_token is required'],
+      });
+      expect(validateDiscordConfig({ ...discordConfig, bot_token: 'discord-secret' })).toEqual({
+        ok: true,
+        errors: [],
+      });
+      expect(
+        validateDiscordConfig(
+          {
+            ...discordConfig,
+            bot_token: 'discord-secret',
+            default_outbound_target: 'channel:999999999999999999',
+          },
+          { requireBotToken: true }
+        ).errors
+      ).toContain('default_outbound_target must target an allowed channel');
+    });
+
+    dbTest('requires a complete allowlisted Discord configuration when enabled', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      await expect(
+        repo.create({
+          name: 'Invalid Discord',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          config: { bot_token: 'discord-secret' },
+        })
+      ).rejects.toThrow('fixed agor_user_id');
+    });
+
+    dbTest('fails closed for duplicate enabled application ids in one tenant', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      await repo.create({
+        name: 'Discord one',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        agor_user_id: generateId() as UUID,
+        config: discordConfig,
+      });
+      await expect(
+        repo.create({
+          name: 'Discord two',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          agor_user_id: generateId() as UUID,
+          config: discordConfig,
+        })
+      ).rejects.toThrow('application_id 111111111111111111 is already used');
+    });
+
+    dbTest(
+      'groups listener duplicates from plaintext application ids without decrypting them',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const first = await repo.create({
+          name: 'Discord listener one',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          agor_user_id: generateId() as UUID,
+          config: discordConfig,
+        });
+        const duplicate = await repo.create({
+          name: 'Discord listener duplicate',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          enabled: false,
+        });
+        await update(db, gatewayChannels)
+          .set({
+            enabled: true,
+            config: {
+              bot_token: 'intentionally-not-encrypted',
+              application_id: discordConfig.application_id,
+            },
+          })
+          .where(eq(gatewayChannels.id, duplicate.id))
+          .run();
+
+        const decryptErrors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const candidates = await repo.findEnabledListenerCandidates(100);
+        expect(candidates).toEqual([]);
+        expect(
+          decryptErrors.mock.calls.some(([message]) =>
+            String(message).includes('Failed to decrypt')
+          )
+        ).toBe(false);
+        decryptErrors.mockRestore();
+        expect(first.id).not.toBe(duplicate.id);
+      }
+    );
+
+    dbTest('keeps legacy invalid Discord drafts inert', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const draft = await repo.create({
+        name: 'Legacy Discord draft',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+      });
+      expect(draft.enabled).toBe(false);
+      expect(draft.config).toEqual({});
     });
   });
 });

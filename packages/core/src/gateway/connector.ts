@@ -54,6 +54,8 @@ export interface GatewayListenerOptions {
   durableEventIdempotency?: boolean;
   /** False means the listener lost its durable owner fence and must stop. */
   saveCheckpoint?: (checkpoint: Record<string, unknown>) => Promise<boolean>;
+  /** Called after a running listener stops because ordered processing failed. */
+  onError?: (error: unknown) => void | Promise<void>;
 }
 
 export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<void>;
@@ -69,6 +71,30 @@ export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<voi
 export interface OutboundPayload {
   text: string;
   blocks?: unknown[];
+}
+
+/** Provider-neutral receipt returned by connectors after one or more sends. */
+export interface GatewaySendReceipt {
+  /** The last provider message id in this send operation. */
+  messageId: string;
+  /** All provider message ids when the connector chunked the response. */
+  messageIds?: string[];
+  /** Canonical provider thread id used for subsequent sends. */
+  threadId?: string;
+  /** Generic inbound aliases that should resolve to the same thread-session map. */
+  replyAliases?: string[];
+  platformChannelId?: string;
+  platformThreadId?: string;
+  permalink?: string | null;
+  /** Provider-specific non-secret details useful to the audit row. */
+  metadata?: Record<string, unknown>;
+}
+
+export type GatewaySendResult = string | GatewaySendReceipt;
+
+/** Normalize legacy string receipts and structured connector receipts. */
+export function normalizeSendReceipt(result: GatewaySendResult): GatewaySendReceipt {
+  return typeof result === 'string' ? { messageId: result } : result;
 }
 
 /**
@@ -95,14 +121,27 @@ export interface GatewayConnector {
    * `blocks` is optional and platform-specific. Connectors that don't support
    * structured blocks should ignore it and use `text`.
    *
-   * @returns Platform-specific message ID
+   * @returns A legacy platform message ID or a structured receipt.
    */
   sendMessage(req: {
     threadId: string;
     text: string;
     blocks?: unknown[];
     metadata?: Record<string, unknown>;
-  }): Promise<string>;
+  }): Promise<GatewaySendResult>;
+
+  /**
+   * Send directly to a provider target without an existing thread mapping.
+   * GatewayService owns authorization, audit, and outbound seed persistence;
+   * the connector owns provider target parsing/resolution and transport.
+   */
+  sendDirectMessage?(req: {
+    target: string;
+    text: string;
+    blocks?: unknown[];
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<GatewaySendResult>;
 
   /**
    * Delete a previously sent platform message when supported.

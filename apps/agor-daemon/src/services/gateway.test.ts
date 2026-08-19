@@ -216,6 +216,61 @@ function makeGatewayHarness(args: {
     updateMetadata: vi.fn(async (_id: string, metadata: Record<string, unknown>) => {
       if (mapping) mapping = { ...mapping, metadata } as ThreadSessionMap;
     }),
+    completeSeedInitialPrompt: vi.fn(
+      async (_id: string, eventId: string | undefined, taskId: string) => {
+        if (!mapping) return false;
+        const metadata = (mapping.metadata as Record<string, unknown> | null) ?? {};
+        const storedEventId = metadata.outbound_seed_initial_event_id;
+        const matches =
+          metadata.outbound_seed_initial_prompt_pending === true &&
+          ((storedEventId === undefined && eventId === undefined) ||
+            (typeof storedEventId === 'string' &&
+              storedEventId.length > 0 &&
+              typeof eventId === 'string' &&
+              eventId.length > 0 &&
+              storedEventId === eventId));
+        if (!matches) return false;
+        mapping = {
+          ...mapping,
+          metadata: {
+            ...metadata,
+            outbound_seed_initial_prompt_pending: false,
+            outbound_seed_initial_task_id: taskId,
+          },
+        } as ThreadSessionMap;
+        return true;
+      }
+    ),
+    mergeGatewayReplyAliases: vi.fn(
+      async (_id: string, aliases: string[], _reason: string, lastMessageId?: string) => {
+        if (mapping) {
+          const current = (mapping.metadata as Record<string, unknown>) ?? {};
+          const previous = Array.isArray(current.gateway_reply_aliases)
+            ? current.gateway_reply_aliases.filter(
+                (alias): alias is string => typeof alias === 'string'
+              )
+            : [];
+          mapping = {
+            ...mapping,
+            metadata: {
+              ...current,
+              gateway_reply_aliases: [...new Set([...previous, ...aliases])],
+              ...(lastMessageId ? { gateway_last_message_id: lastMessageId } : {}),
+            },
+          } as ThreadSessionMap;
+        }
+        return mapping;
+      }
+    ),
+    mergeMetadata: vi.fn(async (_id: string, patch: Record<string, unknown>) => {
+      if (mapping) {
+        mapping = {
+          ...mapping,
+          metadata: { ...((mapping.metadata as Record<string, unknown>) ?? {}), ...patch },
+        } as ThreadSessionMap;
+      }
+      return mapping;
+    }),
     findById: vi.fn(async () => mapping),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = makeMapping({
@@ -235,11 +290,11 @@ function makeGatewayHarness(args: {
       usersRepo: { findByEmailForAlignment: typeof findByEmailForAlignment };
     }
   ).usersRepo = { findByEmailForAlignment };
-  (
-    service as unknown as { outboundRepo: { findUnconsumedByChannelAndThread: unknown } }
-  ).outboundRepo = {
-    findUnconsumedByChannelAndThread: vi.fn(async () => null),
+  const outboundRepo = {
+    admitReplySession: vi.fn(async () => null),
+    completeReplyAdmission: vi.fn(async () => undefined),
   };
+  (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
   (
     service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
   ).activeListeners.set(`tenant-channel\0${channel.id}`, args.connector ?? {});
@@ -256,6 +311,7 @@ function makeGatewayHarness(args: {
     setMCPServers,
     channelRepo,
     threadMapRepo,
+    outboundRepo,
     findByEmailForAlignment,
   };
 }
@@ -1176,8 +1232,14 @@ describe('GatewayService durable listener delivery fences', () => {
   it('reconciles an already-admitted stable Task before rebuilding a different retry prompt', async () => {
     const eventId = '01927f9d-0000-7000-8000-000000000099';
     const taskId = '01927f9d-0000-7000-8000-000000000098';
-    const mapping = makeMapping();
-    const { service, promptCreate, sessionsCreate } = makeGatewayHarness({
+    const mapping = makeMapping({
+      metadata: {
+        ...makeMapping().metadata,
+        outbound_seed_initial_prompt_pending: true,
+        outbound_seed_initial_event_id: eventId,
+      },
+    });
+    const { service, promptCreate, sessionsCreate, threadMapRepo } = makeGatewayHarness({
       existingMapping: mapping,
     });
     Object.assign(service as unknown as Record<string, unknown>, {
@@ -1219,8 +1281,40 @@ describe('GatewayService durable listener delivery fences', () => {
       created: false,
       taskId,
     });
+    expect(threadMapRepo.completeSeedInitialPrompt).toHaveBeenCalledWith(
+      mapping.id,
+      eventId,
+      taskId
+    );
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes the current event to seed completion after prompt admission', async () => {
+    const eventId = '01927f9d-0000-7000-8000-000000000099';
+    const mapping = makeMapping({
+      metadata: {
+        ...makeMapping().metadata,
+        outbound_seed_initial_prompt_pending: true,
+        outbound_seed_initial_event_id: eventId,
+      },
+    });
+    const { service, threadMapRepo } = makeGatewayHarness({ existingMapping: mapping });
+
+    await expect(
+      service.create({
+        channel_key: slackChannel.channel_key,
+        thread_id: mapping.thread_id,
+        text: 'follow-up',
+        gateway_inbound_event_id: eventId as never,
+        metadata: { channel_type: 'channel', slack_has_mention: true },
+      })
+    ).resolves.toMatchObject({ success: true, sessionId: mapping.session_id });
+    expect(threadMapRepo.completeSeedInitialPrompt).toHaveBeenCalledWith(
+      mapping.id,
+      eventId,
+      'task-1'
+    );
   });
 
   it('prepares and routes one duplicate provider occurrence only once', async () => {
@@ -1829,6 +1923,628 @@ describe('GatewayService Slack system message routing', () => {
   });
 });
 
+describe('GatewayService Discord beta routing', () => {
+  const discordChannel = {
+    ...slackChannel,
+    id: 'chan-discord',
+    name: 'Discord Bot',
+    channel_type: 'discord',
+    channel_key: 'discord-key',
+    config: {
+      bot_token: 'discord-token',
+      application_id: '123456789012345678',
+      guild_id: '223456789012345678',
+      allowed_channel_ids: ['323456789012345678'],
+      allowed_user_ids: ['423456789012345678'],
+      allowed_role_ids: [],
+      outbound_enabled: true,
+      default_outbound_target: 'channel:323456789012345678',
+    },
+  } as unknown as GatewayChannel;
+
+  const validDiscordInbound = () => ({
+    channel_key: discordChannel.channel_key,
+    thread_id: 'discord:message:323456789012345678:523456789012345678',
+    text: 'hello',
+    user_name: '423456789012345678',
+    metadata: {
+      discord_guild_id: '223456789012345678',
+      discord_channel_id: '323456789012345678',
+      discord_message_id: '523456789012345678',
+      discord_author_id: '423456789012345678',
+      discord_role_ids: [],
+      discord_bot_user_id: '123456789012345678',
+      discord_is_thread: false,
+      discord_has_mention: true,
+    },
+  });
+
+  it.each([
+    ['guild', { discord_guild_id: '999999999999999999' }],
+    ['allowed channel', { discord_channel_id: '923456789012345678' }],
+    ['mention', { discord_has_mention: false }],
+    ['author', { discord_author_id: '523456789012345678' }],
+    ['roles', { discord_role_ids: ['not-a-snowflake'] }],
+  ] as const)(
+    'rejects a Discord %s mismatch before mapping/session admission',
+    async (_kind, patch) => {
+      const { service, sessionsCreate, threadMapRepo } = makeGatewayHarness({
+        channel: discordChannel,
+      });
+      const inbound = validDiscordInbound();
+      inbound.metadata = { ...inbound.metadata, ...patch };
+
+      await expect(service.create(inbound)).resolves.toEqual({
+        success: false,
+        sessionId: '',
+        created: false,
+      });
+      expect(threadMapRepo.findByChannelAndThread).not.toHaveBeenCalled();
+      expect(sessionsCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('labels a proactive Discord seed with Discord context in the initial prompt', async () => {
+    const seed = {
+      id: 'discord-seed-context',
+      gateway_channel_id: discordChannel.id,
+      channel_type: 'discord',
+      platform_channel_id: '323456789012345678',
+      platform_message_id: '523456789012345678',
+      platform_thread_id: 'discord:message:323456789012345678:523456789012345678',
+      emitted_by_user_id: user.user_id,
+      emitted_by_session_id: null,
+      emitted_by_task_id: null,
+      emitted_by_schedule_id: null,
+      message_text: 'proactive Discord seed',
+      metadata: { provider_reply_aliases: [] },
+      consumed_at: null,
+    };
+    const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });
+    harness.outboundRepo.admitReplySession.mockResolvedValue({
+      admitted: true,
+      message: seed,
+      sessionId: 'discord-seed-session',
+    } as never);
+
+    await expect(harness.service.create(validDiscordInbound())).resolves.toMatchObject({
+      success: true,
+      created: true,
+    });
+    const prompt = harness.promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('This Discord thread began');
+    expect(prompt).toContain('Discord channel: 323456789012345678');
+    expect(prompt).toContain('Human Discord reply:');
+    expect(prompt).not.toContain('Slack');
+  });
+
+  it('rejects a Discord thread whose parent is not in the fresh allowlist', async () => {
+    const { service, sessionsCreate, threadMapRepo } = makeGatewayHarness({
+      channel: discordChannel,
+    });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = 'discord:thread:923456789012345678:823456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_channel_id: '823456789012345678',
+      discord_message_id: '523456789012345678',
+      discord_is_thread: true,
+      discord_parent_channel_id: '923456789012345678',
+    };
+
+    await expect(service.create(inbound)).resolves.toMatchObject({
+      success: false,
+      sessionId: '',
+      created: false,
+    });
+    expect(threadMapRepo.findByChannelAndThread).not.toHaveBeenCalled();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes prompt-admission errors before logs, progress, and Discord delivery', async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const promptFailure = new Error(
+      'AAAAAAAAAAAAAAAAAAAAAAAA.BBBBBB.CCCCCCCCCCCCCCCCCCCCCCCCCCC https://discord.example.test/api /srv/agor/secrets\nunsafe'
+    );
+    const harness = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: makeMapping({
+        channel_id: discordChannel.id,
+        thread_id: 'discord:message:323456789012345678:523456789012345678',
+        metadata: {},
+      }),
+      connector: { sendMessage },
+    });
+    harness.promptCreate.mockRejectedValueOnce(promptFailure);
+
+    const result = await harness.service.create(validDiscordInbound());
+    const logged = errorLog.mock.calls.flat().join(' ');
+    const providerMessages = sendMessage.mock.calls
+      .map(([request]) => (request as { text?: string }).text ?? '')
+      .join('\n');
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1' });
+    expect(logged).not.toContain('AAAAAAAAAAAAAAAAAAAAAAAA.BBBBBB');
+    expect(logged).not.toContain('discord.example.test');
+    expect(logged).not.toContain('/srv/agor/secrets');
+    expect(logged).not.toContain('\nunsafe');
+    expect(providerMessages).not.toContain('AAAAAAAAAAAAAAAAAAAAAAAA.BBBBBB');
+    expect(providerMessages).not.toContain('discord.example.test');
+    expect(providerMessages).not.toContain('/srv/agor/secrets');
+    expect(providerMessages).not.toContain('\nunsafe');
+    expect(providerMessages).toContain('[redacted-discord-token]');
+    errorLog.mockRestore();
+  });
+
+  it('fails closed when stored Discord role metadata is malformed', async () => {
+    const channel = {
+      ...discordChannel,
+      config: {
+        ...(discordChannel.config as Record<string, unknown>),
+        allowed_user_ids: [],
+        allowed_role_ids: ['523456789012345678'],
+      },
+    } as unknown as GatewayChannel;
+    const { service, sessionsCreate, threadMapRepo } = makeGatewayHarness({ channel });
+    const inbound = validDiscordInbound();
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_role_ids: ['malformed'],
+    };
+
+    await expect(service.create(inbound)).resolves.toMatchObject({
+      success: false,
+      sessionId: '',
+      created: false,
+    });
+    expect(threadMapRepo.findByChannelAndThread).not.toHaveBeenCalled();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps one provider thread independent for two Discord rows in one shared store', async () => {
+    const sharedMappings: ThreadSessionMap[] = [];
+    const channelA = {
+      ...discordChannel,
+      id: 'discord-a',
+      channel_key: 'discord-key-a',
+    } as unknown as GatewayChannel;
+    const channelB = {
+      ...discordChannel,
+      id: 'discord-b',
+      channel_key: 'discord-key-b',
+      config: {
+        ...(discordChannel.config as Record<string, unknown>),
+        application_id: '623456789012345679',
+      },
+    } as unknown as GatewayChannel;
+    const inboundA = validDiscordInbound();
+    const inboundB = {
+      ...validDiscordInbound(),
+      channel_key: channelB.channel_key,
+      metadata: {
+        ...validDiscordInbound().metadata,
+        discord_bot_user_id: '623456789012345679',
+      },
+    };
+    const first = makeGatewayHarness({ channel: channelA });
+    const second = makeGatewayHarness({ channel: channelB });
+
+    for (const harness of [first, second]) {
+      harness.threadMapRepo.findByChannelAndThread.mockImplementation(
+        async (channelId: string, threadId: string) =>
+          sharedMappings.find(
+            (mapping) => mapping.channel_id === channelId && mapping.thread_id === threadId
+          ) ?? null
+      );
+      harness.threadMapRepo.create.mockImplementation(async (data) => {
+        const mapping = makeMapping({
+          ...data,
+          id: `map-${sharedMappings.length + 1}`,
+          session_id: data.session_id,
+          metadata: data.metadata ?? null,
+        });
+        sharedMappings.push(mapping);
+        return mapping;
+      });
+    }
+    first.sessionsCreate.mockResolvedValueOnce({
+      session_id: 'discord-session-a',
+      branch_id: channelA.target_branch_id,
+      status: SessionStatus.IDLE,
+    });
+    second.sessionsCreate.mockResolvedValueOnce({
+      session_id: 'discord-session-b',
+      branch_id: channelB.target_branch_id,
+      status: SessionStatus.IDLE,
+    });
+
+    await expect(first.service.create(inboundA)).resolves.toMatchObject({ success: true });
+    await expect(second.service.create(inboundB)).resolves.toMatchObject({ success: true });
+    expect(sharedMappings).toHaveLength(2);
+    expect(sharedMappings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel_id: channelA.id,
+          thread_id: inboundA.thread_id,
+          session_id: 'discord-session-a',
+        }),
+        expect.objectContaining({
+          channel_id: channelB.id,
+          thread_id: inboundB.thread_id,
+          session_id: 'discord-session-b',
+        }),
+      ])
+    );
+    expect(first.threadMapRepo.findByThread).not.toHaveBeenCalled();
+    expect(second.threadMapRepo.findByThread).not.toHaveBeenCalled();
+  });
+
+  it('reuses a stable outbound session only when every collision identity matches', async () => {
+    const channel = attachHiddenTenant({ ...discordChannel }, { tenant_id: 'tenant-channel' });
+    const inbound = validDiscordInbound();
+    const stableSessionId = '01927f9d-0000-7000-8000-000000000011' as SessionID;
+    const seed = {
+      id: 'outbound-seed-1',
+      platform_thread_id: 'discord:message:323456789012345678:523456789012345678',
+      metadata: { provider_reply_aliases: [] },
+    };
+    const admission = { admitted: true, message: seed, sessionId: stableSessionId };
+    const prior = attachHiddenTenant(
+      {
+        session_id: stableSessionId,
+        branch_id: channel.target_branch_id,
+        created_by: user.user_id,
+        custom_context: {
+          gateway_source: {
+            channel_id: channel.id,
+            channel_type: channel.channel_type,
+            thread_id: inbound.thread_id,
+            outbound_seed_id: seed.id,
+            outbound_seed_thread_id: seed.platform_thread_id,
+          },
+        },
+      },
+      { tenant_id: 'tenant-channel' }
+    );
+    const { service, outboundRepo, sessionsCreate, sessionsGet } = makeGatewayHarness({ channel });
+    outboundRepo.admitReplySession.mockResolvedValue(admission as never);
+    const collision = Object.assign(new Error('duplicate session id'), { code: '23505' });
+    sessionsCreate.mockRejectedValueOnce(collision);
+    sessionsGet.mockResolvedValueOnce(prior as never);
+
+    await expect(service.create(inbound)).resolves.toMatchObject({
+      success: true,
+      sessionId: stableSessionId,
+    });
+    expect(sessionsGet).toHaveBeenCalledWith(stableSessionId, { user });
+    expect(outboundRepo.completeReplyAdmission).toHaveBeenCalledWith(seed.id, stableSessionId);
+  });
+
+  it('propagates non-unique session creation errors without collision recovery', async () => {
+    const channel = attachHiddenTenant({ ...discordChannel }, { tenant_id: 'tenant-channel' });
+    const inbound = validDiscordInbound();
+    const stableSessionId = '01927f9d-0000-7000-8000-000000000013' as SessionID;
+    const seed = {
+      id: 'outbound-seed-3',
+      platform_thread_id: inbound.thread_id,
+      metadata: { provider_reply_aliases: [] },
+    };
+    const admission = { admitted: true, message: seed, sessionId: stableSessionId };
+    const { service, outboundRepo, sessionsCreate, sessionsGet } = makeGatewayHarness({ channel });
+    outboundRepo.admitReplySession.mockResolvedValue(admission as never);
+    const failure = new Error('database unavailable');
+    sessionsCreate.mockRejectedValueOnce(failure);
+
+    await expect(service.create(inbound)).rejects.toBe(failure);
+    expect(sessionsGet).not.toHaveBeenCalled();
+    expect(outboundRepo.completeReplyAdmission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['foreign tenant', { tenantId: 'tenant-other' }],
+    ['wrong branch', { branch_id: 'branch-other' }],
+    ['wrong user', { created_by: 'user-other' }],
+    ['wrong channel', { source: { channel_id: 'chan-other' } }],
+    ['wrong outbound seed', { source: { outbound_seed_id: 'outbound-seed-other' } }],
+    ['malformed gateway source', { malformed: true }],
+  ] as const)('fails closed for a %s stable-session collision', async (_kind, mutation) => {
+    const channel = attachHiddenTenant({ ...discordChannel }, { tenant_id: 'tenant-channel' });
+    const inbound = validDiscordInbound();
+    const stableSessionId = '01927f9d-0000-7000-8000-000000000012' as SessionID;
+    const seed = {
+      id: 'outbound-seed-2',
+      platform_thread_id: inbound.thread_id,
+      metadata: { provider_reply_aliases: [] },
+    };
+    const admission = { admitted: true, message: seed, sessionId: stableSessionId };
+    const source = {
+      channel_id: channel.id,
+      channel_type: channel.channel_type,
+      thread_id: inbound.thread_id,
+      outbound_seed_id: seed.id,
+      outbound_seed_thread_id: seed.platform_thread_id,
+      ...(mutation.source ?? {}),
+    };
+    const prior = mutation.malformed
+      ? attachHiddenTenant(
+          {
+            session_id: stableSessionId,
+            branch_id: channel.target_branch_id,
+            created_by: user.user_id,
+            custom_context: { gateway_source: 'malformed' },
+          },
+          { tenant_id: 'tenant-channel' }
+        )
+      : attachHiddenTenant(
+          {
+            session_id: stableSessionId,
+            branch_id: mutation.branch_id ?? channel.target_branch_id,
+            created_by: mutation.created_by ?? user.user_id,
+            custom_context: { gateway_source: source },
+          },
+          { tenant_id: mutation.tenantId ?? 'tenant-channel' }
+        );
+    const { service, outboundRepo, sessionsCreate, sessionsGet } = makeGatewayHarness({ channel });
+    outboundRepo.admitReplySession.mockResolvedValue(admission as never);
+    const collision = Object.assign(new Error('duplicate session id'), { code: '23505' });
+    sessionsCreate.mockRejectedValueOnce(collision);
+    sessionsGet.mockResolvedValueOnce(prior as never);
+
+    await expect(service.create(inbound)).rejects.toBe(collision);
+    expect(outboundRepo.completeReplyAdmission).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an unmentioned inbound prompt', async () => {
+    const sendMessage = vi.fn();
+    const { service } = makeGatewayHarness({ channel: discordChannel, connector: { sendMessage } });
+
+    const result = await service.create({
+      channel_key: discordChannel.channel_key,
+      thread_id: 'discord:message:323456789012345678:523456789012345678',
+      text: 'not addressed to the bot',
+      user_name: 'Discord user',
+      metadata: { discord_has_mention: false },
+    });
+
+    expect(result).toEqual({ success: false, sessionId: '', created: false });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('creates separate sessions for top-level mentions replying to the same human message', async () => {
+    const mappings: ThreadSessionMap[] = [];
+    const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });
+    harness.threadMapRepo.findByChannelAndThread.mockImplementation(
+      async (_channelId: string, threadId: string) =>
+        mappings.find((mapping) => mapping.thread_id === threadId) ?? null
+    );
+    harness.threadMapRepo.findByChannel.mockImplementation(async () => mappings);
+    harness.threadMapRepo.create.mockImplementation(async (data) => {
+      const mapping = makeMapping({
+        ...data,
+        id: `discord-map-${mappings.length + 1}`,
+        session_id: data.session_id,
+        metadata: data.metadata ?? null,
+      });
+      mappings.push(mapping);
+      return mapping;
+    });
+    harness.sessionsCreate
+      .mockResolvedValueOnce({
+        session_id: 'discord-session-one',
+        branch_id: discordChannel.target_branch_id,
+        status: SessionStatus.IDLE,
+      })
+      .mockResolvedValueOnce({
+        session_id: 'discord-session-two',
+        branch_id: discordChannel.target_branch_id,
+        status: SessionStatus.IDLE,
+      });
+
+    const unrelatedHumanMessageId = '923456789012345678';
+    const first = validDiscordInbound();
+    first.thread_id = `discord:message:323456789012345678:${unrelatedHumanMessageId}`;
+    first.metadata = {
+      ...first.metadata,
+      discord_message_id: '623456789012345678',
+      discord_reply_to_message_id: unrelatedHumanMessageId,
+    };
+    const second = {
+      ...first,
+      text: 'second mention',
+      metadata: {
+        ...first.metadata,
+        discord_message_id: '723456789012345678',
+      },
+    };
+
+    await expect(harness.service.create(first)).resolves.toMatchObject({
+      success: true,
+      sessionId: 'discord-session-one',
+      created: true,
+    });
+    await expect(harness.service.create(second)).resolves.toMatchObject({
+      success: true,
+      sessionId: 'discord-session-two',
+      created: true,
+    });
+    expect(mappings.map((mapping) => mapping.thread_id)).toEqual([
+      'discord:message:323456789012345678:623456789012345678',
+      'discord:message:323456789012345678:723456789012345678',
+    ]);
+  });
+
+  it('stores provider-neutral aliases for every structured response chunk', async () => {
+    const sendMessage = vi.fn(async () => ({
+      messageId: '623456789012345678',
+      messageIds: ['623456789012345678', '723456789012345678'],
+      threadId: 'discord:message:323456789012345678:523456789012345678',
+      replyAliases: [
+        'discord:message:323456789012345678:623456789012345678',
+        'discord:message:323456789012345678:723456789012345678',
+      ],
+      platformChannelId: '323456789012345678',
+      platformThreadId: 'discord:message:323456789012345678:523456789012345678',
+    }));
+    const mapping = makeMapping({
+      channel_id: discordChannel.id,
+      thread_id: 'discord:message:323456789012345678:523456789012345678',
+      metadata: {},
+    });
+    const { service, threadMapRepo } = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: mapping,
+      connector: { sendMessage },
+    });
+
+    const result = await service.routeMessage({ session_id: mapping.session_id, message: 'reply' });
+
+    expect(result).toEqual({ routed: true, channelType: 'discord' });
+    expect(threadMapRepo.mergeGatewayReplyAliases).toHaveBeenCalledWith(
+      mapping.id,
+      [
+        'discord:message:323456789012345678:623456789012345678',
+        'discord:message:323456789012345678:723456789012345678',
+      ],
+      'message',
+      '623456789012345678'
+    );
+  });
+
+  it('keeps the first Discord response chunk routable after more than one hundred aliases', async () => {
+    let currentMapping = makeMapping({
+      channel_id: discordChannel.id,
+      thread_id: 'discord:message:323456789012345678:523456789012345678',
+      metadata: {},
+    });
+    const sendMessage = vi.fn(async () => {
+      const messageId = `${623456789012345678n + BigInt(sendMessage.mock.calls.length)}`;
+      return {
+        messageId,
+        messageIds: [messageId],
+        threadId: currentMapping.thread_id,
+        replyAliases: [`discord:message:323456789012345678:${messageId}`],
+        platformChannelId: '323456789012345678',
+        platformThreadId: currentMapping.thread_id,
+      };
+    });
+    const harness = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: currentMapping,
+      connector: { sendMessage },
+    });
+    harness.threadMapRepo.findByChannelAndThread.mockImplementation(
+      async (_channelId: string, threadId: string) =>
+        threadId === currentMapping.thread_id ? currentMapping : null
+    );
+    harness.threadMapRepo.findByChannel.mockImplementation(async () => [currentMapping]);
+    harness.threadMapRepo.findBySession.mockImplementation(async () => currentMapping);
+    harness.threadMapRepo.mergeGatewayReplyAliases.mockImplementation(
+      async (_id: string, aliases: string[], _reason: string, lastMessageId?: string) => {
+        const metadata = (currentMapping.metadata as Record<string, unknown>) ?? {};
+        const previous = Array.isArray(metadata.gateway_reply_aliases)
+          ? metadata.gateway_reply_aliases.filter(
+              (alias): alias is string => typeof alias === 'string'
+            )
+          : [];
+        currentMapping = {
+          ...currentMapping,
+          metadata: {
+            ...metadata,
+            gateway_reply_aliases: [...new Set([...previous, ...aliases])],
+            ...(lastMessageId ? { gateway_last_message_id: lastMessageId } : {}),
+          },
+        } as ThreadSessionMap;
+        return currentMapping;
+      }
+    );
+
+    for (let index = 0; index < 101; index += 1) {
+      await harness.service.routeMessage({
+        session_id: currentMapping.session_id,
+        message: 'chunk',
+      });
+    }
+
+    const aliases = currentMapping.metadata?.gateway_reply_aliases as string[];
+    expect(aliases).toHaveLength(101);
+    const firstAlias = aliases[0];
+    const firstAliasMessageId = firstAlias.split(':').at(-1)!;
+    const inbound = validDiscordInbound();
+    inbound.thread_id = firstAlias;
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_message_id: '823456789012345678',
+      discord_reply_to_message_id: firstAliasMessageId,
+    };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({
+      success: true,
+      sessionId: currentMapping.session_id,
+      created: false,
+    });
+    expect(harness.sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps Discord proactive target resolution and seed audit in the service boundary', async () => {
+    const sendDirectMessage = vi.fn(async (request: { target: string }) => ({
+      messageId: '823456789012345678',
+      messageIds: ['823456789012345678'],
+      threadId: 'discord:message:323456789012345678:823456789012345678',
+      replyAliases: ['discord:message:323456789012345678:823456789012345678'],
+      platformChannelId: '323456789012345678',
+      platformThreadId: 'discord:message:323456789012345678:823456789012345678',
+      metadata: { target: request.target },
+    }));
+    const { service } = makeGatewayHarness({ channel: discordChannel });
+    const outboundRepo = {
+      create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-discord', ...data })),
+    };
+    (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
+    vi.mocked(getConnector).mockReturnValue({ sendDirectMessage } as never);
+
+    const result = await service.emitMessage({
+      gatewayChannelId: discordChannel.id,
+      message: 'proactive update',
+      emittedByUserId: user.user_id as UserID,
+      userRole: 'admin',
+    });
+
+    expect(sendDirectMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ target: 'channel:323456789012345678', text: 'proactive update' })
+    );
+    expect(outboundRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel_type: 'discord',
+        platform_channel_id: '323456789012345678',
+        metadata: expect.objectContaining({
+          provider_reply_aliases: ['discord:message:323456789012345678:823456789012345678'],
+        }),
+      })
+    );
+    expect(result).toMatchObject({
+      success: true,
+      channel_type: 'discord',
+      platform_thread_id: 'discord:message:323456789012345678:823456789012345678',
+    });
+  });
+
+  it('rejects Discord threadTs proactive sends before connector admission', async () => {
+    const { service } = makeGatewayHarness({ channel: discordChannel });
+    vi.mocked(getConnector).mockReturnValue({ sendDirectMessage: vi.fn() } as never);
+
+    await expect(
+      service.emitMessage({
+        gatewayChannelId: discordChannel.id,
+        message: 'thread target is Slack-only',
+        threadTs: 'discord:thread:323456789012345678:523456789012345678',
+        emittedByUserId: user.user_id as UserID,
+        userRole: 'admin',
+      })
+    ).rejects.toThrow('fresh channel:<snowflake> seed');
+  });
+});
+
 describe('GatewayService outbound routing tenant scope', () => {
   it('defers after-hook routing until the current tenant transaction commits', async () => {
     const events: string[] = [];
@@ -2029,10 +2745,26 @@ describe('GatewayService outbound emit session branch binding', () => {
       thread_ts: '200.000100',
       permalink: null,
     }));
-    vi.mocked(getConnector).mockReturnValue({ sendSlackMessage } as never);
+    const sendDirectMessage = vi.fn(
+      async (req: { target: string; text: string; threadId?: string }) => {
+        const sent = await sendSlackMessage({
+          channel: req.target.replace(/^channel:/, ''),
+          text: req.text,
+          ...(req.threadId ? { thread_ts: req.threadId } : {}),
+        });
+        return {
+          messageId: sent.ts,
+          platformChannelId: sent.channel,
+          platformThreadId: `${sent.channel}-${sent.thread_ts}`,
+          permalink: sent.permalink,
+        };
+      }
+    );
+    vi.mocked(getConnector).mockReturnValue({ sendSlackMessage, sendDirectMessage } as never);
     const outboundRepo = {
       create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
-      findUnconsumedByChannelAndThread: vi.fn(async () => null),
+      admitReplySession: vi.fn(async () => null),
+      completeReplyAdmission: vi.fn(async () => undefined),
     };
     const sessionRepo = { findById: vi.fn(async () => args.session ?? null) };
     const branchRepo = {
@@ -2183,13 +2915,42 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
       thread_ts: '200.000100',
       permalink: null,
     }));
+    const sendDirectMessage = vi.fn(
+      async (req: { target: string; text: string; threadId?: string }) => {
+        let channel = req.target.replace(/^channel:/, '');
+        if (req.target.startsWith('#')) {
+          const resolved = await args.connectorExtras?.resolveChannelByName?.(req.target.slice(1));
+          channel = resolved?.channel ?? channel;
+        } else if (req.target.includes('@')) {
+          const resolved = await args.connectorExtras?.openDmByEmail?.(req.target);
+          channel = resolved?.channel ?? channel;
+        }
+        const allowed = args.config?.allowed_channel_ids;
+        if (Array.isArray(allowed) && !channel.startsWith('D') && !allowed.includes(channel)) {
+          throw new Error(`target resolves to ${channel}; allowed_channel_ids whitelist denied it`);
+        }
+        const sent = await sendSlackMessage({
+          channel,
+          text: req.text,
+          ...(req.threadId ? { thread_ts: req.threadId } : {}),
+        });
+        return {
+          messageId: sent.ts,
+          platformChannelId: sent.channel,
+          platformThreadId: `${sent.channel}-${sent.thread_ts}`,
+          permalink: sent.permalink,
+        };
+      }
+    );
     vi.mocked(getConnector).mockReturnValue({
       sendSlackMessage,
+      sendDirectMessage,
       ...args.connectorExtras,
     } as never);
     const outboundRepo = {
       create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
-      findUnconsumedByChannelAndThread: vi.fn(async () => null),
+      admitReplySession: vi.fn(async () => null),
+      completeReplyAdmission: vi.fn(async () => undefined),
     };
     (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
     return { service, sendSlackMessage, outboundRepo };

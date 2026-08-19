@@ -5,9 +5,21 @@
  * through messaging platforms (Slack, Discord, etc.)
  */
 
-export type { GatewayConnector, InboundFile, InboundMessage, OutboundPayload } from './connector';
-export { normalizeOutbound } from './connector';
+export type {
+  GatewayConnector,
+  GatewaySendReceipt,
+  GatewaySendResult,
+  InboundFile,
+  InboundMessage,
+  OutboundPayload,
+} from './connector';
+export { normalizeOutbound, normalizeSendReceipt } from './connector';
 export { getConnector, hasConnector, registerConnector } from './connector-registry';
+export {
+  chunkDiscordMessage,
+  DiscordConnector,
+  stripDiscordBotMention,
+} from './connectors/discord';
 export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
 export {
   buildThreadId as buildShortcutThreadId,
@@ -57,6 +69,7 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
+export { sanitizeGatewayProviderError } from './provider-error';
 export {
   formatGatewayFollowUpRoutingMessage,
   formatGatewayMarkdownSessionReference,

@@ -52,6 +52,7 @@ export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
   'slack',
   'github',
   'shortcut',
+  'discord',
 ] as const satisfies readonly ChannelType[];
 
 /** Thread lifecycle status */
@@ -112,9 +113,111 @@ export function getRequiredSecretFields(
       // Shortcut is poll-based over the REST API — the API token is always
       // required for an enabled channel (there is no outbound-only mode).
       return ['api_token'];
+    case 'discord':
+      return ['bot_token'];
     default:
       return [];
   }
+}
+
+/** Discord gateway configuration used by both the browser wizard and daemon. */
+export interface DiscordGatewayConfig {
+  bot_token?: string;
+  application_id?: string;
+  guild_id?: string;
+  allowed_channel_ids?: string[];
+  allowed_user_ids?: string[];
+  allowed_role_ids?: string[];
+  outbound_enabled?: boolean;
+  default_outbound_target?: string | null;
+}
+
+export interface DiscordConfigValidationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
+
+/**
+ * Validate the non-secret Discord beta configuration without importing any
+ * provider SDK. This is intentionally safe to use in the browser and is also
+ * the daemon's fail-closed listener eligibility check.
+ */
+export function validateDiscordConfig(
+  raw: Record<string, unknown>,
+  options: { requireBotToken?: boolean } = {}
+): DiscordConfigValidationResult {
+  const errors: string[] = [];
+  const requiredSnowflakes: Array<[string, unknown]> = [
+    ['application_id', raw.application_id],
+    ['guild_id', raw.guild_id],
+  ];
+  for (const [field, value] of requiredSnowflakes) {
+    if (typeof value !== 'string' || !DISCORD_SNOWFLAKE_RE.test(value)) {
+      errors.push(`${field} must be a Discord snowflake`);
+    }
+  }
+
+  const rawAllowedChannelIds = raw.allowed_channel_ids;
+  const allowedChannelIds = Array.isArray(rawAllowedChannelIds)
+    ? rawAllowedChannelIds.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (
+    !Array.isArray(rawAllowedChannelIds) ||
+    allowedChannelIds.length === 0 ||
+    rawAllowedChannelIds.some(
+      (item) => typeof item !== 'string' || !DISCORD_SNOWFLAKE_RE.test(item)
+    )
+  ) {
+    errors.push('allowed_channel_ids must contain one or more Discord snowflakes');
+  }
+
+  if (options.requireBotToken !== false) {
+    if (
+      typeof raw.bot_token !== 'string' ||
+      raw.bot_token.trim() === '' ||
+      raw.bot_token === GATEWAY_REDACTED_SENTINEL
+    ) {
+      errors.push('bot_token is required');
+    }
+  }
+
+  const validateAllowlist = (field: 'allowed_user_ids' | 'allowed_role_ids') => {
+    const value = raw[field];
+    if (value === undefined) return;
+    if (!Array.isArray(value)) {
+      errors.push(`${field} must contain only Discord snowflakes`);
+      return;
+    }
+    if (value.length === 0) return;
+    if (value.some((item) => typeof item !== 'string' || !DISCORD_SNOWFLAKE_RE.test(item))) {
+      errors.push(`${field} must contain only Discord snowflakes`);
+    }
+  };
+  validateAllowlist('allowed_user_ids');
+  validateAllowlist('allowed_role_ids');
+  const userAllowlist = Array.isArray(raw.allowed_user_ids) ? raw.allowed_user_ids : [];
+  const roleAllowlist = Array.isArray(raw.allowed_role_ids) ? raw.allowed_role_ids : [];
+  if (userAllowlist.length === 0 && roleAllowlist.length === 0) {
+    errors.push('at least one allowed_user_ids or allowed_role_ids entry is required');
+  }
+
+  if (raw.outbound_enabled !== undefined && typeof raw.outbound_enabled !== 'boolean') {
+    errors.push('outbound_enabled must be a boolean');
+  }
+  if (raw.default_outbound_target !== undefined && raw.default_outbound_target !== null) {
+    if (typeof raw.default_outbound_target !== 'string') {
+      errors.push('default_outbound_target must be channel:<snowflake>');
+    } else {
+      const match = /^channel:(\d{17,20})$/.exec(raw.default_outbound_target.trim());
+      if (!match || !allowedChannelIds.includes(match[1])) {
+        errors.push('default_outbound_target must target an allowed channel');
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 // ============================================================================
@@ -207,6 +310,21 @@ export interface GatewayConnectionTestFailure {
   provided?: string;
 }
 
+/** Granular channel permissions reported by providers that can inspect them. */
+export interface GatewayConnectionTestPermissionDetails {
+  view: boolean;
+  send: boolean;
+  readHistory: boolean;
+  sendInThreads: boolean;
+}
+
+/** Access result for one configured provider channel. */
+export interface GatewayConnectionTestChannelAccess {
+  channelId: string;
+  ok: boolean;
+  permissions?: GatewayConnectionTestPermissionDetails;
+}
+
 /**
  * Result of a best-effort gateway connector connection probe.
  *
@@ -219,7 +337,7 @@ export interface GatewayConnectionTestResult {
   team?: { id: string; name: string };
   bot?: { userId: string; name: string };
   appTokenValid?: boolean;
-  channelAccess?: { channelId: string; ok: boolean }[];
+  channelAccess?: GatewayConnectionTestChannelAccess[];
   failures: GatewayConnectionTestFailure[];
   notVerifiable: string[];
 }
@@ -430,6 +548,14 @@ export interface GatewayOutboundMessage {
 
   created_at: string;
   updated_at: string;
+}
+
+/** Durable admission of one proactive seed into the session-creation path. */
+export interface GatewayOutboundReplyAdmission {
+  message: GatewayOutboundMessage;
+  sessionId: SessionID;
+  /** True only for the transaction that first reserved the session ID. */
+  admitted: boolean;
 }
 
 /**

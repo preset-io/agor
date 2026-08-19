@@ -22,13 +22,16 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
+  validateDiscordConfig,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
+  executeRaw,
   insert,
   isPostgresDatabase,
+  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -36,6 +39,7 @@ import {
 } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
+import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -78,6 +82,25 @@ export interface GatewayListenerClaimInput {
   bootId: string;
 }
 
+function duplicateDiscordChannelIds(
+  rows: Array<{
+    channel_id?: string;
+    tenant_id?: unknown;
+    application_id?: unknown;
+  }>
+): Set<string> {
+  const groups = new Map<string, string[]>();
+  for (const row of rows) {
+    const applicationId = row.application_id;
+    if (typeof applicationId !== 'string' || applicationId.length === 0) continue;
+    const channelId = row.channel_id;
+    if (!channelId) continue;
+    const key = `${String(row.tenant_id ?? 'default')}:${applicationId}`;
+    groups.set(key, [...(groups.get(key) ?? []), channelId]);
+  }
+  return new Set([...groups.values()].filter((ids) => ids.length > 1).flat());
+}
+
 /**
  * Capability-specific repository for process-wide listener discovery.
  *
@@ -108,40 +131,73 @@ export class GatewayListenerDiscoveryRepository {
       isNull(gatewayChannels.listener_lease_expires_at),
       lte(gatewayChannels.listener_lease_expires_at, sql`CURRENT_TIMESTAMP`)
     );
-    const afterCondition = after
-      ? or(
-          gt(tenantColumn, after.tenant_id),
-          and(eq(tenantColumn, after.tenant_id), gt(gatewayChannels.id, after.channel_id))
-        )
-      : undefined;
-    const rows = await select(this.db, {
+    // Do not derive duplicate status from the bounded page: a duplicate peer
+    // may sort outside this page. Every member of every enabled tenant-local
+    // duplicate group must stay inert, regardless of discovery pagination.
+    const allDiscordRows = await select(this.db, {
       channel_id: gatewayChannels.id,
       tenant_id: tenantColumn,
+      application_id: jsonExtract(this.db, gatewayChannels.config, 'application_id'),
     })
       .from(gatewayChannels)
-      .where(
-        and(
-          eq(gatewayChannels.enabled, true),
-          inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES]),
-          claimable,
-          afterCondition
-        )
-      )
-      .orderBy(asc(tenantColumn), asc(gatewayChannels.id))
-      .limit(limit)
+      .where(and(eq(gatewayChannels.enabled, true), eq(gatewayChannels.channel_type, 'discord')))
       .all();
+    const duplicateIds = duplicateDiscordChannelIds(allDiscordRows);
 
-    return (rows as Array<{ channel_id: string; tenant_id?: unknown }>).map((row) => {
-      if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
-        throw new RepositoryError(
-          `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
-        );
+    // The raw page cursor must advance past rows that are filtered locally.
+    // Otherwise a page made entirely of fail-closed duplicate Discord rows
+    // can starve every valid candidate after it, including another tenant.
+    const refs: EnabledGatewayChannelRef[] = [];
+    let rawAfter = after;
+    while (refs.length < limit) {
+      const afterCondition = rawAfter
+        ? or(
+            gt(tenantColumn, rawAfter.tenant_id),
+            and(eq(tenantColumn, rawAfter.tenant_id), gt(gatewayChannels.id, rawAfter.channel_id))
+          )
+        : undefined;
+      const rows = (await select(this.db, {
+        channel_id: gatewayChannels.id,
+        tenant_id: tenantColumn,
+      })
+        .from(gatewayChannels)
+        .where(
+          and(
+            eq(gatewayChannels.enabled, true),
+            inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES]),
+            claimable,
+            afterCondition
+          )
+        )
+        .orderBy(asc(tenantColumn), asc(gatewayChannels.id))
+        .limit(limit)
+        .all()) as Array<{ channel_id: string; tenant_id?: unknown }>;
+
+      for (const row of rows) {
+        if (duplicateIds.has(row.channel_id)) continue;
+        if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
+          throw new RepositoryError(
+            `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
+          );
+        }
+        refs.push({
+          channel_id: row.channel_id as GatewayChannelID,
+          tenant_id: row.tenant_id as TenantID,
+        });
+        if (refs.length === limit) break;
       }
-      return {
-        channel_id: row.channel_id as GatewayChannelID,
-        tenant_id: row.tenant_id as TenantID,
+
+      if (rows.length < limit || refs.length === limit) break;
+      const last = rows.at(-1);
+      if (!last || typeof last.tenant_id !== 'string') {
+        throw new RepositoryError('Gateway listener discovery returned an invalid raw cursor');
+      }
+      rawAfter = {
+        tenant_id: last.tenant_id as TenantID,
+        channel_id: last.channel_id as GatewayChannelID,
       };
-    });
+    }
+    return refs;
   }
 }
 
@@ -481,20 +537,43 @@ export class GatewayChannelRepository
     const auditedProvider = isPostgresDatabase(this.db)
       ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
       : undefined;
-    const rows = await select(this.db)
+    const allDiscordRows = await select(this.db, {
+      channel_id: gatewayChannels.id,
+      application_id: jsonExtract(this.db, gatewayChannels.config, 'application_id'),
+    })
       .from(gatewayChannels)
-      .where(
-        and(
-          eq(gatewayChannels.enabled, true),
-          auditedProvider,
-          claimable,
-          afterId ? gt(gatewayChannels.id, afterId) : undefined
-        )
-      )
-      .orderBy(asc(gatewayChannels.id))
-      .limit(limit)
+      .where(and(eq(gatewayChannels.enabled, true), eq(gatewayChannels.channel_type, 'discord')))
       .all();
-    return rows.map((row: GatewayChannelRow) => this.rowToChannel(row));
+    const duplicateIds = duplicateDiscordChannelIds(allDiscordRows);
+    const candidates: GatewayChannel[] = [];
+    let rawAfterId = afterId;
+    while (candidates.length < limit) {
+      const rows = await select(this.db)
+        .from(gatewayChannels)
+        .where(
+          and(
+            eq(gatewayChannels.enabled, true),
+            auditedProvider,
+            claimable,
+            rawAfterId ? gt(gatewayChannels.id, rawAfterId) : undefined
+          )
+        )
+        .orderBy(asc(gatewayChannels.id))
+        .limit(limit)
+        .all();
+
+      for (const row of rows as GatewayChannelRow[]) {
+        if (duplicateIds.has(row.id)) continue;
+        candidates.push(this.rowToChannel(row));
+        if (candidates.length === limit) break;
+      }
+
+      if (rows.length < limit || candidates.length === limit) break;
+      const last = rows.at(-1) as GatewayChannelRow | undefined;
+      if (!last) break;
+      rawAfterId = last.id as GatewayChannelID;
+    }
+    return candidates;
   }
 
   /**
@@ -604,6 +683,69 @@ export class GatewayChannelRepository
         `Cannot enable ${channelType} gateway channel: missing required secret(s) ${missing.join(', ')}`
       );
     }
+
+    if (channelType === 'discord') {
+      if (typeof channel.agor_user_id !== 'string' || channel.agor_user_id.trim() === '') {
+        throw new RepositoryError(
+          'Cannot enable Discord gateway channel: a fixed agor_user_id is required'
+        );
+      }
+      const validation = validateDiscordConfig(config, { requireBotToken: false });
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot enable Discord gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+    }
+  }
+
+  /**
+   * Discord's gateway manager is process-local and cannot safely share one
+   * application identity across enabled rows in the same tenant. The tenant
+   * scoped database wrapper is the authority for this check; other tenants are
+   * never visible here (including under PostgreSQL RLS).
+   */
+  private async assertDiscordApplicationIdUnique(
+    db: Database,
+    channel: Partial<GatewayChannel>
+  ): Promise<void> {
+    if (channel.channel_type !== 'discord' || channel.enabled === false) return;
+    const applicationId = channel.config?.application_id;
+    if (typeof applicationId !== 'string' || applicationId.length === 0) return;
+    const rows = await select(db)
+      .from(gatewayChannels)
+      .where(and(eq(gatewayChannels.channel_type, 'discord'), eq(gatewayChannels.enabled, true)))
+      .all();
+    const duplicate = rows.find(
+      (row: GatewayChannelRow) =>
+        row.id !== channel.id &&
+        (this.rowToChannel(row).config.application_id as unknown) === applicationId
+    );
+    if (duplicate) {
+      throw new RepositoryError(
+        `Cannot enable Discord gateway channel: application_id ${applicationId} is already used by another enabled channel`
+      );
+    }
+  }
+
+  /** Serialize the admission check so two first writers cannot both pass it. */
+  private async lockDiscordApplicationAdmission(txDb: Database): Promise<void> {
+    if (!isPostgresDatabase(this.db)) return;
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) {
+      throw new RepositoryError(
+        'Discord application admission requires an active tenant database scope'
+      );
+    }
+    await executeRaw(
+      txDb,
+      sql`SELECT pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtextextended(
+          ${`agor:gateway-discord-application-admission:${tenantId}`},
+          0
+        )
+      )`
+    );
   }
 
   /**
@@ -648,13 +790,22 @@ export class GatewayChannelRepository
       });
 
       this.assertRequiredSecretsWhenEnabled(data);
-
-      await insert(this.db, gatewayChannels).values(insertData).run();
-
-      const row = await select(this.db)
-        .from(gatewayChannels)
-        .where(eq(gatewayChannels.id, insertData.id))
-        .one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await this.lockDiscordApplicationAdmission(txDb);
+          await this.assertDiscordApplicationIdUnique(txDb, {
+            ...data,
+            id: insertData.id as GatewayChannelID,
+          });
+          await insert(txDb, gatewayChannels).values(insertData).run();
+          return select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, insertData.id))
+            .one();
+        },
+        { sqliteImmediate: true }
+      );
 
       if (!row) {
         throw new RepositoryError('Failed to retrieve created gateway channel');
@@ -714,71 +865,66 @@ export class GatewayChannelRepository
     try {
       const fullId = await this.resolveId(id);
 
-      const current = await this.findById(fullId);
-      if (!current) {
-        throw new EntityNotFoundError('GatewayChannel', id);
-      }
-
-      // Merge updates, but preserve existing encrypted credentials if update has empty values
-      const merged = { ...current, ...updates };
-
-      // Preserve existing credentials if updates contain empty, falsy, or redacted values.
-      // The API redacts sensitive fields to '••••••••' in responses, so if the client
-      // sends that sentinel back it means "no change" — not "set token to bullets".
-      if (updates.config) {
-        const mergedConfig = { ...current.config, ...updates.config };
-        for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-          const updateValue = updates.config[field];
-          if (
-            (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
-            current.config[field]
-          ) {
-            mergedConfig[field] = current.config[field];
+      const updated = await runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await this.lockDiscordApplicationAdmission(txDb);
+          const currentRow = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, fullId))
+            .one();
+          if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+          const current = this.rowToChannel(currentRow);
+          const merged = { ...current, ...updates };
+          if (updates.config) {
+            const mergedConfig = { ...current.config, ...updates.config };
+            for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
+              const updateValue = updates.config[field];
+              if (
+                (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
+                current.config[field]
+              ) {
+                mergedConfig[field] = current.config[field];
+              }
+            }
+            merged.config = mergedConfig;
           }
-        }
-        merged.config = mergedConfig;
-      }
+          this.assertRequiredSecretsWhenEnabled(merged);
+          await this.assertDiscordApplicationIdUnique(txDb, merged);
+          const insertData = this.channelToInsert(merged);
+          await update(txDb, gatewayChannels)
+            .set({
+              name: insertData.name,
+              channel_type: insertData.channel_type,
+              target_branch_id: insertData.target_branch_id,
+              agor_user_id: insertData.agor_user_id,
+              enabled: insertData.enabled,
+              config: insertData.config,
+              agentic_config: insertData.agentic_config,
+              agentic_tool_preset_id: insertData.agentic_tool_preset_id,
+              mcp_server_ids: insertData.mcp_server_ids,
+              updated_at: new Date(),
+              listener_claim_token: null,
+              listener_claimed_at: null,
+              listener_lease_expires_at: null,
+              listener_instance_id: null,
+              listener_boot_id: null,
+              listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
+              listener_checkpoint: null,
+              listener_checkpoint_updated_at: null,
+            })
+            .where(eq(gatewayChannels.id, fullId))
+            .run();
+          return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+        },
+        { sqliteImmediate: true }
+      );
 
-      this.assertRequiredSecretsWhenEnabled(merged);
-
-      const insertData = this.channelToInsert(merged);
-
-      await update(this.db, gatewayChannels)
-        .set({
-          name: insertData.name,
-          channel_type: insertData.channel_type,
-          target_branch_id: insertData.target_branch_id,
-          agor_user_id: insertData.agor_user_id,
-          enabled: insertData.enabled,
-          config: insertData.config,
-          agentic_config: insertData.agentic_config,
-          agentic_tool_preset_id: insertData.agentic_tool_preset_id,
-          mcp_server_ids: insertData.mcp_server_ids,
-          updated_at: new Date(),
-          // Any configuration mutation immediately revokes the old listener.
-          // Provider callbacks must match the new opaque claim token before a
-          // durable effect can be admitted.
-          listener_claim_token: null,
-          listener_claimed_at: null,
-          listener_lease_expires_at: null,
-          listener_instance_id: null,
-          listener_boot_id: null,
-          listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
-          // A cursor authenticated against old credentials/search scope is not
-          // safe to reuse after mutation. Replacement pollers restart from the
-          // provider-specific bounded overlap.
-          listener_checkpoint: null,
-          listener_checkpoint_updated_at: null,
-        })
-        .where(eq(gatewayChannels.id, fullId))
-        .run();
-
-      const updated = await this.findById(fullId);
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated gateway channel');
       }
 
-      return updated;
+      return this.rowToChannel(updated);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;

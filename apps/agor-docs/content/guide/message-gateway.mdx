@@ -1,6 +1,6 @@
 ---
 title: Message Gateway
-description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions, turning any chat thread or PR comment into a portal to an autonomous coding agent.
+description: Route messages from Slack, Discord, GitHub, and other platforms directly into Agor sessions.
 heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 ---
 
@@ -16,7 +16,7 @@ Things working in your favor:
 
 - **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
-- **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. None of them require a public webhook URL.
+- **Outbound-only transport.** Slack uses Socket Mode; Discord uses its Gateway connection; GitHub and Shortcut use API polling. None of these connectors require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
 
 Things that still warrant caution:
@@ -32,9 +32,9 @@ Things that still warrant caution:
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack or Discord bot in a supported channel, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack and Discord channel-like surfaces, every prompt requires an explicit bot mention.
 
-> Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack**, **Discord beta**, **GitHub**, **Shortcut**, and **Microsoft Teams**. WhatsApp and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -107,7 +107,7 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 Standalone SQLite installations require no new configuration and keep the
 historical process-local listener lifecycle.
 
-> **Provider limit in PostgreSQL mode:** Slack, GitHub, and Shortcut listeners
+> **Provider limit in PostgreSQL mode:** Slack, GitHub, Shortcut, and Discord listeners
 > support distributed ownership. Microsoft Teams currently depends on a local
 > Bot Framework port and in-memory conversation references, so Agor fails its
 > listener closed on PostgreSQL. Teams remains available only in standalone
@@ -138,11 +138,12 @@ inside the Message's tenant. A channel refresh in a tenant with no enabled
 channels cannot stop or suppress another tenant. Missing, stale, or inconsistent
 discovery metadata is skipped rather than falling back to the static tenant.
 
-Stable provider event IDs suppress duplicate Slack, GitHub, and Shortcut
+Stable provider event IDs suppress duplicate Slack, GitHub, Shortcut, and Discord
 deliveries. Slack keys the logical message by workspace, conversation, and
 message timestamp so alternate Slack envelopes for the same message converge.
-GitHub and Shortcut polling watermarks are persisted behind the same owner
-fence, with a short overlap during takeover. Their create-comment APIs do not
+GitHub and Shortcut polling watermarks, and Discord Gateway sequence/session
+checkpoints, are persisted behind the same owner fence. Discord resumes from
+the ordered checkpoint when ownership changes. Their create-comment APIs do not
 accept an idempotency key, so a crash after the provider accepts an
 acknowledgement but before Agor records it can still produce a duplicate
 acknowledgement; the Agor Session and Task remain deduplicated.
@@ -159,6 +160,11 @@ and no superuser daemon connection is required.
 ### Outbound branch binding
 
 Proactive outbound emits (`agor_gateway_emit_message`) and Slack thread history reads made from a session are bound to that session's own branch: the gateway channel's target branch must match the calling session's branch, and there is no admin-role bypass. `agor_gateway_outbound_targets_list` only returns channels a session can actually use. Calls made without session context (personal API keys) follow the regular user-permission model instead.
+
+Discord outbound emits use a `channel:<snowflake>` target. A Discord outbound
+seed is recorded durably; the first eligible human reply to any seed chunk
+consumes that seed and starts the mapped session. Replies to later response
+chunks continue the same session.
 
 ## Slack thread behavior
 
@@ -233,6 +239,43 @@ Notes:
 
 - `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
+
+## Discord beta behavior
+
+Discord beta is maintainer-only and intentionally narrow:
+
+- Each enabled gateway row uses one Discord bot application, one guild, one or more configured public text channels, and one fixed `agor_user_id`.
+- Inbound prompts are accepted from an allowed channel and existing public threads under that channel only. DMs, private threads, attachments, embeds, components, stickers, polls, webhooks, bot/self messages, wrong guild/channel messages, and unmentioned messages are ignored.
+- Every prompt must explicitly mention the configured bot. A configured user or role allowlist must admit the author.
+- The bot token is required and stored as a gateway secret. The beta requests only `GUILDS | GUILD_MESSAGES`; an explicit bot mention supplies Discord's content exception, so no privileged message-content setting is required. Legacy invalid Discord rows remain inert until corrected.
+- Responses are sent as the bot, with generated mentions suppressed. Text is split into deterministic chunks of at most 2,000 Unicode code points, with Markdown fences reopened safely. Reply aliases for every chunk resolve to the same Agor session.
+- Proactive sends are text-only, target `channel:<snowflake>`, and never create an automatic thread. A human reply to any outbound chunk consumes the existing durable outbound seed.
+
+### Setting up Discord beta
+
+Use the maintainer-only **Discord setup** wizard in Settings → Gateway
+Channels, or the `agor_gateway_discord_setup` MCP tool for a secret-free
+checklist. The setup flow does not create a Discord application or call
+Discord. Create one application and bot in the Discord Developer Portal, then
+invite it to the configured guild with permission to view channels, read
+history, send messages, and reply in threads in each allowed public text
+channel. The beta uses only `GUILDS | GUILD_MESSAGES`; explicit bot mentions
+use Discord's content exception, so do not enable a privileged message-content
+setting.
+
+Enter the application, guild, and one or more allowed channel snowflakes plus at least one
+allowlisted user or role. Select the fixed Agor user for the channel, enter
+the bot token through the secure credential UI, and keep the row disabled until
+the configuration is complete. If proactive outbound is enabled, use only
+`channel:<allowed-channel-snowflake>` as the default target. Duplicate enabled
+application IDs in one tenant are rejected fail-closed.
+
+No live Discord QA is implied by the setup wizard or connection test. The
+non-mutating probe can inspect identity, guild/channel access, shard
+recommendation, and relevant permission bits, but cannot prove gateway event
+delivery, role matchability for future authors, or end-to-end session creation
+and reply. The beta does not support DMs, rich messages, attachments,
+auto-created threads, webhooks, user alignment, or sharding.
 
 ## Setting Up GitHub Integration
 
@@ -447,7 +490,7 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `sendDirectMessage()` and `startListening()`.
 - **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
 
 ### Adding a New Platform
@@ -462,7 +505,17 @@ interface OutboundPayload {
 
 interface GatewayConnector {
   readonly channelType: ChannelType;
-  sendMessage(req: { threadId: string; text: string; blocks?: unknown[] }): Promise<string>;
+  sendMessage(req: {
+    threadId: string;
+    text: string;
+    blocks?: unknown[];
+  }): Promise<string | GatewaySendReceipt>;
+  sendDirectMessage?(req: {
+    target: string;
+    text: string;
+    threadId?: string;
+    blocks?: unknown[];
+  }): Promise<string | GatewaySendReceipt>;
   startListening?(
     callback: (msg: InboundMessage) => void | Promise<void>,
     options?: GatewayListenerOptions
@@ -497,6 +550,15 @@ The `blocks` field is opaque platform-specific data. Currently only the Slack co
 - **Token rotation.** Slack's automatic token rotation is not used. The manifest disables it. Rotate manually by generating a fresh token and pasting it into the channel.
 - **Multiple workspaces / Enterprise Grid.** Each workspace needs its own Slack app and its own bot + app token pair, configured as a separate Agor channel. One token pair maps to one workspace.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
+
+### Discord
+
+- **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text channel with permission to view, read history, and send messages.
+- **Mentions are ignored.** The bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured channel or an existing public thread beneath it.
+- **Content is ignored.** DMs, private threads, attachments, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the beta by design.
+- **Gateway resume.** On PostgreSQL, Discord listener ownership, provider event IDs, and ordered Gateway checkpoints are durable and fenced by the channel tenant and listener lease. A stale or invalid configuration stays inert until corrected.
+- **Proactive replies.** Use `channel:<snowflake>` for the configured channel. Replies to any response chunk use its durable alias and continue the same session; proactive sends do not create automatic threads.
+- **Token safety.** Enter bot tokens through the secure credential UI or token widget. Do not put them in chat or MCP arguments.
 
 ### GitHub
 

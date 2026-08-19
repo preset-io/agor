@@ -96,7 +96,7 @@ describe('isTenantWriteMethodName', () => {
       'patch',
       'remove',
       'upsertBoardObject',
-      'markConsumed',
+      'completeReplyAdmission',
       'setPrimaryTeammate',
       'updateLastMessage',
       'clearZoneReferences',
