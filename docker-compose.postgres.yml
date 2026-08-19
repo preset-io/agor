@@ -11,9 +11,9 @@
 #
 services:
   agor-dev:
-    # Full sandbox environments select this file explicitly, so Compose does
+    # Rich sandbox environments select this file explicitly, so Compose does
     # not auto-load docker-compose.override.yml. Permit Codex's nested Linux
-    # sandbox here as part of the self-contained full environment overlay.
+    # sandbox here as part of the self-contained rich environment overlay.
     security_opt:
       - apparmor=unconfined
       - seccomp=unconfined

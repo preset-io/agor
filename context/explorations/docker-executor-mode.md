@@ -199,7 +199,7 @@ acceptable for a POC, but the design must state it explicitly (see §12 non-goal
   `~/.agor/agentic-tools/<version>/<tool>/` (`agentic-integrations.ts`, `apps/agor-cli/src/commands/install.ts`);
   `AGOR_MANAGED_AGENTIC_TOOLS=1` selects managed vs workspace SDKs. This is the reproducible mechanism
   for baking pinned CLIs into an executor image.
-- `.agor.yml` environment variants (`ha`, `docs`, `full`, `sqlite`, …) are **docker-compose commands that
+- `.agor.yml` environment variants (`ha`, `docs`, `rich`, `sqlite`, …) are **docker-compose commands that
   containerize _Agor-under-development_** — a different axis from Agor's own executor substrate (see §7).
 
 ---
