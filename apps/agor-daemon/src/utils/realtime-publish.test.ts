@@ -26,6 +26,7 @@ import {
   REDIS_FEATHERS_DENIED_PATHS,
   setBranchRemovalRealtimeVisibility,
 } from './realtime-publish';
+import { isRealtimePublishAllowed, realtimePublishPolicyFor } from './realtime-publish-policy';
 
 class FakeChannel {
   constructor(public connections: unknown[]) {}
@@ -2265,5 +2266,337 @@ describe('leaveAllSessionStreamChannels', () => {
       ['session-stream:s1', connection],
       ['session-stream:s2', connection],
     ]);
+  });
+});
+
+/**
+ * The allowlist inverts Feathers' default: the app-level publisher runs for
+ * every service that has no publisher of its own, so a path nobody declared
+ * used to broadcast tenant-wide. These drive the real publisher rather than
+ * inspecting the policy table, so a table entry that the publisher does not
+ * actually honour still fails.
+ */
+describe('configureRealtimePublish default-deny allowlist', () => {
+  const allowlistApp = (connections: unknown[]) =>
+    makeApp(connections, { tasks: { get: vi.fn(async () => ({ session_id: 's1' })) } });
+
+  const rbacRepos = () =>
+    repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+
+  /** runPublish returns a channel, or an array of them, or [] for a denial. */
+  const delivered = (result: unknown): unknown[] => {
+    const channels = (Array.isArray(result) ? result : [result]) as (FakeChannel | undefined)[];
+    return [...new Set(channels.flatMap((channel) => channel?.connections ?? []))];
+  };
+
+  it('publishes an undeclared service to nobody, with branch RBAC off', async () => {
+    const app = allowlistApp([{ user: user('u1') }, { user: user('u2') }]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      ...repos({ branch: branch('b1'), permissions: {} }),
+    });
+
+    const result = await app.runPublish(
+      { branch_id: 'b1', secret: 'sk-live-leak' },
+      { path: 'a-service-nobody-declared', method: 'create', event: 'created', params: {} }
+    );
+
+    expect(delivered(result)).toEqual([]);
+  });
+
+  it('publishes an undeclared service to nobody, with branch RBAC on', async () => {
+    const app = allowlistApp([{ user: user('allowed') }, { user: user('denied') }]);
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+
+    const result = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'a-service-nobody-declared', method: 'create', event: 'created', params: {} }
+    );
+
+    expect(delivered(result)).toEqual([]);
+  });
+
+  it('publishes an undeclared service to nobody even on a service connection', async () => {
+    // Service accounts are the escape hatch every other suppression path keeps
+    // open. An undeclared path has none: nobody decided, so nobody hears it.
+    const executor = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = allowlistApp([executor, { user: user('u1') }]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      ...repos({ branch: branch('b1'), permissions: {} }),
+    });
+
+    const result = await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'a-service-nobody-declared', method: 'patch', event: 'patched', params: {} }
+    );
+
+    expect(delivered(result)).toEqual([]);
+  });
+
+  it('suppresses an event with no path at all', async () => {
+    const app = allowlistApp([{ user: user('u1') }]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      ...repos({ branch: branch('b1'), permissions: {} }),
+    });
+
+    const result = await app.runPublish(
+      { branch_id: 'b1' },
+      { method: 'create', event: 'created' }
+    );
+
+    expect(delivered(result)).toEqual([]);
+  });
+
+  it.each([
+    // The RPC route that leaked a credential-bearing mcp_server row (PR #2451).
+    ['mcp-catalog/connect', { mcp_server: { api_key: 'sk-live-leak' }, session: {} }],
+    // The rest of the credential control plane, each of which emits `created`
+    // with its own response body purely because Feathers registers it.
+    ['config/resolve-api-key', { api_key: 'sk-live-leak' }],
+    ['api/v1/user/api-keys', { key: 'agor_pat_leak' }],
+    ['check-auth', { apiKey: 'sk-live-leak' }],
+    ['mcp-servers/oauth-auth-headers', { Authorization: 'Bearer leak' }],
+    ['mcp-servers/discover', { tools: [] }],
+    ['branches/logs', { logs: 'DATABASE_URL=postgres://user:pw@host/db' }],
+    ['repos/clone', { url: 'https://token@github.com/org/repo' }],
+    ['sessions/:id/fork', { session_id: 's1', branch_id: 'b1' }],
+    ['terminals', { terminal_id: 't1' }],
+  ])('publishes %s to nobody', async (path, data) => {
+    const app = allowlistApp([{ user: user('u1') }, { user: user('u2') }]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      ...repos({ branch: branch('b1'), permissions: {} }),
+    });
+
+    const result = await app.runPublish(data, {
+      path,
+      method: 'create',
+      event: 'created',
+      params: {},
+    });
+
+    expect(delivered(result)).toEqual([]);
+  });
+
+  it('keeps an undeclared event off the Redis relay', async () => {
+    // A denied path must not reach other replicas either — otherwise the leak
+    // just moves one hop and re-enters through the relay handler.
+    const relayed: unknown[] = [];
+    const app = allowlistApp([{ user: user('u1') }]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+      realtimeRelay: {
+        relay: (envelope) => relayed.push(envelope),
+        setRelayHandler: () => {},
+      },
+      ...repos({ branch: branch('b1'), permissions: {} }),
+    });
+
+    await app.runPublish(
+      { mcp_server: { api_key: 'sk-live-leak' } },
+      { path: 'mcp-catalog/connect', method: 'create', event: 'created', params: {} }
+    );
+    // A declared path on the same publisher still relays, so this asserts the
+    // gate rather than a relay that never fires.
+    await app.runPublish(
+      { branch_id: 'b1' },
+      { path: 'branches', method: 'patch', event: 'patched', params: {} }
+    );
+
+    expect(relayed).toHaveLength(1);
+    expect((relayed[0] as { path: string }).path).toBe('branches');
+  });
+
+  describe('declared services still reach their audience', () => {
+    // One case per declared fan-out path. Branch RBAC is ON and only `allowed`
+    // can see branch b1, so a path that silently fell back to a tenant-wide
+    // broadcast — or to nobody — fails here rather than passing by accident.
+    const branchScoped: Array<[string, Record<string, unknown>]> = [
+      ['sessions', { session_id: 's1' }],
+      ['tasks', { session_id: 's1' }],
+      ['messages', { session_id: 's1' }],
+      ['session-mcp-servers', { session_id: 's1' }],
+      ['session-env-selections', { session_id: 's1' }],
+      ['branches', { branch_id: 'b1' }],
+      ['schedules', { branch_id: 'b1' }],
+      ['board-objects', { branch_id: 'b1' }],
+      ['board-comments', { session_id: 's1' }],
+      ['artifacts', { branch_id: 'b1' }],
+    ];
+
+    it.each(branchScoped)('%s reaches the users who can see the branch', async (path, data) => {
+      const allowed = { user: user('allowed') };
+      const denied = { user: user('denied') };
+      const app = allowlistApp([allowed, denied]);
+      configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+
+      const result = await app.runPublish(data, {
+        path,
+        method: 'patch',
+        event: 'patched',
+        params: {},
+      });
+
+      expect(delivered(result)).toEqual([allowed]);
+    });
+
+    it('branches/:id/owners reaches the branch audience via the route id', async () => {
+      const allowed = { user: user('allowed') };
+      const denied = { user: user('denied') };
+      const app = allowlistApp([allowed, denied]);
+      configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+
+      // The payload is a bare User with no branch id — the route param is the
+      // only thing that can scope it.
+      const result = await app.runPublish(
+        { user_id: 'allowed' },
+        {
+          path: 'branches/:id/owners',
+          method: 'create',
+          event: 'created',
+          params: { route: { id: 'b1' } },
+        }
+      );
+
+      expect(delivered(result)).toEqual([allowed]);
+    });
+
+    it('branches/:id/group-grants reaches the branch audience via the route id', async () => {
+      const allowed = { user: user('allowed') };
+      const denied = { user: user('denied') };
+      const app = allowlistApp([allowed, denied]);
+      configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+
+      const result = await app.runPublish(
+        { group_id: 'g1' },
+        {
+          path: 'branches/:id/group-grants',
+          method: 'create',
+          event: 'created',
+          params: { route: { id: 'b1' } },
+        }
+      );
+
+      expect(delivered(result)).toEqual([allowed]);
+    });
+
+    it.each([
+      'boards',
+      'cards',
+      'card-types',
+      'repos',
+      'users',
+      'mcp-servers',
+      'gateway-channels',
+      'agentic-tool-settings',
+    ])('%s reaches the whole tenant', async (path) => {
+      const u1 = { user: user('u1') };
+      const u2 = { user: user('u2') };
+      const app = allowlistApp([u1, u2]);
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: true,
+        ...repos({ branch: branch('b1'), permissions: {} }),
+      });
+
+      const result = await app.runPublish(
+        { some_id: 'x1' },
+        { path, method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([u1, u2]);
+    });
+
+    it('board-objects with no branch attachment still reaches the whole tenant', async () => {
+      const u1 = { user: user('u1') };
+      const u2 = { user: user('u2') };
+      const app = allowlistApp([u1, u2]);
+      configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+
+      const result = await app.runPublish(
+        { board_object_id: 'o1' },
+        { path: 'board-objects', method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([u1, u2]);
+    });
+
+    it.each([
+      'kb/documents',
+      'kb/namespaces',
+      'kb/versions',
+      'kb/graph',
+      'kb/settings',
+      'kb/indexing/status',
+    ])('%s is routed to the Knowledge resolver, not to the tenant', async (path) => {
+      // Without a database the Knowledge resolver can authorize nobody, so it
+      // returns an empty reader set and only service connections receive. What
+      // matters here is that the path is neither denied outright nor allowed to
+      // fall through to the tenant-wide branch — the seeded dbTests above pin
+      // the real reader sets.
+      const service = { user: { _isServiceAccount: true, role: 'service' } };
+      const member = { user: user('u1') };
+      const app = allowlistApp([service, member]);
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: false,
+        ...repos({ branch: branch('b1'), permissions: {} }),
+      });
+
+      const result = await app.runPublish(
+        { document_id: 'd1' },
+        { path, method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([service]);
+    });
+
+    it('still routes executor task control to the private room', async () => {
+      // tasks/messages carry the executor control events, which resolve before
+      // branch scoping. The gate must not swallow them.
+      const browser = { user: user('browser') };
+      const executor = { user: user('executor') };
+      const room = executorTaskChannelName('tenant-a', 'task-1');
+      const app = makeApp([browser, executor], {}, { [room]: [executor] });
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: false,
+        multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+        ...repos({ branch: branch('b1'), permissions: {} }),
+      });
+
+      const result = await app.runPublish(
+        { task_id: 'task-1', status: 'stopping' },
+        { path: 'tasks', method: 'patch', event: 'termination_requested', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([executor]);
+    });
+  });
+
+  it('declares an audience for every path the publisher special-cases', () => {
+    // The publisher names these paths directly (streaming, executor control,
+    // Redis denial). If one were dropped from the policy the gate would deny it
+    // before that special case ever ran.
+    for (const path of ['messages', 'tasks', 'branches', 'artifacts', 'messages/streaming']) {
+      expect(realtimePublishPolicyFor(path), `${path} is not declared`).toBeDefined();
+    }
+    // Conversely, everything the Redis denylist protects must be denied here
+    // too — the allowlist is meant to be the stricter of the two.
+    for (const path of REDIS_FEATHERS_DENIED_PATHS) {
+      expect(isRealtimePublishAllowed(path), `${path} may publish`).toBe(false);
+    }
   });
 });

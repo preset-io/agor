@@ -36,6 +36,11 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
+import {
+  isRealtimePublishAllowed,
+  type RealtimePublishAudience,
+  realtimePublishPolicyFor,
+} from './realtime-publish-policy.js';
 
 export const BRANCH_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBranchRemovalVisibility';
 
@@ -236,15 +241,15 @@ type PublishScope =
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
-const BRANCH_ID_SCOPED_PATHS = new Set(['branches', 'schedules']);
-const ROUTE_BRANCH_ID_SCOPED_PATHS = new Set(['branches/:id/owners', 'branches/:id/group-grants']);
-const SESSION_ID_SCOPED_PATHS = new Set([
-  'tasks',
-  'messages',
-  'session-mcp-servers',
-  'session-env-selections',
-]);
-const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
+/**
+ * The declared audience for a path, or `undefined` when it was never declared.
+ * `undefined` is a DENY here, not a default — see `realtime-publish-policy.ts`.
+ * Every scoping decision below reads from that one table so the audiences a
+ * reviewer sees listed are the audiences the publisher actually applies.
+ */
+function audienceFor(path: string | null | undefined): RealtimePublishAudience | undefined {
+  return realtimePublishPolicyFor(path)?.audience;
+}
 
 // Authentication and credential control-plane results must never enter shared
 // Redis, even if a future service accidentally enables publication for them.
@@ -340,7 +345,7 @@ function extractBranchId(data: unknown, context: PublishContext): string | undef
   const record = asRecord(data);
   const routeBranchId = (context.params as { route?: { id?: unknown } } | undefined)?.route?.id;
   if (
-    ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path ?? '') &&
+    audienceFor(context.path) === 'branch-route' &&
     typeof routeBranchId === 'string' &&
     routeBranchId.length > 0
   ) {
@@ -491,53 +496,53 @@ async function resolvePublishScope(
   context: PublishContext,
   accessCache: RealtimeAccessCache
 ): Promise<PublishScope> {
-  if (!context.path) return { kind: 'global' };
+  switch (audienceFor(context.path)) {
+    case 'branch':
+    case 'branch-route': {
+      const branchId = extractBranchId(data, context);
+      return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
+    }
 
-  if (BRANCH_ID_SCOPED_PATHS.has(context.path) || ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path)) {
-    const branchId = extractBranchId(data, context);
-    return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
+    case 'branch-or-session': {
+      // Hot session/message/task paths must carry branch_id or session_id —
+      // custom `sessions` events carry camelCase `sessionId` rather than the
+      // row's `branch_id`. Avoid message/task fallback lookups here so
+      // malformed streaming events fail closed instead of doing DB work per
+      // chunk.
+      const branchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
+      return { kind: 'branch', branchId: branchId ?? null };
+    }
+
+    case 'branch-optional': {
+      const resolvedBranchId = await resolveBranchIdFromSessionTaskOrMessage(
+        data,
+        context,
+        accessCache
+      );
+      if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
+
+      // These services can also emit global/card/board rows with no branch,
+      // session, task, or message attachment.
+      return { kind: 'global' };
+    }
+
+    case 'artifact': {
+      const branchId = extractBranchId(data, context);
+      if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
+
+      // Null-branch artifacts are not covered by branch visibility. Keep
+      // delivery narrow to the creator/admins when the creator is known,
+      // otherwise service connections only.
+      const createdBy = extractCreatedBy(data);
+      return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
+    }
+
+    // 'knowledge' never reaches here — resolveKnowledgeRealtimeUserIds answers
+    // for every `kb/*` path earlier in resolveDelivery. 'tenant' is the only
+    // remaining declared audience, and 'none'/undefined were denied at the gate.
+    default:
+      return { kind: 'global' };
   }
-
-  if (context.path === 'sessions') {
-    // Custom sessions events carry camelCase `sessionId` instead of the
-    // session row's `branch_id`.
-    const resolvedBranchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
-    return { kind: 'branch', branchId: resolvedBranchId ?? null };
-  }
-
-  if (SESSION_ID_SCOPED_PATHS.has(context.path)) {
-    // Hot message/task paths must carry branch_id or session_id. Avoid
-    // message/task fallback lookups here so malformed streaming events fail
-    // closed instead of doing DB work per chunk.
-    const branchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
-    return { kind: 'branch', branchId: branchId ?? null };
-  }
-
-  if (OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS.has(context.path)) {
-    const resolvedBranchId = await resolveBranchIdFromSessionTaskOrMessage(
-      data,
-      context,
-      accessCache
-    );
-    if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
-
-    // These services can also emit global/card/board rows with no branch,
-    // session, task, or message attachment.
-    return { kind: 'global' };
-  }
-
-  if (context.path === 'artifacts') {
-    const branchId = extractBranchId(data, context);
-    if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
-
-    // Null-branch artifacts are not covered by branch visibility. Keep delivery
-    // narrow to the creator/admins when the creator is known, otherwise service
-    // connections only.
-    const createdBy = extractCreatedBy(data);
-    return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
-  }
-
-  return { kind: 'global' };
 }
 
 function filterToServiceConnections(authenticated: PublishChannel): PublishChannel {
@@ -739,11 +744,17 @@ function resolveRealtimeTenantId(
 /**
  * Register the single global Feathers publish handler.
  *
- * In open-access mode this preserves the legacy behavior: every authenticated
- * socket receives every service event. When branch RBAC is enabled, events for
- * branch/session-scoped resources are reduced to authenticated connections whose
- * user currently has at least `view` permission for the event's branch. Service
- * executor sockets remain trusted so prompt/permission plumbing keeps working.
+ * Nothing publishes unless `realtime-publish-policy.ts` says who may hear it.
+ * That gate runs first and is independent of branch RBAC: an undeclared path
+ * reaches nobody at all, service connections included, and never enters the
+ * Redis relay.
+ *
+ * For a path that IS declared, the audience is then narrowed as before. In
+ * open-access mode a declared service reaches every authenticated socket in the
+ * tenant. When branch RBAC is enabled, events for branch/session-scoped
+ * resources are reduced to authenticated connections whose user currently has
+ * at least `view` permission for the event's branch. Service executor sockets
+ * remain trusted so prompt/permission plumbing keeps working.
  */
 export function configureRealtimePublish(options: RealtimePublishOptions): void {
   const {
@@ -762,6 +773,15 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   } = options;
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
+    // Default-deny. Feathers routes EVERY service event that has no publisher
+    // of its own through this handler, so an undeclared path is one nobody
+    // decided about — including the RPC routes that emit their own response
+    // body as `created`. Suppressing here also keeps the event off the Redis
+    // relay below, because `tenantId` stays undefined.
+    if (!isRealtimePublishAllowed(context.path)) {
+      return { delivery: [] as PublishChannel[], tenantId: undefined };
+    }
+
     const authenticated = app.channel('authenticated');
     if (context.path && isKnowledgeRealtimeSuppressedEvent(context.path, context.event)) {
       return { delivery: authenticated.filter(() => false), tenantId: undefined };

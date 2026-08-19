@@ -93,6 +93,7 @@ import { deepFreezeClone } from './utils/deep-freeze.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
+import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
@@ -870,6 +871,15 @@ async function startDaemonWithOwnedMetrics(
     sessionEnvSelectionsService: services.sessionEnvSelectionsService,
     terminalsService: services.terminalsService,
   });
+
+  // --------------------------------------------------------------------------
+  // Phase 3.5: Every registered service must have declared its realtime
+  // audience. Undeclared services publish to nobody, which is the safe failure
+  // but an invisible one — so refuse to boot rather than let realtime for a new
+  // service quietly do nothing. Deterministic: it reads the registration table,
+  // not request data.
+  // --------------------------------------------------------------------------
+  assertRealtimePublishPolicyCoverage(app);
 
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)
