@@ -83,18 +83,34 @@ and isn't:
   thing between the model and a switched-off tool there. There is no prompt to
   fall back on and no `canUseTool` equivalent.
 
-### OpenCode's throw is deliberate — leave it
+### Correction: there is no OpenCode "fail-closed throw"
 
-OpenCode's declarative config _is_ its enforcement boundary; there is no
-call-time hook to fall back on. The fail-closed throw is what keeps a `deny`
-meaningful there, and it should not be relaxed to make anything else easier.
+An earlier revision of this note described a deliberate throw guarding
+`tool_permissions` on OpenCode. **No such throw exists.** A gated server is
+dropped by `scoping.ts:297-307`, exactly like Copilot and Cursor — the table
+row above is right and that prose was wrong. The throws in `opencode-tool.ts`
+cover a missing dependency, malformed or unauthenticated config, and a failed
+permission round-trip; none of them is about `tool_permissions`.
+
+The claim was inherited from the task framing and restated without being
+checked. It is recorded here rather than silently deleted because it was
+repeated onward as fact.
 
 ## 3. The actual gap: nothing writes `tool_permissions`
 
-Searched every write path. The field has exactly one writer:
+Searched every write path. The wire is open — `tool_permissions` is part of
+`UpdateMCPServerInput`, the Feathers service patches with that type, and the
+repository spreads it through with no field allowlist, so **any user authorised
+to edit the server can set it over REST or socket today**. What is missing is
+anything that _offers_ to.
+
+The only caller that does is:
 
 - `apps/agor-daemon/src/mcp/tools/mcp-servers.ts:871` — the
   `agor_mcp_servers_update` MCP admin tool, i.e. an agent calling Agor's own API.
+
+That the transport already works is good news for §5: the remaining gap is a
+form control, not a new API.
 
 And specifically **not**:
 
@@ -106,14 +122,16 @@ And specifically **not**:
 
 Consequences, stated plainly:
 
-1. For all 47 marketplace entries, `tool_permissions` is empty, so
+1. For all 48 marketplace entries, `tool_permissions` is empty, so
    `canEnforceMcpToolPermissions` returns `true` trivially, nothing is withheld,
    nothing is excluded, and **every tool the server exposes is callable** —
    including the destructive ones the disclosure describes.
 2. The disclosure is therefore prose the user acknowledges and nothing acts on.
    It is accurate about what the server _can_ do; it is not a control.
-3. `others_can`, OAuth scope, and server-level `enabled` are the only real
-   narrowing available today. None of them is per-tool.
+3. The real narrowings available today are `mcp_member_policy`, `owner_user_id`
+   privacy, and the per-session attachment `enabled` flag. None is per-tool.
+   (`others_can` is branch RBAC and is not consulted anywhere on the MCP paths;
+   an earlier revision listed it here in error.)
 
 ## 4. What was changed in this PR, and what wasn't
 
@@ -154,7 +172,7 @@ Roughly in order of value:
    list, so it cannot be mechanically turned into permissions. Making the
    disclosure enforceable would mean adding a structured field to
    `curated.yaml` — e.g. `default_denied_tools` — and seeding from it at connect
-   time. That is a curation cost across 47 entries and a change to the connect
+   time. That is a curation cost across 48 entries and a change to the connect
    path; worth it only if the product intends the disclosure to be a contract
    rather than a description.
 
