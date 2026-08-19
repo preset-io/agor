@@ -8,6 +8,24 @@ import styles from './LandingPage.module.css';
  * (infra-forward vs. relatable/outcome language) intentionally varies by
  * audience per the messaging thread; everything below the hero is shared
  * and unchanged so the test isolates the hero thesis, not the page.
+ *
+ * Exp 2 (Aug 2026) — problem-sell vs. solution-sell framing test. Each of
+ * the two Phase-1 conversion winners gained a counterpart page, so the
+ * theme is held constant while only the framing varies. Pairing:
+ * /not-alone <-> /not-alone-problem hold the collaboration theme;
+ * /costs-under-control <-> /costs-under-control-solution hold the
+ * cost / no-lock-in theme. Page column below is the /<slug> route.
+ *
+ * | Page | Variant key | Framing | Changed |
+ * | --- | --- | --- | --- |
+ * | not-alone | technical-collaboration | solution | sub-only¹ |
+ * | not-alone-problem | technical-collaboration-problem | problem | new |
+ * | costs-under-control | cost-control | problem | reframed² |
+ * | costs-under-control-solution | cost-control-solution | solution | new |
+ *
+ * ¹ headline unchanged (proven high-converting); only subheadline changed.
+ * ² reframed to vendor lock-in + spend; dropped the old "governance,
+ *   observability, model agnosticism" line.
  */
 export type HeroVariantKey =
   | 'technical-collaboration'
