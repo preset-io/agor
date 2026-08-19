@@ -173,9 +173,7 @@ describe('OnboardingWizard', () => {
     }
     // Title + description still render.
     expect(screen.getByText('Hand off the build')).toBeInTheDocument();
-    expect(
-      screen.getByText('A working app, dashboard, or prototype — live on your board, ready to use.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('A working app or dashboard, live on your board.')).toBeInTheDocument();
   });
 
   it('gives every goal card an even title→description gap and equal-height cards', () => {
@@ -557,7 +555,7 @@ describe('OnboardingWizard', () => {
 
     clickButton(/^continue →/i); // workspace → llm
     await findAndClickButton(/skip for now/i); // llm
-    clickButton(/open my board/i);
+    clickButton(/meet rusty/i); // named teammate → verb-first primary CTA
 
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -670,13 +668,9 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — with a model connected the app shell *does* seed a first session,
-    // so the summary is allowed to promise one. The skipped-LLM flow asserts
-    // the other half of this below.
+    // done — the primary CTA is now verb-first + named ("Meet Rusty →").
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(screen.getByText(/start your first AI session/i)).toBeInTheDocument();
-    expect(screen.queryByText(/connect an ai model in settings whenever/i)).not.toBeInTheDocument();
-    clickButton(/open my board/i);
+    clickButton(/meet rusty/i);
 
     // The wizard emits the teammate naming details + selected agent so the app
     // shell can seed the first AI teammate on the created board. No template was
@@ -734,6 +728,11 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Claude')).toBeInTheDocument();
     expect(screen.queryByText('AI connected')).not.toBeInTheDocument();
     expect(screen.queryByText('MCP tools')).not.toBeInTheDocument();
+    // The single primary action is verb-first + named (into the activation moment),
+    // and the recap sits under a muted "What we set up" caption as clearly secondary.
+    expect(screen.getByText(/^meet rusty →$/i)).toBeInTheDocument();
+    expect(screen.getByText('What we set up')).toBeInTheDocument();
+    expect(screen.queryByText(/open my board/i)).not.toBeInTheDocument();
   });
 
   it('done step shows skip hints when goals/template/provider were skipped', async () => {

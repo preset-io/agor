@@ -765,8 +765,13 @@ export function OnboardingWizard({
       }
       case 'workspace':
         return hasExistingBoard ? 'Keep going →' : 'Continue →';
-      case 'done':
-        return completing ? 'Setting up your AI teammate…' : 'Open my board →';
+      case 'done': {
+        const name = teammateName.trim();
+        if (completing) return name ? `Setting up ${name}…` : 'Setting up your AI teammate…';
+        // Verb-first primary action into the activation moment — the teammate's
+        // first session — named when we have a name, generic board-open otherwise.
+        return name ? `Meet ${name} →` : 'Open my board →';
+      }
     }
   }, [
     currentStep,
@@ -775,6 +780,7 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     agentIsVerifiedConnected,
+    teammateName,
   ]);
 
   const canGoBack = stepIndex > 0;
@@ -1092,8 +1098,7 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge(goalsTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
-          Pick up to two — we'll shape your first session around them. Not sure yet? You can skip
-          this.
+          Pick up to two — we'll shape your first session around them. You can skip this.
         </Paragraph>
 
         <div
@@ -1187,8 +1192,7 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge('Connect your AI')}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Choose a model and connect it. This powers everything - you can change it anytime in
-          Settings.
+          Choose a model and connect it — it powers your teammate. Change it anytime in Settings.
         </Paragraph>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
@@ -1558,8 +1562,8 @@ export function OnboardingWizard({
           .ant-modal-content and mismatches. */}
       {renderStepBadge('Name your AI teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Name your teammate, then pick a starter template to shape what they do — or start blank. You
-        can change everything anytime.
+        Name your teammate and pick a starter template to shape what they do — or start blank.
+        Change anything later.
       </Paragraph>
 
       <TeammateGallery
@@ -1726,13 +1730,26 @@ export function OnboardingWizard({
         <Paragraph
           style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
         >
-          {/* Without a model there is no first session to open — the completion
-              handler deliberately stops at the board. Don't promise one. */}
-          {aiConnected
-            ? 'Open your board to start your first AI session.'
-            : 'Open your board to get started. Connect an AI model in Settings whenever you are ready.'}
+          {teammateName.trim()
+            ? `${teammateName.trim()} is set up and waiting on your board.`
+            : 'Open your board to start your first AI session.'}
         </Paragraph>
 
+        {/* Recap — deliberately secondary to the primary CTA below: a muted
+            caption + quiet glass card, not a competing call to action. */}
+        <Text
+          style={{
+            display: 'block',
+            textAlign: 'left',
+            color: TEXT_MUTED,
+            fontSize: 11,
+            textTransform: 'uppercase',
+            letterSpacing: 0.4,
+            marginBottom: 6,
+          }}
+        >
+          What we set up
+        </Text>
         {/* Summary checklist */}
         <div
           style={{
@@ -1869,7 +1886,10 @@ export function OnboardingWizard({
         mask={true}
         keyboard={false}
         footer={null}
-        width={600}
+        // Widened from 600 → 730 so step-2's gallery fits 3 cards per row while
+        // the step-1 goal cards (explicit 2-col grid) simply get more room, keeping
+        // their titles on one line.
+        width={730}
         // Vertically center instead of antd's default fixed top:100 so the
         // footer stays on-screen on shorter laptop viewports (the content
         // region's vh cap keeps header + grid + footer within the viewport).

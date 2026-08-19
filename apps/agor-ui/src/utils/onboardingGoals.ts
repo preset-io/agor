@@ -116,16 +116,16 @@ export const DEFAULT_MCP_REC_IDS = ['slack', 'github', 'linear', 'notion'];
 export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'personal-teammate',
-    title: 'Get my own personal teammate',
-    description: 'Keeps up with Slack and recurring updates so you don’t have to.',
+    title: 'Get a personal teammate',
+    description: 'Keeps up with Slack and your updates, so you don’t have to.',
     mcpRecs: ['slack'],
     bootstrapLine:
       'Desired outcome: a useful recurring brief from connected sources. A first win is a Slack digest based on the channels they care about.',
   },
   {
     id: 'status-updates',
-    title: 'Never chase a status update again',
-    description: 'Meeting notes, action items, and project updates — drafted for you.',
+    title: 'Never chase an update',
+    description: 'Notes, action items, and status — drafted for you.',
     mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
     bootstrapLine:
       'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
@@ -140,8 +140,8 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'team-teammate',
-    title: 'Give my team an AI teammate',
-    description: "One helper who knows everyone's Slack, docs, and boards — not just yours.",
+    title: 'A teammate for the team',
+    description: "Knows everyone's Slack, docs, and boards — not just yours.",
     mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
     bootstrapLine:
       'Desired outcome: a shared teammate for repeated team work. A first win is identifying one repeated workflow to run from the team board.',
@@ -149,7 +149,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'hand-off-build',
     title: 'Hand off the build',
-    description: 'A working app, dashboard, or prototype — live on your board, ready to use.',
+    description: 'A working app or dashboard, live on your board.',
     mcpRecs: ['github', 'figma'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
@@ -157,7 +157,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'dig-into-anything',
     title: 'Dig into anything',
-    description: 'Ask a question, get real research back — competitors, markets, data.',
+    description: 'Ask a question, get real research back.',
     mcpRecs: ['amplitude', 'hubspot'],
     bootstrapLine:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
