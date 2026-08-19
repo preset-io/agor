@@ -166,7 +166,11 @@ export async function refreshMCPToken(
 }
 
 type MutexKey = string;
-const _inFlightRefreshes = new Map<MutexKey, Promise<string>>();
+interface StandaloneRefreshFlight {
+  version: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>;
+  promise: Promise<string>;
+}
+const _inFlightRefreshes = new Map<MutexKey, StandaloneRefreshFlight>();
 export function __resetRefreshMutexForTests(): void {
   _inFlightRefreshes.clear();
 }
@@ -183,11 +187,11 @@ export interface RefreshAndPersistDeps {
   userId: UserID | null;
   mcpServerId: MCPServerID;
   /**
-   * Version read by the caller when it decided a PostgreSQL refresh was
-   * needed. Required at runtime for PostgreSQL so a delayed caller cannot
-   * refresh a peer's newly rotated token.
+   * Exact version read by the caller when it decided a refresh was needed.
+   * Both database implementations fence the exchange and any joined refresh
+   * result to this version so a stale caller cannot adopt a replacement grant.
    */
-  observedRefreshVersion?: MCPOAuthRefreshVersion;
+  observedRefreshVersion: MCPOAuthRefreshVersion;
   /**
    * Re-resolve the authoritative saved server and verify this exact grant's
    * binding inside the supplied database unit. Daemon callers acquire the
@@ -209,6 +213,16 @@ function exactGrantMatches(
   return (
     (token.grant_generation ?? 0) === expected.grantGeneration &&
     (token.grant_binding_fingerprint ?? undefined) === expected.grantBindingFingerprint
+  );
+}
+
+function exactGrantVersionsMatch(
+  left: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>,
+  right: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>
+): boolean {
+  return (
+    left.grantGeneration === right.grantGeneration &&
+    left.grantBindingFingerprint === right.grantBindingFingerprint
   );
 }
 
@@ -436,15 +450,31 @@ async function assertGrantSubjectForRefresh(
   });
 }
 
-async function refreshStandalone(deps: RefreshAndPersistDeps): Promise<string> {
+async function loadObservedStandaloneGrant(
+  deps: RefreshAndPersistDeps,
+  expected: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>
+): Promise<UserMCPOAuthToken> {
   const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
   const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
-  if (!row?.oauth_refresh_token) throw new MissingRefreshTokenError();
-  const exactGrantVersion = {
-    grantGeneration: row.grant_generation ?? 0,
-    grantBindingFingerprint: row.grant_binding_fingerprint,
-  };
+  if (!row) throw new MissingRefreshTokenError();
+  if (!exactGrantMatches(row, expected)) throw new GrantConfigurationChangedError();
   await assertGrantStillAuthorized(deps, row, deps.db);
+  return row;
+}
+
+async function refreshStandalone(
+  deps: RefreshAndPersistDeps,
+  observedVersion: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>
+): Promise<string> {
+  const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
+  const exactGrantVersion = {
+    grantGeneration: observedVersion.grantGeneration,
+    grantBindingFingerprint: observedVersion.grantBindingFingerprint,
+  };
+  // Repeat the caller-bound check inside the mutex owner. The saved row may
+  // have changed after the pre-mutex validation but before this promise ran.
+  const row = await loadObservedStandaloneGrant(deps, exactGrantVersion);
+  if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
   const server = await new MCPServerRepository(deps.db as Database).findById(deps.mcpServerId);
   const clientId = row.oauth_client_id ?? server?.auth?.oauth_client_id;
   if (!clientId) throw new MissingClientIdError();
@@ -496,15 +526,39 @@ async function refreshStandalone(deps: RefreshAndPersistDeps): Promise<string> {
 
 export async function refreshAndPersistToken(deps: RefreshAndPersistDeps): Promise<string> {
   if (isPostgresDatabaseHandle(deps.db)) return refreshPostgres(deps);
+  const expected = deps.observedRefreshVersion;
+  if (!expected) {
+    throw new Error('Standalone MCP OAuth refresh requires an observed grant version');
+  }
+
+  // Validate the caller's exact observation before it may create or join a
+  // user/server mutex. A caller authorized against an old row must not learn,
+  // refresh, or invalidate the replacement row occupying the same subject.
+  await loadObservedStandaloneGrant(deps, expected);
   const key = mutexKey(deps.userId, deps.mcpServerId);
   const existing = _inFlightRefreshes.get(key);
-  if (existing) return existing;
-  const refresh = refreshStandalone(deps);
-  _inFlightRefreshes.set(key, refresh);
+  if (existing) {
+    if (!exactGrantVersionsMatch(existing.version, expected)) {
+      throw new GrantConfigurationChangedError();
+    }
+    const result = await existing.promise;
+    // A Settings mutation or replacement may have landed while this caller
+    // was awaiting another request's exchange. Fence the shared result too.
+    await loadObservedStandaloneGrant(deps, expected);
+    return result;
+  }
+  const flight: StandaloneRefreshFlight = {
+    version: {
+      grantGeneration: expected.grantGeneration,
+      grantBindingFingerprint: expected.grantBindingFingerprint,
+    },
+    promise: refreshStandalone(deps, expected),
+  };
+  _inFlightRefreshes.set(key, flight);
   try {
-    return await refresh;
+    return await flight.promise;
   } finally {
-    _inFlightRefreshes.delete(key);
+    if (_inFlightRefreshes.get(key) === flight) _inFlightRefreshes.delete(key);
   }
 }
 

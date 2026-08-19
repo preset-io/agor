@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
 import { openMCPOAuthSecret, sealMCPOAuthSecret } from '../oauth-secret-envelope';
@@ -417,7 +417,7 @@ export class UserMCPOAuthTokenRepository {
             binding
               ? and(
                   matchKey(userId, serverId),
-                  sql`${userMcpOauthTokens.grant_generation} <= ${binding.generation}`
+                  lt(userMcpOauthTokens.grant_generation, binding.generation)
                 )
               : matchKey(userId, serverId)
           )

@@ -10,8 +10,13 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockGetOAuthToken, mockGrantAuthority } = vi.hoisted(() => ({
+const { mockGetOAuthToken, mockFindMCPServer, mockGrantAuthority } = vi.hoisted(() => ({
   mockGetOAuthToken: vi.fn(async () => null),
+  mockFindMCPServer: vi.fn(async (mcpServerId: string) => ({
+    mcp_server_id: mcpServerId,
+    enabled: true,
+    auth: { type: 'oauth', oauth_mode: 'per_user' },
+  })),
   mockGrantAuthority: vi.fn(async () => true),
 }));
 
@@ -24,6 +29,9 @@ vi.mock('../resolve-ids.js', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class FakeBranchRepository {},
+  MCPServerRepository: class FakeMCPServerRepository {
+    findById = mockFindMCPServer;
+  },
   UserMCPOAuthTokenRepository: class FakeUserMCPOAuthTokenRepository {
     getToken = mockGetOAuthToken;
   },
@@ -35,6 +43,11 @@ vi.mock('../../services/mcp-oauth-grant-authority.js', () => ({
 
 beforeEach(() => {
   mockGetOAuthToken.mockReset().mockResolvedValue(null);
+  mockFindMCPServer.mockReset().mockImplementation(async (mcpServerId: string) => ({
+    mcp_server_id: mcpServerId,
+    enabled: true,
+    auth: { type: 'oauth', oauth_mode: 'per_user' },
+  }));
   mockGrantAuthority.mockReset().mockResolvedValue(true);
 });
 

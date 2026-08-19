@@ -1511,16 +1511,25 @@ export async function registerMCPServices(
   // Store pending OAuth flow contexts
   const pendingOAuthFlows = new Map<string, PendingOAuthFlow>();
   // SQLite has no cross-process flow, but callbacks and Settings mutations can
-  // interleave within this daemon. A monotonic per-subject generation prevents
-  // an older exchange from replacing a newer completed authorization.
-  const localOAuthGrantGenerations = new Map<string, { generation: number; reservedAt: number }>();
+  // interleave within this daemon. Keep every active attempt represented and
+  // allocate from a process-lifetime monotonic high-water mark: releasing a
+  // newer failed attempt must never make an older generation reusable (ABA).
+  const localOAuthGrantReservations = new Map<
+    string,
+    Map<MCPOAuthAttemptID, { generation: number; reservedAt: number }>
+  >();
+  let localOAuthGrantGenerationHighWater = 0;
   const releaseLocalGrantGeneration = (flow: PendingOAuthFlow): void => {
     if (!flow.localGrantSubjectKey || !flow.localGrantBinding) return;
-    const reserved = localOAuthGrantGenerations.get(flow.localGrantSubjectKey);
-    // A newer in-flight attempt for the same subject owns a higher reservation.
-    // Never let an older callback release that fence.
+    const subjectReservations = localOAuthGrantReservations.get(flow.localGrantSubjectKey);
+    const reserved = subjectReservations?.get(flow.attemptId);
+    // Release only this attempt. A different attempt may never free or replace
+    // an exchanging callback's active generation authority.
     if (reserved?.generation === flow.localGrantBinding.generation) {
-      localOAuthGrantGenerations.delete(flow.localGrantSubjectKey);
+      subjectReservations!.delete(flow.attemptId);
+      if (subjectReservations!.size === 0) {
+        localOAuthGrantReservations.delete(flow.localGrantSubjectKey);
+      }
     }
   };
   const localOAuthAttemptStatuses = new Map<
@@ -1582,9 +1591,14 @@ export async function registerMCPServices(
     // an unexpected local failure before its terminal-status path ran. OAuth
     // provider exchanges are bounded to seconds; after the full flow TTL no
     // live exchange can safely depend on the process-local reservation.
-    for (const [subjectKey, reservation] of localOAuthGrantGenerations) {
-      if (now - reservation.reservedAt > LOCAL_OAUTH_FLOW_TTL_MS) {
-        localOAuthGrantGenerations.delete(subjectKey);
+    for (const [subjectKey, reservations] of localOAuthGrantReservations) {
+      for (const [attemptId, reservation] of reservations) {
+        if (now - reservation.reservedAt > LOCAL_OAUTH_FLOW_TTL_MS) {
+          reservations.delete(attemptId);
+        }
+      }
+      if (reservations.size === 0) {
+        localOAuthGrantReservations.delete(subjectKey);
       }
     }
     for (const [attemptId, attempt] of localOAuthAttemptStatuses) {
@@ -1793,6 +1807,11 @@ export async function registerMCPServices(
       }
     }
 
+    // Local reservations are attempt-aware, so establish identity before
+    // allocating a generation. PostgreSQL obtains its durable attempt ID from
+    // the pending-flow authority below instead.
+    const localAttemptId = durableOAuthFlows ? undefined : (generateId() as MCPOAuthAttemptID);
+
     const context = await startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
       authorizationUrlOverride: effectiveAuthorizationUrlOverride,
       tokenUrlOverride: effectiveTokenUrlOverride,
@@ -1859,11 +1878,16 @@ export async function registerMCPServices(
           currentServer.mcp_server_id
         );
         const generation =
-          Math.max(
-            existingGrant?.grant_generation ?? 0,
-            localOAuthGrantGenerations.get(subjectKey)?.generation ?? 0
-          ) + 1;
-        localOAuthGrantGenerations.set(subjectKey, { generation, reservedAt: Date.now() });
+          Math.max(existingGrant?.grant_generation ?? 0, localOAuthGrantGenerationHighWater) + 1;
+        if (!Number.isSafeInteger(generation)) {
+          throw new Error('Standalone OAuth grant generation authority is exhausted');
+        }
+        localOAuthGrantGenerationHighWater = generation;
+        const subjectReservations =
+          localOAuthGrantReservations.get(subjectKey) ??
+          new Map<MCPOAuthAttemptID, { generation: number; reservedAt: number }>();
+        subjectReservations.set(localAttemptId!, { generation, reservedAt: Date.now() });
+        localOAuthGrantReservations.set(subjectKey, subjectReservations);
         localGrantSubjectKey = subjectKey;
         const version = grantBindingVersionForCompatibilityMode(context.compatibilityMode);
         return {
@@ -1913,7 +1937,7 @@ export async function registerMCPServices(
             ),
           });
         })
-      : (generateId() as MCPOAuthAttemptID);
+      : localAttemptId!;
 
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
     let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;

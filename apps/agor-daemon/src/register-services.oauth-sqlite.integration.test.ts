@@ -60,13 +60,20 @@ type TestProvider = {
 };
 
 async function createTestProvider(
-  options: { holdToken?: boolean; holdRefresh?: boolean; invalidRefresh?: boolean } = {}
+  options: {
+    holdToken?: boolean;
+    holdTokenRequests?: number[];
+    numberedTokenResponses?: boolean;
+    holdRefresh?: boolean;
+    invalidRefresh?: boolean;
+  } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
   const tokenRequested = deferred<void>();
   const release = deferred<void>();
   const refreshRequested = deferred<void>();
   const releaseRefresh = deferred<void>();
+  let tokenRequestCount = 0;
   let baseUrl = '';
 
   const server = http.createServer(async (request, response) => {
@@ -127,13 +134,20 @@ async function createTestProvider(
         );
         return;
       }
+      tokenRequestCount += 1;
       tokenRequested.resolve();
-      if (options.holdToken) await release.promise;
+      if (options.holdToken || options.holdTokenRequests?.includes(tokenRequestCount)) {
+        await release.promise;
+      }
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
-          access_token: 'sqlite-access-token',
-          refresh_token: 'refresh',
+          access_token: options.numberedTokenResponses
+            ? `sqlite-access-token-${tokenRequestCount}`
+            : 'sqlite-access-token',
+          refresh_token: options.numberedTokenResponses
+            ? `refresh-${tokenRequestCount}`
+            : 'refresh',
           expires_in: 3600,
         })
       );
@@ -212,6 +226,7 @@ type SQLiteHarness = {
   server: MCPServer;
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
+  deny: (state: string) => Promise<{ status: number; body: string }>;
 };
 
 async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 'shared') {
@@ -264,6 +279,29 @@ async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 's
     deployment: {} as RegisterServicesContext['deployment'],
   });
 
+  const invokeCallback = async (
+    query: Record<string, string>
+  ): Promise<{ status: number; body: string }> => {
+    let status = 200;
+    let body = '';
+    const response = {
+      setHeader: vi.fn(),
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      send(value: string) {
+        body = value;
+        return this;
+      },
+    };
+    await (oauthCallbackHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(
+      { query },
+      response
+    );
+    return { status, body };
+  };
+
   return {
     app,
     db,
@@ -275,26 +313,9 @@ async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 's
       nextUrl = deferred<string>();
       return value;
     },
-    callback: async (state: string) => {
-      let status = 200;
-      let body = '';
-      const response = {
-        setHeader: vi.fn(),
-        status(code: number) {
-          status = code;
-          return this;
-        },
-        send(value: string) {
-          body = value;
-          return this;
-        },
-      };
-      await (oauthCallbackHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-        { query: { code: 'authorization-code', state, iss: provider.baseUrl } },
-        response
-      );
-      return { status, body };
-    },
+    callback: (state: string) =>
+      invokeCallback({ code: 'authorization-code', state, iss: provider.baseUrl }),
+    deny: (state: string) => invokeCallback({ error: 'access_denied', state }),
   } satisfies SQLiteHarness;
 }
 
@@ -600,6 +621,102 @@ describe('SQLite saved-row OAuth authority', () => {
     ).resolves.toMatchObject({
       grant_generation: generation,
       oauth_access_token: 'new-authorization-access-token',
+    });
+  });
+
+  it('never reuses a released generation while an older callback is exchanging', async () => {
+    const provider = await createTestProvider({
+      holdTokenRequests: [1],
+      numberedTokenResponses: true,
+    });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+
+    const start = async (): Promise<string> => {
+      const result = (await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+        authorizationUrl: string;
+      };
+      return new URL(result.authorizationUrl).searchParams.get('state')!;
+    };
+
+    // A owns generation 1 and has already been claimed/removed from pending
+    // state, but its provider exchange remains active.
+    const stateA = await start();
+    const callbackA = harness.callback(stateA);
+    await provider.tokenRequested.promise;
+
+    // B owns generation 2, then fails and releases only its own reservation.
+    const stateB = await start();
+    expect((await harness.deny(stateB)).status).toBe(400);
+
+    // C must allocate generation 3, never reuse generation 1 after B releases.
+    const stateC = await start();
+    expect((await harness.callback(stateC)).status).toBe(200);
+    const repository = new UserMCPOAuthTokenRepository(harness.rawDb);
+    await expect(
+      repository.getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      grant_generation: 3,
+      oauth_access_token: 'sqlite-access-token-2',
+      oauth_refresh_token: 'refresh-2',
+    });
+
+    // When A eventually completes, older/equal-generation update fencing and
+    // exact deletion must leave C's grant untouched.
+    provider.releaseToken();
+    expect((await callbackA).status).not.toBe(200);
+    await expect(
+      repository.getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      grant_generation: 3,
+      oauth_access_token: 'sqlite-access-token-2',
+      oauth_refresh_token: 'refresh-2',
+    });
+
+    const grantC = await repository.getToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID
+    );
+    expect(grantC?.grant_binding_fingerprint).toBeTruthy();
+    await expect(
+      repository.saveToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID,
+        {
+          accessToken: 'same-generation-different-attempt',
+          refreshToken: 'must-not-replace-c',
+          clientId: grantC!.oauth_client_id,
+          grantBinding: {
+            generation: 3,
+            version: 4,
+            fingerprint: grantC!.grant_binding_fingerprint!,
+            metadataUri: grantC!.oauth_metadata_uri!,
+            resourceUri: grantC!.oauth_resource_uri!,
+            issuer: grantC!.oauth_issuer!,
+            authorizationEndpoint: grantC!.oauth_authorization_endpoint!,
+            tokenEndpoint: grantC!.oauth_token_endpoint!,
+            redirectUri: grantC!.oauth_redirect_uri!,
+          },
+        }
+      )
+    ).rejects.toThrow('A newer MCP OAuth grant superseded this attempt');
+    await expect(
+      repository.getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      grant_generation: 3,
+      oauth_access_token: 'sqlite-access-token-2',
     });
   });
 });

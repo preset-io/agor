@@ -53,23 +53,29 @@ async function getOAuthStatus(
   mcpServer: MCPServer
 ): Promise<{ authenticated: boolean; tokenExpiresAt?: number }> {
   const authType = mcpServer.auth?.type || 'none';
-  const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
 
   if (authType !== 'oauth') {
     return { authenticated: true };
   }
 
   // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
-  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres).
-  const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const lookupUserId = oauthMode === 'shared' ? null : ctx.userId;
+  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres). MCP
+  // service responses have already passed through token injection + secret
+  // redaction hooks, so binding authority must come from the raw stored row.
+  const { MCPServerRepository, UserMCPOAuthTokenRepository } = await import('@agor/core/db');
   const tokenData = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const authoritativeServer = await new MCPServerRepository(db).findById(mcpServer.mcp_server_id);
+    if (!authoritativeServer?.enabled || authoritativeServer.auth?.type !== 'oauth') return null;
+    const lookupUserId =
+      (authoritativeServer.auth.oauth_mode ?? 'per_user') === 'shared' ? null : ctx.userId;
     const grant = await new UserMCPOAuthTokenRepository(db).getToken(
       lookupUserId,
       mcpServer.mcp_server_id
     );
     if (!grant) return null;
-    return (await isMCPOAuthGrantAuthorizedForServer(db, mcpServer, grant)) ? grant : null;
+    return (await isMCPOAuthGrantAuthorizedForServer(db, authoritativeServer, grant))
+      ? grant
+      : null;
   });
   if (tokenData) {
     if (

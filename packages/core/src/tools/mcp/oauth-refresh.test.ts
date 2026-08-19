@@ -263,6 +263,11 @@ describe('refreshAndPersistToken', () => {
   const originalFetch = globalThis.fetch;
   const USER_ID = 'user-1' as UserID;
   const SERVER_ID = 'srv-1' as MCPServerID;
+  const observedVersion = (grantGeneration = 0, grantBindingFingerprint?: string) => ({
+    grantGeneration,
+    grantBindingFingerprint,
+    refreshGeneration: 0,
+  });
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -310,6 +315,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -353,6 +359,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -386,6 +393,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(7, 'binding-7'),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(GrantConfigurationChangedError);
@@ -419,6 +427,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
         onInvalidGrant,
       })
@@ -455,6 +464,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(3, 'old-binding'),
         validateGrant: async () => true,
         onInvalidGrant,
       })
@@ -477,6 +487,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingRefreshTokenError);
@@ -490,6 +501,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingRefreshTokenError);
@@ -514,6 +526,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -539,6 +552,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingTokenEndpointError);
@@ -567,6 +581,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -596,6 +611,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingClientIdError);
@@ -629,12 +645,14 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
     const p2 = refreshAndPersistToken({
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -655,6 +673,96 @@ describe('refreshAndPersistToken', () => {
     expect(t2).toBe('shared-new-a');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(mockCompleteStandaloneRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a stale caller before it can adopt a replacement SQLite grant', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'replacement-access',
+      oauth_refresh_token: 'replacement-refresh',
+      oauth_client_id: 'cid',
+      grant_generation: 12,
+      grant_binding_fingerprint: 'replacement-binding',
+    });
+    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
+    const validateGrant = vi.fn(async () => true);
+
+    await expect(
+      refreshAndPersistToken({
+        db: { run: () => undefined } as any,
+        userId: USER_ID,
+        mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(11, 'stale-binding'),
+        validateGrant,
+      })
+    ).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+
+    expect(validateGrant).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(__refreshMutexSizeForTests()).toBe(0);
+  });
+
+  it('does not share a user/server mutex result across grant versions', async () => {
+    const oldGrant = {
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-access',
+      oauth_refresh_token: 'old-refresh',
+      oauth_client_id: 'cid',
+      grant_generation: 21,
+      grant_binding_fingerprint: 'old-binding',
+    };
+    const replacementGrant = {
+      ...oldGrant,
+      oauth_access_token: 'replacement-access',
+      oauth_refresh_token: 'replacement-refresh',
+      grant_generation: 22,
+      grant_binding_fingerprint: 'replacement-binding',
+    };
+    mockGetToken.mockResolvedValue(oldGrant);
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_token_url: 'https://auth.example.com/token' },
+    });
+    let resolveFetch!: (response: Response) => void;
+    globalThis.fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    ) as typeof globalThis.fetch;
+
+    const oldCaller = refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(21, 'old-binding'),
+      validateGrant: async () => true,
+    });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+
+    // Reauthorization replaced the row while the old exchange owns the mutex.
+    mockGetToken.mockResolvedValue(replacementGrant);
+    const replacementCaller = refreshAndPersistToken({
+      db: { run: () => undefined } as any,
+      userId: USER_ID,
+      mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(22, 'replacement-binding'),
+      validateGrant: async () => true,
+    });
+
+    await expect(replacementCaller).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    resolveFetch(
+      new Response(JSON.stringify({ access_token: 'old-refresh-result', expires_in: 3600 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    await expect(oldCaller).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+    expect(__refreshMutexSizeForTests()).toBe(0);
   });
 
   it('mutex: different keys refresh independently', async () => {
@@ -688,12 +796,14 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       }),
       refreshAndPersistToken({
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID_2,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       }),
     ]);
@@ -719,6 +829,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
@@ -745,6 +856,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(InvalidGrantError);
@@ -770,6 +882,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: null,
       mcpServerId: SERVER_ID,
+      observedRefreshVersion: observedVersion(),
       validateGrant: async () => true,
     });
 
