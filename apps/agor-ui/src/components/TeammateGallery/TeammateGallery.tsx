@@ -232,10 +232,10 @@ const BlankCard: React.FC<{
  * Enter/Space on it) deselects it (`onChange(null)`). Cards matching
  * the goal-derived recommendations get a "Recommended" badge (up to two; never
  * the blank card) and, in the default "All" view, sort to the front in
- * recommendation order. Filter chips (All · Grow · Build · Operate, plus a
- * Recommended chip when goals produced recommendations) narrow the grid to one
- * category; a ghost "Clear filters" button (shown only when a non-All chip is
- * active) resets to All. The blank starter shows only under All and stays last.
+ * recommendation order. Filter chips (All · Grow · Build · Operate) narrow the
+ * grid to one category; a ghost "Clear filters" button (shown only when a
+ * non-All chip is active) resets to All. The blank starter shows only under All
+ * and stays last.
  *
  * Each card carries a category pill and color-coded icon in a shared avatar-
  * palette hue; selecting a card gives it a quiet same-hue border + background
@@ -253,18 +253,10 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
   const { token } = theme.useToken();
   const goalList = useMemo(() => goals ?? [], [goals]);
   const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
-  const hasRecommendations = recommendedIds.size > 0;
 
   const [filter, setFilter] = useState<GalleryFilter>('all');
-  // The Recommended chip only exists while goals produce recommendations; if it
-  // disappears (goals cleared) fall back to All rather than showing an empty grid.
-  const activeFilter: GalleryFilter =
-    filter === 'recommended' && !hasRecommendations ? 'all' : filter;
 
-  const cards = useMemo(
-    () => galleryCardsForFilter(goalList, activeFilter),
-    [goalList, activeFilter]
-  );
+  const cards = useMemo(() => galleryCardsForFilter(goalList, filter), [goalList, filter]);
 
   const chips: { key: GalleryFilter; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -272,7 +264,6 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
       key: category.id as GalleryFilter,
       label: category.label,
     })),
-    ...(hasRecommendations ? [{ key: 'recommended' as GalleryFilter, label: 'Recommended' }] : []),
   ];
 
   return (
@@ -287,14 +278,14 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
         {chips.map((chip) => (
           <AntTag.CheckableTag
             key={chip.key}
-            checked={activeFilter === chip.key}
+            checked={filter === chip.key}
             onChange={() => setFilter(chip.key)}
             style={{ cursor: 'pointer', fontSize: token.fontSize, padding: '2px 12px' }}
           >
             {chip.label}
           </AntTag.CheckableTag>
         ))}
-        {activeFilter !== 'all' && (
+        {filter !== 'all' && (
           // Ghost, understated, trailing the chips — clears back to All.
           <Button
             type="text"

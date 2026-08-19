@@ -167,17 +167,15 @@ describe('TeammateGallery', () => {
     expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
   });
 
-  it('renders category filter chips; the Recommended chip only when goals produce recs', () => {
-    const { rerender } = render(<TeammateGallery value={null} onChange={vi.fn()} />);
+  it('renders exactly the All/Grow/Build/Operate chips — no Recommended chip', () => {
+    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
     const chips = chipRow();
     for (const label of ['All', 'Grow', 'Build', 'Operate']) {
       expect(within(chips).getByText(label)).toBeInTheDocument();
     }
-    // No goals → no Recommended chip.
+    // The redundant Recommended filter chip is gone, even when goals produce recs
+    // (recommended templates still sort first and keep their badge in the grid).
     expect(within(chips).queryByText('Recommended')).not.toBeInTheDocument();
-
-    rerender(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
-    expect(within(chipRow()).getByText('Recommended')).toBeInTheDocument();
   });
 
   it('filters the grid to a category and hides the blank starter', () => {

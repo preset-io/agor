@@ -242,31 +242,27 @@ export function recommendedTemplateIds(goals: string[]): string[] {
   return result;
 }
 
-/** The gallery's active filter: everything, a single category, or the goal recs. */
-export type GalleryFilter = 'all' | TeammateCategoryId | 'recommended';
+/** The gallery's active filter: everything, or a single category. */
+export type GalleryFilter = 'all' | TeammateCategoryId;
 
 /**
  * Cards to render for the given goals + active filter, already ordered:
  * - `all`      → recommended templates first (in recommendation order) with the
  *                rest in default order, and the blank starter always last.
  * - `<category>` → that category's templates in default order (no blank starter).
- * - `recommended` → just the recommended templates, in recommendation order.
  *
  * Ordering lives here (not in the component) so it's a single, unit-tested rule.
  */
 export function galleryCardsForFilter(goals: string[], filter: GalleryFilter): TeammateTemplate[] {
-  const recommendedCards = recommendedTemplateIds(goals)
-    .map((id) => getTeammateTemplate(id))
-    .filter((template): template is TeammateTemplate => Boolean(template));
-
-  if (filter === 'recommended') return recommendedCards;
-
   if (filter !== 'all') {
     // A specific category: default order, blank starter excluded.
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
 
   // All: recommended first, then the remaining templates in default order, then blank.
+  const recommendedCards = recommendedTemplateIds(goals)
+    .map((id) => getTeammateTemplate(id))
+    .filter((template): template is TeammateTemplate => Boolean(template));
   const recommendedIds = new Set(recommendedCards.map((template) => template.id));
   const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
   return [...recommendedCards, ...rest, BLANK_TEMPLATE];

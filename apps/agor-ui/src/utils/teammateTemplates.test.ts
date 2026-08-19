@@ -116,14 +116,6 @@ describe('galleryCardsForFilter', () => {
     expect(ids).toEqual(['competitive-analyst', 'deal-desk', 'sales-outbound']);
     expect(ids).not.toContain(BLANK_TEMPLATE_ID);
   });
-
-  it('the recommended filter returns just the recommended templates, in order', () => {
-    expect(galleryCardsForFilter(['dig-into-anything'], 'recommended').map((t) => t.id)).toEqual([
-      'competitive-analyst',
-      'financial-analyst',
-    ]);
-    expect(galleryCardsForFilter([], 'recommended')).toEqual([]);
-  });
 });
 
 describe('getTeammateTemplate', () => {
