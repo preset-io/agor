@@ -10,10 +10,10 @@ import {
 } from './teammateTemplates';
 
 describe('TEAMMATE_TEMPLATES', () => {
-  it('defines the seven templates with unique ids, locked copy, and contract source branches', () => {
-    expect(TEAMMATE_TEMPLATES).toHaveLength(7);
+  it('defines the eight templates with unique ids, locked copy, and contract source branches', () => {
+    expect(TEAMMATE_TEMPLATES).toHaveLength(8);
     const ids = TEAMMATE_TEMPLATES.map((t) => t.id);
-    expect(new Set(ids).size).toBe(7);
+    expect(new Set(ids).size).toBe(8);
     for (const template of TEAMMATE_TEMPLATES) {
       expect(template.title.length).toBeGreaterThan(0);
       expect(template.description.length).toBeGreaterThan(0);
@@ -33,6 +33,7 @@ describe('TEAMMATE_TEMPLATES', () => {
       'template/deal-desk-revops-analyst',
       'template/sales-outbound-analyst',
       'template/legal-analyst',
+      'template/builder',
     ]);
   });
 
@@ -44,7 +45,7 @@ describe('TEAMMATE_TEMPLATES', () => {
   });
 
   it('appends the blank starter to the gallery cards, never to the templates', () => {
-    expect(TEAMMATE_GALLERY_CARDS).toHaveLength(8);
+    expect(TEAMMATE_GALLERY_CARDS).toHaveLength(9);
     expect(TEAMMATE_GALLERY_CARDS.at(-1)).toBe(BLANK_TEMPLATE);
     expect(BLANK_TEMPLATE.emoji).toBe('');
     expect(TEAMMATE_TEMPLATES).not.toContain(BLANK_TEMPLATE);
@@ -74,13 +75,17 @@ describe('recommendedTemplateIds', () => {
     expect(recommendedTemplateIds([])).toEqual([]);
   });
 
-  it('returns [] for a goal that maps to no template', () => {
-    // hand-off-build is now the only goal with no template (builder is a future add).
-    expect(recommendedTemplateIds(['hand-off-build'])).toEqual([]);
+  it('returns [] for an unknown goal that maps to no template', () => {
+    // Every real goal now maps to a template; only unknown ids resolve to nothing.
+    expect(recommendedTemplateIds(['not-a-goal'])).toEqual([]);
   });
 
   it('recommends Chief of Staff for the personal-teammate goal', () => {
     expect(recommendedTemplateIds(['personal-teammate'])).toEqual(['chief-of-staff']);
+  });
+
+  it('recommends Builder for the hand-off-build goal', () => {
+    expect(recommendedTemplateIds(['hand-off-build'])).toEqual(['builder']);
   });
 
   it('returns a single goal’s recommended templates (capped at two)', () => {
@@ -104,9 +109,10 @@ describe('recommendedTemplateIds', () => {
     ]);
   });
 
-  it('keeps just the match when one goal maps to nothing and the other maps', () => {
-    // hand-off-build maps to nothing; dig-into-anything's top rec survives.
+  it('takes each goal’s top rec when two mapping goals are supplied', () => {
+    // hand-off-build → builder; dig-into-anything's top rec is competitive-analyst.
     expect(recommendedTemplateIds(['hand-off-build', 'dig-into-anything'])).toEqual([
+      'builder',
       'competitive-analyst',
     ]);
   });

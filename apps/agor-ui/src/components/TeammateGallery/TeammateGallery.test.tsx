@@ -14,7 +14,7 @@ function cardFor(title: string): HTMLElement {
 }
 
 describe('TeammateGallery', () => {
-  it('renders all seven templates plus the blank starter as a single-select radiogroup', () => {
+  it('renders all eight templates plus the blank starter as a single-select radiogroup', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
 
     expect(screen.getByRole('radiogroup', { name: 'Teammate template' })).toBeInTheDocument();
@@ -26,6 +26,7 @@ describe('TeammateGallery', () => {
       'Deal Desk Analyst',
       'Outbound Analyst',
       'Legal Analyst',
+      'Builder',
       'Start blank',
     ]) {
       expect(screen.getByText(title)).toBeInTheDocument();
@@ -70,8 +71,8 @@ describe('TeammateGallery', () => {
   });
 
   it('shows no badge when the selected goals map to no template', () => {
-    // hand-off-build is the only goal with no template mapping.
-    render(<TeammateGallery goals={['hand-off-build']} value={null} onChange={vi.fn()} />);
+    // Every real goal now maps to a template; only unknown goal ids resolve to nothing.
+    render(<TeammateGallery goals={['not-a-goal']} value={null} onChange={vi.fn()} />);
     expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
   });
 

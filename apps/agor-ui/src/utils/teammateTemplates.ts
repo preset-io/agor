@@ -1,5 +1,6 @@
 import {
   AimOutlined,
+  BuildOutlined,
   FundOutlined,
   PlusOutlined,
   ProjectOutlined,
@@ -100,6 +101,15 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     emoji: '⚖️',
     sourceBranch: 'template/legal-analyst',
   },
+  {
+    id: 'builder',
+    title: 'Builder',
+    description:
+      'Turns your idea into a working app, dashboard, or prototype — live on your board and ready to click.',
+    icon: BuildOutlined,
+    emoji: '🛠️',
+    sourceBranch: 'template/builder',
+  },
 ];
 
 /**
@@ -146,7 +156,7 @@ export const GOAL_TEMPLATE_RECS: Record<string, string[]> = {
   'status-updates': ['product-manager'],
   'ship-without-busywork': ['product-manager'],
   'team-teammate': ['product-manager'],
-  'hand-off-build': [],
+  'hand-off-build': ['builder'],
   'dig-into-anything': ['competitive-analyst', 'financial-analyst'],
 };
 
