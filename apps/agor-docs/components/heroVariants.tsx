@@ -108,8 +108,8 @@ export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
     ctaLabel: 'Enable your dev team',
   },
   'cost-control': {
-    headline: 'Locked into [one AI vendor]\nas costs climb?',
-    subheadline: 'No way to {switch models} or keep agent {spend} in view.',
+    headline: 'Locked into one vendor.\n[Locked into their price.]',
+    subheadline: 'Run [any model] across multiple agents, while keeping {spend} in check.',
     ctaLabel: 'Control your AI costs',
   },
   // Exp 2 framing variant — solution-sell counterpart to cost-control
