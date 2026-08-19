@@ -107,6 +107,34 @@ export function buildMcpToolPermissionIndex(servers: MCPServer[]): McpToolPermis
 }
 
 /**
+ * Resolve a permission when the SDK hands over the server and tool separately.
+ *
+ * Copilot's `kind: 'mcp'` permission request carries `serverName` and
+ * `toolName` as distinct fields, so there is no namespaced string to take
+ * apart and no ambiguity to resolve — which makes this the exact lookup and
+ * `resolveMcpToolPermission` the one that has to guess where the boundary is.
+ *
+ * Both names go through the alias set because the server half reaches us as
+ * whatever key the handler registered the server under (Copilot lowercases and
+ * rewrites), while `tool_permissions` is keyed on the raw advertised name.
+ */
+export function resolveMcpToolPermissionByParts(
+  index: McpToolPermissionIndex,
+  serverName: string,
+  toolName: string
+): ToolPermission | undefined {
+  for (const serverAlias of new Set(mcpToolNameAliasesForServer(serverName))) {
+    const tools = index.byServer.get(serverAlias);
+    if (!tools) continue;
+    for (const toolAlias of new Set(mcpToolNameAliasesForTool(toolName))) {
+      const permission = tools.get(toolAlias);
+      if (permission) return permission;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Resolve the configured permission for a tool name as an SDK surfaced it.
  *
  * Returns `undefined` when nothing is configured — callers must treat that as
