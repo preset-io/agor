@@ -28,7 +28,8 @@ interface GlobalSearchProps extends GlobalSearchEntityMaps {
 /**
  * Navbar global-search input + dropdown.
  *
- * Implementation per docs/internal/global-search-design-2026-05-23.md.
+ * The original design document's global shortcut proposal is superseded;
+ * browser-native shortcuts must not be intercepted here.
  * V1 scaffolding: client-side filtering over in-memory entity maps, sectioned
  * dropdown, and type + scope chips.
  */

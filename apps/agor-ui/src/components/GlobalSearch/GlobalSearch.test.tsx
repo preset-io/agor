@@ -108,13 +108,19 @@ describe('GlobalSearch', () => {
     expect(button).toBeInTheDocument();
   });
 
-  it('clicking the icon opens the popover and shows the combobox input', async () => {
+  it('keeps global search accessible through its visible native button', async () => {
     renderSearch();
+    const button = screen.getByRole('button', { name: 'Open search' });
+    expect(button.tagName).toBe('BUTTON');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open search' }));
+    button.focus();
+    expect(button).toHaveFocus();
+    fireEvent.click(button, { detail: 0 });
     await vi.advanceTimersByTimeAsync(16);
 
-    expect(screen.getByRole('combobox', { name: 'Global search' })).toBeInTheDocument();
+    const input = screen.getByRole('combobox', { name: 'Global search' });
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveFocus();
   });
 
   it('clicking the icon again closes the popover', async () => {
