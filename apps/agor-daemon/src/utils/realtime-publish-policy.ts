@@ -152,7 +152,7 @@ export const REALTIME_PUBLISH_POLICY = {
   repos: { audience: 'tenant', why: 'useAgorData and App.tsx track repo rows and clone progress.' },
   users: {
     audience: 'tenant',
-    why: 'useAgorData keeps the user directory current for attribution.',
+    why: 'useAgorData keeps the user directory current for attribution. rowToUser computes agentic_tools_public_values PER REQUESTER (decrypted plaintext, owner only), so redactUserOwnerOnlyFieldsForBroadcast strips it from context.dispatch — the audience is tenant-wide, so the payload must carry nothing the row owner alone may see.',
   },
   'mcp-servers': {
     audience: 'tenant',

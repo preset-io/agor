@@ -667,6 +667,66 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
 }
 
 /**
+ * Strip the owner-only fields from one user row. Pure.
+ *
+ * `agentic_tools_public_values` is decrypted plaintext that `rowToUser` fills
+ * in ONLY when `requesterId === row.user_id` (`services/users.ts`). The
+ * contract on `AGENTIC_TOOLS_PUBLIC_FIELDS` is explicit that it goes to the
+ * field's owner and to nobody else — not even to an admin reading someone
+ * else's profile — because a base URL can name an internal host.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactUserOwnerOnlyFields(user: any): any {
+  if (!user || typeof user !== 'object' || user.agentic_tools_public_values === undefined) {
+    return user;
+  }
+  const { agentic_tools_public_values: _ownerOnly, ...rest } = user;
+  return rest;
+}
+
+/** Apply the user redaction to whatever shape the payload arrived in. */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactUserPayload(result: any): any {
+  if (Array.isArray(result)) return result.map(redactUserOwnerOnlyFields);
+  if (result?.data && Array.isArray(result.data)) {
+    return { ...result, data: result.data.map(redactUserOwnerOnlyFields) };
+  }
+  if (result?.user_id) return redactUserOwnerOnlyFields(result);
+  return result;
+}
+
+/**
+ * Keep owner-only user fields out of the realtime broadcast.
+ *
+ * `users` is a tenant-wide fan-out path — `useAgorData` keeps the whole
+ * directory current so any row can be named in attribution — and Feathers
+ * dispatches `context.dispatch ?? context.result`. Without this hook a
+ * SELF-patch satisfies `requesterId === row.user_id`, so the result carries
+ * decrypted `agentic_tools_public_values`, and that object is what every other
+ * socket in the tenant receives. `GET /users/:id` by those same users returns
+ * the field as `undefined`, so the socket was handing over precisely what the
+ * REST path withholds.
+ *
+ * Same split as `redactMCPServerSecretFields`: `context.result` is the CALLER's
+ * copy and stays intact, because the caller is the owner and legitimately asked
+ * for their own value. `context.dispatch` is by definition everyone else, so
+ * redacting it is unconditional.
+ *
+ * Keyed off `context.event` so it only fires for the methods Feathers actually
+ * broadcasts (`created`/`updated`/`patched`/`removed`; `null` for find/get) —
+ * leaving find/get alone keeps the owner's own reads working.
+ *
+ * Module scope rather than a closure inside `registerHooks` so tests can drive
+ * the real hook instead of reproducing its body.
+ */
+export const redactUserOwnerOnlyFieldsForBroadcast = async (context: HookContext) => {
+  if (context.event) {
+    context.dispatch = redactUserPayload(context.result);
+  }
+  return context;
+};
+
+/**
  * Redact every MCP server row in a service payload, whatever shape it arrived
  * in. Pure — callers decide what to do with the copy.
  */
@@ -2374,6 +2434,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete users')],
     },
     after: {
+      // Registered on `all`, not a method list: Feathers composes
+      // `collectedAll.after` outermost, so this gets the LAST word on
+      // `context.dispatch` after the avatar hooks have run. It is also what
+      // keeps this from drifting the way the mcp-servers redaction did when it
+      // was pinned to a method list that omitted `remove` (#2374) — the hook
+      // itself no-ops on find/get by keying off `context.event`.
+      all: [redactUserOwnerOnlyFieldsForBroadcast],
       // Refresh derived profile presentation after user creation or update.
       create: [
         async (context: HookContext) => {
