@@ -232,6 +232,9 @@ importers:
       handlebars:
         specifier: '>=4.7.9 <5'
         version: 4.7.9
+      hot-shots:
+        specifier: ^17.1.0
+        version: 17.1.0
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1(supports-color@8.1.1)
@@ -7210,6 +7213,10 @@ packages:
     resolution: {integrity: sha512-puUZAUKT5m8Zzvs72XWy3HtvVbTWljRE66cP60bxJzAqf2DgICo7lYTY2IHUmLnNpjYvw5bvmoHvPc0QO2a62w==}
     engines: {node: ^16.14.0 || >=18.0.0}
 
+  hot-shots@17.1.0:
+    resolution: {integrity: sha512-F7hnyBtBq7UE1amiWFRF8uEIzb29+FKW2otG9KbgPG+DwALavjwn/Vzc9GWp6EU6T1JW5sik7qnPecainwpIQA==}
+    engines: {node: '>=18.0.0'}
+
   html-encoding-sniffer@4.0.0:
     resolution: {integrity: sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==}
     engines: {node: '>=18'}
@@ -10028,6 +10035,10 @@ packages:
   universalify@2.0.1:
     resolution: {integrity: sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==}
     engines: {node: '>= 10.0.0'}
+
+  unix-dgram@2.0.7:
+    resolution: {integrity: sha512-pWaQorcdxEUBFIKjCqqIlQaOoNVmchyoaNAJ/1LwyyfK2XSxcBhgJNiSE8ZRhR0xkNGyk4xInt1G03QPoKXY5A==}
+    engines: {node: '>=0.10.48'}
 
   unpipe@1.0.0:
     resolution: {integrity: sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==}
@@ -17745,6 +17756,10 @@ snapshots:
     dependencies:
       lru-cache: 10.4.3
 
+  hot-shots@17.1.0:
+    optionalDependencies:
+      unix-dgram: 2.0.7
+
   html-encoding-sniffer@4.0.0:
     dependencies:
       whatwg-encoding: 3.1.1
@@ -21364,6 +21379,12 @@ snapshots:
   universalify@0.1.2: {}
 
   universalify@2.0.1: {}
+
+  unix-dgram@2.0.7:
+    dependencies:
+      bindings: 1.5.0
+      nan: 2.23.1
+    optional: true
 
   unpipe@1.0.0: {}
 

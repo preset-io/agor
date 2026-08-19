@@ -91,5 +91,8 @@ allowBuilds:
   'tree-sitter-bash@0.25.0': true
   # Scalar's React wrapper uses its Vue core; vue-demi selects the installed Vue runtime.
   'vue-demi@0.14.10': true
+  # hot-shots uses this optional native addon only for Unix-domain sockets;
+  # Agor's exporter deliberately uses UDP to the local Agent.
+  'unix-dgram@2.0.7': false
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch

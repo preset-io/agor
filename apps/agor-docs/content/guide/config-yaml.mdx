@@ -78,3 +78,48 @@ by `AgorConfig` in `packages/core/src/config/types.ts`; unknown/removed keys fai
 stamps the stable operational defaults needed for a working deployment, but deliberately does not
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
+
+## DogStatsD daemon metrics
+
+Operational daemon metrics can be sent over UDP to a locally reachable
+Datadog Agent (DogStatsD's default port is `8125`). They are disabled by
+default:
+
+```yaml
+metrics:
+  statsd:
+    enabled: false
+    host: 127.0.0.1
+    port: 8125
+    prefix: agor.daemon.
+    global_tags:
+      env: production
+      region: us-east-1
+```
+
+The supported environment overrides are `AGOR_STATSD_ENABLED` (`true`,
+`false`, `1`, or `0`), `AGOR_STATSD_HOST`, `AGOR_STATSD_PORT`, and
+`AGOR_STATSD_PREFIX`. Static global tags remain in YAML so their reviewed,
+low-cardinality values are visible in the deployment source. This section has
+no credentials; the daemon sends UDP to the configured Agent and does not use
+a Datadog API key.
+
+Metrics settings are resolved into the daemon's immutable startup snapshot.
+Changing YAML or environment variables requires a restart. Executors neither
+read this config nor receive the metrics settings. UDP delivery is best effort:
+an absent Agent drops metrics without changing request or executor behavior.
+
+`global_tags` is limited to 20 short static tags. Resource and identity
+dimensions such as tenant, user, session, task, branch, repository, host, pod,
+path, URL, and UUID tags are rejected. The daemon always adds
+`deployment_mode` and `daemon_instance`. In HA, set a stable and unique
+`AGOR_DAEMON_INSTANCE_ID` on each replica (letters, digits, `.`, `_`, or `-`;
+at most 100 characters). StatsD is disabled on an HA replica
+without one rather than emitting a last-writer-wins gauge. The running-executor gauge is
+process-local; sum it across `daemon_instance` for a fleet total. Never drop
+that dimension from the gauge query, because DogStatsD gauges are last-value
+signals.
+
+Older Agor versions reject the unknown top-level `metrics` key. During a
+mixed-version rollout, upgrade every daemon first, then add the block and
+restart the fleet.

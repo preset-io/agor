@@ -93,6 +93,13 @@ describe('getDefaultConfig', () => {
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
     expect(defaults.analytics?.enabled).toBe(false);
+    expect(defaults.metrics?.statsd).toEqual({
+      enabled: false,
+      host: '127.0.0.1',
+      port: 8125,
+      prefix: 'agor.daemon.',
+      global_tags: {},
+    });
   });
 });
 
@@ -123,6 +130,49 @@ describe('resolveEffectiveConfig', () => {
       { AGOR_DATA_HOME: '/from-environment' }
     );
     expect(resolved.paths?.data_home).toBe('/from-environment');
+  });
+
+  it('materializes StatsD YAML and strict environment overrides', () => {
+    const input: AgorConfig = {
+      metrics: {
+        statsd: {
+          enabled: false,
+          host: 'yaml-agent',
+          port: 18125,
+          prefix: 'custom.',
+          global_tags: { env: 'staging' },
+        },
+      },
+    };
+    const resolved = resolveEffectiveConfig(input, {
+      AGOR_STATSD_ENABLED: '1',
+      AGOR_STATSD_HOST: '127.0.0.2',
+      AGOR_STATSD_PORT: '28125',
+      AGOR_STATSD_PREFIX: 'company.agor.',
+    });
+    expect(resolved.metrics?.statsd).toEqual({
+      enabled: true,
+      host: '127.0.0.2',
+      port: 28125,
+      prefix: 'company.agor.',
+      global_tags: { env: 'staging' },
+    });
+    expect(input.metrics?.statsd?.enabled).toBe(false);
+  });
+
+  it('rejects invalid StatsD environment overrides', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_ENABLED: 'yes' })).toThrow(
+      /AGOR_STATSD_ENABLED/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PORT: '8125udp' })).toThrow(
+      /AGOR_STATSD_PORT/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PORT: '70000' })).toThrow(
+      /AGOR_STATSD_PORT/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PREFIX: 'missing-dot' })).toThrow(
+      /metrics\.statsd\.prefix/
+    );
   });
 
   it.each(['opportunistic', 'strict', 'insulated'])(
@@ -575,6 +625,68 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('loads the StatsD surface and rejects unsafe or high-cardinality settings', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        metrics: {
+          statsd: {
+            enabled: true,
+            host: '127.0.0.1',
+            port: 8125,
+            prefix: 'agor.daemon.',
+            global_tags: { env: 'test', region: 'local' },
+          },
+        },
+      }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      metrics: { statsd: { enabled: true, global_tags: { env: 'test', region: 'local' } } },
+    });
+
+    for (const [field, value, message] of [
+      ['port', 0, 'port'],
+      ['prefix', 'agor', 'prefix'],
+      ['host', 'http://agent:8125', 'host'],
+    ] as const) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ metrics: { statsd: { [field]: value } } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).rejects.toThrow(new RegExp(`metrics\\.statsd\\.${message}`));
+    }
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ metrics: { statsd: { global_tags: { session_id: 'anything' } } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/low-cardinality policy/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        metrics: {
+          statsd: { global_tags: { env: '0198d20e-7182-7000-8000-000000000000' } },
+        },
+      }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/low-cardinality string/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: { statsd: { surprise: true } } }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics\.statsd\.surprise/);
   });
 
   it('accepts a deployment-owned agentic tool package list', async () => {

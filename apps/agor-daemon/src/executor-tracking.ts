@@ -5,6 +5,7 @@ import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
+import { getMetrics } from './metrics/index.js';
 
 export interface ExecutorContainmentIdentity {
   sessionId: string;
@@ -38,6 +39,29 @@ function executorProcesses(owner?: object): Map<string, ExecutorContainmentIdent
     executorProcessesByOwner.set(key, registry);
   }
   return registry;
+}
+
+function reportTrackedExecutorGauge(owner?: object, value = executorProcesses(owner).size): void {
+  if (!owner) return;
+  getMetrics(owner).gauge('executors.running', value, {
+    mode: 'local',
+    scope: 'process_group',
+  });
+}
+
+/** Number of local executor process groups this daemon still owns. */
+export function getTrackedExecutorCount(owner?: object): number {
+  return executorProcesses(owner).size;
+}
+
+/** Emit the absolute process-local count, including the startup/restart zero. */
+export function reconcileTrackedExecutorGauge(owner: object): void {
+  reportTrackedExecutorGauge(owner);
+}
+
+/** Mark this daemon instance as owning no live tracking registry on shutdown. */
+export function clearTrackedExecutorGauge(owner: object): void {
+  reportTrackedExecutorGauge(owner, 0);
 }
 
 const CONTAINMENT_FENCE_VERSION = 1;
@@ -217,6 +241,7 @@ export function trackExecutorProcess(
     bootIdentity: readBootIdentity(),
     leaderExited: false,
   });
+  reportTrackedExecutorGauge(owner);
 }
 
 export function markExecutorProcessExited(sessionId: string, pid?: number, owner?: object): void {
@@ -227,7 +252,10 @@ export function markExecutorProcessExited(sessionId: string, pid?: number, owner
 export function untrackExecutorProcess(sessionId: string, taskId?: string, owner?: object): void {
   const registry = executorProcesses(owner);
   const tracked = registry.get(sessionId);
-  if (!taskId || tracked?.taskId === taskId) registry.delete(sessionId);
+  if (!taskId || tracked?.taskId === taskId) {
+    registry.delete(sessionId);
+    reportTrackedExecutorGauge(owner);
+  }
 }
 
 export function getTrackedExecutor(

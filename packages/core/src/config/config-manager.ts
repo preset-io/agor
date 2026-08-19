@@ -24,6 +24,7 @@ import {
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
+  type AgorStatsDSettings,
   BRANCH_STORAGE_MODES,
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
@@ -262,6 +263,116 @@ function assertSupportedUnixUserMode(mode: unknown): asserts mode is UnixUserMod
   );
 }
 
+const FORBIDDEN_OPERATIONAL_METRIC_TAG_KEY =
+  /(^|[_.-])(tenant|user|session|task|branch|repo|repository|email|uuid|token|secret|prompt|path|url|title|slug|name|id|host|hostname|pod|container|boot)($|[_.-])/i;
+const RESERVED_OPERATIONAL_METRIC_TAG_KEYS = new Set(['daemon_instance', 'deployment_mode']);
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+function validateStatsDConfig(statsd: AgorStatsDSettings | undefined): void {
+  if (statsd === undefined) return;
+  if (!statsd || typeof statsd !== 'object' || Array.isArray(statsd)) {
+    throw new Error('Config error: metrics.statsd must be an object');
+  }
+  if (statsd.enabled !== undefined && typeof statsd.enabled !== 'boolean') {
+    throw new Error('Config error: metrics.statsd.enabled must be a boolean');
+  }
+  if (
+    statsd.host !== undefined &&
+    (typeof statsd.host !== 'string' ||
+      statsd.host.trim() === '' ||
+      statsd.host.length > 253 ||
+      /[\s/\\]/.test(statsd.host) ||
+      statsd.host.includes('://'))
+  ) {
+    throw new Error(
+      'Config error: metrics.statsd.host must be a non-empty hostname or IP address without a URL scheme'
+    );
+  }
+  if (
+    statsd.port !== undefined &&
+    (!Number.isSafeInteger(statsd.port) || statsd.port < 1 || statsd.port > 65_535)
+  ) {
+    throw new Error('Config error: metrics.statsd.port must be an integer from 1 to 65535');
+  }
+  if (
+    statsd.prefix !== undefined &&
+    (typeof statsd.prefix !== 'string' ||
+      statsd.prefix.length > 64 ||
+      !/^[a-zA-Z][a-zA-Z0-9_.-]*\.$/.test(statsd.prefix))
+  ) {
+    throw new Error(
+      'Config error: metrics.statsd.prefix must start with a letter, contain only letters, digits, dots, underscores, or hyphens, and end with a dot'
+    );
+  }
+  if (statsd.global_tags === undefined) return;
+  if (
+    !statsd.global_tags ||
+    typeof statsd.global_tags !== 'object' ||
+    Array.isArray(statsd.global_tags)
+  ) {
+    throw new Error('Config error: metrics.statsd.global_tags must be a string map');
+  }
+  const entries = Object.entries(statsd.global_tags as Record<string, unknown>);
+  if (entries.length > 20) {
+    throw new Error('Config error: metrics.statsd.global_tags supports at most 20 tags');
+  }
+  for (const [key, value] of entries) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,62}$/.test(key)) {
+      throw new Error(`Config error: metrics.statsd.global_tags key '${key}' is invalid`);
+    }
+    if (
+      RESERVED_OPERATIONAL_METRIC_TAG_KEYS.has(key.toLowerCase()) ||
+      FORBIDDEN_OPERATIONAL_METRIC_TAG_KEY.test(key)
+    ) {
+      throw new Error(
+        `Config error: metrics.statsd.global_tags key '${key}' is reserved or violates the low-cardinality policy`
+      );
+    }
+    if (
+      typeof value !== 'string' ||
+      value.trim() === '' ||
+      value.length > 100 ||
+      containsControlCharacter(value) ||
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ) {
+      throw new Error(
+        `Config error: metrics.statsd.global_tags value for '${key}' must be a non-empty, low-cardinality string of at most 100 characters`
+      );
+    }
+  }
+}
+
+function parseOptionalBooleanEnvironmentValue(
+  value: string | undefined,
+  name: string
+): boolean | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  throw new Error(`Config error: ${name} must be one of: true, false, 1, 0`);
+}
+
+function parseOptionalPortEnvironmentValue(
+  value: string | undefined,
+  name: string
+): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Config error: ${name} must be an integer from 1 to 65535`);
+  }
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Config error: ${name} must be an integer from 1 to 65535`);
+  }
+  return port;
+}
+
 function validateConfig(config: AgorConfig): void {
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
     ?.plugins;
@@ -354,6 +465,7 @@ function validateConfig(config: AgorConfig): void {
     'paths',
     'analytics',
     'telemetry',
+    'metrics',
     'onboarding',
     'multi_tenancy',
     'uploads',
@@ -753,6 +865,15 @@ function validateConfig(config: AgorConfig): void {
     'last_usage_summary_day',
     'last_reported_version',
   ]);
+  only(config.metrics, 'metrics', ['statsd']);
+  only(config.metrics?.statsd, 'metrics.statsd', [
+    'enabled',
+    'host',
+    'port',
+    'prefix',
+    'global_tags',
+  ]);
+  validateStatsDConfig(config.metrics?.statsd);
   only(legacyConfig.onboarding, 'onboarding', [
     ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
@@ -1112,6 +1233,15 @@ export function getDefaultConfig(): AgorConfig {
     },
     analytics: getDefaultAnalyticsConfig(),
     telemetry: {},
+    metrics: {
+      statsd: {
+        enabled: false,
+        host: '127.0.0.1',
+        port: 8125,
+        prefix: 'agor.daemon.',
+        global_tags: {},
+      },
+    },
     multi_tenancy: {
       filesystem_isolation_enabled: false,
       tenants_base_folder: '~/.agor/tenants',
@@ -1137,6 +1267,11 @@ export function resolveEffectiveConfig(
 ): AgorConfig {
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
+  const statsdEnabled = parseOptionalBooleanEnvironmentValue(
+    env.AGOR_STATSD_ENABLED,
+    'AGOR_STATSD_ENABLED'
+  );
+  const statsdPort = parseOptionalPortEnvironmentValue(env.AGOR_STATSD_PORT, 'AGOR_STATSD_PORT');
 
   // Resolve the effective Unix isolation mode (env override wins) so the
   // `sandbox` mode can imply the rest of its machinery.
@@ -1182,7 +1317,7 @@ export function resolveEffectiveConfig(
     };
   }
 
-  return {
+  const resolved: AgorConfig = {
     ...defaults,
     ...config,
     daemon: {
@@ -1231,9 +1366,23 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_TELEMETRY_ENDPOINT ? { endpoint: env.AGOR_TELEMETRY_ENDPOINT } : {}),
       ...(env.AGOR_TELEMETRY_WRITE_KEY ? { write_key: env.AGOR_TELEMETRY_WRITE_KEY } : {}),
     },
+    metrics: {
+      ...defaults.metrics,
+      ...config.metrics,
+      statsd: {
+        ...defaults.metrics?.statsd,
+        ...config.metrics?.statsd,
+        ...(statsdEnabled !== undefined ? { enabled: statsdEnabled } : {}),
+        ...(env.AGOR_STATSD_HOST ? { host: env.AGOR_STATSD_HOST } : {}),
+        ...(statsdPort !== undefined ? { port: statsdPort } : {}),
+        ...(env.AGOR_STATSD_PREFIX ? { prefix: env.AGOR_STATSD_PREFIX } : {}),
+      },
+    },
     uploads: { ...defaults.uploads, ...config.uploads },
     multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
   };
+  validateStatsDConfig(resolved.metrics?.statsd);
+  return resolved;
 }
 
 /**

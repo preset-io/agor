@@ -986,6 +986,35 @@ export interface AgorTelemetrySettings {
 }
 
 /**
+ * DogStatsD transport settings for daemon operational metrics.
+ *
+ * Metrics are process-global operational signals, not tenant analytics. Keep
+ * global tags deployment-level and low-cardinality; request/resource IDs are
+ * deliberately forbidden by config validation.
+ */
+export interface AgorStatsDSettings {
+  /** Master switch. Defaults to false. */
+  enabled?: boolean;
+
+  /** Datadog Agent / StatsD UDP host. Defaults to 127.0.0.1. */
+  host?: string;
+
+  /** Datadog Agent / StatsD UDP port. Defaults to 8125. */
+  port?: number;
+
+  /** Namespace prepended to every daemon metric. Must end in a dot. */
+  prefix?: string;
+
+  /** Static, deployment-level DogStatsD tags applied to every metric. */
+  global_tags?: Record<string, string>;
+}
+
+/** Optional daemon operational metrics exporters. */
+export interface AgorMetricsSettings {
+  statsd?: AgorStatsDSettings;
+}
+
+/**
  * Backend analytics settings.
  *
  * Disabled by default. When enabled, daemon/server code sends curated
@@ -1235,6 +1264,9 @@ export interface AgorConfig {
   /** Public community telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
+  /** Operational daemon metrics. Disabled by default. */
+  metrics?: AgorMetricsSettings;
+
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
 
@@ -1258,5 +1290,6 @@ export type ConfigKey =
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`
+  | `metrics.${keyof AgorMetricsSettings}`
   | `multi_tenancy.${keyof AgorMultiTenancySettings}`
   | `uploads.${keyof AgorUploadSettings}`;

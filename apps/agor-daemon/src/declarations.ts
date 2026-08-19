@@ -41,6 +41,7 @@ import type {
   Task,
   TaskPendingDispatchStatus,
 } from '@agor/core/types';
+import type { DaemonMetrics } from './metrics/index.js';
 import type {
   ExecuteTaskData,
   SessionArchiveOptions,
@@ -61,6 +62,8 @@ export type Application = ExpressApplication & {
   set(name: 'config', value: DeepReadonly<AgorConfig>): ExpressApplication;
   get(name: 'distributedWorkIdentity'): DistributedWorkIdentity | undefined;
   set(name: 'distributedWorkIdentity', value: DistributedWorkIdentity): ExpressApplication;
+  get(name: 'metrics'): DaemonMetrics | undefined;
+  set(name: 'metrics', value: DaemonMetrics): ExpressApplication;
 };
 
 /**

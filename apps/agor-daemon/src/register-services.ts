@@ -6,6 +6,7 @@
  */
 
 import { homedir } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 
 import {
@@ -92,6 +93,7 @@ import {
   inOpenCodeNativeStateMutationSlot,
   type OpenCodeNativeStateMutationFence,
 } from './integrations/opencode/native-state-coordinator.js';
+import { getMetrics } from './metrics/index.js';
 import { runInOAuthTenantScope, runInOAuthTenantWriteScope } from './oauth-auth-helpers.js';
 import { persistOAuthToken } from './oauth-cache.js';
 import {
@@ -916,6 +918,8 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
+    const launchStartedAt = performance.now();
+    const metrics = getMetrics(app);
     const tenantId = getCurrentTenantId();
     const session = await prepareSessionForExecutorStart(
       db,
@@ -1221,6 +1225,12 @@ function createExecuteHandler(
         user_id: userId,
       },
       onSpawn: (child, spawnContext) => {
+        metrics.increment('executor.launches', 1, { mode: spawnContext.mode });
+        metrics.distribution(
+          'executor.launch.duration_ms',
+          Math.max(0, performance.now() - launchStartedAt),
+          { mode: spawnContext.mode }
+        );
         nativeState?.markSpawned();
         if (spawnContext.mode === 'local' && child.pid) {
           localExecutorPid = child.pid;
@@ -1255,6 +1265,10 @@ function createExecuteHandler(
         );
       },
       onExit: async (code, spawnContext) => {
+        metrics.increment('executor.process_exits', 1, {
+          mode: spawnContext.mode,
+          outcome: code === 0 ? 'success' : code === null ? 'unknown' : 'failure',
+        });
         console.log(`${logPrefix} Exited with code ${code}`);
 
         if (spawnContext.mode === 'local') {
