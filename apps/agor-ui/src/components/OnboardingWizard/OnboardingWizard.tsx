@@ -1568,24 +1568,24 @@ export function OnboardingWizard({
 
   const renderWorkspace = () => (
     <div>
-      {/* The whole above-the-grid block — heading + intro + name field + section
-          label + filter chips — is the gallery's sticky header, so only the card
-          grid scrolls. The header background defaults to the modal's real content
-          surface (colorBgElevated) for a seamless pin (no MODAL_BG override,
-          which is occluded behind .ant-modal-content and mismatches). */}
+      {/* Title + intro are normal scroll content: they scroll up and away as the
+          cards scroll. Only the name field + section label + filter chips (the
+          gallery's `header` + chips) stay pinned; the grid scrolls under them.
+          The sticky header background defaults to the modal's real content surface
+          (colorBgElevated) for a seamless pin — MODAL_BG is occluded behind
+          .ant-modal-content and mismatches. */}
+      {renderStepBadge('Name your AI teammate')}
+      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
+        Name your teammate, then pick a starter template to shape what they do — or start blank. You
+        can change everything anytime.
+      </Paragraph>
+
       <TeammateGallery
         goals={selectedGoals}
         value={selectedTemplateId}
         onChange={applyTemplate}
         header={
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
-              Name your AI teammate
-            </Title>
-            <Paragraph style={{ color: TEXT_SECONDARY, margin: 0 }}>
-              Name your teammate, then pick a starter template to shape what they do — or start
-              blank. You can change everything anytime.
-            </Paragraph>
             <div>
               <Text
                 style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
