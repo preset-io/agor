@@ -247,7 +247,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const authenticatedHook = scopeExecutorRuntimeAuth(
     authenticate({ strategies: ['api-key', 'jwt'] })
   );
-  const requireAuth = createRequireAuthHook(authenticatedHook, multiTenancy);
+  const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -281,6 +281,21 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       user_id: freshUser.user_id,
     });
   };
+
+  /**
+   * `enforcePasswordChange` is also registered as a global app hook, but Feathers
+   * runs app-level hooks *before* service-level ones — so over REST it fired while
+   * `params.user` was still unset by the service's own `requireAuth`, hit its
+   * `if (!user) return context` guard, and silently passed the request through. A
+   * user flagged for a password change could do anything the CLI offered. On
+   * Socket.IO the connection already carries `params.user`, which is why the gate
+   * worked there and the gap only ever showed up over REST.
+   *
+   * Running it here, immediately after authentication resolves, means the check
+   * happens once at the auth chokepoint with the user actually populated.
+   */
+  const requireAuth = async (context: HookContext): Promise<HookContext> =>
+    enforcePasswordChange(await requireAuthOnly(context));
 
   // --------------------------------------------------------------------------
   // Ports, daemon URL, credentials
