@@ -86,7 +86,6 @@
     "express-static-gzip": "^3.0.1",
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
-    "hot-shots": "^17.1.0",
     "inquirer": "^12.10.0",
     "ioredis": "^5.11.1",
     "js-yaml": "^5.2.3",
@@ -103,6 +102,14 @@
   },
   "optionalDependencies": {
     "@lydell/node-pty": "1.2.0-beta.15"
+  },
+  "peerDependencies": {
+    "hot-shots": "^17.1.0"
+  },
+  "peerDependenciesMeta": {
+    "hot-shots": {
+      "optional": true
+    }
   },
   "bundleDependencies": [
     "@agor/agentic-tool-opencode",

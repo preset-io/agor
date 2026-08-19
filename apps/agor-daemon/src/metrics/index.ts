@@ -1,6 +1,6 @@
+import { createRequire } from 'node:module';
 import type { AgorDeploymentMode, AgorStatsDSettings } from '@agor/core/config';
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
-import StatsD, { type ClientOptions } from 'hot-shots';
 import { NOOP_METRICS } from './noop.js';
 import {
   type MetricsErrorReporter,
@@ -9,7 +9,38 @@ import {
 } from './statsd.js';
 import type { DaemonMetrics } from './types.js';
 
-export type StatsDClientFactory = (options: ClientOptions) => StatsDTransportClient;
+interface StatsDClientOptions {
+  protocol: 'udp';
+  host: string;
+  port: number;
+  prefix: string;
+  globalTags: Record<string, string>;
+  datadog: true;
+  cardinality: 'low';
+  originDetection: true;
+  includeDataDogTags: false;
+  includeDatadogTelemetry: false;
+  errorHandler: MetricsErrorReporter;
+}
+
+type StatsDClientConstructor = new (options: StatsDClientOptions) => StatsDTransportClient;
+
+const requireFromDaemon = createRequire(import.meta.url);
+
+export type StatsDClientFactory = (options: StatsDClientOptions) => StatsDTransportClient;
+
+function createHotShotsClient(options: StatsDClientOptions): StatsDTransportClient {
+  let StatsD: StatsDClientConstructor;
+  try {
+    StatsD = requireFromDaemon('hot-shots') as StatsDClientConstructor;
+  } catch (error) {
+    throw new Error(
+      'DogStatsD metrics require the optional hot-shots peer dependency. Install hot-shots alongside agor-live, or disable metrics.statsd.',
+      { cause: error }
+    );
+  }
+  return new StatsD(options);
+}
 
 export interface DaemonMetricsFactoryContext {
   workIdentity: DistributedWorkIdentity;
@@ -39,7 +70,7 @@ export function buildStatsDClientOptions(
   config: AgorStatsDSettings,
   context: DaemonMetricsFactoryContext,
   reportError: MetricsErrorReporter
-): ClientOptions {
+): StatsDClientOptions {
   return {
     protocol: 'udp',
     host: config.host ?? '127.0.0.1',
@@ -73,7 +104,7 @@ function createRateLimitedErrorReporter(): MetricsErrorReporter {
 export function createDaemonMetrics(
   config: AgorStatsDSettings | undefined,
   context: DaemonMetricsFactoryContext,
-  factory: StatsDClientFactory = (options) => new StatsD(options)
+  factory: StatsDClientFactory = createHotShotsClient
 ): DaemonMetrics {
   if (config?.enabled !== true) return NOOP_METRICS;
   const reportError = createRateLimitedErrorReporter();

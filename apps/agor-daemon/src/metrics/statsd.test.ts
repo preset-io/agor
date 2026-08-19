@@ -1,5 +1,4 @@
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
-import type { MetricOptions } from 'hot-shots';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildStatsDClientOptions,
@@ -10,25 +9,26 @@ import {
   StatsDDaemonMetrics,
   sanitizeMetricTags,
 } from './index.js';
-import type { StatsDTransportClient } from './statsd.js';
+import type { StatsDMetricOptions, StatsDTransportClient } from './statsd.js';
 
 class FakeStatsDClient implements StatsDTransportClient {
-  calls: Array<{ method: string; name?: string; value?: number; options?: MetricOptions }> = [];
+  calls: Array<{ method: string; name?: string; value?: number; options?: StatsDMetricOptions }> =
+    [];
   closeCalls = 0;
 
-  increment(name: string, value: number, options?: MetricOptions): void {
+  increment(name: string, value: number, options?: StatsDMetricOptions): void {
     this.calls.push({ method: 'increment', name, value, options });
   }
-  timing(name: string, value: number, options?: MetricOptions): void {
+  timing(name: string, value: number, options?: StatsDMetricOptions): void {
     this.calls.push({ method: 'timing', name, value, options });
   }
-  histogram(name: string, value: number, options?: MetricOptions): void {
+  histogram(name: string, value: number, options?: StatsDMetricOptions): void {
     this.calls.push({ method: 'histogram', name, value, options });
   }
-  distribution(name: string, value: number, options?: MetricOptions): void {
+  distribution(name: string, value: number, options?: StatsDMetricOptions): void {
     this.calls.push({ method: 'distribution', name, value, options });
   }
-  gauge(name: string, value: number, options?: MetricOptions): void {
+  gauge(name: string, value: number, options?: StatsDMetricOptions): void {
     this.calls.push({ method: 'gauge', name, value, options });
   }
   flush(callback?: (error?: Error) => void): void {

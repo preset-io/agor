@@ -91,6 +91,17 @@ Operational daemon metrics can be sent over UDP to a locally reachable
 Datadog Agent (DogStatsD's default port is `8125`). They are disabled by
 default:
 
+The DogStatsD client is an optional peer dependency, so a normal Agor install
+does not download it. Install it only on deployments that enable StatsD. The
+client's optional Unix-socket addon is unnecessary because Agor uses UDP, so
+the deployment install can safely disable dependency lifecycle scripts:
+
+```bash
+npm install -g --ignore-scripts hot-shots@^17.1.0
+```
+
+Then enable the exporter in the deployment-owned config:
+
 ```yaml
 metrics:
   statsd:
@@ -114,6 +125,8 @@ Metrics settings are resolved into the daemon's immutable startup snapshot.
 Changing YAML or environment variables requires a restart. Executors neither
 read this config nor receive the metrics settings. UDP delivery is best effort:
 an absent Agent drops metrics without changing request or executor behavior.
+If StatsD is enabled without `hot-shots` installed alongside `agor-live`, Agor
+logs a rate-limited exporter warning and continues with metrics disabled.
 
 `global_tags` is limited to 20 short static deployment labels. This is the
 supported place for ambient dimensions such as environment, region, cluster,

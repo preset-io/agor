@@ -1,13 +1,17 @@
 import { performance } from 'node:perf_hooks';
-import type { MetricOptions } from 'hot-shots';
 import type { DaemonMetrics, MetricTags } from './types.js';
 
+export interface StatsDMetricOptions {
+  tags?: Record<string, string>;
+  cardinality?: 'low' | 'orchestrator' | 'high' | 'none';
+}
+
 export interface StatsDTransportClient {
-  increment(name: string, value: number, options?: MetricOptions): void;
-  timing(name: string, value: number, options?: MetricOptions): void;
-  histogram(name: string, value: number, options?: MetricOptions): void;
-  distribution(name: string, value: number, options?: MetricOptions): void;
-  gauge(name: string, value: number, options?: MetricOptions): void;
+  increment(name: string, value: number, options?: StatsDMetricOptions): void;
+  timing(name: string, value: number, options?: StatsDMetricOptions): void;
+  histogram(name: string, value: number, options?: StatsDMetricOptions): void;
+  distribution(name: string, value: number, options?: StatsDMetricOptions): void;
+  gauge(name: string, value: number, options?: StatsDMetricOptions): void;
   flush(callback?: (error?: Error) => void): void;
   close(callback?: (error?: Error) => void): void;
 }
@@ -127,7 +131,7 @@ export class StatsDDaemonMetrics implements DaemonMetrics {
     name: string,
     value: number,
     tags: MetricTags | undefined,
-    send: (options: MetricOptions) => void
+    send: (options: StatsDMetricOptions) => void
   ): void {
     if (this.closed || !METRIC_NAME.test(name) || !Number.isFinite(value)) return;
     try {

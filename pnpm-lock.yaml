@@ -232,9 +232,6 @@ importers:
       handlebars:
         specifier: '>=4.7.9 <5'
         version: 4.7.9
-      hot-shots:
-        specifier: ^17.1.0
-        version: 17.1.0
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1(supports-color@8.1.1)
@@ -302,6 +299,9 @@ importers:
       glob:
         specifier: ^11.1.0
         version: 11.1.0
+      hot-shots:
+        specifier: ^17.1.0
+        version: 17.1.0
       mdast-util-gfm:
         specifier: ^3.1.0
         version: 3.1.0(supports-color@8.1.1)

@@ -8,7 +8,10 @@ Agor uses [`hot-shots`](https://github.com/bdeitte/hot-shots) behind an
 Agor-owned `DaemonMetrics` interface. Datadog lists hot-shots as a community
 DogStatsD client, it supports current Node releases and TypeScript, and it
 already owns UDP formatting, tag escaping, socket errors, flush, and close.
-The optional native `unix-dgram` addon is disabled because Agor uses UDP.
+The published package declares it as an optional peer and resolves it only
+when StatsD is enabled, so default installs have no dependency on hot-shots or
+its native `unix-dgram` addon. StatsD deployments install the peer with
+lifecycle scripts disabled because Agor uses UDP rather than Unix sockets.
 
 References: [Datadog DogStatsD](https://docs.datadoghq.com/developers/dogstatsd/),
 [Datadog metric types](https://docs.datadoghq.com/metrics/types/), and
@@ -159,7 +162,9 @@ new immutable first-progress timestamp or event at the executor/SDK boundary.
 ## Lifecycle and failure contract
 
 - Construction happens once at daemon composition. Disabled config never
-  creates a socket.
+  loads the optional peer or creates a socket.
+- A deployment that enables StatsD without the peer logs a rate-limited
+  exporter warning and continues with the no-op implementation.
 - A startup ownership guard closes an initialized exporter if later database,
   service, route, worker, or listener startup fails before lifecycle ownership
   transfers to the registered shutdown handler.

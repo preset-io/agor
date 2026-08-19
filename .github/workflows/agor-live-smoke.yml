@@ -153,7 +153,46 @@ jobs:
             test -d "$PACKAGE_ROOT/node_modules/@agor/$package"
             test ! -L "$PACKAGE_ROOT/node_modules/@agor/$package"
           done
+          test ! -e "$PACKAGE_ROOT/node_modules/hot-shots"
+          test ! -e "$ROOT/prefix/lib/node_modules/hot-shots"
+          if find "$ROOT/prefix/lib/node_modules" -type d -name unix-dgram -print -quit | grep -q .; then
+            echo "Default install unexpectedly contains unix-dgram" >&2
+            exit 1
+          fi
           HOME="$ROOT/home" "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+
+          # Importing the metrics composition module must not resolve the peer
+          # while the default-disabled exporter is in use.
+          node --input-type=module - "$PACKAGE_ROOT" <<'NODE'
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const packageRoot = process.argv[2];
+          const metricsModule = await import(
+            pathToFileURL(join(packageRoot, 'dist/daemon/metrics/index.js')).href
+          );
+          const metrics = metricsModule.createDaemonMetrics(undefined, {
+            workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+            deploymentMode: 'standalone',
+            deploymentId: 'smoke',
+          });
+          if (metrics.enabled) throw new Error('Default metrics exporter must be disabled');
+          const warnings = [];
+          const originalWarn = console.warn;
+          console.warn = (message) => warnings.push(String(message));
+          const missingPeerMetrics = metricsModule.createDaemonMetrics(
+            { enabled: true },
+            {
+              workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+              deploymentMode: 'standalone',
+              deploymentId: 'smoke',
+            }
+          );
+          console.warn = originalWarn;
+          if (missingPeerMetrics.enabled) throw new Error('Missing peer must fall back to no-op');
+          if (!warnings.some((warning) => warning.includes('optional hot-shots peer dependency'))) {
+            throw new Error(`Missing peer warning was not actionable: ${JSON.stringify(warnings)}`);
+          }
+          NODE
 
           # A second install with lifecycle execution forcibly disabled must be
           # equally usable. This is a release invariant, not a user instruction.
@@ -180,6 +219,38 @@ jobs:
             if (exitCode === 0 && output.includes(marker)) resolve();
             else reject(new Error(`PTY failed: exit=${exitCode}, output=${JSON.stringify(output)}`));
           }));
+          NODE
+
+      - name: Optional StatsD peer works without lifecycle scripts
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.19.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/statsd-peer"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit "$CLIENT" "$LIVE"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit --ignore-scripts \
+            hot-shots@17.1.0
+          PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
+          test -d "$ROOT/prefix/lib/node_modules/hot-shots"
+          node --input-type=module - "$PACKAGE_ROOT" <<'NODE'
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const packageRoot = process.argv[2];
+          const metricsModule = await import(
+            pathToFileURL(join(packageRoot, 'dist/daemon/metrics/index.js')).href
+          );
+          const metrics = metricsModule.createDaemonMetrics(
+            { enabled: true, host: '127.0.0.1', port: 8125, prefix: 'agor.smoke.' },
+            {
+              workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+              deploymentMode: 'standalone',
+              deploymentId: 'smoke',
+            }
+          );
+          if (!metrics.enabled) throw new Error('StatsD peer did not initialize');
+          await metrics.close();
           NODE
 
       - name: A missing optional PTY does not block Agor
