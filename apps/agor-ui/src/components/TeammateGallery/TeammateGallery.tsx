@@ -312,16 +312,31 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
           gap={token.marginXS}
           wrap="wrap"
         >
-          {chips.map((chip) => (
-            <AntTag.CheckableTag
-              key={chip.key}
-              checked={filter === chip.key}
-              onChange={() => setFilter(chip.key)}
-              style={{ cursor: 'pointer', fontSize: token.fontSize, padding: '2px 12px' }}
-            >
-              {chip.label}
-            </AntTag.CheckableTag>
-          ))}
+          {chips.map((chip) => {
+            const active = filter === chip.key;
+            return (
+              <AntTag.CheckableTag
+                key={chip.key}
+                checked={active}
+                onChange={() => setFilter(chip.key)}
+                // Explicit, deterministic styling in both states so inactive chips
+                // always look identical: a bordered transparent pill, with only the
+                // active chip filled. Inline styles also override antd's hover-fill,
+                // so no chip is left with a stuck grey box.
+                style={{
+                  cursor: 'pointer',
+                  fontSize: token.fontSize,
+                  padding: '2px 12px',
+                  borderRadius: token.borderRadius,
+                  border: `1px solid ${active ? token.colorPrimary : token.colorBorderSecondary}`,
+                  background: active ? token.colorPrimary : 'transparent',
+                  color: active ? token.colorTextLightSolid : token.colorText,
+                }}
+              >
+                {chip.label}
+              </AntTag.CheckableTag>
+            );
+          })}
           {filter !== 'all' && (
             // Ghost, understated, trailing the chips — clears back to All.
             <Button

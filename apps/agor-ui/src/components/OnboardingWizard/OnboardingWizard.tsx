@@ -1568,22 +1568,24 @@ export function OnboardingWizard({
 
   const renderWorkspace = () => (
     <div>
-      {renderStepBadge('Name your AI teammate')}
-      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Name your teammate, then pick a starter template to shape what they do — or start blank. You
-        can change everything anytime.
-      </Paragraph>
-
-      {/* The name field + section label + filter chips form the gallery's sticky
-          header (see TeammateGallery); only the card grid scrolls beneath them.
-          MODAL_BG keeps the pinned header opaque against the modal surface. */}
+      {/* The whole above-the-grid block — heading + intro + name field + section
+          label + filter chips — is the gallery's sticky header, so only the card
+          grid scrolls. The header background defaults to the modal's real content
+          surface (colorBgElevated) for a seamless pin (no MODAL_BG override,
+          which is occluded behind .ant-modal-content and mismatches). */}
       <TeammateGallery
         goals={selectedGoals}
         value={selectedTemplateId}
         onChange={applyTemplate}
-        stickyHeaderBackground={MODAL_BG}
         header={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
+              Name your AI teammate
+            </Title>
+            <Paragraph style={{ color: TEXT_SECONDARY, margin: 0 }}>
+              Name your teammate, then pick a starter template to shape what they do — or start
+              blank. You can change everything anytime.
+            </Paragraph>
             <div>
               <Text
                 style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
