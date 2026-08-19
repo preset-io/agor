@@ -99,25 +99,20 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith('competitive-analyst');
   });
 
-  it('double-clicking the selected card deselects it (onChange null); single-click still selects', () => {
+  it('single-click toggles: unselected card selects, the selected card deselects', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
 
-    // Single-click an unselected card still selects it.
+    // Click an unselected card → selects it.
     fireEvent.click(cardFor('Product Manager'));
     expect(onChange).toHaveBeenLastCalledWith('product-manager');
 
-    // Double-click the selected card clears the pick. Replay the full
-    // click,click,dblclick sequence a real double-click emits — it must end
-    // deselected (null), not re-selected.
-    const selected = cardFor('Legal Analyst');
-    fireEvent.click(selected);
-    fireEvent.click(selected);
-    fireEvent.doubleClick(selected);
+    // Click the already-selected card → clears the pick (single click, no dblclick).
+    fireEvent.click(cardFor('Legal Analyst'));
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it('keyboard toggles the already-selected card off (Enter/Space) but selects an unselected one', () => {
+  it('keyboard (Enter/Space) toggles both ways', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
 
@@ -131,16 +126,33 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith('product-manager');
   });
 
-  it('also clears the blank starter via double-click or keyboard toggle-off', () => {
+  it('single-click / keyboard also toggles the blank starter off when selected', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value="blank" onChange={onChange} />);
 
-    fireEvent.doubleClick(cardFor('Start blank'));
+    fireEvent.click(cardFor('Start blank'));
     expect(onChange).toHaveBeenLastCalledWith(null);
 
     onChange.mockClear();
     fireEvent.keyDown(cardFor('Start blank'), { key: 'Enter' });
     expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('pins header content + chips in a sticky block; the grid scrolls as a sibling', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} header={<div>NAME FIELD</div>} />);
+    // Host header content renders inside the gallery.
+    expect(screen.getByText('NAME FIELD')).toBeInTheDocument();
+
+    // The chip row's container is position:sticky at top:0.
+    const stickyBlock = chipRow().parentElement as HTMLElement;
+    const style = stickyBlock.getAttribute('style') ?? '';
+    expect(style).toContain('position: sticky');
+    expect(style).toContain('top: 0');
+    // Header content lives inside the sticky block…
+    expect(stickyBlock).toContainElement(screen.getByText('NAME FIELD'));
+    // …while the scrolling grid is a sibling, not nested inside it.
+    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    expect(stickyBlock.contains(grid)).toBe(false);
   });
 
   it('badges up to two goal-recommended templates and never the blank card', () => {

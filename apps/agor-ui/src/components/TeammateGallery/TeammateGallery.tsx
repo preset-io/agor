@@ -20,26 +20,38 @@ export interface TeammateGalleryProps {
   value: string | null;
   /**
    * Fires with the clicked card's id (the blank starter included), or `null`
-   * when the current pick is cleared (double-click, or keyboard toggle-off).
+   * when the current pick is cleared (clicking the selected card, or keyboard
+   * toggle-off).
    */
   onChange: (templateId: string | null) => void;
+  /**
+   * Optional content pinned above the filter chips inside the sticky header
+   * (e.g. a name field + section label). It stays visible while only the card
+   * grid scrolls beneath it.
+   */
+  header?: React.ReactNode;
+  /**
+   * Opaque background for the sticky header, so scrolling cards never show
+   * through it. Pass the host surface's color/gradient; defaults to the elevated
+   * surface token for standalone use.
+   */
+  stickyHeaderBackground?: string;
 }
 
 /**
  * Shared pointer/keyboard handlers for a single-select card that can also be
- * deselected. Single-click selects; double-click always clears (a dblclick also
- * emits its two clicks, so forcing null last guarantees it ends deselected);
- * Enter/Space toggles the current card off when it's already selected.
+ * deselected. Selection is a single-click toggle (matching the step-1 goal
+ * cards): clicking an unselected card selects it, clicking the already-selected
+ * card clears it. Enter/Space toggles the focused card the same way.
  */
 function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => void) {
+  const toggle = () => (selected ? onClear() : onSelect());
   return {
-    onClick: onSelect,
-    onDoubleClick: onClear,
+    onClick: toggle,
     onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
       event.preventDefault();
-      if (selected) onClear();
-      else onSelect();
+      toggle();
     },
   };
 }
@@ -227,9 +239,10 @@ const BlankCard: React.FC<{
  * Responsive 2-column grid of teammate starter templates plus a blank card,
  * with category filter chips above it.
  *
- * Single-select: clicking a card reports its id (blank included). Selecting is
- * optional, so a pick can be cleared — double-click the selected card (or press
- * Enter/Space on it) deselects it (`onChange(null)`). Cards matching
+ * Single-select via a single-click toggle (like the step-1 goal cards): clicking
+ * an unselected card selects it and reports its id (blank included); clicking the
+ * already-selected card — or pressing Enter/Space on it — clears the pick
+ * (`onChange(null)`), since selecting a template is optional. Cards matching
  * the goal-derived recommendations get a "Recommended" badge (up to two; never
  * the blank card) and, in the default "All" view, sort to the front in
  * recommendation order. Filter chips (All · Grow · Build · Operate) narrow the
@@ -243,13 +256,20 @@ const BlankCard: React.FC<{
  * collapses to one only when very narrow, shows full untruncated descriptions,
  * and keeps row-mates equal height. It sits inside the modal's own vertically-
  * scrollable content region so every card is reachable while the wizard footer
- * stays on-screen.
+ * stays on-screen; the chips row (plus any `header` content) is pinned as a
+ * sticky header so only the grid scrolls under it.
  *
  * Standalone and theme-token driven so it renders correctly both on the
  * onboarding wizard's dark-glass surface and on the standard create-teammate
  * form.
  */
-export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, onChange }) => {
+export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
+  goals,
+  value,
+  onChange,
+  header,
+  stickyHeaderBackground,
+}) => {
   const { token } = theme.useToken();
   const goalList = useMemo(() => goals ?? [], [goals]);
   const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
@@ -268,34 +288,52 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
 
   return (
     <Flex vertical gap={token.marginSM}>
+      {/* Sticky header: the optional host content (name field + label) plus the
+          filter chips stay pinned to the top of the modal's scroll region while
+          only the card grid scrolls under them. Opaque background + z-index keep
+          scrolling cards from bleeding through; a hairline separates it. */}
       <Flex
-        role="group"
-        aria-label="Filter templates by category"
-        align="center"
-        gap={token.marginXS}
-        wrap="wrap"
+        vertical
+        gap={token.marginSM}
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          background: stickyHeaderBackground ?? token.colorBgElevated,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          paddingBottom: token.paddingSM,
+        }}
       >
-        {chips.map((chip) => (
-          <AntTag.CheckableTag
-            key={chip.key}
-            checked={filter === chip.key}
-            onChange={() => setFilter(chip.key)}
-            style={{ cursor: 'pointer', fontSize: token.fontSize, padding: '2px 12px' }}
-          >
-            {chip.label}
-          </AntTag.CheckableTag>
-        ))}
-        {filter !== 'all' && (
-          // Ghost, understated, trailing the chips — clears back to All.
-          <Button
-            type="text"
-            size="small"
-            onClick={() => setFilter('all')}
-            style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
-          >
-            Clear filters
-          </Button>
-        )}
+        {header}
+        <Flex
+          role="group"
+          aria-label="Filter templates by category"
+          align="center"
+          gap={token.marginXS}
+          wrap="wrap"
+        >
+          {chips.map((chip) => (
+            <AntTag.CheckableTag
+              key={chip.key}
+              checked={filter === chip.key}
+              onChange={() => setFilter(chip.key)}
+              style={{ cursor: 'pointer', fontSize: token.fontSize, padding: '2px 12px' }}
+            >
+              {chip.label}
+            </AntTag.CheckableTag>
+          ))}
+          {filter !== 'all' && (
+            // Ghost, understated, trailing the chips — clears back to All.
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setFilter('all')}
+              style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
+            >
+              Clear filters
+            </Button>
+          )}
+        </Flex>
       </Flex>
 
       <div

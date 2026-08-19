@@ -1574,46 +1574,56 @@ export function OnboardingWizard({
         can change everything anytime.
       </Paragraph>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div>
-          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
-            Teammate name
-          </Text>
-          <div style={{ display: 'flex', gap: 0 }}>
-            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
-            <Input
-              aria-label="Teammate name"
-              placeholder="e.g. Rusty, Ada, Scout…"
-              value={teammateName}
-              onChange={(e) => setTeammateName(e.target.value)}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                borderTopLeftRadius: 0,
-                borderBottomLeftRadius: 0,
-                flex: 1,
-              }}
-            />
-          </div>
-          {hasExistingBoard && (
-            <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
-              They'll join your existing board
-              {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
-            </Text>
-          )}
-        </div>
+      {/* The name field + section label + filter chips form the gallery's sticky
+          header (see TeammateGallery); only the card grid scrolls beneath them.
+          MODAL_BG keeps the pinned header opaque against the modal surface. */}
+      <TeammateGallery
+        goals={selectedGoals}
+        value={selectedTemplateId}
+        onChange={applyTemplate}
+        stickyHeaderBackground={MODAL_BG}
+        header={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div>
+              <Text
+                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
+              >
+                Teammate name
+              </Text>
+              <div style={{ display: 'flex', gap: 0 }}>
+                <EmojiPickerInput
+                  value={teammateEmoji}
+                  onChange={setTeammateEmoji}
+                  defaultEmoji="🤖"
+                />
+                <Input
+                  aria-label="Teammate name"
+                  placeholder="e.g. Rusty, Ada, Scout…"
+                  value={teammateName}
+                  onChange={(e) => setTeammateName(e.target.value)}
+                  style={{
+                    background: 'rgba(0,0,0,0.3)',
+                    borderColor: 'rgba(255,255,255,0.12)',
+                    borderTopLeftRadius: 0,
+                    borderBottomLeftRadius: 0,
+                    flex: 1,
+                  }}
+                />
+              </div>
+              {hasExistingBoard && (
+                <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
+                  They'll join your existing board
+                  {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
+                </Text>
+              )}
+            </div>
 
-        <div>
-          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 8 }}>
-            Start from a template <span style={{ color: TEXT_MUTED }}>(optional)</span>
-          </Text>
-          <TeammateGallery
-            goals={selectedGoals}
-            value={selectedTemplateId}
-            onChange={applyTemplate}
-          />
-        </div>
-      </div>
+            <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block' }}>
+              Start from a template <span style={{ color: TEXT_MUTED }}>(optional)</span>
+            </Text>
+          </div>
+        }
+      />
 
       {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
     </div>
