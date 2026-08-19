@@ -1,3 +1,4 @@
+import { access, constants } from 'node:fs/promises';
 import {
   AGENTIC_TOOL_INTEGRATIONS,
   resolveAgenticToolSelectionPolicy,
@@ -44,14 +45,21 @@ export default class Doctor extends Command {
     // what the daemon actually runs — not just the raw config.yaml.
     const sandbox = diagnoseSandbox(resolveEffectiveConfig(cfg));
 
-    // `daemon start` refuses to run without this and sends people here, so doctor
-    // has to both report it and be able to fix it.
+    // `daemon start` refuses to run without a deployment ID and sends people here,
+    // so doctor has to both report it and be able to fix it.
+    //
+    // Scope that to an installation that has actually been initialized. A fresh
+    // install legitimately has no config.yaml and therefore no deployment ID; that
+    // is what `agor init` is for, not a fault, and it must not turn `ok` false.
+    const initialized = await this.pathExists(getConfigPath());
     let deploymentIdPresent = true;
-    try {
-      requireDeploymentId(cfg);
-    } catch (error) {
-      if (!isMissingDeploymentIdError(error)) throw error;
-      deploymentIdPresent = false;
+    if (initialized) {
+      try {
+        requireDeploymentId(cfg);
+      } catch (error) {
+        if (!isMissingDeploymentIdError(error)) throw error;
+        deploymentIdPresent = false;
+      }
     }
 
     if (flags.json) {
@@ -60,7 +68,11 @@ export default class Doctor extends Command {
           {
             ok: git.status === 'ready' && deploymentIdPresent,
             git,
-            deploymentId: { present: deploymentIdPresent, configPath: getConfigPath() },
+            deploymentId: {
+              present: initialized ? deploymentIdPresent : null,
+              initialized,
+              configPath: getConfigPath(),
+            },
             optionalCapabilities: { webTerminal },
             policy,
             sandbox,
@@ -82,7 +94,9 @@ export default class Doctor extends Command {
       this.log(`${chalk.red('✗')} ${git.detail}`);
     }
 
-    if (deploymentIdPresent) {
+    if (!initialized) {
+      this.log(`${chalk.yellow('○')} Not initialized yet — run \`agor init\``);
+    } else if (deploymentIdPresent) {
       this.log(`${chalk.green('✓')} Deployment ID is set`);
     } else {
       this.log(`${chalk.red('✗')} daemon.deployment_id is missing — the daemon will not start`);
@@ -159,5 +173,14 @@ export default class Doctor extends Command {
     if (policy.source === 'missing-manifest')
       this.log(chalk.yellow('\n  No local selection manifest. Run interactive `agor install`.'));
     else this.log(chalk.dim('\n  Repair without changing selection: agor install --sync'));
+  }
+
+  private async pathExists(path: string): Promise<boolean> {
+    try {
+      await access(path, constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
