@@ -341,6 +341,23 @@ ${block}
     );
   });
 
+  it('refuses dcr_mode: disabled with no client_id, which can never start a flow', () => {
+    // Registration off and no client stated leaves the flow with no client ID
+    // to send, and `startOAuthFlow` throws on exactly that pair. Caught here it
+    // is a diff a reviewer can fix; caught there it is a per-user dead end.
+    expect(() => parseCuratedCatalog(withOAuth('      dcr_mode: disabled'))).toThrow(
+      CuratedCatalogError
+    );
+  });
+
+  it.each(['advertised', 'fallback'] as const)(
+    'accepts dcr_mode: %s with no client_id, because registration mints one',
+    (dcrMode) => {
+      const [entry] = parseCuratedCatalog(withOAuth(`      dcr_mode: ${dcrMode}`));
+      expect(entry.oauth).toEqual({ dcr_mode: dcrMode });
+    }
+  );
+
   it('leaves the block absent when an entry states nothing', () => {
     const [entry] = parseCuratedCatalog(VALID_ENTRY);
     expect(entry.oauth).toBeUndefined();
