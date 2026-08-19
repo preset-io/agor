@@ -5,7 +5,7 @@ import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
-import { getMetrics } from './metrics/index.js';
+import { getDaemonMetrics } from './metrics/index.js';
 
 export interface ExecutorContainmentIdentity {
   sessionId: string;
@@ -43,7 +43,7 @@ function executorProcesses(owner?: object): Map<string, ExecutorContainmentIdent
 
 function reportTrackedExecutorGauge(owner?: object, value = executorProcesses(owner).size): void {
   if (!owner) return;
-  getMetrics(owner).gauge('executors.running', value, {
+  getDaemonMetrics(owner).gauge('executors.running', value, {
     mode: 'local',
     scope: 'process_group',
   });

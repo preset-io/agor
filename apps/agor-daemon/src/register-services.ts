@@ -93,7 +93,7 @@ import {
   inOpenCodeNativeStateMutationSlot,
   type OpenCodeNativeStateMutationFence,
 } from './integrations/opencode/native-state-coordinator.js';
-import { getMetrics } from './metrics/index.js';
+import { getDaemonMetrics } from './metrics/index.js';
 import { runInOAuthTenantScope, runInOAuthTenantWriteScope } from './oauth-auth-helpers.js';
 import { persistOAuthToken } from './oauth-cache.js';
 import {
@@ -919,7 +919,7 @@ function createExecuteHandler(
     params: any
   ) => {
     const launchStartedAt = performance.now();
-    const metrics = getMetrics(app);
+    const metrics = getDaemonMetrics(app);
     const tenantId = getCurrentTenantId();
     const session = await prepareSessionForExecutorStart(
       db,

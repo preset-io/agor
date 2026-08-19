@@ -59,7 +59,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { getMetrics } from '../metrics/index.js';
+import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
   recordExecutorConnected,
@@ -188,7 +188,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       expectedStatus,
       updates
     );
-    recordDispatchClaim(getMetrics(this.app), result);
+    recordDispatchClaim(getDaemonMetrics(this.app), result);
     if (result.outcome === 'claimed') {
       emitServiceEvent(this.app, {
         path: 'tasks',
@@ -396,7 +396,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   private trackTaskCompleted(task: Task): void {
-    recordTaskSettlement(getMetrics(this.app), task);
+    recordTaskSettlement(getDaemonMetrics(this.app), task);
     const normalized = task.normalized_sdk_response;
     analyticsLogger.track(
       'task.completed',
@@ -1345,7 +1345,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
     if (connection.transitioned) {
-      recordExecutorConnected(getMetrics(this.app), connection.task);
+      recordExecutorConnected(getDaemonMetrics(this.app), connection.task);
       const startedAt = Date.parse(connection.task.started_at ?? '');
       const connectedAt = Date.parse(connection.task.executor_connected_at ?? '');
       if (Number.isFinite(startedAt) && Number.isFinite(connectedAt)) {

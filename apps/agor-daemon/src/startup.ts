@@ -30,7 +30,7 @@ import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@ag
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
-import { type DaemonMetrics, getMetrics, NOOP_METRICS } from './metrics/index.js';
+import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -675,7 +675,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
-  const metrics = getMetrics(app);
+  const metrics = getDaemonMetrics(app);
   initializeEnvironmentHealthMonitor(healthMonitor, metrics);
   if (orphanCleanupResult) {
     runPostStartJob(
@@ -981,7 +981,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
         console.warn('[metrics.statsd] Failed to reset executor gauge:', error);
       }
       try {
-        await getMetrics(app).close();
+        await getDaemonMetrics(app).close();
       } catch (error) {
         console.warn('[metrics.statsd] Failed to close metrics exporter:', error);
       }

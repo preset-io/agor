@@ -85,7 +85,7 @@ export function createDaemonMetrics(
 }
 
 /** Resolve application-owned metrics without introducing a process singleton. */
-export function getMetrics(owner: object | null | undefined): DaemonMetrics {
+export function getDaemonMetrics(owner: object | null | undefined): DaemonMetrics {
   try {
     const metrics = (owner as { get?: (name: 'metrics') => unknown } | null | undefined)?.get?.(
       'metrics'

@@ -55,10 +55,10 @@ Express middleware  Feathers around hook  lifecycle seams
 ```
 
 The Feathers application owns the dependency and its socket lifecycle. Modules
-use `getMetrics(app)`, which returns the application client or the shared
-no-op. This follows Agor's existing application-owned config, database, work
-identity, scheduler, and monitor dependencies without a mutable process
-singleton or constructor changes across every service.
+use `getDaemonMetrics(app)`, which returns the application-owned metrics
+abstraction or the shared no-op. This follows Agor's existing application-owned
+config, database, work identity, scheduler, and monitor dependencies without a
+mutable process singleton or constructor changes across every service.
 
 Both passive boundaries are needed:
 

@@ -110,7 +110,7 @@ import {
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { createFeathersMetricsHook } from './metrics/feathers.js';
-import { getMetrics } from './metrics/index.js';
+import { getDaemonMetrics } from './metrics/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -4552,7 +4552,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   app.hooks({
     around: {
-      all: [createFeathersMetricsHook(getMetrics(app))],
+      all: [createFeathersMetricsHook(getDaemonMetrics(app))],
     },
     before: {
       all: [enforcePasswordChange],
