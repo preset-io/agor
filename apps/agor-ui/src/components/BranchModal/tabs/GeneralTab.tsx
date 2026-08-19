@@ -116,8 +116,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           <Typography.Text strong style={{ fontSize: 14, display: 'block', marginBottom: 16 }}>
             Work Context
           </Typography.Text>
-          <Form layout="horizontal" colon={false}>
-            <Form.Item label="Board" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+          <Form layout="vertical" colon={false}>
+            <Form.Item label="Board">
               <Select
                 value={state.boardId}
                 onChange={(value) => setField('boardId', value)}
@@ -128,7 +128,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Issue" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item label="Issue">
               <Input
                 value={state.issueUrl}
                 onChange={(e) => setField('issueUrl', e.target.value)}
@@ -138,7 +138,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Pull Request" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item label="Pull Request">
               <Input
                 value={state.prUrl}
                 onChange={(e) => setField('prUrl', e.target.value)}
@@ -169,8 +169,6 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                     </Tooltip>
                   </Space>
                 }
-                labelCol={{ span: 6 }}
-                wrapperCol={{ span: 18 }}
               >
                 <TextArea
                   value={state.notes}
@@ -184,9 +182,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
 
             <Form.Item
               label="MCP Servers"
-              labelCol={{ span: 6 }}
-              wrapperCol={{ span: 18 }}
-              extra="Default MCP servers for new sessions in this branch"
+              tooltip="Default MCP servers for new sessions in this branch"
             >
               <MCPServerSelect
                 mcpServers={mcpServers}

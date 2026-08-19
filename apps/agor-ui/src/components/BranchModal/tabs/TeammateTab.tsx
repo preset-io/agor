@@ -32,8 +32,8 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
         </Space>
 
         {/* Editable fields */}
-        <Form layout="horizontal" colon={false}>
-          <Form.Item label="Display Name" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+        <Form layout="vertical" colon={false}>
+          <Form.Item label="Display Name">
             <Input
               value={state.displayName}
               onChange={(e) => setField('displayName', e.target.value)}
@@ -41,7 +41,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
               disabled={!canEdit}
             />
           </Form.Item>
-          <Form.Item label="Icon" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+          <Form.Item label="Icon">
             <EmojiPickerInput
               value={state.emoji}
               onChange={(val) => setField('emoji', val)}
@@ -51,8 +51,6 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
           </Form.Item>
           <Form.Item
             label="Description"
-            labelCol={{ span: 6 }}
-            wrapperCol={{ span: 18 }}
             tooltip="What does this AI teammate do? Visible to other agents via MCP."
           >
             <Input.TextArea
