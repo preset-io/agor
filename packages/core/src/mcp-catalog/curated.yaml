@@ -37,18 +37,6 @@
 
 # Entries the registry publishes under exactly this `name`.
 entries:
-  - name: io.github.github/github-mcp-server
-    category: dev-tools
-    capabilities: [code-repos, issues, pull-requests, code-search, automations]
-    benefit: Let an agent read your repos, triage issues, and open pull requests without leaving the session.
-    starter_prompt: Summarise the open pull requests on my most active repository and flag any that have been waiting on review for more than a week.
-    permission_disclosure: Reads and writes repositories, issues, pull requests, and Actions runs for every organisation your GitHub account can reach.
-    icon_url: https://api.smithery.ai/servers/github/icon
-    popularity_rank: 1
-    remote_url: https://api.githubcopilot.com/mcp/
-    transport: streamable-http
-    auth_type: oauth
-
   - name: app.linear/linear
     category: dev-tools
     capabilities: [issues, projects, notes]
@@ -134,18 +122,6 @@ entries:
     transport: streamable-http
     auth_type: oauth
 
-  - name: io.prisma/mcp
-    category: data-storage
-    capabilities: [schema, databases]
-    benefit: Keep an agent's migrations honest by giving it the live Prisma schema and database state.
-    starter_prompt: Read my Prisma schema and draft a migration that adds the field I describe.
-    permission_disclosure: Reads and modifies schema and data in the Prisma Postgres databases you authorise.
-    icon_url: https://api.smithery.ai/servers/prisma/icon
-    popularity_rank: 18
-    remote_url: https://mcp.prisma.io/mcp
-    transport: streamable-http
-    auth_type: oauth
-
   - name: com.airtable/mcp
     category: data-storage
     capabilities: [databases, schema]
@@ -205,6 +181,8 @@ entries:
     remote_url: https://mcp.monday.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      compatibility_mode: strict
 
   - name: com.zapier/mcp
     category: productivity
@@ -404,6 +382,8 @@ unpublished:
     remote_url: https://mcp.cloudflare.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      compatibility_mode: strict
 
   - name: com.semgrep/mcp
     category: dev-tools
@@ -426,18 +406,6 @@ unpublished:
     icon_url: https://api.smithery.ai/servers/buildkite/icon
     popularity_rank: 31
     remote_url: https://mcp.buildkite.com/mcp
-    transport: streamable-http
-    auth_type: oauth
-
-  - name: com.mongodb/mcp
-    category: data-storage
-    capabilities: [files, databases, schema, sql]
-    benefit: Explore collections and run aggregations without hand-writing shell commands.
-    starter_prompt: List my collections, describe the shape of the largest one, and suggest an index for my slowest query.
-    permission_disclosure: Reads and writes documents, collections, and indexes in the MongoDB clusters you authorise.
-    icon_url: https://www.google.com/s2/favicons?domain=mongodb.com&sz=64
-    popularity_rank: 16
-    remote_url: https://mcp.mongodb.com/mcp
     transport: streamable-http
     auth_type: oauth
 
@@ -465,18 +433,6 @@ unpublished:
     transport: streamable-http
     auth_type: oauth
 
-  - name: com.box/mcp
-    category: data-storage
-    capabilities: [files, web-search]
-    benefit: Search and read Box content so an agent can work from the documents your team already keeps there.
-    starter_prompt: Search my Box account for documents about the project I name and summarise what they cover.
-    permission_disclosure: Reads and writes files, folders, and metadata in the Box accounts you authorise.
-    icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/box.svg
-    popularity_rank: 40
-    remote_url: https://mcp.box.com/mcp
-    transport: streamable-http
-    auth_type: oauth
-
   - name: com.asana/mcp
     category: productivity
     capabilities: [tasks, projects, notes]
@@ -500,6 +456,8 @@ unpublished:
     remote_url: https://mcp.clickup.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      compatibility_mode: strict
 
   - name: com.squareup/mcp
     category: productivity
@@ -510,18 +468,6 @@ unpublished:
     icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master//squareup.svg
     popularity_rank: 43
     remote_url: https://mcp.squareup.com/mcp
-    transport: streamable-http
-    auth_type: oauth
-
-  - name: com.hubspot/mcp
-    category: productivity
-    capabilities: [crm]
-    benefit: Query the CRM in plain language instead of building a report for every question.
-    starter_prompt: Summarise the deals in my pipeline that have not moved in two weeks.
-    permission_disclosure: Reads and writes contacts, companies, deals, and tickets in the HubSpot portals you authorise.
-    icon_url: https://api.smithery.ai/servers/hubspot/icon
-    popularity_rank: 27
-    remote_url: https://mcp.hubspot.com/anthropic
     transport: streamable-http
     auth_type: oauth
 
@@ -546,18 +492,6 @@ unpublished:
     icon_url: https://cdn.jsdelivr.net/gh/ComposioHQ/open-logos@master/canva.jpeg
     popularity_rank: 42
     remote_url: https://mcp.canva.com/mcp
-    transport: streamable-http
-    auth_type: oauth
-
-  - name: com.slack/mcp
-    category: messaging
-    capabilities: [messages, channels, web-search]
-    benefit: Search channel history for the decision nobody wrote down, and post results where the team will see them.
-    starter_prompt: Search my Slack for discussion about the feature I name and summarise what was decided.
-    permission_disclosure: Reads and posts messages in the Slack channels you authorise, including their history.
-    icon_url: https://api.smithery.ai/servers/node2flow/slack/icon
-    popularity_rank: 13
-    remote_url: https://mcp.slack.com/mcp
     transport: streamable-http
     auth_type: oauth
 
@@ -586,18 +520,6 @@ unpublished:
     transport: streamable-http
     auth_type: credentials
 
-  - name: com.pagerduty/mcp
-    category: observability
-    capabilities: [incidents, deployments]
-    benefit: Read incident history and on-call state so an agent knows who was paged and what changed.
-    starter_prompt: Summarise the incidents from the last week and identify which service caused the most pages.
-    permission_disclosure: Reads and writes incidents, schedules, and service configuration in the PagerDuty accounts you authorise.
-    icon_url: https://logos.composio.dev/api/pagerduty
-    popularity_rank: 46
-    remote_url: https://mcp.pagerduty.com/mcp
-    transport: streamable-http
-    auth_type: oauth
-
   - name: com.firecrawl/mcp
     category: search
     capabilities: [web-scrape]
@@ -610,14 +532,7 @@ unpublished:
     transport: streamable-http
     auth_type: none
 
-  - name: com.kagi/mcp
-    category: search
-    capabilities: [web-search]
-    benefit: Search with an ad-free, publisher-ranked index when result quality matters more than breadth.
-    starter_prompt: Search for recent authoritative coverage of the topic I name and summarise the consensus.
-    permission_disclosure: Sends your search queries to Kagi under the account you authorise, which may consume search credits.
-    icon_url: https://www.google.com/s2/favicons?domain=kagi.com&sz=64
-    popularity_rank: 50
-    remote_url: https://mcp.kagi.com/mcp
-    transport: streamable-http
-    auth_type: oauth
+# OAuth endpoints intentionally not offered after the 2026-08-19 read-only audit:
+# - GitHub, MongoDB, Box, HubSpot, and Slack publish no DCR endpoint or reviewed public client for Agor.
+# - Prisma and PagerDuty publish authorization-server issuer chains that do not bind safely.
+# - Kagi challenges with Bearer but publishes neither protected-resource nor authorization-server metadata.

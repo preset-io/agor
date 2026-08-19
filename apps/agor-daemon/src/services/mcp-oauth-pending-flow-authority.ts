@@ -75,7 +75,11 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
-    (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
+    (material.compatibilityMode === 'strict' ||
+      material.compatibilityMode === 'legacy' ||
+      material.compatibilityMode === 'marketplace') &&
+    (material.authorizationResponseIssuerParameterSupported === undefined ||
+      typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
     typeof material.allowLocalhostHttp === 'boolean'
   );
 }
@@ -144,6 +148,8 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
         compatibilityMode: input.context.compatibilityMode,
+        authorizationResponseIssuerParameterSupported:
+          input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
       };
       const sealedMaterial = sealMCPOAuthSecret(
@@ -281,6 +287,12 @@ export class MCPOAuthPendingFlowAuthority {
         // secret-bearing authorization URL after the browser has opened it.
         authorizationUrl: '',
         compatibilityMode: material.compatibilityMode,
+        // Older version-2 envelopes predate this explicit bit. Strict starts
+        // could only succeed when the AS advertised RFC 9207, while legacy
+        // never required it, so the mode reconstructs the old contract.
+        authorizationResponseIssuerParameterSupported:
+          material.authorizationResponseIssuerParameterSupported ??
+          material.compatibilityMode === 'strict',
         allowLocalhostHttp: material.allowLocalhostHttp,
       },
     };

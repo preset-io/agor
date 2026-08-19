@@ -246,10 +246,10 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  * either.
  *
  * The rest is {@link MCPCatalogEntryOAuth} — the non-secret settings an entry
- * may state for a server that falls short of the spec. `curated.yaml` states
- * none of them today; each is spread only when present, so an entry that says
- * nothing produces the two-key block above and not a row full of `undefined`
- * that would then have to be compared around.
+ * may state after the production discovery boundary is reviewed. Each is
+ * spread only when present, so an entry that says nothing produces the two-key
+ * block above and not a row full of `undefined` that would then have to be
+ * compared around.
  */
 function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
   const stated = entry.oauth;

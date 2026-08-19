@@ -181,9 +181,11 @@ export interface MCPCatalogEntry {
  * metadata (RFC 9728), that names its authorization server, that publishes its
  * endpoints and registration endpoint (RFC 8414), and Dynamic Client
  * Registration (RFC 7591) mints the client. Connect declares none of that, and
- * every entry in `curated.yaml` today states nothing here, because a fact
- * fetched from the vendor at the moment of use cannot go stale and an authored
- * one silently can — and nothing sweeps this file for rot.
+ * entries should normally state nothing here, because a fact fetched from the
+ * vendor at the moment of use cannot go stale and an authored one silently can
+ * — and nothing sweeps this file for rot. A reviewed explicit `strict` opt-in
+ * is useful when the production discovery boundary proves a provider supports
+ * the complete strict contract.
  *
  * So this is an escape hatch for the servers that fall short of that, not a
  * place to restate what discovery already returns. Each field is here because
@@ -200,8 +202,10 @@ export interface MCPCatalogEntry {
  *   in the browser's address bar during the flow.
  * - `dcr_mode` decides whether registration may fall back to an unadvertised
  *   `/register`, for a server that runs DCR without publishing the endpoint.
- * - `compatibility_mode` decides whether authorization-server metadata may be
- *   fetched straight from the MCP origin, for a server that predates RFC 9728.
+ * - `compatibility_mode` is an explicit `strict` or `legacy` opt-in. Omission
+ *   uses the daemon's marketplace-only interoperability profile: standard and
+ *   OIDC discovery fallbacks with same-origin resource binding, issuer
+ *   validation, and PKCE S256 retained.
  *
  * What is deliberately absent is as load-bearing as what is here:
  *
@@ -228,7 +232,7 @@ export interface MCPCatalogEntryOAuth {
   client_id?: string;
   /** Dynamic Client Registration policy; defaults to `advertised`. */
   dcr_mode?: MCPOAuthDCRMode;
-  /** Authorization-metadata discovery strictness; defaults to `strict`. */
+  /** Explicit authorization-metadata policy; omission uses marketplace interoperability. */
   compatibility_mode?: MCPOAuthCompatibilityMode;
 }
 

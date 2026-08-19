@@ -72,6 +72,18 @@ export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
 export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
 
 /**
+ * Effective OAuth discovery policy while a flow is running.
+ *
+ * `marketplace` is deliberately not an {@link MCPOAuthCompatibilityMode} and
+ * therefore cannot be submitted in an MCP server payload. The daemon derives
+ * it only for reviewed catalog installs whose row did not explicitly opt into
+ * `strict` or `legacy`. This keeps the default for every user/admin configured
+ * server strict while giving the marketplace a bounded interoperability
+ * profile that still enforces issuer/resource binding and PKCE S256.
+ */
+export type MCPOAuthRuntimeCompatibilityMode = MCPOAuthCompatibilityMode | 'marketplace';
+
+/**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
  *
  * This closed shape classifies recovery without carrying provider response
@@ -128,7 +140,9 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
-  compatibilityMode: 'strict' | 'legacy';
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  /** Whether RFC 9207 says this AS will return `iss` on the callback. */
+  authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
 }
 

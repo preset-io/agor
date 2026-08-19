@@ -13,6 +13,7 @@ import type {
   MCPServerID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
+import { resolveMCPOAuthCompatibilityMode } from './mcp-oauth-compatibility.js';
 
 export const MCP_OAUTH_GRANT_BINDING_VERSION = 2 as const;
 
@@ -47,13 +48,14 @@ export interface MCPOAuthResolvedGrantBinding {
 }
 
 function authBinding(
-  auth: MCPAuth | undefined,
+  server: { source?: MCPServer['source']; auth?: MCPAuth },
   version: MCPOAuthGrantBindingVersion
 ): Record<string, unknown> {
+  const auth = server.auth;
   return {
     type: auth?.type ?? 'none',
     mode: auth?.oauth_mode ?? 'per_user',
-    compatibility: auth?.oauth_compatibility_mode ?? 'strict',
+    compatibility: resolveMCPOAuthCompatibilityMode(server),
     // Preserve version 1 for existing grants and pending flows. New bindings
     // record the effective default so an explicit switch to disabled revokes a
     // DCR-created grant just like any other relevant policy change.
@@ -70,7 +72,10 @@ function authBinding(
 /** HMAC prevents a fingerprint from becoming a client-secret guessing oracle. */
 export function fingerprintMCPOAuthGrantConfiguration(
   masterSecret: string,
-  server: Pick<MCPServer, 'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'auth'>,
+  server: Pick<
+    MCPServer,
+    'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
+  >,
   resolved: MCPOAuthResolvedGrantBinding,
   version: MCPOAuthGrantBindingVersion = MCP_OAUTH_GRANT_BINDING_VERSION
 ): string {
@@ -81,7 +86,7 @@ export function fingerprintMCPOAuthGrantConfiguration(
     enabled: server.enabled,
     transport: server.transport,
     serverUrl: server.url ?? null,
-    auth: authBinding(server.auth, version),
+    auth: authBinding(server, version),
     resolved,
   });
   return createHmac('sha256', masterSecret)
@@ -97,7 +102,7 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     enabled: server.enabled,
     transport: server.transport,
     url: server.url ?? null,
-    auth: authBinding(server.auth, MCP_OAUTH_GRANT_BINDING_VERSION),
+    auth: authBinding(server, MCP_OAUTH_GRANT_BINDING_VERSION),
   });
 }
 
@@ -115,7 +120,10 @@ export function hasMCPOAuthRelevantServerConfigurationChanged(
  */
 export function isMCPOAuthGrantBoundToServer(
   masterSecret: string,
-  server: Pick<MCPServer, 'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'auth'>,
+  server: Pick<
+    MCPServer,
+    'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
+  >,
   grant: UserMCPOAuthToken
 ): boolean {
   if (

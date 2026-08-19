@@ -11,12 +11,16 @@ import {
 
 const masterSecret = 'test-master-secret-that-is-not-a-provider-secret';
 
-type ServerBinding = Pick<MCPServer, 'mcp_server_id' | 'enabled' | 'transport' | 'url' | 'auth'>;
+type ServerBinding = Pick<
+  MCPServer,
+  'mcp_server_id' | 'enabled' | 'transport' | 'url' | 'source' | 'catalog_entry_name' | 'auth'
+>;
 
 const server: ServerBinding = {
   mcp_server_id: '019f-server-a' as MCPServerID,
   enabled: true,
   transport: 'http',
+  source: 'user',
   url: 'https://resource.example/mcp',
   auth: {
     type: 'oauth',
@@ -100,6 +104,24 @@ describe('MCP OAuth grant configuration binding', () => {
         tokenFor(legacyFingerprint(withoutPolicy), 1)
       )
     ).toBe(true);
+  });
+
+  it('binds the marketplace-derived profile and an explicit strict opt-in differently', () => {
+    const catalogDefault: ServerBinding = {
+      ...server,
+      source: 'catalog',
+      catalog_entry_name: 'com.example/provider',
+      auth: { ...server.auth, oauth_compatibility_mode: undefined },
+    };
+    const catalogStrict: ServerBinding = {
+      ...catalogDefault,
+      auth: { ...catalogDefault.auth, oauth_compatibility_mode: 'strict' },
+    };
+
+    expect(fingerprintMCPOAuthGrantConfiguration(masterSecret, catalogDefault, resolved)).not.toBe(
+      fingerprintMCPOAuthGrantConfiguration(masterSecret, catalogStrict, resolved)
+    );
+    expect(hasMCPOAuthRelevantServerConfigurationChanged(catalogDefault, catalogStrict)).toBe(true);
   });
 
   it('binds every provider, client, callback, server, mode, and version input', () => {

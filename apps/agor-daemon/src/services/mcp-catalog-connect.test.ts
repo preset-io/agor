@@ -605,12 +605,13 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
 
-    // `oauth-start` reads exactly three things off the row: the endpoint, that
-    // the row is enabled, and that it is an OAuth row. Everything else it needs
-    // it discovers from the endpoint at the moment the user signs in.
+    // `oauth-start` reads the endpoint, enabled/OAuth state, and trusted catalog
+    // provenance. Everything provider-specific is still discovered from the
+    // endpoint at the moment the user signs in.
     expect(created.mcpServers[0]).toMatchObject({
       url: 'https://mcp.linear.app/mcp',
       transport: 'http',
+      source: 'catalog',
       auth: { type: 'oauth', oauth_mode: 'per_user' },
     });
     expect(result.reused_existing_server).toBe(false);
@@ -659,8 +660,8 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
   });
 
   it('carries the entry’s stated settings onto the row', async () => {
-    // The escape hatch for servers that fall short of the discovery spec. No
-    // curated entry states these today; the plumbing is what is asserted.
+    // The reviewed escape hatch for a provider-specific exception or strict
+    // opt-in; the plumbing is what is asserted.
     const { app, created } = buildApp({
       ...OAUTH_ENTRY,
       oauth: {

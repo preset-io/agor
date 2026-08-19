@@ -62,6 +62,7 @@ import type {
   MCPOAuthAttemptID,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
   MCPServer,
   MCPServerID,
@@ -157,6 +158,7 @@ import { createKnowledgeSettingsService } from './services/knowledge-settings.js
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
+import { resolveMCPOAuthCompatibilityMode } from './services/mcp-oauth-compatibility.js';
 import {
   classifyMCPOAuthCompletionFailure,
   OAuthFlowAuthorizationChangedError,
@@ -1599,7 +1601,7 @@ async function registerMCPServices(
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     scope?: string;
-    compatibilityMode?: 'strict' | 'legacy';
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
   };
@@ -2826,7 +2828,7 @@ async function registerMCPServices(
         let clientSecretOverride: string | undefined;
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
-        let compatibilityMode: 'strict' | 'legacy' = 'strict';
+        let compatibilityMode: MCPOAuthRuntimeCompatibilityMode = 'strict';
         let dcrMode: MCPOAuthDCRMode | undefined;
         const savedServerId = data.mcp_server_id;
         // Its stored OAuth client configuration belongs to whoever owns the
@@ -2883,7 +2885,7 @@ async function registerMCPServices(
           clientIdFromConfig = savedServer.auth.oauth_client_id;
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
-          compatibilityMode = savedServer.auth.oauth_compatibility_mode ?? 'strict';
+          compatibilityMode = resolveMCPOAuthCompatibilityMode(savedServer);
           dcrMode = savedServer.auth.oauth_dcr_mode;
           if (oauthMode === 'shared') {
             const currentUser =
@@ -3768,6 +3770,8 @@ async function registerMCPServices(
           name?: string;
           scope?: string;
           owner_user_id?: string;
+          source?: MCPServer['source'];
+          catalog_entry_name?: string;
         };
         let serverId: string | undefined;
 
@@ -3797,6 +3801,8 @@ async function registerMCPServices(
               current: server.headers,
               next: data.headers,
             });
+            serverConfig.source = server.source;
+            serverConfig.catalog_entry_name = server.catalog_entry_name;
             serverId = data.mcp_server_id;
           }
         } else if (data.mcp_server_id) {
@@ -3817,6 +3823,8 @@ async function registerMCPServices(
             name: server.name,
             scope: server.scope,
             owner_user_id: server.owner_user_id,
+            source: server.source,
+            catalog_entry_name: server.catalog_entry_name,
           };
           serverId = data.mcp_server_id;
         } else {
@@ -3904,7 +3912,7 @@ async function registerMCPServices(
             const { resolveMCPOAuthDiscovery } = await import(
               '@agor/core/tools/mcp/oauth-mcp-transport'
             );
-            const compatibilityMode = serverConfig.auth?.oauth_compatibility_mode ?? 'strict';
+            const compatibilityMode = resolveMCPOAuthCompatibilityMode(serverConfig);
             const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, mcpUrl, {
               compatibilityMode,
               allowLocalhostHttp: !durableOAuthFlows,
@@ -3988,6 +3996,8 @@ async function registerMCPServices(
                     enabled: true,
                     transport: serverConfig.transport,
                     url: serverConfig.url,
+                    source: serverConfig.source ?? 'user',
+                    catalog_entry_name: serverConfig.catalog_entry_name,
                     auth: serverConfig.auth,
                   },
                   grant

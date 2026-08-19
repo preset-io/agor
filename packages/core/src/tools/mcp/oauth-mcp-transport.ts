@@ -9,13 +9,18 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { z } from 'zod';
-import type { MCPOAuthDCRDiagnostic, MCPOAuthDCRMode } from '../../types/mcp.js';
+import type {
+  MCPOAuthDCRDiagnostic,
+  MCPOAuthDCRMode,
+  MCPOAuthRuntimeCompatibilityMode,
+} from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
-  resource?: string;
+  /** RFC 9728 says string; marketplace compatibility also recognizes one observed singleton array. */
+  resource?: string | string[];
   authorization_servers: string[];
   scopes_supported?: string[];
   bearer_methods_supported?: string[];
@@ -367,7 +372,10 @@ export type MCPOAuthDiscoveryResult =
 export async function resolveMCPOAuthDiscovery(
   wwwAuthenticateHeader: string | null,
   mcpUrl: string,
-  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
+  options: {
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
+    allowLocalhostHttp?: boolean;
+  } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
   const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
@@ -376,7 +384,7 @@ export async function resolveMCPOAuthDiscovery(
   }
 
   // Strategies 3 + 4: AS metadata directly at MCP origin (RFC 8414 / OIDC)
-  if ((options.compatibilityMode ?? 'strict') !== 'legacy') return null;
+  if ((options.compatibilityMode ?? 'strict') === 'strict') return null;
   const asDirect = await discoverAuthorizationServerFromMcpOrigin(mcpUrl, options);
   if (asDirect) {
     return {
@@ -643,6 +651,36 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
 }
 
 /**
+ * A few reviewed providers disagree only about a trailing slash on an issuer.
+ * Treat that spelling difference as equivalent in the marketplace profile,
+ * while preserving strict RFC 8414 string comparison everywhere else. Host,
+ * scheme, port, path, query, username and password must still agree.
+ */
+function oauthIssuerIdentifiersMatch(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  if (left === right) return true;
+  try {
+    const normalize = (value: string): string => {
+      const url = new URL(value);
+      if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '');
+      return url.toString();
+    };
+    return normalize(left) === normalize(right);
+  } catch {
+    return false;
+  }
+}
+
+function oauthIssuerOriginMatchesResource(issuer: unknown, resourceUri: string): boolean {
+  if (typeof issuer !== 'string') return false;
+  try {
+    return new URL(issuer).origin === new URL(resourceUri).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch Authorization Server Metadata (RFC 8414)
  *
  * Implements path-aware discovery per RFC 8414 Section 3.
@@ -650,7 +688,10 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  */
 export async function fetchAuthorizationServerMetadata(
   authServerUrl: string,
-  options: { compatibilityMode?: 'strict' | 'legacy'; allowLocalhostHttp?: boolean } = {}
+  options: {
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
+    allowLocalhostHttp?: boolean;
+  } = {}
 ): Promise<AuthorizationServerMetadata> {
   const cleanUrl = authServerUrl.replace(/\/$/, '');
   const urlsToTry: { url: string; label: string }[] = [];
@@ -659,20 +700,21 @@ export async function fetchAuthorizationServerMetadata(
   const rfc8414Url = buildWellKnownUrl(cleanUrl, 'oauth-authorization-server');
   urlsToTry.push({ url: rfc8414Url, label: 'RFC 8414 (path-aware)' });
 
-  const legacy = options.compatibilityMode === 'legacy';
+  const compatibilityMode = options.compatibilityMode ?? 'strict';
+  const compatibilityProbes = compatibilityMode !== 'strict';
   // Narrow opt-in legacy probes for non-compliant issuers.
   const naiveUrl = `${cleanUrl}/.well-known/oauth-authorization-server`;
-  if (legacy && naiveUrl !== rfc8414Url) {
+  if (compatibilityProbes && naiveUrl !== rfc8414Url) {
     urlsToTry.push({ url: naiveUrl, label: 'RFC 8414 (naive append)' });
   }
 
   // 3. OIDC discovery — path-aware
   const oidcUrl = buildWellKnownUrl(cleanUrl, 'openid-configuration');
-  if (legacy) urlsToTry.push({ url: oidcUrl, label: 'OIDC (path-aware)' });
+  if (compatibilityProbes) urlsToTry.push({ url: oidcUrl, label: 'OIDC (path-aware)' });
 
   // 4. OIDC discovery — naive append
   const naiveOidcUrl = `${cleanUrl}/.well-known/openid-configuration`;
-  if (legacy && naiveOidcUrl !== oidcUrl) {
+  if (compatibilityProbes && naiveOidcUrl !== oidcUrl) {
     urlsToTry.push({ url: naiveOidcUrl, label: 'OIDC (naive append)' });
   }
 
@@ -687,7 +729,12 @@ export async function fetchAuthorizationServerMetadata(
       if (response.ok) {
         console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
         const metadata = (await response.json()) as AuthorizationServerMetadata;
-        if (!legacy && metadata.issuer !== authServerUrl) {
+        if (
+          compatibilityMode === 'strict'
+            ? metadata.issuer !== authServerUrl
+            : compatibilityMode === 'marketplace' &&
+              !oauthIssuerIdentifiersMatch(metadata.issuer, authServerUrl)
+        ) {
           throw new Error(
             'Authorization server metadata issuer does not match the advertised issuer'
           );
@@ -1126,7 +1173,7 @@ export async function performMCPOAuthFlow(
       pkce.verifier,
       actualClientId,
       clientSecret,
-      resourceMetadata.resource,
+      typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
       true
     );
 
@@ -1252,9 +1299,59 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   state: string;
   authorizationUrl: string;
-  compatibilityMode: 'strict' | 'legacy';
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  /** Require `iss` when the AS advertised RFC 9207 support for this flow. */
+  authorizationResponseIssuerParameterSupported: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
+}
+
+/**
+ * Bounded RFC 9728 compatibility for reviewed marketplace endpoints.
+ *
+ * Exact equality remains the strict/default rule. The marketplace may also
+ * accept an origin-level (or parent-path) resource identifier, but only when
+ * both the metadata document and that identifier are served by the exact MCP
+ * origin. This covers providers that publish one origin-scoped PRM for
+ * `/mcp`, without accepting a cross-origin metadata document or resource that
+ * could redirect a grant to an attacker. The authorization and token requests
+ * still carry the exact MCP URL as their RFC 8707 `resource` value.
+ *
+ * One provider currently emits the singular RFC field as a singleton array;
+ * accepting exactly one string preserves the same unambiguous binding. A list
+ * of alternatives is rejected rather than guessing which resource was meant.
+ */
+function marketplaceResourceMetadataMatches(
+  metadataUrl: string,
+  statedResource: OAuthMetadata['resource'],
+  resourceUri: string
+): boolean {
+  const identifiers =
+    typeof statedResource === 'string'
+      ? [statedResource]
+      : Array.isArray(statedResource) &&
+          statedResource.length === 1 &&
+          typeof statedResource[0] === 'string'
+        ? statedResource
+        : [];
+  if (identifiers.length !== 1) return false;
+  const [identifier] = identifiers;
+  if (identifier === resourceUri) return true;
+
+  try {
+    const metadata = new URL(metadataUrl);
+    const stated = new URL(identifier);
+    const requested = new URL(resourceUri);
+    if (metadata.origin !== requested.origin || stated.origin !== requested.origin) return false;
+    if (stated.search || stated.hash) return false;
+    const basePath = stated.pathname.replace(/\/+$/, '') || '/';
+    const requestedPath = requested.pathname.replace(/\/+$/, '') || '/';
+    return (
+      requestedPath === basePath || basePath === '/' || requestedPath.startsWith(`${basePath}/`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1301,7 +1398,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   reuseDynamicClientRegistration?: boolean;
   resourceUri: string;
   issuer: string;
-  compatibilityMode: 'strict' | 'legacy';
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
 }): Promise<OAuthFlowContext> {
@@ -1364,17 +1461,30 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
   assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
-  if (compatibilityMode === 'strict') {
+  if (compatibilityMode !== 'legacy') {
     if (!authServerMetadata) {
-      throw new Error('Strict MCP OAuth requires authorization-server metadata');
+      throw new Error('MCP OAuth issuer validation requires authorization-server metadata');
     }
-    if (authServerMetadata.issuer !== issuer) {
+    assertSafeOAuthUrl(authServerMetadata.issuer, { allowLocalhostHttp });
+    const issuerMatches =
+      compatibilityMode === 'strict'
+        ? authServerMetadata.issuer === issuer
+        : oauthIssuerIdentifiersMatch(authServerMetadata.issuer, issuer);
+    if (!issuerMatches) {
       throw new Error('Authorization server issuer mismatch');
     }
-    if (!authServerMetadata.code_challenge_methods_supported?.includes('S256')) {
+    const advertisedPKCEMethods = authServerMetadata.code_challenge_methods_supported;
+    if (
+      compatibilityMode === 'strict'
+        ? !advertisedPKCEMethods?.includes('S256')
+        : advertisedPKCEMethods !== undefined && !advertisedPKCEMethods.includes('S256')
+    ) {
       throw new Error('Authorization server does not advertise required PKCE S256 support');
     }
-    if (authServerMetadata.authorization_response_iss_parameter_supported !== true) {
+    if (
+      compatibilityMode === 'strict' &&
+      authServerMetadata.authorization_response_iss_parameter_supported !== true
+    ) {
       throw new Error(
         'Authorization server does not advertise the required callback issuer parameter'
       );
@@ -1383,10 +1493,10 @@ async function startMCPOAuthFlowWithAS(opts: {
       authorizationUrlOverride &&
       authorizationUrlOverride !== authServerMetadata.authorization_endpoint
     ) {
-      throw new Error('Strict MCP OAuth authorization endpoint override does not match metadata');
+      throw new Error('MCP OAuth authorization endpoint override does not match metadata');
     }
     if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
-      throw new Error('Strict MCP OAuth token endpoint override does not match metadata');
+      throw new Error('MCP OAuth token endpoint override does not match metadata');
     }
   }
 
@@ -1454,7 +1564,11 @@ async function startMCPOAuthFlowWithAS(opts: {
   return {
     metadataUrl: cacheKey,
     resourceUri,
-    issuer,
+    // RFC 8414 metadata is the callback issuer authority. Marketplace mode
+    // admits only a trailing-slash spelling difference from the resource's
+    // advertised AS identifier; persist the metadata spelling so an `iss`
+    // callback is compared with the value the AS itself promised to send.
+    issuer: authServerMetadata?.issuer ?? issuer,
     authorizationEndpoint,
     tokenEndpoint,
     redirectUri: actualRedirectUri,
@@ -1464,6 +1578,8 @@ async function startMCPOAuthFlowWithAS(opts: {
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
+    authorizationResponseIssuerParameterSupported:
+      authServerMetadata?.authorization_response_iss_parameter_supported === true,
     allowLocalhostHttp,
   };
 }
@@ -1502,7 +1618,7 @@ export async function startMCPOAuthFlow(
     reuseDynamicClientRegistration?: boolean;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
-    compatibilityMode?: 'strict' | 'legacy';
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
@@ -1520,8 +1636,10 @@ export async function startMCPOAuthFlow(
   // 9728 resource metadata to fetch. Take the short path and skip directly to
   // PKCE / DCR / auth-URL construction.
   if (options?.prefetchedAuthServerMetadata) {
-    if (compatibilityMode !== 'legacy') {
-      throw new Error('Authorization-server-direct discovery requires explicit legacy mode');
+    if (compatibilityMode === 'strict') {
+      throw new Error(
+        'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
+      );
     }
     if (!options.cacheKey) {
       // Without it there is no `context.metadataUrl` to carry through the
@@ -1530,6 +1648,18 @@ export async function startMCPOAuthFlow(
       throw new Error(
         'startMCPOAuthFlow: cacheKey is required when prefetchedAuthServerMetadata is provided ' +
           '(typically pass the MCP server URL).'
+      );
+    }
+    // With no RFC 9728 document there is no independently advertised AS
+    // identifier to bind. The marketplace fallback is therefore safe only
+    // when the directly discovered issuer remains on the protected resource's
+    // origin. Legacy mode retains its explicitly broader behavior.
+    if (
+      compatibilityMode === 'marketplace' &&
+      !oauthIssuerOriginMatchesResource(options.prefetchedAuthServerMetadata.issuer, resourceUri)
+    ) {
+      throw new Error(
+        'Authorization-server-direct discovery issuer does not match the MCP resource origin'
       );
     }
     console.log('[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped)');
@@ -1565,7 +1695,12 @@ export async function startMCPOAuthFlow(
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
   const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp });
 
-  if (compatibilityMode === 'strict' && resourceMetadata.resource !== resourceUri) {
+  if (
+    compatibilityMode === 'strict'
+      ? resourceMetadata.resource !== resourceUri
+      : compatibilityMode === 'marketplace' &&
+        !marketplaceResourceMetadataMatches(metadataUrl, resourceMetadata.resource, resourceUri)
+  ) {
     throw new Error('Protected resource metadata does not match the MCP resource URI');
   }
 
@@ -1659,10 +1794,14 @@ export async function completeMCPOAuthFlow(
   if (state !== context.state) {
     throw new OAuthCallbackValidationError('callback_state_mismatch');
   }
-  if (context.compatibilityMode === 'strict' && options.issuer == null) {
+  if (context.authorizationResponseIssuerParameterSupported && options.issuer == null) {
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
-  if (context.compatibilityMode === 'strict' && options.issuer !== context.issuer) {
+  if (
+    context.compatibilityMode !== 'legacy' &&
+    options.issuer != null &&
+    options.issuer !== context.issuer
+  ) {
     throw new OAuthCallbackValidationError('callback_issuer_mismatch');
   }
 

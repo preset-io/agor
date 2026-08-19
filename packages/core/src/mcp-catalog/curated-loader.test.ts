@@ -337,14 +337,35 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
-  it('states no oauth settings, because discovery covers every entry', async () => {
-    // Not a style rule: each of these is an authored claim about somebody
-    // else's endpoint that nothing in the running system can contradict, so an
-    // entry acquiring one should be a deliberate, reviewed exception rather
-    // than something that accumulates. Delete this expectation with the PR that
-    // adds the first justified one.
+  it('opts the providers that pass the strict production boundary into strict mode', async () => {
+    // Marketplace installs with no statement use the daemon's bounded
+    // interoperability profile. These three publish the exact PRM/issuer,
+    // S256 and RFC 9207 contracts, so keep the stronger policy explicit and
+    // make any later expansion a reviewed curation change.
     const entries = await loadCuratedCatalog();
-    expect(entries.filter((entry) => entry.oauth !== undefined)).toEqual([]);
+    expect(
+      entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
+    ).toEqual([
+      ['com.monday/monday.com', { compatibility_mode: 'strict' }],
+      ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
+      ['com.clickup/mcp', { compatibility_mode: 'strict' }],
+    ]);
+  });
+
+  it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
+    const entries = await loadCuratedCatalog();
+    const unsupported = [
+      'io.github.github/github-mcp-server',
+      'io.prisma/mcp',
+      'com.mongodb/mcp',
+      'com.box/mcp',
+      'com.hubspot/mcp',
+      'com.slack/mcp',
+      'com.pagerduty/mcp',
+      'com.kagi/mcp',
+    ];
+
+    expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {
