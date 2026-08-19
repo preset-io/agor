@@ -14,13 +14,14 @@ function cardFor(title: string): HTMLElement {
 }
 
 describe('TeammateGallery', () => {
-  it('renders all six templates plus the blank starter as a single-select radiogroup', () => {
+  it('renders all seven templates plus the blank starter as a single-select radiogroup', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
 
     expect(screen.getByRole('radiogroup', { name: 'Teammate template' })).toBeInTheDocument();
     for (const title of [
       'Competitive Analyst',
       'Product Manager',
+      'Chief of Staff',
       'Financial Analyst',
       'Deal Desk Analyst',
       'Outbound Analyst',
@@ -69,7 +70,8 @@ describe('TeammateGallery', () => {
   });
 
   it('shows no badge when the selected goals map to no template', () => {
-    render(<TeammateGallery goals={['personal-teammate']} value={null} onChange={vi.fn()} />);
+    // hand-off-build is the only goal with no template mapping.
+    render(<TeammateGallery goals={['hand-off-build']} value={null} onChange={vi.fn()} />);
     expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
   });
 

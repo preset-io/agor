@@ -6,6 +6,7 @@ import {
   RadarChartOutlined,
   ReconciliationOutlined,
   SafetyOutlined,
+  SolutionOutlined,
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 
@@ -54,6 +55,15 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     icon: ProjectOutlined,
     emoji: '🧭',
     sourceBranch: 'template/product-manager',
+  },
+  {
+    id: 'chief-of-staff',
+    title: 'Chief of Staff',
+    description:
+      'Keeps your world in order: triages the noise, preps your meetings, and closes the loop on everything you hand off.',
+    icon: SolutionOutlined,
+    emoji: '🗂️',
+    sourceBranch: 'template/chief-of-staff',
   },
   {
     id: 'financial-analyst',
@@ -132,7 +142,7 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
  * template lists []. This is the single source of truth for recommendations.
  */
 export const GOAL_TEMPLATE_RECS: Record<string, string[]> = {
-  'personal-teammate': [],
+  'personal-teammate': ['chief-of-staff'],
   'status-updates': ['product-manager'],
   'ship-without-busywork': ['product-manager'],
   'team-teammate': ['product-manager'],
