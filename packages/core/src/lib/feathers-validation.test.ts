@@ -167,6 +167,7 @@ describe('taskQueryValidator', () => {
         query: {
           session_id: '019e8e1c',
           task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+          created_by: '019e8e1b',
           $limit: '1000',
         },
       },
@@ -175,6 +176,7 @@ describe('taskQueryValidator', () => {
     expect(valid.params.query).toEqual({
       session_id: '019e8e1c',
       task_id: { $gt: '019e8e1d', $lte: '019e8e1f' },
+      created_by: '019e8e1b',
       $limit: 1000,
     });
 

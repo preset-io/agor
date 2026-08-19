@@ -179,7 +179,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
   config = resolveEffectiveConfig(config);
-  requireDeploymentId(config);
+  const deploymentId = requireDeploymentId(config);
   assertValidEffectiveExecutionConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
@@ -357,6 +357,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : createDaemonMetrics(effectiveConfig.metrics?.statsd, {
         workIdentity: metricsWorkIdentity ?? distributedWorkIdentity,
         deploymentMode: deployment.mode,
+        deploymentId,
       });
   app.set('metrics', metrics);
   reconcileTrackedExecutorGauge(app);

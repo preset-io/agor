@@ -3,7 +3,8 @@ import type express from 'express';
 import type { Application } from '../declarations.js';
 import type { DaemonMetrics } from './types.js';
 
-const SAFE_ROUTE_TEMPLATE = /^\/[a-zA-Z0-9_./:-]{0,159}$/;
+const SAFE_ROUTE_SEGMENT = /^[a-zA-Z0-9_.-]+$/;
+const SAFE_ROUTE_PARAMETER = /^:[a-zA-Z_][a-zA-Z0-9_]*$/;
 const STATIC_HTTP_ROUTES = new Set(['/livez', '/readyz', '/mcp']);
 
 function normalizePath(path: string): string {
@@ -11,11 +12,28 @@ function normalizePath(path: string): string {
   return path;
 }
 
+function isSafeRouteTemplate(candidate: string): boolean {
+  if (!candidate.startsWith('/') || candidate.length > 160) return false;
+  if (candidate === '/') return true;
+  return candidate
+    .slice(1)
+    .split('/')
+    .every(
+      (segment) =>
+        segment !== '.' &&
+        segment !== '..' &&
+        (SAFE_ROUTE_SEGMENT.test(segment) || SAFE_ROUTE_PARAMETER.test(segment))
+    );
+}
+
 function routeTemplateFromExpress(request: express.Request): string | undefined {
   const routePath = (request.route as { path?: unknown } | undefined)?.path;
   if (typeof routePath !== 'string') return undefined;
-  const candidate = normalizePath(`${request.baseUrl ?? ''}${routePath}`);
-  return SAFE_ROUTE_TEMPLATE.test(candidate) ? candidate : undefined;
+  // `route.path` is code-defined. `baseUrl` is deliberately excluded: for a
+  // parameterized mounted router Express may expose the concrete matched
+  // value there, which would turn an ID/slug into an unbounded metric tag.
+  const candidate = normalizePath(routePath);
+  return isSafeRouteTemplate(candidate) ? candidate : undefined;
 }
 
 function routeTemplateFromServices(
@@ -26,14 +44,21 @@ function routeTemplateFromServices(
   const candidates = [...servicePaths].sort((left, right) => right.length - left.length);
   for (const servicePath of candidates) {
     const serviceSegments = servicePath.split('/').filter(Boolean);
+    const base = `/${serviceSegments.join('/')}`;
+    if (!isSafeRouteTemplate(base)) continue;
     if (
       requestSegments.length !== serviceSegments.length &&
       requestSegments.length !== serviceSegments.length + 1
     ) {
       continue;
     }
-    if (!serviceSegments.every((segment, index) => segment === requestSegments[index])) continue;
-    const base = `/${serviceSegments.join('/')}`;
+    if (
+      !serviceSegments.every(
+        (segment, index) => SAFE_ROUTE_PARAMETER.test(segment) || segment === requestSegments[index]
+      )
+    ) {
+      continue;
+    }
     return requestSegments.length === serviceSegments.length ? base : `${base}/:id`;
   }
   return undefined;
@@ -44,13 +69,13 @@ export function normalizedHttpRoute(
   request: express.Request,
   app: Pick<Application, 'services'>
 ): string {
-  const expressTemplate = routeTemplateFromExpress(request);
-  if (expressTemplate) return expressTemplate;
-
   const requestPath = normalizePath(request.path);
   const serviceTemplate = routeTemplateFromServices(requestPath, Object.keys(app.services));
   if (serviceTemplate) return serviceTemplate;
   if (STATIC_HTTP_ROUTES.has(requestPath)) return requestPath;
+
+  const expressTemplate = routeTemplateFromExpress(request);
+  if (expressTemplate) return expressTemplate;
   return '/_unmatched';
 }
 

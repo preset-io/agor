@@ -14,6 +14,7 @@ export type StatsDClientFactory = (options: ClientOptions) => StatsDTransportCli
 export interface DaemonMetricsFactoryContext {
   workIdentity: DistributedWorkIdentity;
   deploymentMode: AgorDeploymentMode;
+  deploymentId: string;
 }
 
 /**
@@ -46,6 +47,7 @@ export function buildStatsDClientOptions(
     prefix: config.prefix ?? 'agor.daemon.',
     globalTags: {
       ...(config.global_tags ?? {}),
+      deployment_id: context.deploymentId,
       daemon_instance: context.workIdentity.instanceId,
       deployment_mode: context.deploymentMode,
     },

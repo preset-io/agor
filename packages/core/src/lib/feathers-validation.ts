@@ -163,6 +163,7 @@ export const taskQuerySchema = Type.Intersect(
         ])
       ),
       created_at: Type.Optional(CommonSchemas.timestamp),
+      created_by: Type.Optional(CommonSchemas.uuid),
     }),
     Type.Object({
       $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),

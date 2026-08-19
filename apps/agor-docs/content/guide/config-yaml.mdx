@@ -109,10 +109,16 @@ Changing YAML or environment variables requires a restart. Executors neither
 read this config nor receive the metrics settings. UDP delivery is best effort:
 an absent Agent drops metrics without changing request or executor behavior.
 
-`global_tags` is limited to 20 short static tags. Resource and identity
+`global_tags` is limited to 20 short static deployment labels. This is the
+supported place for ambient dimensions such as environment, region, cluster,
+or service tier. Resource and identity
 dimensions such as tenant, user, session, task, branch, repository, host, pod,
 path, URL, and UUID tags are rejected. The daemon always adds
-`deployment_mode` and `daemon_instance`. In HA, set a stable and unique
+`deployment_id` from the required `daemon.deployment_id`, plus
+`deployment_mode` and `daemon_instance`; those keys cannot be overridden in
+`global_tags`. The deployment ID is a bounded, deployment-level dimension and
+lets one Datadog account separate installations without duplicating config.
+In HA, set a stable and unique
 `AGOR_DAEMON_INSTANCE_ID` on each replica (letters, digits, `.`, `_`, or `-`;
 at most 100 characters). StatsD is disabled on an HA replica
 without one rather than emitting a last-writer-wins gauge. The running-executor gauge is

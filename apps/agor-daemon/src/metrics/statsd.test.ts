@@ -42,13 +42,14 @@ class FakeStatsDClient implements StatsDTransportClient {
 }
 
 const workIdentity: DistributedWorkIdentity = { instanceId: 'daemon-a', bootId: 'boot-1' };
+const deploymentId = '019c1234-5678-7123-8123-123456789abc';
 
 describe('StatsD daemon metrics', () => {
   it('uses one cheap no-op and never constructs a client while disabled', async () => {
     const factory = vi.fn(() => new FakeStatsDClient());
     const metrics = createDaemonMetrics(
       { enabled: false },
-      { workIdentity, deploymentMode: 'standalone' },
+      { workIdentity, deploymentMode: 'standalone', deploymentId },
       factory
     );
     expect(metrics).toBe(NOOP_METRICS);
@@ -121,8 +122,13 @@ describe('StatsD daemon metrics', () => {
 
   it('builds per-instance HA gauge dimensions without a boot-id series', () => {
     const optionsA = buildStatsDClientOptions(
-      { enabled: true, global_tags: { env: 'prod' } },
-      { workIdentity, deploymentMode: 'ha' },
+      {
+        enabled: true,
+        // Effective config validation rejects this reserved key. The factory
+        // still keeps canonical context authoritative if called directly.
+        global_tags: { env: 'prod', deployment_id: 'cannot-override' },
+      },
+      { workIdentity, deploymentMode: 'ha', deploymentId },
       vi.fn()
     );
     const optionsB = buildStatsDClientOptions(
@@ -130,11 +136,13 @@ describe('StatsD daemon metrics', () => {
       {
         workIdentity: { instanceId: 'daemon-b', bootId: 'another-boot' },
         deploymentMode: 'ha',
+        deploymentId,
       },
       vi.fn()
     );
     expect(optionsA.globalTags).toEqual({
       env: 'prod',
+      deployment_id: deploymentId,
       daemon_instance: 'daemon-a',
       deployment_mode: 'ha',
     });
@@ -165,9 +173,13 @@ describe('StatsD daemon metrics', () => {
   it('falls back to no-op if client construction fails', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(
-      createDaemonMetrics({ enabled: true }, { workIdentity, deploymentMode: 'standalone' }, () => {
-        throw new Error('constructor failure');
-      })
+      createDaemonMetrics(
+        { enabled: true },
+        { workIdentity, deploymentMode: 'standalone', deploymentId },
+        () => {
+          throw new Error('constructor failure');
+        }
+      )
     ).toBe(NOOP_METRICS);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('constructor failure'));
     warn.mockRestore();

@@ -141,7 +141,13 @@ describe('Feathers metrics hook', () => {
 });
 
 describe('HTTP metrics middleware', () => {
-  const app = { services: { sessions: {}, 'mcp-servers': {} } } as unknown as Application;
+  const app = {
+    services: {
+      sessions: {},
+      'mcp-servers': {},
+      'sessions/:session_id/tasks': {},
+    },
+  } as unknown as Application;
 
   it('uses Express or Feathers route templates and never a raw item id', () => {
     expect(
@@ -174,6 +180,98 @@ describe('HTTP metrics middleware', () => {
         app
       )
     ).toBe('/_unmatched');
+  });
+
+  it('never incorporates a concrete Express mount value into a route tag', () => {
+    const privateValues = [
+      '0198d20e-7182-7000-8000-000000000000',
+      'person@example.com',
+      'token%2Fwith%2Fslashes',
+      'name-with-emoji-%F0%9F%A7%AA',
+    ];
+
+    for (const privateValue of privateValues) {
+      const route = normalizedHttpRoute(
+        {
+          path: `/private-mount/${privateValue}/submit`,
+          route: { path: '/submit' },
+          baseUrl: `/private-mount/${privateValue}`,
+        } as unknown as express.Request,
+        app
+      );
+      expect(route).toBe('/submit');
+      expect(route).not.toContain(privateValue);
+    }
+  });
+
+  it('normalizes nested registered services without exposing concrete parameters', () => {
+    const sessionId = '0198d20e-7182-7000-8000-000000000000';
+    expect(
+      normalizedHttpRoute(
+        {
+          path: `/sessions/${sessionId}/tasks`,
+          route: undefined,
+        } as unknown as express.Request,
+        app
+      )
+    ).toBe('/sessions/:session_id/tasks');
+    expect(
+      normalizedHttpRoute(
+        {
+          path: `/sessions/${sessionId}/tasks/private-task-id`,
+          route: undefined,
+        } as unknown as express.Request,
+        app
+      )
+    ).toBe('/sessions/:session_id/tasks/:id');
+  });
+
+  it.each([
+    ['an array route', ['/safe', '/still-safe']],
+    ['a regular-expression route', /^\/private\/(.+)$/],
+    ['a wildcard route', '/private/*'],
+    ['an optional-pattern route', '/private/:id?'],
+    ['an empty segment', '/private//submit'],
+    ['a traversal segment', '/private/../submit'],
+    ['a query-like route', '/private?token=:token'],
+    ['a control character', '/private\n/:id'],
+    ['a unicode route', '/private/🧪'],
+    ['an overlong route', `/${'a'.repeat(160)}`],
+  ])('collapses %s to the bounded unmatched series', (_description, routePath) => {
+    expect(
+      normalizedHttpRoute(
+        {
+          path: '/private/raw-value',
+          route: { path: routePath },
+          baseUrl: '/also-private',
+        } as unknown as express.Request,
+        app
+      )
+    ).toBe('/_unmatched');
+  });
+
+  it('uses only exact static routes and bounded Feathers item shapes', () => {
+    expect(
+      normalizedHttpRoute({ path: '/mcp/', route: undefined } as unknown as express.Request, app)
+    ).toBe('/mcp');
+    expect(
+      normalizedHttpRoute(
+        { path: '/mcp/private-value', route: undefined } as unknown as express.Request,
+        app
+      )
+    ).toBe('/_unmatched');
+    expect(
+      normalizedHttpRoute(
+        { path: '/sessions/private/extra', route: undefined } as unknown as express.Request,
+        app
+      )
+    ).toBe('/_unmatched');
+    expect(
+      normalizedHttpRoute(
+        { path: '/sessions/private%2Fvalue', route: undefined } as unknown as express.Request,
+        app
+      )
+    ).toBe('/sessions/:id');
   });
 
   it('records final HTTP status, outcome, method, normalized route and duration', () => {

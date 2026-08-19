@@ -265,7 +265,11 @@ function assertSupportedUnixUserMode(mode: unknown): asserts mode is UnixUserMod
 
 const FORBIDDEN_OPERATIONAL_METRIC_TAG_KEY =
   /(^|[_.-])(tenant|user|session|task|branch|repo|repository|email|uuid|token|secret|prompt|path|url|title|slug|name|id|host|hostname|pod|container|boot)($|[_.-])/i;
-const RESERVED_OPERATIONAL_METRIC_TAG_KEYS = new Set(['daemon_instance', 'deployment_mode']);
+const RESERVED_OPERATIONAL_METRIC_TAG_KEYS = new Set([
+  'daemon_instance',
+  'deployment_id',
+  'deployment_mode',
+]);
 
 function containsControlCharacter(value: string): boolean {
   return [...value].some((character) => {

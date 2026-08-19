@@ -664,13 +664,15 @@ describe('loadConfig', () => {
       await expect(loadConfig()).rejects.toThrow(new RegExp(`metrics\\.statsd\\.${message}`));
     }
 
-    __resetConfigCacheForTests();
-    await fs.writeFile(
-      configPath,
-      yaml.dump({ metrics: { statsd: { global_tags: { session_id: 'anything' } } } }),
-      'utf-8'
-    );
-    await expect(loadConfig()).rejects.toThrow(/low-cardinality policy/);
+    for (const reservedKey of ['session_id', 'deployment_id']) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ metrics: { statsd: { global_tags: { [reservedKey]: 'anything' } } } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).rejects.toThrow(/low-cardinality policy/);
+    }
 
     __resetConfigCacheForTests();
     await fs.writeFile(

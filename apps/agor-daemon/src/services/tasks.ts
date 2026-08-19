@@ -124,6 +124,7 @@ export type TaskParams = QueryParams<{
       };
   session_id?: string;
   status?: Task['status'];
+  created_by?: string;
 }> &
   AuthenticatedParams & {
     /**
@@ -270,6 +271,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (typeof query.created_at === 'number' && Number.isFinite(query.created_at)) {
       pageOptions.createdAt = new Date(query.created_at);
     }
+    if (typeof query.created_by === 'string') pageOptions.createdBy = query.created_by as UUID;
     if (params?._agorSqlSessionAccessUserId) {
       pageOptions.visibleToUserId = params._agorSqlSessionAccessUserId;
     }

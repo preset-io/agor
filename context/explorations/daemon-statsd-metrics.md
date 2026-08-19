@@ -65,7 +65,10 @@ Both passive boundaries are needed:
 - Express middleware observes real HTTP method/status/latency for REST, raw
   API, probes, and MCP. It accepts only Express route templates or registered
   Feathers service templates and otherwise emits `/_unmatched`; raw paths are
-  never tags.
+  never tags. Registered service templates win over Express. Express
+  `route.path` is code-defined and accepted only in a strict bounded grammar;
+  `baseUrl` is never used because a parameterized router mount can expose its
+  concrete matched ID or slug there.
 - The global Feathers around hook observes logical service/method/result for
   REST and Socket.IO. Calls without `params.provider` are internal and skipped;
   authentication entity lookups are also skipped using their existing internal
@@ -104,8 +107,11 @@ The default prefix is `agor.daemon.`. Names below omit that prefix.
 | `background_job.runs`                        | count          | `job`, `outcome`                                           | Bounded startup post-job completion                                                     |
 | `background_job.duration_ms`                 | distribution   | same                                                       | Startup post-job wall time                                                              |
 
-Configured global tags plus `daemon_instance` and `deployment_mode` accompany
-every metric. Runtime tag keys are allow-listed in code. Tenant/user/session/
+Configured global tags plus the canonical `deployment_id`, `daemon_instance`,
+and `deployment_mode` accompany every metric. `deployment_id` comes from the
+existing required `daemon.deployment_id` and is reserved against operator
+override; it is a stable deployment-level dimension, not a tenant/resource
+dimension. Runtime tag keys are allow-listed in code. Tenant/user/session/
 task/branch/repository IDs, model names, prompts, raw paths, and arbitrary
 errors are not emitted.
 
@@ -132,9 +138,10 @@ repair separately. An ungraceful death can leave Datadog displaying the last
 gauge value until the series becomes stale or the stable instance restarts, so
 alerts must also handle no-data/staleness.
 
-Every series has a stable `daemon_instance` dimension and never a boot ID. In
-HA the gauge is per replica, not a global last-writer-wins gauge. Fleet queries
-sum by/over `daemon_instance`. Set stable unique
+Every series has a stable `deployment_id` and `daemon_instance` dimension and
+never a boot ID. In HA the gauge is per replica, not a global
+last-writer-wins gauge. Deployment queries filter/group by `deployment_id`;
+fleet executor totals sum by/over `daemon_instance`. Set stable unique
 `AGOR_DAEMON_INSTANCE_ID` values. An HA replica without one disables its
 StatsD exporter and warns at startup.
 
