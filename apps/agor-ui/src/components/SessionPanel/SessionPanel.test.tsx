@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Session, Task } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -97,22 +97,26 @@ const branch = {
 
 function renderPanel({
   onOpenTerminal = vi.fn(),
+  onChooseAgenticTool,
   client = null,
   activeSession = session,
+  open = true,
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
+  onChooseAgenticTool?: ReturnType<typeof vi.fn>;
   client?: AgorClient | null;
   activeSession?: Session;
+  open?: boolean;
 } = {}) {
   render(
     <ConnectionProvider value={connected}>
-      <AppActionsProvider value={{ onOpenTerminal }}>
+      <AppActionsProvider value={{ onOpenTerminal, onChooseAgenticTool }}>
         <AntApp>
           <SessionPanel
             client={client}
             session={activeSession}
             branch={branch}
-            open
+            open={open}
             onClose={vi.fn()}
           />
         </AntApp>
@@ -121,6 +125,123 @@ function renderPanel({
   );
   return { onOpenTerminal };
 }
+
+const findShortcuts = [
+  { label: 'Cmd+F', modifiers: { metaKey: true } },
+  { label: 'Ctrl+F', modifiers: { ctrlKey: true } },
+] as const;
+
+function pressFind(target: Window | Element, modifiers: { metaKey?: boolean; ctrlKey?: boolean }) {
+  const event = createEvent.keyDown(target, {
+    key: 'f',
+    bubbles: true,
+    cancelable: true,
+    ...modifiers,
+  });
+  const notCancelled = fireEvent(target, event);
+  return { event, notCancelled };
+}
+
+function getSearchRow() {
+  return screen.getByPlaceholderText('Search session...').closest('div[style*="max-height"]');
+}
+
+describe.each(findShortcuts)('SessionPanel native $label behavior', ({ modifiers }) => {
+  afterEach(() => {
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('does not prevent or replace browser Find while the panel is open', () => {
+    renderPanel();
+    const searchInput = screen.getByPlaceholderText('Search session...');
+
+    const { event, notCancelled } = pressFind(window, modifiers);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
+    expect(searchInput).not.toHaveFocus();
+  });
+
+  it('does not prevent browser Find while the panel is closed', () => {
+    renderPanel({ open: false });
+
+    const { event, notCancelled } = pressFind(window, modifiers);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('does not prevent or replace browser Find from the focused composer', () => {
+    renderPanel({ activeSession: { ...session, agentic_tool: 'codex' } });
+    const composer = screen.getByRole('textbox', { name: 'Prompt' });
+    const searchInput = screen.getByPlaceholderText('Search session...');
+    composer.focus();
+
+    const { event, notCancelled } = pressFind(composer, modifiers);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
+    expect(searchInput).not.toHaveFocus();
+  });
+
+  it('does not prevent browser Find when conversation search is already open', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Search session' }));
+    const searchInput = screen.getByPlaceholderText('Search session...');
+    await waitFor(() => expect(searchInput).toHaveFocus());
+
+    const { event, notCancelled } = pressFind(searchInput, modifiers);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '36px' });
+  });
+
+  it('does not prevent or replace browser Find while a modal is open', async () => {
+    renderPanel({
+      activeSession: { ...session, agentic_tool: 'codex' },
+      onChooseAgenticTool: vi.fn(),
+    });
+    fireEvent.click(screen.getAllByRole('img', { name: 'ellipsis' })[0].closest('button')!);
+    fireEvent.click(await screen.findByText('Switch tool…'));
+    const dialog = await screen.findByRole('dialog', { name: 'Switch tool' });
+    const searchInput = screen.getByPlaceholderText('Search session...');
+
+    const { event, notCancelled } = pressFind(dialog, modifiers);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
+    expect(searchInput).not.toHaveFocus();
+  });
+});
+
+describe('SessionPanel search control', () => {
+  afterEach(() => {
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('keeps session search accessible through its visible native button', async () => {
+    renderPanel();
+    const searchButton = screen.getByRole('button', { name: 'Search session' });
+    expect(searchButton.tagName).toBe('BUTTON');
+
+    searchButton.focus();
+    expect(searchButton).toHaveFocus();
+    fireEvent.click(searchButton, { detail: 0 });
+
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '36px' });
+    const searchInput = screen.getByPlaceholderText('Search session...');
+    await waitFor(() => expect(searchInput).toHaveFocus());
+
+    fireEvent.keyDown(searchInput, { key: 'Escape' });
+    expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
+  });
+});
 
 describe('SessionPanel historical runtime handling and terminal actions', () => {
   afterEach(() => {

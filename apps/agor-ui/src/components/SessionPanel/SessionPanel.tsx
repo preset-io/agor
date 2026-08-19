@@ -92,11 +92,6 @@ import { useComposerAttachments } from './useComposerAttachments';
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
 
-// The find shortcut is Cmd+F on mac, Ctrl+F elsewhere — label it correctly.
-const IS_MAC =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform ?? '');
-const FIND_SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
-
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
 // text in *local* state so that keystrokes never trigger a parent re-render.
@@ -717,16 +712,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && open) {
-        e.preventDefault();
-        if (!searchOpen) openSearch();
-        else searchInputRef.current?.focus();
-      }
       if (e.key === 'Escape' && searchOpen) closeSearch();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [searchOpen, open, openSearch, closeSearch]);
+  }, [searchOpen, closeSearch]);
 
   // Reset search when switching sessions — stale ranges/counts belong to the
   // previous conversation's DOM.
@@ -1509,8 +1499,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
             </Dropdown>
-            <Tooltip title={`Search session (${FIND_SHORTCUT_LABEL})`}>
-              <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+            <Tooltip title="Search session">
+              <Button
+                type="text"
+                aria-label="Search session"
+                icon={<SearchOutlined />}
+                onClick={openSearch}
+              />
             </Tooltip>
             <Tooltip title="Close Panel">
               <Button
