@@ -34,6 +34,7 @@
 
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { findDuplicateMCPCustomHeaderName } from '@agor/core/tools/mcp/http-headers';
 import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
@@ -100,9 +101,9 @@ type PortionState = 'empty' | 'matches' | 'conflict';
 
 /**
  * Catalog trust is deployment-local review authority, not portable tenant
- * data. Validate archived public OAuth values before any write; the database
- * rewrite later marks every restored MCP row `imported` and removes its
- * catalog stamp.
+ * data. Validate archived public OAuth values and header identity before any
+ * write; the database rewrite later marks every restored MCP row `imported`
+ * and removes its catalog stamp.
  */
 export async function validateArchivedMCPCompatibilityModes(
   archivePath: string,
@@ -114,9 +115,20 @@ export async function validateArchivedMCPCompatibilityModes(
   for (const line of lines) {
     const row = JSON.parse(line) as { data?: unknown };
     const data = row.data;
-    const auth = data && typeof data === 'object' ? (data as { auth?: unknown }).auth : undefined;
+    const publicData = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    const auth = publicData.auth;
     try {
       assertPublicMCPOAuthCompatibilityMode(auth);
+      const headers = publicData.headers;
+      const duplicate =
+        headers && typeof headers === 'object' && !Array.isArray(headers)
+          ? findDuplicateMCPCustomHeaderName(headers as Record<string, unknown>)
+          : undefined;
+      if (duplicate) {
+        throw new Error(
+          `Duplicate custom HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`
+        );
+      }
     } catch (error) {
       throw new MalformedArchiveError(
         `Refusing to import mcp_servers: ${

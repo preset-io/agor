@@ -6,6 +6,7 @@ import {
   type TenantScopedDatabase,
   type UserMCPOAuthToken,
 } from '@agor/core/db';
+import { canonicalMCPCustomHeaderEntries } from '@agor/core/tools/mcp/http-headers';
 import type {
   MCPAuth,
   MCPOAuthGrantBindingVersion,
@@ -23,7 +24,10 @@ export const MCP_OAUTH_GRANT_BINDING_VERSION = 4 as const;
  * unbound grants usable, while every newly issued versioned grant verifies.
  */
 export function shouldVerifyMCPOAuthGrantBinding(requireAll: boolean, version: unknown): boolean {
-  return requireAll || isMCPOAuthGrantBindingVersion(version);
+  // Only a truly absent standalone/SQLite version is historical. Any present
+  // but unsupported value (0, a future version, NaN/malformed storage) must
+  // reach the verifier and fail closed rather than masquerade as unbound.
+  return requireAll || (version !== null && version !== undefined);
 }
 
 export function grantBindingVersionForCompatibilityMode(
@@ -134,14 +138,7 @@ export function fingerprintMCPOAuthGrantConfiguration(
       ? {
           source: server.source,
           catalogEntryName: server.catalog_entry_name ?? null,
-          // Header names are case-insensitive on the wire. Sorting makes the
-          // fingerprint independent of JSON object insertion order without
-          // accepting any value or duplicate-header change.
-          headers: Object.entries(server.headers ?? {})
-            .map(([name, value]) => [name.toLowerCase(), value] as const)
-            .sort(([aName, aValue], [bName, bValue]) =>
-              aName === bName ? aValue.localeCompare(bValue) : aName.localeCompare(bName)
-            ),
+          headers: canonicalMCPCustomHeaderEntries(server.headers),
         }
       : {}),
     auth: authBinding(server, version, compatibilityMode),
@@ -162,11 +159,7 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     url: server.url ?? null,
     source: server.source ?? null,
     catalogEntryName: server.catalog_entry_name ?? null,
-    headers: Object.entries(server.headers ?? {})
-      .map(([name, value]) => [name.toLowerCase(), value] as const)
-      .sort(([aName, aValue], [bName, bValue]) =>
-        aName === bName ? aValue.localeCompare(bValue) : aName.localeCompare(bName)
-      ),
+    headers: canonicalMCPCustomHeaderEntries(server.headers),
     // Mutation invalidation compares public row data. Current catalog policy
     // is independently re-resolved at start, callback, and grant-use time.
     auth: authBinding(server, 4, server.auth?.oauth_compatibility_mode ?? 'strict'),

@@ -423,6 +423,20 @@ describe('MCPServerRepository custom headers', () => {
     expect(found?.headers).toBeUndefined();
   });
 
+  dbTest('should reject case-insensitive duplicate custom headers', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    await expect(
+      repo.create(
+        createMCPServerData({
+          name: 'ambiguous-headers',
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          headers: { 'X-Route': 'a', 'x-route': 'b' },
+        })
+      )
+    ).rejects.toThrow(/Duplicate custom HTTP header names/);
+  });
+
   dbTest(
     'should preserve existing header values when update sends redacted sentinel',
     async ({ db }) => {

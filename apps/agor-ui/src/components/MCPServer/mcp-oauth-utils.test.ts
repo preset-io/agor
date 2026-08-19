@@ -361,5 +361,8 @@ describe('validateHeadersJSON', () => {
     expect(validateHeadersJSON('{"X-Count": 42}')).toBe(
       'Custom HTTP header values must be strings'
     );
+    expect(validateHeadersJSON('{"X-Route": "a", "x-route": "b"}')).toMatch(
+      /Duplicate case-insensitive custom HTTP header names/
+    );
   });
 });

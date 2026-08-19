@@ -23,6 +23,7 @@ import type { MCPServerID, UserID } from '../../types';
 import {
   AmbiguousRefreshError,
   FailedRefreshError,
+  GrantConfigurationChangedError,
   OAuthRefreshExchangeError,
   refreshAndPersistToken,
 } from './oauth-refresh';
@@ -109,14 +110,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       };
     }
 
-    async function nextGeneration(db: TenantScopeAwareDatabase, tenantId: string) {
-      return runWithTenantDatabaseScope(db, tenantId, (scoped) => {
+    async function nextGeneration(db: TenantScopeAwareDatabase, seed: Seed) {
+      return runWithTenantDatabaseScope(db, seed.tenantId, (scoped) => {
         const repository = new MCPOAuthPendingFlowRepository(scoped);
         return repository.allocateGrantGeneration({
-          tenantId,
-          mcpServerId: 'refresh-test-generation-subject' as MCPServerID,
-          oauthMode: 'shared',
-          subjectUserId: null,
+          tenantId: seed.tenantId,
+          mcpServerId: seed.serverId,
+          oauthMode: 'per_user',
+          subjectUserId: seed.userId,
         });
       });
     }
@@ -187,7 +188,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       accessToken: string,
       refreshToken: string
     ): Promise<number> {
-      const generation = await nextGeneration(db, seed.tenantId);
+      const generation = await nextGeneration(db, seed);
       await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
         new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           seed.userId,
@@ -215,7 +216,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     }
 
     function initialRefreshVersion(seed: Seed) {
-      return { grantGeneration: seed.generation, refreshGeneration: 0 };
+      return {
+        grantGeneration: seed.generation,
+        grantBindingFingerprint: 'a'.repeat(64),
+        refreshGeneration: 0,
+      };
     }
 
     it('allows one daemon to rotate while a peer observes the committed result', async () => {
@@ -241,6 +246,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          validateGrant: async () => true,
           observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         }),
@@ -249,6 +255,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          validateGrant: async () => true,
           observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         }),
@@ -285,6 +292,50 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).toBe(true);
     });
 
+    it('refuses completion when authoritative server configuration changes during exchange', async () => {
+      let configurationStillValid = true;
+      const tokenProvider = await provider((_body, response) => {
+        // The refresh owner already validated the saved row before sending
+        // the request. Model a Settings mutation landing while the provider
+        // owns the rotating refresh token.
+        configurationStillValid = false;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            access_token: 'must-not-commit-after-settings-change',
+            refresh_token: 'must-not-rotate-after-settings-change',
+            expires_in: 3600,
+          })
+        );
+      });
+      const bound = await seed('settings-mutation', tokenProvider.url);
+      const validateGrant = vi.fn(async () => configurationStillValid);
+
+      await expect(
+        refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          validateGrant,
+          observedRefreshVersion: initialRefreshVersion(bound),
+          allowLocalhostHttpDevelopment: true,
+        })
+      ).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+
+      expect(validateGrant).toHaveBeenCalledTimes(2);
+      const current = await runWithTenantDatabaseScope(dbB, bound.tenantId, (scoped) =>
+        new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(bound.userId, bound.serverId)
+      );
+      expect(current).toMatchObject({
+        oauth_access_token: 'expired-access-settings-mutation',
+        oauth_refresh_token: 'refresh-settings-mutation-0',
+        refresh_status: 'ambiguous',
+        refresh_generation: 1,
+        refresh_success_generation: 0,
+      });
+    });
+
     it('makes a delayed stale caller observe the committed rotation instead of refreshing twice', async () => {
       const tokenProvider = await provider((_body, response) => {
         response.writeHead(200, { 'content-type': 'application/json' });
@@ -305,6 +356,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          validateGrant: async () => true,
           observedRefreshVersion: staleVersion,
           allowLocalhostHttpDevelopment: true,
         })
@@ -318,6 +370,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          validateGrant: async () => true,
           observedRefreshVersion: staleVersion,
           allowLocalhostHttpDevelopment: true,
         })
@@ -347,6 +400,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         tenantId: bound.tenantId,
         userId: bound.userId,
         mcpServerId: bound.serverId,
+        validateGrant: async () => true,
         observedRefreshVersion: observed,
         allowLocalhostHttpDevelopment: true,
       });
@@ -356,6 +410,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         tenantId: bound.tenantId,
         userId: bound.userId,
         mcpServerId: bound.serverId,
+        validateGrant: async () => true,
         observedRefreshVersion: observed,
         allowLocalhostHttpDevelopment: true,
       });
@@ -409,6 +464,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           tenantId: bound.tenantId,
           userId: bound.userId,
           mcpServerId: bound.serverId,
+          validateGrant: async () => true,
           observedRefreshVersion: initialRefreshVersion(bound),
           allowLocalhostHttpDevelopment: true,
         })
@@ -438,6 +494,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         tenantId: bound.tenantId,
         userId: bound.userId,
         mcpServerId: bound.serverId,
+        validateGrant: async () => true,
         observedRefreshVersion: initialRefreshVersion(bound),
         onInvalidGrant: invalidGrantNotice,
         allowLocalhostHttpDevelopment: true,
@@ -452,7 +509,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
       releaseResponse();
 
-      await expect(oldRefresh).resolves.toBe('new-account-access');
+      await expect(oldRefresh).rejects.toBeInstanceOf(GrantConfigurationChangedError);
       expect(invalidGrantNotice).not.toHaveBeenCalled();
       const current = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
         new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(bound.userId, bound.serverId)
@@ -462,6 +519,58 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_access_token: 'new-account-access',
         oauth_refresh_token: 'new-account-refresh',
         refresh_status: 'idle',
+      });
+    });
+
+    it('does not return or overwrite a newer authorization after an old refresh succeeds', async () => {
+      let requestArrived!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        requestArrived = resolve;
+      });
+      let releaseResponse!: () => void;
+      const release = new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+      const tokenProvider = await provider(async (_body, response) => {
+        requestArrived();
+        await release;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            access_token: 'stale-refresh-access',
+            refresh_token: 'stale-refresh-rotation',
+            expires_in: 3600,
+          })
+        );
+      });
+      const bound = await seed('losing-successful-refresh', tokenProvider.url);
+      const oldRefresh = refreshAndPersistToken({
+        db: dbA,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        validateGrant: async () => true,
+        observedRefreshVersion: initialRefreshVersion(bound),
+        allowLocalhostHttpDevelopment: true,
+      });
+      await arrived;
+      const newerGeneration = await replaceGrant(
+        dbB,
+        bound,
+        tokenProvider.url,
+        'new-authorization-access',
+        'new-authorization-refresh'
+      );
+      releaseResponse();
+
+      await expect(oldRefresh).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+      const current = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(bound.userId, bound.serverId)
+      );
+      expect(current).toMatchObject({
+        grant_generation: newerGeneration,
+        oauth_access_token: 'new-authorization-access',
+        oauth_refresh_token: 'new-authorization-refresh',
       });
     });
 

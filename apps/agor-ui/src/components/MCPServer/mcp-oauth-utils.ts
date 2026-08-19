@@ -1,4 +1,5 @@
 import {
+  findDuplicateMCPCustomHeaderName,
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
@@ -266,6 +267,11 @@ export function validateHeadersJSON(headersValue: unknown): string | undefined {
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return 'Custom HTTP headers must be a JSON object';
+  }
+
+  const duplicate = findDuplicateMCPCustomHeaderName(parsed as Record<string, unknown>);
+  if (duplicate) {
+    return `Duplicate case-insensitive custom HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`;
   }
 
   for (const [key, value] of Object.entries(parsed)) {

@@ -20,7 +20,7 @@ describe('register-services durable OAuth status authority', () => {
   it('resolves durable status through the one place that decides it', () => {
     expect(statusBlock).toContain('resolveAuthenticatedServerIds');
     expect(statusBlock).toContain('requireGrantBinding: true');
-    expect(statusBlock).toContain('shouldVerifyMCPOAuthGrantBinding(');
+    expect(statusBlock).toContain('isMCPOAuthGrantAuthorizedForServer(');
   });
 
   it('gives the refresh owner and observer the same retryable known-failure response', () => {

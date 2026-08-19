@@ -117,6 +117,8 @@ export type MCPOAuthRefreshClaimResult =
 
 export interface MCPOAuthRefreshVersion {
   grantGeneration: number;
+  /** Exact configuration HMAC observed with the grant; null for historical unbound SQLite rows. */
+  grantBindingFingerprint?: string;
   refreshGeneration: number;
 }
 
@@ -466,6 +468,45 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
+   * Commit a standalone/SQLite refresh only onto the exact grant which was
+   * verified before the provider exchange. This is deliberately update-only:
+   * a Settings mutation or disconnect which deleted the grant must never be
+   * resurrected as an unbound generation-0 row.
+   */
+  async completeStandaloneRefresh(
+    userId: UserID | null,
+    serverId: MCPServerID,
+    expected: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>,
+    input: { accessToken: string; refreshToken?: string; expiresAt: Date | null }
+  ): Promise<boolean> {
+    if (this.postgres) {
+      throw new RepositoryError('Standalone refresh completion is only available on SQLite');
+    }
+    try {
+      const fingerprint = expected.grantBindingFingerprint ?? null;
+      const result = await update(this.db, userMcpOauthTokens)
+        .set({
+          oauth_access_token: input.accessToken,
+          oauth_token_expires_at: input.expiresAt,
+          ...(input.refreshToken !== undefined ? { oauth_refresh_token: input.refreshToken } : {}),
+          updated_at: new Date(),
+        })
+        .where(
+          and(
+            matchKey(userId, serverId),
+            eq(userMcpOauthTokens.grant_generation, expected.grantGeneration),
+            sql`${userMcpOauthTokens.grant_binding_fingerprint} IS NOT DISTINCT FROM ${fingerprint}`
+          )
+        )
+        .run();
+      return result.rowsAffected === 1;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError('Failed to complete exact standalone MCP OAuth refresh', error);
+    }
+  }
+
+  /**
    * PostgreSQL database-time refresh claim. A stale owner is not replayed:
    * the row becomes ambiguous because a rotating refresh token may have been
    * consumed before the owner died.
@@ -507,6 +548,7 @@ export class UserMCPOAuthTokenRepository {
           WHERE mcp_server_id = ${serverId}
             AND ${userPredicate}
             AND grant_generation = ${expected.grantGeneration}
+            AND grant_binding_fingerprint IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}
             AND refresh_generation = ${expected.refreshGeneration}
             AND refresh_status = 'idle'
             AND oauth_refresh_token IS NOT NULL

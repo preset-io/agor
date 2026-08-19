@@ -86,8 +86,40 @@ function tokenFor(
 describe('MCP OAuth grant configuration binding', () => {
   it('grandfathers only historical standalone unbound grants', () => {
     expect(shouldVerifyMCPOAuthGrantBinding(false, undefined)).toBe(false);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, null)).toBe(false);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, 0)).toBe(true);
     expect(shouldVerifyMCPOAuthGrantBinding(false, 4)).toBe(true);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, 5)).toBe(true);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, Number.NaN)).toBe(true);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, 'malformed')).toBe(true);
     expect(shouldVerifyMCPOAuthGrantBinding(true, undefined)).toBe(true);
+
+    const fingerprint = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
+    for (const version of [0, 5, Number.NaN]) {
+      expect(
+        isMCPOAuthGrantBoundToServer(masterSecret, server, tokenFor(fingerprint, version), 'strict')
+      ).toBe(false);
+    }
+  });
+
+  it('uses one case-insensitive header representation for wire, mutation, and binding', () => {
+    const ordered = { ...server, headers: { 'X-Route': 'a', 'X-Tenant': 'b' } };
+    const reorderedAndRecased = {
+      ...server,
+      headers: { 'x-tenant': 'b', 'x-route': 'a' },
+    };
+    expect(fingerprintMCPOAuthGrantConfiguration(masterSecret, ordered, resolved)).toBe(
+      fingerprintMCPOAuthGrantConfiguration(masterSecret, reorderedAndRecased, resolved)
+    );
+    expect(hasMCPOAuthRelevantServerConfigurationChanged(ordered, reorderedAndRecased)).toBe(false);
+
+    const duplicate = { ...server, headers: { 'X-Route': 'a', 'x-route': 'b' } };
+    expect(() => fingerprintMCPOAuthGrantConfiguration(masterSecret, duplicate, resolved)).toThrow(
+      /Duplicate custom HTTP header names/
+    );
+    expect(() => hasMCPOAuthRelevantServerConfigurationChanged(server, duplicate)).toThrow(
+      /Duplicate custom HTTP header names/
+    );
   });
   it('records advertised as the effective default while preserving version-1 fingerprints', () => {
     const withoutPolicy: ServerBinding = {

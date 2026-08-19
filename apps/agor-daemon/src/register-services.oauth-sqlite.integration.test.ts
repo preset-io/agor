@@ -53,14 +53,20 @@ type TestProvider = {
   transientMcpUrl: string;
   requests: Array<{ path: string; authorization?: string; transientHeader?: string }>;
   tokenRequested: Deferred<void>;
+  refreshRequested: Deferred<void>;
   releaseToken: () => void;
+  releaseRefresh: () => void;
   close: () => Promise<void>;
 };
 
-async function createTestProvider(options: { holdToken?: boolean } = {}): Promise<TestProvider> {
+async function createTestProvider(
+  options: { holdToken?: boolean; holdRefresh?: boolean; invalidRefresh?: boolean } = {}
+): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
   const tokenRequested = deferred<void>();
   const release = deferred<void>();
+  const refreshRequested = deferred<void>();
+  const releaseRefresh = deferred<void>();
   let baseUrl = '';
 
   const server = http.createServer(async (request, response) => {
@@ -99,6 +105,28 @@ async function createTestProvider(options: { holdToken?: boolean } = {}): Promis
       return;
     }
     if (url.pathname === '/token') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const isRefresh = new URLSearchParams(body).get('grant_type') === 'refresh_token';
+      if (isRefresh) {
+        refreshRequested.resolve();
+        if (options.holdRefresh) await releaseRefresh.promise;
+        response.writeHead(options.invalidRefresh ? 400 : 200, {
+          'content-type': 'application/json',
+        });
+        response.end(
+          JSON.stringify(
+            options.invalidRefresh
+              ? { error: 'invalid_grant' }
+              : {
+                  access_token: 'stale-refreshed-access-token',
+                  refresh_token: 'stale-rotated-refresh-token',
+                  expires_in: 3600,
+                }
+          )
+        );
+        return;
+      }
       tokenRequested.resolve();
       if (options.holdToken) await release.promise;
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -163,9 +191,12 @@ async function createTestProvider(options: { holdToken?: boolean } = {}): Promis
     transientMcpUrl: `${baseUrl}/transient/mcp`,
     requests,
     tokenRequested,
+    refreshRequested,
     releaseToken: () => release.resolve(),
+    releaseRefresh: () => releaseRefresh.resolve(),
     close: () => {
       release.resolve();
+      releaseRefresh.resolve();
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
@@ -270,8 +301,66 @@ async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 's
 function paramsFor(harness: SQLiteHarness): AuthenticatedParams & { connection: { id: string } } {
   return {
     user: harness.user,
+    tenant: { tenant_id: 'default', source: 'static' },
     connection: { id: 'sqlite-test-socket' },
   } as AuthenticatedParams & { connection: { id: string } };
+}
+
+async function authorizeSavedServer(harness: SQLiteHarness): Promise<void> {
+  const started = (await harness.app
+    .service('mcp-servers/oauth-start')
+    .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+    success: boolean;
+    authorizationUrl: string;
+  };
+  expect(started.success).toBe(true);
+  const state = new URL(started.authorizationUrl).searchParams.get('state');
+  expect(state).toBeTruthy();
+  expect((await harness.callback(state!)).status).toBe(200);
+}
+
+async function replaceWithNewAuthorization(harness: SQLiteHarness): Promise<number> {
+  const repository = new UserMCPOAuthTokenRepository(harness.rawDb);
+  const previous = await repository.getToken(
+    harness.user.user_id as UserID,
+    harness.server.mcp_server_id as MCPServerID
+  );
+  if (
+    !previous?.grant_binding_fingerprint ||
+    !previous.oauth_metadata_uri ||
+    !previous.oauth_resource_uri ||
+    !previous.oauth_issuer ||
+    !previous.oauth_authorization_endpoint ||
+    !previous.oauth_token_endpoint ||
+    !previous.oauth_redirect_uri ||
+    !previous.oauth_client_id
+  ) {
+    throw new Error('Expected a complete bound SQLite grant fixture');
+  }
+  const generation = previous.grant_generation + 1;
+  await repository.saveToken(
+    harness.user.user_id as UserID,
+    harness.server.mcp_server_id as MCPServerID,
+    {
+      accessToken: 'new-authorization-access-token',
+      refreshToken: 'new-authorization-refresh-token',
+      clientId: previous.oauth_client_id,
+      clientSecret: previous.oauth_client_secret,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      grantBinding: {
+        generation,
+        version: 4,
+        fingerprint: previous.grant_binding_fingerprint,
+        metadataUri: previous.oauth_metadata_uri,
+        resourceUri: previous.oauth_resource_uri,
+        issuer: previous.oauth_issuer,
+        authorizationEndpoint: previous.oauth_authorization_endpoint,
+        tokenEndpoint: previous.oauth_token_endpoint,
+        redirectUri: previous.oauth_redirect_uri,
+      },
+    }
+  );
+  return generation;
 }
 
 const providers: TestProvider[] = [];
@@ -415,5 +504,102 @@ describe('SQLite saved-row OAuth authority', () => {
         harness.server.mcp_server_id as MCPServerID
       )
     ).toBeNull();
+  });
+
+  it('does not resurrect a grant deleted by a Settings mutation during refresh', async () => {
+    const provider = await createTestProvider({ holdRefresh: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const refresh = harness.app
+      .service('mcp-servers/oauth-refresh')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await Promise.race([
+      provider.refreshRequested.promise,
+      refresh.then((result) => {
+        throw new Error(`Refresh returned before provider exchange: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    await harness.app
+      .service('mcp-servers')
+      .patch(
+        harness.server.mcp_server_id,
+        { headers: { 'X-Saved-Config': 'mutated-during-refresh' } },
+        paramsFor(harness)
+      );
+    provider.releaseRefresh();
+
+    await expect(refresh).resolves.toMatchObject({ success: false, error: 'needs_reauth' });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toBeNull();
+  });
+
+  it('does not let an old refresh overwrite a newer authorization generation', async () => {
+    const provider = await createTestProvider({ holdRefresh: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const refresh = harness.app
+      .service('mcp-servers/oauth-refresh')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await Promise.race([
+      provider.refreshRequested.promise,
+      refresh.then((result) => {
+        throw new Error(`Refresh returned before provider exchange: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    const generation = await replaceWithNewAuthorization(harness);
+    provider.releaseRefresh();
+
+    await expect(refresh).resolves.toMatchObject({ success: false, error: 'needs_reauth' });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      grant_generation: generation,
+      oauth_access_token: 'new-authorization-access-token',
+      oauth_refresh_token: 'new-authorization-refresh-token',
+    });
+  });
+
+  it('does not let stale invalid_grant delete a newer authorization', async () => {
+    const provider = await createTestProvider({ holdRefresh: true, invalidRefresh: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const refresh = harness.app
+      .service('mcp-servers/oauth-refresh')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await Promise.race([
+      provider.refreshRequested.promise,
+      refresh.then((result) => {
+        throw new Error(`Refresh returned before provider exchange: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    const generation = await replaceWithNewAuthorization(harness);
+    provider.releaseRefresh();
+
+    await expect(refresh).resolves.toMatchObject({ success: false, error: 'needs_reauth' });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({
+      grant_generation: generation,
+      oauth_access_token: 'new-authorization-access-token',
+    });
   });
 });

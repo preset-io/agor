@@ -101,6 +101,7 @@ import {
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
 
 /**
@@ -2478,11 +2479,19 @@ export class GatewayService {
               // before handing it to the executor. This avoids spurious
               // "not authenticated" warnings for users who are one refresh away.
               const row = await this.userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
+              const bindingValid =
+                !!row && (await isMCPOAuthGrantAuthorizedForServer(this.db, server, row));
               const accessValid = !!(
-                row?.oauth_access_token &&
+                bindingValid &&
+                row?.refresh_status === 'idle' &&
+                row.oauth_access_token &&
                 (!row.oauth_token_expires_at || row.oauth_token_expires_at > new Date())
               );
-              const refreshable = !!row?.oauth_refresh_token;
+              const refreshable = !!(
+                bindingValid &&
+                row?.refresh_status !== 'ambiguous' &&
+                row?.oauth_refresh_token
+              );
               if (!accessValid && !refreshable) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }

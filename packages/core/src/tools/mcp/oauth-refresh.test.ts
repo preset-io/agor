@@ -25,6 +25,7 @@ import type { MCPServerID, UserID } from '../../types';
 import {
   __refreshMutexSizeForTests,
   __resetRefreshMutexForTests,
+  GrantConfigurationChangedError,
   InvalidGrantError,
   MissingClientIdError,
   MissingRefreshTokenError,
@@ -44,26 +45,30 @@ import {
 // plain `function` constructors (not arrow factories) so `new X()` works.
 // ---------------------------------------------------------------------------
 
-const { mockGetToken, mockSaveToken, mockDeleteToken, mockFindById, mockUserFindById } = vi.hoisted(
-  () => ({
-    mockGetToken: vi.fn(),
-    mockSaveToken: vi.fn(),
-    mockDeleteToken: vi.fn(),
-    mockFindById: vi.fn(),
-    // Persisting a refreshed token now requires the grant's subject to still be
-    // entitled to hold it (`assertMcpGrantSubjectEntitled`), so these
-    // orchestration tests need a subject who is. The refusal itself is covered
-    // where it is enforced — see the daemon's `mcp-capability-role` tests.
-    mockUserFindById: vi.fn(async () => ({ user_id: 'user-1', role: 'member' })),
-  })
-);
+const {
+  mockGetToken,
+  mockCompleteStandaloneRefresh,
+  mockDeleteGrantVersion,
+  mockFindById,
+  mockUserFindById,
+} = vi.hoisted(() => ({
+  mockGetToken: vi.fn(),
+  mockCompleteStandaloneRefresh: vi.fn(),
+  mockDeleteGrantVersion: vi.fn(),
+  mockFindById: vi.fn(),
+  // Persisting a refreshed token now requires the grant's subject to still be
+  // entitled to hold it (`assertMcpGrantSubjectEntitled`), so these
+  // orchestration tests need a subject who is. The refusal itself is covered
+  // where it is enforced — see the daemon's `mcp-capability-role` tests.
+  mockUserFindById: vi.fn(async () => ({ user_id: 'user-1', role: 'member' })),
+}));
 
 vi.mock('../../db/repositories', () => ({
   UserMCPOAuthTokenRepository: function UserMCPOAuthTokenRepositoryMock() {
     return {
       getToken: mockGetToken,
-      saveToken: mockSaveToken,
-      deleteToken: mockDeleteToken,
+      completeStandaloneRefresh: mockCompleteStandaloneRefresh,
+      deleteGrantVersion: mockDeleteGrantVersion,
     };
   },
   MCPServerRepository: function MCPServerRepositoryMock() {
@@ -265,8 +270,8 @@ describe('refreshAndPersistToken', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     mockGetToken.mockReset();
-    mockSaveToken.mockReset();
-    mockDeleteToken.mockReset();
+    mockCompleteStandaloneRefresh.mockReset().mockResolvedValue(true);
+    mockDeleteGrantVersion.mockReset();
     mockFindById.mockReset();
 
     __resetRefreshMutexForTests();
@@ -299,23 +304,28 @@ describe('refreshAndPersistToken', () => {
       url: 'https://srv.example.com/mcp',
       auth: { oauth_token_url: 'https://auth.example.com/token' },
     });
-    mockSaveToken.mockResolvedValue(undefined);
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     expect(token).toBe('new-a');
-    expect(mockSaveToken).toHaveBeenCalledWith(USER_ID, SERVER_ID, {
-      accessToken: 'new-a',
-      expiresAt: expect.any(Date), // resolved from expires_in: 3600 → ~now+1h
-      refreshToken: undefined, // provider omitted — repo preserves existing
-    });
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
+      USER_ID,
+      SERVER_ID,
+      { grantGeneration: 0, grantBindingFingerprint: undefined },
+      {
+        accessToken: 'new-a',
+        expiresAt: expect.any(Date), // resolved from expires_in: 3600 → ~now+1h
+        refreshToken: undefined, // provider omitted — repo preserves existing
+      }
+    );
     // Spot-check the resolved expiry is roughly +1h from now (within 5s slop).
-    const call = mockSaveToken.mock.calls[0]?.[2] as { expiresAt: Date };
+    const call = mockCompleteStandaloneRefresh.mock.calls[0]?.[3] as { expiresAt: Date };
     const deltaSec = (call.expiresAt.getTime() - Date.now()) / 1000;
     expect(deltaSec).toBeGreaterThan(3595);
     expect(deltaSec).toBeLessThanOrEqual(3600);
@@ -343,12 +353,47 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
-    expect(mockSaveToken).toHaveBeenCalledWith(
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
       USER_ID,
       SERVER_ID,
+      expect.any(Object),
       expect.objectContaining({ refreshToken: 'rt-2' })
+    );
+  });
+
+  it('fails closed when the exact SQLite grant disappears before refresh commit', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-1',
+      oauth_client_id: 'cid',
+      grant_generation: 7,
+      grant_binding_fingerprint: 'binding-7',
+    });
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_token_url: 'https://auth.example.com/token' },
+    });
+    mockFetchJson({ access_token: 'stale-refresh-result', expires_in: 3600 });
+    mockCompleteStandaloneRefresh.mockResolvedValue(false);
+
+    await expect(
+      refreshAndPersistToken({
+        db: { run: () => undefined } as any,
+        userId: USER_ID,
+        mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
+      })
+    ).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
+      USER_ID,
+      SERVER_ID,
+      { grantGeneration: 7, grantBindingFingerprint: 'binding-7' },
+      expect.objectContaining({ accessToken: 'stale-refresh-result' })
     );
   });
 
@@ -365,7 +410,7 @@ describe('refreshAndPersistToken', () => {
       auth: { oauth_token_url: 'https://auth.example.com/token' },
     });
     mockFetchJson({ error: 'invalid_grant' }, 400);
-    mockDeleteToken.mockResolvedValue(true);
+    mockDeleteGrantVersion.mockResolvedValue(true);
 
     const onInvalidGrant = vi.fn();
 
@@ -374,16 +419,48 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
         onInvalidGrant,
       })
     ).rejects.toBeInstanceOf(InvalidGrantError);
 
-    expect(mockDeleteToken).toHaveBeenCalledWith(USER_ID, SERVER_ID);
+    expect(mockDeleteGrantVersion).toHaveBeenCalledWith(USER_ID, SERVER_ID, 0, undefined);
     expect(onInvalidGrant).toHaveBeenCalledWith({
       userId: USER_ID,
       mcpServerId: SERVER_ID,
     });
-    expect(mockSaveToken).not.toHaveBeenCalled();
+    expect(mockCompleteStandaloneRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not report or delete invalid_grant when the exact grant was replaced', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'old-a',
+      oauth_refresh_token: 'rt-revoked',
+      oauth_client_id: 'cid',
+      grant_generation: 3,
+      grant_binding_fingerprint: 'old-binding',
+    });
+    mockFindById.mockResolvedValue({
+      url: 'https://srv.example.com/mcp',
+      auth: { oauth_token_url: 'https://auth.example.com/token' },
+    });
+    mockFetchJson({ error: 'invalid_grant' }, 400);
+    mockDeleteGrantVersion.mockResolvedValue(false);
+    const onInvalidGrant = vi.fn();
+
+    await expect(
+      refreshAndPersistToken({
+        db: { run: () => undefined } as any,
+        userId: USER_ID,
+        mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
+        onInvalidGrant,
+      })
+    ).rejects.toBeInstanceOf(GrantConfigurationChangedError);
+    expect(mockDeleteGrantVersion).toHaveBeenCalledWith(USER_ID, SERVER_ID, 3, 'old-binding');
+    expect(onInvalidGrant).not.toHaveBeenCalled();
   });
 
   it('throws MissingRefreshTokenError when row has no refresh_token', async () => {
@@ -400,6 +477,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingRefreshTokenError);
   });
@@ -412,6 +490,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingRefreshTokenError);
   });
@@ -435,6 +514,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     expect(token).toBe('new-a');
@@ -459,6 +539,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingTokenEndpointError);
   });
@@ -486,6 +567,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
@@ -514,6 +596,7 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(MissingClientIdError);
 
@@ -546,11 +629,13 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
     const p2 = refreshAndPersistToken({
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     // Wait for the fetch mock to be invoked before resolving — the mock's
@@ -569,7 +654,7 @@ describe('refreshAndPersistToken', () => {
     expect(t1).toBe('shared-new-a');
     expect(t2).toBe('shared-new-a');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(mockSaveToken).toHaveBeenCalledTimes(1);
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('mutex: different keys refresh independently', async () => {
@@ -603,11 +688,13 @@ describe('refreshAndPersistToken', () => {
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       }),
       refreshAndPersistToken({
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID_2,
+        validateGrant: async () => true,
       }),
     ]);
 
@@ -632,6 +719,7 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: USER_ID,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     expect(__refreshMutexSizeForTests()).toBe(0);
@@ -650,13 +738,14 @@ describe('refreshAndPersistToken', () => {
       auth: { oauth_token_url: 'https://auth.example.com/token' },
     });
     mockFetchJson({ error: 'invalid_grant' }, 400);
-    mockDeleteToken.mockResolvedValue(true);
+    mockDeleteGrantVersion.mockResolvedValue(true);
 
     await expect(
       refreshAndPersistToken({
         db: { run: () => undefined } as any,
         userId: USER_ID,
         mcpServerId: SERVER_ID,
+        validateGrant: async () => true,
       })
     ).rejects.toBeInstanceOf(InvalidGrantError);
 
@@ -681,11 +770,17 @@ describe('refreshAndPersistToken', () => {
       db: { run: () => undefined } as any,
       userId: null,
       mcpServerId: SERVER_ID,
+      validateGrant: async () => true,
     });
 
     expect(token).toBe('shared-new');
     expect(mockGetToken).toHaveBeenCalledWith(null, SERVER_ID);
-    expect(mockSaveToken).toHaveBeenCalledWith(null, SERVER_ID, expect.any(Object));
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
+      null,
+      SERVER_ID,
+      expect.any(Object),
+      expect.any(Object)
+    );
   });
 });
 

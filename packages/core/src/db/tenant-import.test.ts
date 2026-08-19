@@ -120,8 +120,13 @@ describe('importTenant pre-mutation validation ordering', () => {
 });
 
 describe('importTenant MCP OAuth public policy boundary', () => {
-  async function archivedMcpManifest(mode: unknown): Promise<TenantArchiveManifest> {
-    const line = `${JSON.stringify({ data: { auth: { type: 'oauth', oauth_compatibility_mode: mode } } })}\n`;
+  async function archivedMcpManifest(
+    mode: unknown,
+    headers?: Record<string, string>
+  ): Promise<TenantArchiveManifest> {
+    const line = `${JSON.stringify({
+      data: { auth: { type: 'oauth', oauth_compatibility_mode: mode }, headers },
+    })}\n`;
     await mkdir(databaseDir(scratch), { recursive: true });
     await writeFile(tableJsonlPath(scratch, 'mcp_servers'), line, 'utf8');
     return {
@@ -158,5 +163,14 @@ describe('importTenant MCP OAuth public policy boundary', () => {
     await expect(
       validateArchivedMCPCompatibilityModes(scratch, await archivedMcpManifest(mode))
     ).resolves.toBeUndefined();
+  });
+
+  it('rejects case-insensitive duplicate custom headers before import writes', async () => {
+    await expect(
+      validateArchivedMCPCompatibilityModes(
+        scratch,
+        await archivedMcpManifest('strict', { 'X-Route': 'a', 'x-route': 'b' })
+      )
+    ).rejects.toThrow(/Duplicate custom HTTP header names/);
   });
 });

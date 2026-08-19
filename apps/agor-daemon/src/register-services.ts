@@ -45,6 +45,7 @@ import {
   shortId,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
   UsersRepository,
   visibleSessionReferenceAccessExists,
@@ -56,6 +57,7 @@ import type {
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AuthenticatedParams,
   HookContext,
@@ -173,6 +175,10 @@ import {
   classifyMCPOAuthCompletionFailure,
   OAuthFlowAuthorizationChangedError,
 } from './services/mcp-oauth-exchange-classification.js';
+import {
+  isCurrentMCPOAuthGrantAuthorized,
+  isMCPOAuthGrantAuthorizedForServer,
+} from './services/mcp-oauth-grant-authority.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
   grantBindingVersionForCompatibilityMode,
@@ -1450,6 +1456,24 @@ export async function registerMCPServices(
       allowLocalhostHttp: !durableOAuthFlows,
     });
   };
+  const refreshGrantValidator =
+    (tenantId: string | undefined, serverId: MCPServerID) =>
+    async (
+      grant: UserMCPOAuthToken,
+      refreshDb: Parameters<RefreshAndPersistDeps['validateGrant']>[1]
+    ): Promise<boolean> =>
+      isCurrentMCPOAuthGrantAuthorized({
+        // Core accepts a raw repository-compatible handle for standalone
+        // tests, but daemon refreshes always enter here with the long-lived
+        // tenant-aware proxy or a short-lived tenant-scoped transaction.
+        db: refreshDb as TenantScopeAwareDatabase | TenantScopedDatabase,
+        serverId,
+        grant,
+        tenantId,
+        // PostgreSQL Settings mutations use the same advisory lock. SQLite
+        // relies on exact-generation/fingerprint CAS plus its serialized writer.
+        lockConfiguration: true,
+      });
 
   type PendingOAuthFlow = {
     attemptId: MCPOAuthAttemptID;
@@ -1480,6 +1504,8 @@ export async function registerMCPServices(
     savedServerAuthority?: MCPServer;
     /** Bound grant envelope issued for new standalone flows. */
     localGrantBinding?: NonNullable<SaveTokenInput['grantBinding']>;
+    /** Subject key whose temporary generation reservation this flow owns. */
+    localGrantSubjectKey?: string;
   };
 
   // Store pending OAuth flow contexts
@@ -1487,7 +1513,16 @@ export async function registerMCPServices(
   // SQLite has no cross-process flow, but callbacks and Settings mutations can
   // interleave within this daemon. A monotonic per-subject generation prevents
   // an older exchange from replacing a newer completed authorization.
-  const localOAuthGrantGenerations = new Map<string, number>();
+  const localOAuthGrantGenerations = new Map<string, { generation: number; reservedAt: number }>();
+  const releaseLocalGrantGeneration = (flow: PendingOAuthFlow): void => {
+    if (!flow.localGrantSubjectKey || !flow.localGrantBinding) return;
+    const reserved = localOAuthGrantGenerations.get(flow.localGrantSubjectKey);
+    // A newer in-flight attempt for the same subject owns a higher reservation.
+    // Never let an older callback release that fence.
+    if (reserved?.generation === flow.localGrantBinding.generation) {
+      localOAuthGrantGenerations.delete(flow.localGrantSubjectKey);
+    }
+  };
   const localOAuthAttemptStatuses = new Map<
     MCPOAuthAttemptID,
     {
@@ -1539,7 +1574,17 @@ export async function registerMCPServices(
           failureCode: 'authorization_timed_out',
           updatedAt: now,
         });
+        releaseLocalGrantGeneration(flow);
         flow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
+      }
+    }
+    // Defense-in-depth for a callback which was claimed and then abandoned by
+    // an unexpected local failure before its terminal-status path ran. OAuth
+    // provider exchanges are bounded to seconds; after the full flow TTL no
+    // live exchange can safely depend on the process-local reservation.
+    for (const [subjectKey, reservation] of localOAuthGrantGenerations) {
+      if (now - reservation.reservedAt > LOCAL_OAUTH_FLOW_TTL_MS) {
+        localOAuthGrantGenerations.delete(subjectKey);
       }
     }
     for (const [attemptId, attempt] of localOAuthAttemptStatuses) {
@@ -1781,6 +1826,7 @@ export async function registerMCPServices(
     } satisfies import('./services/mcp-oauth-grant-binding.js').MCPOAuthResolvedGrantBinding;
 
     let localGrantBinding: NonNullable<SaveTokenInput['grantBinding']> | undefined;
+    let localGrantSubjectKey: string | undefined;
     if (savedServerAuthority && !durableOAuthFlows) {
       localGrantBinding = await runInOAuthTenantScope(db, opts.tenantId, async () => {
         const currentServer = await new MCPServerRepository(db).findById(
@@ -1815,9 +1861,10 @@ export async function registerMCPServices(
         const generation =
           Math.max(
             existingGrant?.grant_generation ?? 0,
-            localOAuthGrantGenerations.get(subjectKey) ?? 0
+            localOAuthGrantGenerations.get(subjectKey)?.generation ?? 0
           ) + 1;
-        localOAuthGrantGenerations.set(subjectKey, generation);
+        localOAuthGrantGenerations.set(subjectKey, { generation, reservedAt: Date.now() });
+        localGrantSubjectKey = subjectKey;
         const version = grantBindingVersionForCompatibilityMode(context.compatibilityMode);
         return {
           generation,
@@ -1891,6 +1938,7 @@ export async function registerMCPServices(
             const pending = pendingOAuthFlows.get(context.state);
             if (pending) {
               pendingOAuthFlows.delete(context.state);
+              releaseLocalGrantGeneration(pending);
               localOAuthAttemptStatuses.set(attemptId, {
                 status: 'expired',
                 userId: opts.userId,
@@ -1937,6 +1985,7 @@ export async function registerMCPServices(
         tokenReject,
         savedServerAuthority,
         localGrantBinding,
+        localGrantSubjectKey,
       });
       localOAuthAttemptStatuses.set(attemptId, {
         status: 'pending',
@@ -2279,6 +2328,9 @@ export async function registerMCPServices(
       failureCode,
       updatedAt: Date.now(),
     });
+    if (status !== 'pending' && status !== 'exchanging') {
+      releaseLocalGrantGeneration(pendingFlow);
+    }
   };
 
   const emitOAuthCompletion = (pendingFlow: PendingOAuthFlow, success: boolean) => {
@@ -3433,24 +3485,8 @@ export async function registerMCPServices(
           listShared: () => userTokenRepo.listShared(),
           findServer: (serverId) => serverRepo.findById(serverId),
           requireGrantBinding: true,
-          isGrantBoundToServer: async (server, grant) => {
-            // Existing standalone grants predate binding and remain usable.
-            // Every newly issued SQLite grant is v4-bound and must verify.
-            if (
-              !shouldVerifyMCPOAuthGrantBinding(
-                isPostgresDatabaseHandle(db),
-                grant.grant_binding_version
-              )
-            ) {
-              return true;
-            }
-            return isMCPOAuthGrantBoundToServer(
-              process.env.AGOR_MASTER_SECRET!,
-              server,
-              grant,
-              (await resolveMCPOAuthCompatibilityPolicy(server)).mode
-            );
-          },
+          isGrantBoundToServer: (server, grant) =>
+            isMCPOAuthGrantAuthorizedForServer(db, server, grant),
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
@@ -3736,8 +3772,10 @@ export async function registerMCPServices(
                   mcpServerId: serverId as MCPServerID,
                   observedRefreshVersion: {
                     grantGeneration: row.grant_generation,
+                    grantBindingFingerprint: row.grant_binding_fingerprint,
                     refreshGeneration: row.refresh_generation,
                   },
+                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
                 });
                 headers[serverId] = { authorization: `Bearer ${observed}` };
               } catch {
@@ -3756,8 +3794,10 @@ export async function registerMCPServices(
                   mcpServerId: serverId as MCPServerID,
                   observedRefreshVersion: {
                     grantGeneration: row.grant_generation,
+                    grantBindingFingerprint: row.grant_binding_fingerprint,
                     refreshGeneration: row.refresh_generation,
                   },
+                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
                 });
               } catch (refreshErr) {
                 if (refreshErr instanceof InvalidGrantError) {
@@ -3838,6 +3878,7 @@ export async function registerMCPServices(
         MissingClientIdError,
         AmbiguousRefreshError,
         FailedRefreshError,
+        GrantConfigurationChangedError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       try {
@@ -3859,45 +3900,26 @@ export async function registerMCPServices(
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
-        let observedRefreshVersion:
-          | { grantGeneration: number; refreshGeneration: number }
-          | undefined;
         const currentGrant = await runInOAuthTenantScope(db, tenantId, () =>
           new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
         );
-        if (
-          shouldVerifyMCPOAuthGrantBinding(
-            isPostgresDatabaseHandle(db),
-            currentGrant?.grant_binding_version
-          )
-        ) {
-          const compatibilityMode = (await resolveMCPOAuthCompatibilityPolicy(server)).mode;
-          if (
-            !currentGrant ||
-            !isMCPOAuthGrantBoundToServer(
-              process.env.AGOR_MASTER_SECRET!,
-              server,
-              currentGrant,
-              compatibilityMode
+        if (!currentGrant) return { success: false, error: 'needs_reauth' };
+        if (!(await isMCPOAuthGrantAuthorizedForServer(db, server, currentGrant))) {
+          await runInOAuthTenantWriteScope(db, tenantId, () =>
+            new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
+              tokenUserId,
+              serverId as MCPServerID,
+              currentGrant.grant_generation,
+              currentGrant.grant_binding_fingerprint
             )
-          ) {
-            if (currentGrant) {
-              await runInOAuthTenantWriteScope(db, tenantId, () =>
-                new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
-                  tokenUserId,
-                  serverId as MCPServerID,
-                  currentGrant.grant_generation,
-                  currentGrant.grant_binding_fingerprint
-                )
-              );
-            }
-            return { success: false, error: 'needs_reauth' };
-          }
-          observedRefreshVersion = {
-            grantGeneration: currentGrant.grant_generation,
-            refreshGeneration: currentGrant.refresh_generation,
-          };
+          );
+          return { success: false, error: 'needs_reauth' };
         }
+        const observedRefreshVersion = {
+          grantGeneration: currentGrant.grant_generation,
+          grantBindingFingerprint: currentGrant.grant_binding_fingerprint,
+          refreshGeneration: currentGrant.refresh_generation,
+        };
 
         await refreshAndPersistToken({
           db,
@@ -3905,6 +3927,7 @@ export async function registerMCPServices(
           userId: tokenUserId,
           mcpServerId: serverId as MCPServerID,
           observedRefreshVersion,
+          validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
         });
 
         const fresh = await runInOAuthTenantScope(db, tenantId, () =>
@@ -3920,7 +3943,8 @@ export async function registerMCPServices(
         if (
           err instanceof InvalidGrantError ||
           err instanceof MissingRefreshTokenError ||
-          err instanceof AmbiguousRefreshError
+          err instanceof AmbiguousRefreshError ||
+          err instanceof GrantConfigurationChangedError
         ) {
           return { success: false, error: 'needs_reauth' };
         }
