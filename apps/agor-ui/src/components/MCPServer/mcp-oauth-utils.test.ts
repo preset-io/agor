@@ -51,6 +51,8 @@ describe('extractOAuthConfig', () => {
       oauth_scope: 'read write',
       oauth_grant_type: 'authorization_code',
       oauth_mode: 'per_user',
+      oauth_compatibility_mode: 'strict',
+      oauth_dcr_mode: 'advertised',
     });
   });
 
@@ -72,6 +74,28 @@ describe('extractOAuthConfig', () => {
   it('preserves oauth_mode=shared when explicitly set', () => {
     const result = extractOAuthConfig({ oauth_mode: 'shared' });
     expect(result.oauth_mode).toBe('shared');
+  });
+
+  it('defaults to strict OAuth with advertised registration', () => {
+    expect(extractOAuthConfig({})).toMatchObject({
+      oauth_compatibility_mode: 'strict',
+      oauth_dcr_mode: 'advertised',
+    });
+  });
+
+  it('preserves explicit disabled and legacy fallback policies', () => {
+    expect(extractOAuthConfig({ oauth_dcr_mode: 'disabled' })).toMatchObject({
+      oauth_dcr_mode: 'disabled',
+    });
+    expect(
+      extractOAuthConfig({
+        oauth_compatibility_mode: 'legacy',
+        oauth_dcr_mode: 'fallback',
+      })
+    ).toMatchObject({
+      oauth_compatibility_mode: 'legacy',
+      oauth_dcr_mode: 'fallback',
+    });
   });
 
   it('omits falsy string fields', () => {
@@ -148,6 +172,28 @@ describe('extractOAuthConfigForTesting', () => {
 });
 
 describe('buildAuthFromValues', () => {
+  it('preserves a legacy absent DCR field across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_dcr_mode: 'advertised',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentDcrMode: true }
+      )
+    ).not.toHaveProperty('oauth_dcr_mode');
+  });
+
+  it('materializes DCR after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_dcr_mode: 'fallback' },
+        { preserveAbsentDcrMode: true }
+      )
+    ).toMatchObject({ oauth_dcr_mode: 'fallback' });
+  });
+
   it('returns undefined when auth_type is none / missing / unrecognized', () => {
     expect(buildAuthFromValues({})).toBeUndefined();
     expect(buildAuthFromValues({ auth_type: 'none' })).toBeUndefined();

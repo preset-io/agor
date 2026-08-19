@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { User, UserID } from '../types/index.js';
-import { resolveSessionDefaults } from './resolve-session-defaults.js';
+import { resolveSessionDefaults, resolveSessionMcpServerIds } from './resolve-session-defaults.js';
 
 const now = new Date('2026-05-03T00:00:00.000Z');
 
@@ -361,10 +361,9 @@ describe('resolveSessionDefaults', () => {
     });
   });
 
-  describe('gateway-style overrides (covers GatewayService channel config)', () => {
-    // Regression coverage for 7992a712: gateway now threads codex sub-config
-    // and mcpServerIds from GatewayAgenticConfig through the helper. Verify
-    // that the full set of fields is honored as a single bundle.
+  describe('combined runtime overrides', () => {
+    // Keep the compatibility resolver delegating both agent configuration and
+    // MCP selection to their respective owners.
 
     it('threads codex sub-config + mcp ids + permission/model overrides together', () => {
       const r = resolveSessionDefaults({
@@ -393,5 +392,31 @@ describe('resolveSessionDefaults', () => {
       });
       expect(r.mcp_server_ids).toEqual(['gateway-mcp-1', 'gateway-mcp-2']);
     });
+  });
+});
+
+describe('resolveSessionMcpServerIds', () => {
+  it('uses explicit IDs without falling through, including an empty selection', () => {
+    const fallback = {
+      branch: { mcp_server_ids: ['branch-1'] },
+      user: makeUser({}, ['user-1']),
+    };
+
+    expect(resolveSessionMcpServerIds({ ...fallback, explicit: ['explicit-1'] })).toEqual([
+      'explicit-1',
+    ]);
+    expect(resolveSessionMcpServerIds({ ...fallback, explicit: [] })).toEqual([]);
+  });
+
+  it('falls back through branch and user defaults', () => {
+    const user = makeUser({}, ['user-1']);
+
+    expect(resolveSessionMcpServerIds({ branch: { mcp_server_ids: ['branch-1'] }, user })).toEqual([
+      'branch-1',
+    ]);
+    expect(resolveSessionMcpServerIds({ branch: { mcp_server_ids: [] }, user })).toEqual([
+      'user-1',
+    ]);
+    expect(resolveSessionMcpServerIds({})).toEqual([]);
   });
 });

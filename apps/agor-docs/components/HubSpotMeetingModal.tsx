@@ -18,10 +18,32 @@ interface HubSpotMeetingModalProps {
  * repeat opens deterministic (no loader-script re-scan). The calendar's
  * internals are HubSpot-rendered; we own everything around it.
  */
+declare global {
+  interface Window {
+    dataLayer?: unknown[];
+  }
+}
+
 /** Spinner-gated scheduler iframe — shared by the standalone meeting modal
  * and the beta-form modal's "book a demo instead" view. */
 export function MeetingEmbed() {
   const [frameReady, setFrameReady] = useState(false);
+
+  // "Opened" isn't something HubSpot's meeting embed reports back to us —
+  // unlike the contact form's hsFormCallback postMessage contract, the
+  // meetings scheduler bundle only ever posts a consent-readiness handshake,
+  // an iframe-resize notice, and a final booking success/failure (confirmed
+  // by reading its shipped JS — see app/layout.tsx's booking-tracking
+  // script). There's no "in progress" signal to latch onto either. So the
+  // "opened the scheduler" moment is something we already know ourselves —
+  // this component mounting IS that moment, in every context it's used
+  // (the standalone meeting modal and the contact-form modal's "book a demo
+  // instead" view alike).
+  useEffect(() => {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'hubspot_meeting_open' });
+  }, []);
+
   return (
     <>
       {!frameReady && (

@@ -1,6 +1,6 @@
 import { BoardObjectRepository } from '@agor/core/db';
 import type { Card, ZoneBoardObject } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
@@ -10,6 +10,7 @@ import {
   mcpOffset,
   mcpOptionalId,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredNumber,
   mcpRequiredString,
@@ -110,7 +111,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     'agor_cards_list',
     {
       description:
-        'List cards with optional filtering by board, card type, zone, search query, or archive status.',
+        'List a page of cards with optional filtering by board, card type, zone, search query, or archive status. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
@@ -118,7 +119,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         zoneId: mcpOptionalId('zoneId', 'Zone', 'Filter by zone ID (requires boardId)'),
         search: mcpOptionalString('search', 'Search query for card titles/descriptions'),
         archived: z.boolean().optional().describe('Filter by archive status'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
         offset: mcpOffset(0),
       }),
     },
@@ -133,35 +134,19 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       const limit = typeof args.limit === 'number' ? args.limit : 50;
       const offset = typeof args.offset === 'number' ? args.offset : 0;
 
-      let cardsList: Card[];
-      if (zoneId && boardId) {
-        cardsList = await cardsService.findByZoneId(boardId as never, zoneId);
-      } else if (search) {
-        cardsList = await cardsService.searchCards(search, {
-          boardId: boardId as never,
-          archived,
-          limit,
-          offset,
-        });
-      } else if (cardTypeId) {
-        cardsList = await cardsService.findByCardTypeId(cardTypeId as never, { limit, offset });
-      } else if (boardId) {
-        cardsList = await cardsService.findByBoardId(boardId as never, {
-          archived,
-          limit,
-          offset,
-        });
-      } else {
-        const result = await cardsService.find({
-          query: { $limit: limit, $skip: offset },
-        } as never);
-        cardsList = 'data' in result ? result.data : result;
-      }
+      const query: Record<string, unknown> = {
+        archived,
+        $limit: limit,
+        $skip: offset,
+        $sort: { created_at: -1, card_id: 1 },
+      };
+      if (boardId) query.board_id = boardId;
+      if (cardTypeId) query.card_type_id = cardTypeId;
+      if (zoneId) query.zone_id = zoneId;
+      if (search) query.search = search;
 
-      return textResult({
-        total: Array.isArray(cardsList) ? cardsList.length : 0,
-        data: cardsList,
-      });
+      const result = await cardsService.find({ query, ...ctx.baseServiceParams } as never);
+      return textResult(mcpPageResult<Card>(result, limit, offset));
     }
   );
 

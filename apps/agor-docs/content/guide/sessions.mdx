@@ -194,6 +194,8 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
+**Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
+
 **Post-prompt anytime.** Subsessions persist after completion. "Can you add error handling to the code you wrote?" is a valid follow-up at any point.
 
 ---
@@ -206,7 +208,7 @@ A session has more knobs than a CLI invocation:
 - **Effort**: Explicit reasoning depth for Claude and Codex sessions. Unset Codex sessions inherit the runtime's project, user, or model default.
 - **Permissions**: How tool calls are gated (auto-approve, supervised, manual)
 - **MCP servers**: Which tool sets are attached
-- **Effort and 1M context**: Models with `[1m]` enable extended context
+- **Effort and context capacity**: Supported Claude Code models expose separate 200k and `[1m]` choices; availability still depends on the connected account and provider
 
 All of this is changeable at any point. You don't have to start a new session to dial things up or down.
 

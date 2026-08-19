@@ -291,7 +291,6 @@ export function renderTemplate(
  * - {{branch.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
  * - {{branch.name}} - Branch name (slug format)
  * - {{branch.path}} - Absolute path to branch directory
- * - {{branch.gid}} - Unix GID of branch's unix_group (resolved dynamically at execution time)
  * - {{branch.base_ref}} - Source branch/tag name this branch was created from
  *   (the "Base Branch"/"Base Tag" from the create dialog). Empty string if unknown.
  * - {{branch.ref_type}} - 'branch' | 'tag': whether base_ref names a branch or a tag
@@ -313,7 +312,6 @@ export function buildBranchContext(branch: {
   path: string;
   repo_slug?: string;
   custom_context?: Record<string, unknown>;
-  unix_gid?: number;
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
@@ -322,7 +320,6 @@ export function buildBranchContext(branch: {
     unique_id: branch.branch_unique_id,
     name: branch.name,
     path: branch.path,
-    gid: branch.unix_gid,
     base_ref: branch.base_ref || '',
     ref_type: branch.ref_type || 'branch',
   };

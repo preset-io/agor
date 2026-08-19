@@ -4,8 +4,8 @@
  * Executes prompts using OpenAI Codex SDK with Feathers/WebSocket architecture
  */
 
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 import { CodexTool } from '../../sdk-handlers/codex/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 

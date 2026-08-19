@@ -15,6 +15,7 @@
  * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
+import { generateId } from '@agor/core/db';
 import type {
   ChannelType,
   EnvVarMetadata,
@@ -28,9 +29,10 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
   type EnvVarsParams,
@@ -59,9 +61,8 @@ function requireAdmin(ctx: McpContext, action: string): void {
  */
 function widgetContentPreview(params: EnvVarsParams): string {
   const list = params.names.join(', ');
-  return params.names.length === 1
-    ? `Please provide ${list}: ${params.reason}`
-    : `Please provide ${list}: ${params.reason}`;
+  const noun = params.names.length === 1 ? 'variable' : 'variables';
+  return `Please provide ${noun} ${list}: ${params.reason}`;
 }
 
 /**
@@ -88,6 +89,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         'Ask the user to provide one or more environment variables via a compact in-conversation form. ' +
+        'PREFER this tool whenever you need an env var, API key, or token the user has not set: call it instead of telling the user to open Settings → Environment Variables or asking them to paste a value into chat. ' +
         'FIRE-AND-FORGET: the widget renders inline; end your turn after calling. You will receive a user-role message ("[Agor] User submitted ...") when the user responds. ' +
         'Values never enter your context — only the variable NAMES do. Do NOT ask the user to paste values into chat. ' +
         'Keep `reason` to ONE short sentence (≤200 chars) — it shows as a small muted line; do not restate what the widget does or describe the security contract (the UI handles that).',
@@ -148,6 +150,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
+      const widgetId = generateId() as MessageID;
 
       const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         appendSystemMessage({
@@ -159,17 +162,17 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
           type: 'widget_request',
           role: MessageRole.SYSTEM,
-          // widget_id is filled in once we know the new message_id (id == widget_id).
+          // Generate the shared ID before create so no realtime consumer can
+          // observe a temporary "pending" submit URL.
+          messageId: widgetId,
           metadata: {
             widget: {
               ...baseWidgetMeta,
-              widget_id: 'pending' as MessageID,
+              widget_id: widgetId,
             },
           },
         })
       );
-
-      const widgetId = created.message_id as MessageID;
 
       // Extend the host task's message_range.end_index so the widget is
       // counted within the task's window (mirrors the daemon-restart
@@ -195,19 +198,6 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         }
       }
 
-      // Stamp the actual widget_id onto the row (single source of truth =
-      // `metadata.widget.widget_id === message.message_id`).
-      await ctx.app.service('messages').patch(
-        widgetId,
-        {
-          metadata: {
-            ...(created.metadata ?? {}),
-            widget: { ...baseWidgetMeta, widget_id: widgetId },
-          },
-        },
-        ctx.baseServiceParams
-      );
-
       if (presentEverywhere) {
         // Short-circuit: no form render. Auto-queue a "values already
         // configured" task (unless the agent opted out via auto_resume:false).
@@ -219,6 +209,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
             {
               prompt,
               messageSource: 'agor',
+              idempotencyTaskId: widgetAutoResumeTaskId(widgetId),
               metadata: {
                 system_authored: true,
                 widget_id: widgetId,
@@ -239,6 +230,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         "Ask an admin to securely provide a gateway channel's platform tokens (Slack bot/app tokens, GitHub private key, Teams app password) via a compact form that appears at the end of your message, so setup finishes without anyone pasting xoxb-/xapp- tokens into chat. " +
+        'PREFER this tool over telling the admin to open Settings and paste tokens manually: it collects and verifies the credentials inline. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it is resolved. ' +
         'Token values never enter your context — only the channel identity and field NAMES do. ' +
         'Admin-only: a non-admin agent cannot mint this widget. Keep `reason` to ONE short sentence (≤200 chars).',
@@ -307,6 +299,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
+      const widgetId = generateId() as MessageID;
 
       const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         appendSystemMessage({
@@ -318,16 +311,17 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           contentPreview: `Widget: gateway_token (${channel.name})`,
           type: 'widget_request',
           role: MessageRole.SYSTEM,
+          // Generate the shared ID before create so no realtime consumer can
+          // observe a temporary "pending" submit URL.
+          messageId: widgetId,
           metadata: {
             widget: {
               ...baseWidgetMeta,
-              widget_id: 'pending' as MessageID,
+              widget_id: widgetId,
             },
           },
         })
       );
-
-      const widgetId = created.message_id as MessageID;
 
       if (hostTask?.message_range) {
         try {
@@ -348,17 +342,6 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           );
         }
       }
-
-      await ctx.app.service('messages').patch(
-        widgetId,
-        {
-          metadata: {
-            ...(created.metadata ?? {}),
-            widget: { ...baseWidgetMeta, widget_id: widgetId },
-          },
-        },
-        ctx.baseServiceParams
-      );
 
       return textResult({ widget_id: widgetId, status: 'requested' });
     }

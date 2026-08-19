@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
 let insideTenantDatabaseScope = false;
@@ -130,6 +130,20 @@ describe('artifact MCP tool input schemas', () => {
       subpath: 'artifact',
       waitForStatus: true,
       waitTimeoutMs: 15000,
+    });
+
+    expect(parsed?.success).toBe(true);
+  });
+
+  it('accepts the static template for HTML-first artifacts', () => {
+    const parsed = captureConfig('agor_artifacts_publish').inputSchema?.safeParse({
+      branchId: 'branch-1',
+      subpath: 'artifact',
+      template: 'static',
+      sandpackConfig: {
+        template: 'static',
+        customSetup: { entry: '/index.html' },
+      },
     });
 
     expect(parsed?.success).toBe(true);

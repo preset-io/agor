@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -13,12 +14,10 @@ import type {
   User,
 } from '@agor-live/client';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   getDefaultPermissionMode,
   isAgenticToolName,
   mapToCodexPermissionConfig,
   SessionStatus,
-  shortId,
   TaskStatus,
 } from '@agor-live/client';
 import {
@@ -66,6 +65,7 @@ import {
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
+import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -91,11 +91,6 @@ import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
-
-// The find shortcut is Cmd+F on mac, Ctrl+F elsewhere — label it correctly.
-const IS_MAC =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform ?? '');
-const FIND_SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
 
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
@@ -407,33 +402,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
-  // Per-session draft storage (localStorage-backed to survive unmounts)
-  const DRAFT_KEY_PREFIX = 'agor-draft-';
-  const getDraft = React.useCallback((sessionId: string): string => {
-    try {
-      return localStorage.getItem(`${DRAFT_KEY_PREFIX}${sessionId}`) || '';
-    } catch {
-      return '';
-    }
-  }, []);
-  const saveDraft = React.useCallback((sessionId: string, value: string) => {
-    try {
-      if (value.trim()) {
-        localStorage.setItem(`${DRAFT_KEY_PREFIX}${sessionId}`, value);
-      } else {
-        localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
-      }
-    } catch {
-      // localStorage full or unavailable
-    }
-  }, []);
-  const deleteDraft = React.useCallback((sessionId: string) => {
-    try {
-      localStorage.removeItem(`${DRAFT_KEY_PREFIX}${sessionId}`);
-    } catch {
-      // ignore
-    }
-  }, []);
+  // Per-session draft storage (localStorage-backed to survive unmounts).
+  // Aliased as stable callbacks because they're threaded through props and
+  // effect deps below.
+  const getDraft = React.useCallback(getPromptDraft, []);
+  const saveDraft = React.useCallback(savePromptDraft, []);
+  const deleteDraft = React.useCallback(deletePromptDraft, []);
 
   // Input value lives entirely inside PromptInput (local state).
   // The parent reads it imperatively via promptRef / inputValueRef — no
@@ -473,6 +447,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const [forceFailTarget, setForceFailTarget] = React.useState<{
+    taskId: string;
+    terminationRequestedAt: string;
+  } | null>(null);
+  const [forceFailConfirmation, setForceFailConfirmation] = React.useState('');
+  const forceFailInputRef = React.useRef<InputRef | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -480,6 +460,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
+  React.useEffect(() => {
+    if (
+      forceFailTarget &&
+      !tasks.some(
+        (task) =>
+          task.task_id === forceFailTarget.taskId &&
+          task.status === TaskStatus.STOPPING &&
+          task.sdk_failure?.termination === 'unverified' &&
+          task.termination_request?.requested_at === forceFailTarget.terminationRequestedAt
+      )
+    ) {
+      setForceFailTarget(null);
+      setForceFailConfirmation('');
+    }
+  }, [forceFailTarget, tasks]);
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // Search observes only the conversation region, not the whole body: the
@@ -620,12 +615,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let i = tasks.length - 1; i >= 0; i--) {
       const task = tasks[i];
       if (task.computed_context_window !== undefined && task.normalized_sdk_response) {
-        const { contextWindowLimit } = task.normalized_sdk_response;
+        const { contextWindowLimit, contextUsageSnapshot } = task.normalized_sdk_response;
 
         if (task.computed_context_window > 0) {
           return {
             used: task.computed_context_window,
-            limit: contextWindowLimit || 0,
+            limit: contextUsageSnapshot?.maxTokens ?? contextWindowLimit ?? 0,
             // Forward the full normalized response so ContextWindowPill can
             // honor `contextUsageSnapshot.percentage` instead of recomputing
             // from raw used/limit (which is wrong for Codex's baseline-adjusted
@@ -717,16 +712,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && open) {
-        e.preventDefault();
-        if (!searchOpen) openSearch();
-        else searchInputRef.current?.focus();
-      }
       if (e.key === 'Escape' && searchOpen) closeSearch();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [searchOpen, open, openSearch, closeSearch]);
+  }, [searchOpen, closeSearch]);
 
   // Reset search when switching sessions — stale ranges/counts belong to the
   // previous conversation's DOM.
@@ -1099,28 +1089,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         (task) =>
           task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
       );
-    if (unverifiedTask) {
-      const expected = shortId(unverifiedTask.task_id);
-      const confirmation = window.prompt(
-        `Agor could not verify that this executor stopped. It may still be running and writing to the branch. Type ${expected} to force-fail the Task anyway.`
-      );
-      if (confirmation === null) return;
-      if (confirmation !== expected) {
-        showError(`Type ${expected} to confirm force-fail.`);
-        return;
-      }
-      setStopRequestInFlight(true);
-      try {
-        await client.service(`sessions/${session.session_id}/stop`).create({
-          force_unverified: true,
-          confirmation,
-        });
-      } catch (error) {
-        console.error('Failed to force-fail execution:', error);
-        showError('Failed to force-fail execution. You can try again.');
-      } finally {
-        setStopRequestInFlight(false);
-      }
+    if (unverifiedTask?.termination_request) {
+      setForceFailConfirmation('');
+      setForceFailTarget({
+        taskId: unverifiedTask.task_id,
+        terminationRequestedAt: unverifiedTask.termination_request.requested_at,
+      });
       return;
     }
 
@@ -1131,10 +1105,44 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     setStopRequestInFlight(true);
     try {
-      await client.service(`sessions/${session.session_id}/stop`).create({});
+      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
+        success?: boolean;
+        reason?: string;
+      };
+      if (result.success === false) {
+        showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
+      }
     } catch (error) {
       console.error('Failed to stop execution:', error);
       showError('Failed to stop execution. You can try again.');
+    } finally {
+      setStopRequestInFlight(false);
+    }
+  };
+
+  const handleForceFail = async () => {
+    if (
+      !session ||
+      !client ||
+      !forceFailTarget ||
+      forceFailConfirmation !== 'STOP' ||
+      stopRequestInFlight
+    ) {
+      return;
+    }
+    setStopRequestInFlight(true);
+    try {
+      await client.service(`sessions/${session.session_id}/stop`).create({
+        force_unverified: true,
+        confirmation: 'STOP',
+        task_id: forceFailTarget.taskId,
+        termination_requested_at: forceFailTarget.terminationRequestedAt,
+      });
+      setForceFailTarget(null);
+      setForceFailConfirmation('');
+    } catch (error) {
+      console.error('Failed to force-fail execution:', error);
+      showError('Failed to force-fail execution. You can try again.');
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1343,6 +1351,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const sessionFooter = activeSession ? (
     <SessionFooter
       session={activeSession}
+      currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}
@@ -1490,8 +1499,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
             </Dropdown>
-            <Tooltip title={`Search session (${FIND_SHORTCUT_LABEL})`}>
-              <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+            <Tooltip title="Search session">
+              <Button
+                type="text"
+                aria-label="Search session"
+                icon={<SearchOutlined />}
+                onClick={openSearch}
+              />
             </Tooltip>
             <Tooltip title="Close Panel">
               <Button
@@ -1670,6 +1684,52 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
         {/* Footer is unavailable for historical sessions whose runtime was removed. */}
         {sessionFooter}
+
+        <Modal
+          title="Force-fail task?"
+          open={forceFailTarget !== null}
+          okText="Force fail"
+          cancelText="Cancel"
+          keyboard
+          mask={{ closable: false }}
+          confirmLoading={stopRequestInFlight}
+          okButtonProps={{
+            danger: true,
+            disabled: forceFailConfirmation !== 'STOP',
+          }}
+          cancelButtonProps={{ disabled: stopRequestInFlight }}
+          onOk={handleForceFail}
+          onCancel={() => {
+            if (stopRequestInFlight) return;
+            setForceFailTarget(null);
+            setForceFailConfirmation('');
+          }}
+          afterOpenChange={(modalOpen) => {
+            if (modalOpen) forceFailInputRef.current?.focus();
+          }}
+        >
+          <Alert
+            type="warning"
+            showIcon
+            title="Executor termination is unverified"
+            description="The executor may still be running and writing to this branch. Force-fail changes Agor's durable Task status to failed and makes the Session available again. It cannot prove or guarantee process termination."
+            style={{ marginBottom: token.marginMD }}
+          />
+          <Typography.Paragraph>
+            Type <Typography.Text code>STOP</Typography.Text> to continue.
+          </Typography.Paragraph>
+          <Input
+            ref={forceFailInputRef}
+            aria-label="Type STOP to confirm force-fail"
+            value={forceFailConfirmation}
+            onChange={(event) => setForceFailConfirmation(event.target.value)}
+            onPressEnter={() => {
+              if (forceFailConfirmation === 'STOP') void handleForceFail();
+            }}
+            disabled={stopRequestInFlight}
+            autoComplete="off"
+          />
+        </Modal>
 
         {/* Advanced upload modal preserves the existing file upload flow for
             non-image files and notify-agent options. */}

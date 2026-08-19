@@ -6,7 +6,7 @@
  *
  * Key concepts:
  * - Full UUIDs stored in database (36 chars)
- * - Short IDs displayed to users — always 20 hex chars via `shortId(id)`.
+ * - Short IDs displayed to users — always 24 hex chars via `shortId(id)`.
  *   See `SHORT_ID_LENGTH` in `../types/id` for the collision math.
  * - Git-style collision resolution on user input (expand prefix when
  *   ambiguous) — handled centrally by `resolveByShortIdPrefix` in
@@ -80,9 +80,9 @@ export type IDPrefix = string;
  * Trade-off: we give up the library's strict sub-millisecond `seq`
  * ordering. Ms-resolution time-ordering on the timestamp prefix
  * (bytes 0–5) is preserved, so DB index locality and "ORDER BY id ASC ≈
- * insertion order at second resolution" still work. The one caller that
- * relied on sub-ms ordering (`TaskRepository.createMany`) now imposes
- * insertion order explicitly. Existing IDs in the DB are unaffected.
+ * insertion order at second resolution" still work. Callers that need a
+ * total order add an explicit stable tie-breaker. Existing IDs in the DB are
+ * unaffected.
  *
  * @returns A UUIDv7-shaped, RFC 9562 method-3 identifier.
  *

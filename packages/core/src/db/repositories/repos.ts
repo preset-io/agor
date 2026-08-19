@@ -85,7 +85,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         repo_id: row.repo_id as UUID,
         slug: row.slug,
         repo_type: (row.repo_type as Repo['repo_type']) ?? 'remote',
-        unix_group: row.unix_group ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         last_updated: row.updated_at
           ? new Date(row.updated_at).toISOString()
@@ -138,7 +137,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
       repo_type: repo.repo_type,
-      unix_group: repo.unix_group ?? null,
       data: {
         name: repo.name ?? repo.slug,
         remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
@@ -242,6 +240,32 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all repos: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Lock the canonical repository row before inventorying branches for delete.
+   *
+   * The caller must already own a native transaction. PostgreSQL's FOR UPDATE
+   * lock conflicts with the key-share lock taken by a concurrent branch FK
+   * insert, so no new child can appear between inventory and repository delete.
+   * SQLite relies on the caller's IMMEDIATE transaction for the equivalent
+   * write exclusion.
+   */
+  async lockForBranchInventory(id: string): Promise<Repo> {
+    try {
+      const fullId = await this.resolveId(id);
+      await lockRowForUpdate(this.db, this.db, repos, eq(repos.repo_id, fullId));
+
+      const row = await select(this.db).from(repos).where(eq(repos.repo_id, fullId)).one();
+      if (!row) throw new EntityNotFoundError('Repo', id);
+      return this.rowToRepo(row);
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to lock repo branch inventory: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -373,7 +397,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: merged.unix_group ?? null,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))
@@ -432,7 +455,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
 
         const current = this.rowToRepo(currentRow);
         const next: Repo = { ...current, ...patch };
-
         const insertData = this.repoToInsert(next);
         const newUpdatedAt = new Date();
         await update(txAsDb(tx), repos)
@@ -440,7 +462,6 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
-            unix_group: next.unix_group ?? null,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))

@@ -11,6 +11,7 @@ export {
   gt,
   gte,
   inArray,
+  isNull,
   like,
   lt,
   lte,
@@ -43,12 +44,18 @@ export * from './encryption';
 export * from './first-run-bootstrap';
 // Migrations
 export * from './migrate';
+export * from './oauth-secret-envelope';
 // Pending-migrations presentation (shared by CLI and daemon)
 export * from './pending-migrations';
 // Repositories
 export * from './repositories';
 export * from './sanitize-error';
 export * from './schema';
+export {
+  type DatabaseDialect,
+  detectDialectFromUrl,
+  getDatabaseDialect,
+} from './schema-factory';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 // Tenant database lifecycle primitives. Filesystem-backed portability operations

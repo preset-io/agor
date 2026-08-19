@@ -14,7 +14,7 @@
  */
 
 import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../resolve-ids.js', () => ({
@@ -429,12 +429,11 @@ describe('agor_sessions_create', () => {
 
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config).toBeDefined();
-    // Explicit override wins over user default ('claude-sonnet-5').
-    expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias');
-    expect(created.model_config.effort).toBe('max');
-    expect(typeof created.model_config.updated_at).toBe('string');
+    expect(created.model_config).toEqual({
+      model: 'claude-opus-4-6',
+      mode: 'alias',
+      effort: 'max',
+    });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.session).not.toHaveProperty('mcp_token');
@@ -480,7 +479,7 @@ describe('agor_sessions_create', () => {
     expect(created.model_config.effort).toBe('xhigh');
   });
 
-  it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
+  it('attributes sessions to the acting MCP user and leaves their defaults for the sessions service', async () => {
     const sessionCreates: unknown[] = [];
     const baseServiceParams = {
       authenticated: true,
@@ -544,13 +543,11 @@ describe('agor_sessions_create', () => {
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.created_by).toBe('user-b');
     expect(created.unix_username).toBe('bob');
-    expect(created.permission_config.mode).toBe('acceptEdits');
-    expect(created.model_config.model).toBe('claude-sonnet-5');
-    expect(created.model_config.effort).toBe('high');
-    expect(created.model_config.model).not.toBe('claude-parent');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
-  it('falls back to user default modelConfig when none is explicitly provided', async () => {
+  it('does not snapshot user defaults before the sessions service materializes them', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
       users: { get: async () => baseUser },
@@ -582,8 +579,8 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
-    expect(created.model_config.effort).toBe('medium');
+    expect(created).not.toHaveProperty('permission_config');
+    expect(created).not.toHaveProperty('model_config');
   });
 
   it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
@@ -745,11 +742,17 @@ describe('agor_sessions_create', () => {
     const result = await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
+      enableCallback: true,
     });
 
     // New session genealogy should reference the calling session as parent
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-caller',
+      callback_mode: 'persistent',
+    });
 
     // Parent's children list should be updated to include the new session
     expect(patchCalls).toHaveLength(1);
@@ -761,6 +764,38 @@ describe('agor_sessions_create', () => {
     // Note in response should mention the parent link
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.note).toContain('sess-caller');
+  });
+
+  it('rejects a default callback target the caller cannot prompt', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const sessionCreate = vi.fn();
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: { create: sessionCreate },
+    });
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code',
+        enableCallback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-view-only',
+      'user-1',
+      app,
+      expect.anything()
+    );
+    expect(sessionCreate).not.toHaveBeenCalled();
   });
 
   it('does not set parent_session_id when called without session context', async () => {
@@ -850,6 +885,13 @@ describe('agor_sessions_create', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
+        // null inspects the calling session to decide cross-branch provenance;
+        // here the caller shares the target branch, so it stays fully unlinked.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
         patch: async (...args: unknown[]) => {
           patchCalls.push(args);
           return {};
@@ -873,6 +915,297 @@ describe('agor_sessions_create', () => {
     expect(created.genealogy.parent_session_id).toBeUndefined();
     // No patch to update a parent's children list
     expect(patchCalls).toHaveLength(0);
+  });
+
+  // Regression: an orchestrator that opts out of same-branch genealogy with
+  // `parentSessionId: null` while still requesting a callback to itself created
+  // a session that carried `callback_config` but NO durable `remote_create`
+  // relationship. The remote branch's link/unlink toggle (which reads
+  // callback_config / as_target) rendered, but the parent SessionTree — which
+  // projects surrogates from the source session's `remote_relationships` — had
+  // no edge to show, so the child was invisible upstream.
+  it('records a remote_create relationship for parentSessionId: null cross-branch with a callback', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      enableCallback: true,
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Genealogy opt-out is preserved: no same-branch parent, no parent patch.
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+    // But the durable cross-branch provenance edge IS recorded so the
+    // orchestrator's SessionTree can surface the child.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-caller',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_enabled: true,
+      callback_session_id: 'sess-caller',
+    });
+  });
+
+  // Provenance (who created the child) is the CALLING session, not the callback
+  // target (where completion is routed). Caller A creates the child and routes
+  // callbacks to a different session B: the remote_create source must be A,
+  // while the callback endpoint records B.
+  it('attributes remote_create provenance to the caller, not the callback target', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        // The caller (sess-A) lives in a different branch than the target.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-A' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      callbackSessionId: 'sess-B',
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-A', // the creator, NOT sess-B
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_session_id: 'sess-B', // routing endpoint
+    });
+  });
+
+  // With no calling-session context there is no creator to attribute, so no
+  // provenance edge is written even when an explicit cross-branch callback
+  // target is supplied. Completion routing (callback_config) is still recorded.
+  it('records no remote_create relationship when there is no calling session', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1' }, // no sessionId
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      callbackSessionId: 'sess-B',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Routing is still set up so completion is delivered...
+    expect(created.callback_config).toMatchObject({
+      enabled: true,
+      callback_session_id: 'sess-B',
+    });
+    // ...but there is no creator, so no provenance edge.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
+  });
+
+  // parentSessionId: null with a same-branch callback target is an intentional
+  // unlinked root: no genealogy parent AND no cross-branch provenance edge.
+  it('records no remote_create relationship for a same-branch callback target', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch }, // branch_id 'wt-1'
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1', // caller shares the target branch
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+      enableCallback: true,
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
+  });
+
+  // A same-branch genealogy parent with an explicit cross-branch callback
+  // target: the creator is local (genealogy handles it), so no remote_create
+  // edge is written — the callback target is routing only.
+  it('records no remote_create relationship when the caller shares the branch but routes callbacks cross-branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch }, // branch_id 'wt-1'
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1', // caller shares the target branch → genealogy parent
+          genealogy: { children: [] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      callbackSessionId: 'sess-B', // cross-branch routing target
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Same-branch genealogy parent is established (omitted parentSessionId).
+    expect(created.genealogy.parent_session_id).toBe('sess-caller');
+    expect(patchCalls).toHaveLength(1);
+    // No remote provenance edge — the creator is local.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toBeUndefined();
+  });
+
+  // Genealogy and provenance are orthogonal and can coexist: a cross-branch
+  // caller assigns a valid same-target-branch genealogy parent. The child gets
+  // BOTH the local genealogy parent AND a remote_create edge sourced from the
+  // cross-branch caller.
+  it('records both genealogy parent and remote_create edge for a cross-branch caller with an explicit parent', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: Array<{ id: unknown; data: unknown }> = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        // The explicit parent lives in the target branch; the caller (sess-A)
+        // lives in a different branch.
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: id === 'sess-A' ? 'wt-caller' : 'wt-target',
+          genealogy: { children: [] },
+        }),
+        patch: async (id: unknown, data: unknown) => {
+          patchCalls.push({ id, data });
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-A' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+      parentSessionId: 'sess-parent',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Local genealogy parent is honored...
+    expect(created.genealogy.parent_session_id).toBe('sess-parent');
+    expect(patchCalls[0].id).toBe('sess-parent');
+    // ...AND the cross-branch caller is recorded as the remote creator.
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-A',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+    });
   });
 
   it('does not auto-link to the calling session when creating in a different branch', async () => {
@@ -1137,6 +1470,93 @@ describe('agor_sessions_prompt (subsession mode)', () => {
   });
 });
 
+describe('agor_sessions_prompt task callback', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('binds callback:true to trusted calling session context', async () => {
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-1', status: 'queued', queue_position: 1 };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue exactly this task',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(promptCalls[0][1]).toMatchObject({
+      route: { id: 'sess-target' },
+      _taskCompletionCallback: {
+        target_session_id: 'sess-caller',
+        requested_from_session_id: 'sess-caller',
+        requested_by_user_id: 'user-1',
+      },
+    });
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    expect(ensureCanPromptTargetSession).toHaveBeenCalledWith(
+      'sess-caller',
+      'user-1',
+      app,
+      expect.anything()
+    );
+  });
+
+  it('rejects callback:true when the caller cannot prompt its callback session', async () => {
+    const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
+    vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
+      new Error('Prompt permission required')
+    );
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-view-only' },
+      ['agor_sessions_prompt']
+    );
+
+    await expect(
+      agor_sessions_prompt({
+        sessionId: 'sess-target',
+        prompt: 'continue',
+        mode: 'continue',
+        callback: true,
+      })
+    ).rejects.toThrow('Prompt permission required');
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects callback:true without current session context', async () => {
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_prompt',
+    ]);
+
+    const result = await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue',
+      mode: 'continue',
+      callback: true,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('MCP session input validation clarity', () => {
   afterEach(() => {
     vi.resetModules();
@@ -1310,7 +1730,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config.model).toBe('claude-opus-4-6');
-    expect(created.model_config.mode).toBe('alias'); // default applied by resolveModelConfig
+    expect(created.model_config).toEqual({ model: 'claude-opus-4-6' });
   });
 });
 

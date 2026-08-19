@@ -78,8 +78,15 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   );
   return {
     INLINE_AGENTIC_CONFIGURATION: '__inline__',
-    AgenticToolConfigurationPicker: () => (
-      <div data-testid="agent-config">
+    AgenticToolConfigurationPicker: ({
+      modelCatalogClient,
+    }: {
+      modelCatalogClient?: AgorClient | null;
+    }) => (
+      <div
+        data-testid="agent-config"
+        data-model-catalog={modelCatalogClient === null ? 'closed' : 'open'}
+      >
         <Form.Item name="effort" noStyle>
           <EffortField />
         </Form.Item>
@@ -106,11 +113,12 @@ function makeBranch(): Branch {
   } as unknown as Branch;
 }
 
-function makeUser(): User {
+function makeUser(overrides: Partial<User> = {}): User {
   return {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    ...overrides,
   } as unknown as User;
 }
 
@@ -184,6 +192,16 @@ function clickButton(text: RegExp) {
 }
 /** Drain microtasks so a Form.validateFields()-gated step transition settles. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Text of the rendered scope/event Tags. Scoped to `.ant-tag` on purpose: the
+ * Options step's explainer prose names `app_mention` in a `<code>`, so a bare
+ * `queryByText` would match the copy instead of the derived list — passing the
+ * "absent before the surface is enabled" check for the wrong reason.
+ */
+function scopeTagTexts(): string[] {
+  return Array.from(document.querySelectorAll('.ant-tag')).map((el) => el.textContent ?? '');
+}
 
 /**
  * Open the (real) channel-type antd Select and pick a platform by its option
@@ -280,24 +298,30 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
   });
 
-  it('updates the manifest preview and scope list as surfaces change', async () => {
+  it('updates the derived scope/event list as surfaces change, without the raw manifest', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
     // Surfaces live on the Options step (step 1).
     await advanceToOptions();
 
+    // The Options step configures; the raw JSON manifest is reserved for the
+    // "Create app" step, where it has a working copy button (issue #2448).
+    const manifestBlocks = Array.from(document.querySelectorAll('pre')).filter((el) =>
+      el.textContent?.includes('display_information')
+    );
+    expect(manifestBlocks).toHaveLength(1);
+    expect(manifestBlocks[0]).not.toBeVisible();
+
     // Public-channel scopes/events are absent until the surface is enabled.
-    expect(screen.queryByText('channels:history')).not.toBeInTheDocument();
-    expect(screen.queryByText('app_mention')).not.toBeInTheDocument();
+    expect(scopeTagTexts()).not.toContain('channels:history');
+    expect(scopeTagTexts()).not.toContain('app_mention');
 
     fireEvent.click(screen.getByText('Public channels'));
 
     // Now they appear in the derived scope/event list (Form.useWatch flush).
-    await waitFor(() =>
-      expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0)
-    );
-    expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
-    expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
+    await waitFor(() => expect(scopeTagTexts()).toContain('channels:history'));
+    expect(scopeTagTexts()).toContain('app_mentions:read');
+    expect(scopeTagTexts()).toContain('app_mention');
   });
 
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {
@@ -404,15 +428,21 @@ function renderEditTable(
   } = {}
 ) {
   const branch = makeBranch();
-  const user = makeUser();
+  const channelOwner = makeUser();
+  const currentUser = opts.currentUser ?? channelOwner;
   renderWithProviders(
     <GatewayChannelsTable
       client={client}
       gatewayChannelById={new Map([[channel.id, channel]])}
       branchById={new Map([[branch.branch_id, branch]])}
-      userById={new Map([[user.user_id, user]])}
+      userById={
+        new Map([
+          [channelOwner.user_id, channelOwner],
+          [currentUser.user_id, currentUser],
+        ])
+      }
       mcpServerById={new Map<string, MCPServer>()}
-      currentUser={opts.currentUser ?? user}
+      currentUser={currentUser}
       onUpdate={opts.onUpdate}
     />
   );
@@ -425,6 +455,41 @@ function expandPanel(title: string) {
 }
 
 describe('GatewayChannelsTable Slack edit mode', () => {
+  it('renders the OpenCode model catalog for a stable self-owned gateway', () => {
+    const { client } = makeClient();
+    renderEditTable(client, {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'opencode' },
+    } as GatewayChannel);
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'open');
+  });
+
+  it('renders the gateway model catalog fail-closed for a cross-user owner', () => {
+    const { client } = makeClient();
+    renderEditTable(
+      client,
+      {
+        ...makeSlackChannel(),
+        agentic_config: { agent: 'opencode' },
+      } as GatewayChannel,
+      { currentUser: makeUser({ user_id: 'user-2' }) }
+    );
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'closed');
+  });
+
+  it('renders the gateway model catalog fail-closed for an aligned owner', () => {
+    const { client } = makeClient();
+    renderEditTable(client, {
+      ...makeSlackChannel(),
+      config: { bot_token: '••••••••', align_slack_users: true },
+      agentic_config: { agent: 'opencode' },
+    } as GatewayChannel);
+    expandPanel('Agent Configuration');
+    expect(screen.getByTestId('agent-config')).toHaveAttribute('data-model-catalog', 'closed');
+  });
+
   it('still renders the Collapse form (not the wizard) when editing', () => {
     renderEditTable(null, makeSlackChannel());
 

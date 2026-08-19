@@ -30,8 +30,8 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Collapse, Flex, Spin, Typography, theme } from 'antd';
-import React, { useMemo, useRef } from 'react';
+import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import React, { useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -115,6 +115,72 @@ function isSdkStatusMessage(message: Message): boolean {
   );
 }
 
+/** Durable outcome projection; re-renders are inherently idempotent. */
+export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false): boolean {
+  return (
+    isLatestTask &&
+    task.status === TaskStatus.FAILED &&
+    task.sdk_failure?.termination === 'verified' &&
+    task.termination_request?.cause !== 'user_stop'
+  );
+}
+
+/** Presentation policy: keep STOPPING output visible until a durable terminal projection arrives. */
+export function shouldRenderLiveTaskProgress(task: Task): boolean {
+  return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
+}
+
+function RuntimeInterruptionNotice({
+  task,
+  sessionId,
+  client,
+}: {
+  task: Task;
+  sessionId?: SessionID | null;
+  client?: AgorClient | null;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [resumed, setResumed] = useState(false);
+  const handleResume = async () => {
+    if (!client || !sessionId) return;
+    setSubmitting(true);
+    try {
+      // This deliberately starts a new durable Task. It never attempts to
+      // revive the failed Task or reuse its executor ownership.
+      await client.sessions.prompt(
+        sessionId,
+        'Continue from the interrupted task. Inspect the previous task state first, then continue safely.'
+      );
+      setResumed(true);
+    } catch (error) {
+      console.error('Failed to resume after runtime interruption:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      message="Task interrupted"
+      description={
+        task.sdk_failure?.reason === 'startup_timeout'
+          ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
+          : 'Agor lost contact with the executor and verified containment before making this session promptable.'
+      }
+      action={
+        client && sessionId && !resumed ? (
+          <Button size="small" type="primary" loading={submitting} onClick={handleResume}>
+            Resume in new task
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+}
+
 function isAgentChainMessage(message: Message): boolean {
   // EXCEPTION: User messages with ONLY tool_result blocks are part of agent execution
   // (tool results are technically "user" role per Anthropic API, but they're automated responses)
@@ -150,11 +216,9 @@ function isAgentChainMessage(message: Message): boolean {
       return false; // Show as regular message bubble
     }
 
-    // If it has tools BUT ALSO has text, treat as mixed message
-    // We'll split it: tools go to AgentChain, text goes to MessageBlock
-    if (hasTools && hasText) {
-      return false; // Let MessageBlock handle the splitting
-    }
+    // User-facing text wins over thinking/tool activity. MessageBlock already
+    // separates the visible response from its supporting activity.
+    if (hasText) return false;
 
     // Only tools/thinking, no text = pure agent chain
     if (hasTools || hasThinking) return true;
@@ -423,6 +487,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
   }) => {
     const { token } = theme.useToken();
+    const runtimeLive = shouldRenderLiveTaskProgress(task);
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -662,6 +727,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               },
               children: (
                 <div style={{ paddingTop: token.sizeUnit }}>
+                  {isVerifiedRuntimeInterruption(task, isLatestTask) && (
+                    <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+                  )}
                   {/* Show loading spinner while fetching messages */}
                   {messagesLoading && (
                     <div
@@ -729,7 +797,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               agentic_tool={agentic_tool}
                               userById={userById}
                               currentUserId={task.created_by}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={runtimeLive}
                               sessionId={sessionId}
                               onPermissionDecision={onPermissionDecision}
                               isFirstPendingPermission={isFirstPending}
@@ -749,7 +817,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <AgentChain
                               messages={block.messages}
-                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isTaskRunning={runtimeLive}
                               isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                             />
                           </div>
@@ -773,11 +841,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   {/* Keep latest TODO visible even after completion (Claude parity). */}
                   <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-                  {/* Show typing indicator whenever task is actively running.
+                  {/* Show typing indicator whenever the executor may still be live.
                       Marked as a conversation block so its unmount at stream
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
-                  {task.status === TaskStatus.RUNNING && (
+                  {runtimeLive && (
                     <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
                       <Bubble
                         placement="start"

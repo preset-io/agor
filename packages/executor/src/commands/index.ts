@@ -7,7 +7,13 @@
  * 3. Returning an ExecutorResult
  */
 
-import type { ExecutorPayload, ExecutorResult, PromptPayload } from '../payload-types.js';
+import { ToolRegistry } from '../handlers/sdk/tool-registry.js';
+import type {
+  AgenticToolInvokePayload,
+  ExecutorPayload,
+  ExecutorResult,
+  PromptPayload,
+} from '../payload-types.js';
 import {
   handleBranchArtifactLand,
   handleBranchArtifactPublish,
@@ -35,12 +41,6 @@ import {
   handleGitRepoRealignOrigin,
 } from './git.js';
 import { handleBranchKnowledgeRead, handleBranchKnowledgeWrite } from './knowledge.js';
-import {
-  handleUnixSyncBoard,
-  handleUnixSyncBranch,
-  handleUnixSyncRepo,
-  handleUnixSyncUser,
-} from './unix.js';
 import { handleBranchUploadMaterialize } from './upload.js';
 import { handleZellijAttach, handleZellijTab } from './zellij.js';
 
@@ -62,6 +62,19 @@ type CommandHandler<T extends ExecutorPayload> = (
  */
 const commandHandlers: Map<string, CommandHandler<ExecutorPayload>> = new Map();
 
+export interface InteractiveCommandChannel {
+  emit(event: unknown): void;
+  read(): Promise<unknown>;
+}
+
+type InteractiveCommandHandler<T extends ExecutorPayload> = (
+  payload: T,
+  options: CommandOptions,
+  channel: InteractiveCommandChannel
+) => Promise<ExecutorResult>;
+
+const interactiveCommandHandlers = new Map<string, InteractiveCommandHandler<ExecutorPayload>>();
+
 /**
  * Register a command handler
  */
@@ -70,6 +83,31 @@ export function registerCommand<T extends ExecutorPayload>(
   handler: CommandHandler<T>
 ): void {
   commandHandlers.set(command, handler as CommandHandler<ExecutorPayload>);
+}
+
+export function registerInteractiveCommand<T extends ExecutorPayload>(
+  command: string,
+  handler: InteractiveCommandHandler<T>
+): void {
+  interactiveCommandHandlers.set(command, handler as InteractiveCommandHandler<ExecutorPayload>);
+}
+
+export async function executeInteractiveCommand(
+  payload: ExecutorPayload,
+  options: CommandOptions,
+  channel: InteractiveCommandChannel
+): Promise<ExecutorResult> {
+  const handler = interactiveCommandHandlers.get(payload.command);
+  if (!handler) {
+    return {
+      success: false,
+      error: {
+        code: 'INTERACTIVE_COMMAND_UNSUPPORTED',
+        message: `Command does not support interactive execution: ${payload.command}`,
+      },
+    };
+  }
+  return handler(payload, options, channel);
 }
 
 /**
@@ -167,11 +205,40 @@ async function handlePromptCommand(
   };
 }
 
+async function handleAgenticToolInvoke(
+  payload: AgenticToolInvokePayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  return ToolRegistry.executeAuxiliary(payload.params.tool, {
+    context: payload.agenticToolContext,
+    request: payload.params.request,
+    dryRun: options.dryRun,
+  });
+}
+
+async function handleInteractiveAgenticToolInvoke(
+  payload: AgenticToolInvokePayload,
+  options: CommandOptions,
+  channel: InteractiveCommandChannel
+): Promise<ExecutorResult> {
+  return ToolRegistry.executeInteractiveAuxiliary(
+    payload.params.tool,
+    {
+      context: payload.agenticToolContext,
+      request: payload.params.request,
+      dryRun: options.dryRun,
+    },
+    channel
+  );
+}
+
 // ═══════════════════════════════════════════════════════════
 // Register All Commands
 // ═══════════════════════════════════════════════════════════
 
 registerCommand('prompt', handlePromptCommand);
+registerCommand('agentic-tool.invoke', handleAgenticToolInvoke);
+registerInteractiveCommand('agentic-tool.invoke', handleInteractiveAgenticToolInvoke);
 registerCommand('git.clone', handleGitClone);
 registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);
@@ -195,10 +262,6 @@ registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
 registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('git.repo.inspect', handleGitRepoInspect);
 registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentialsReconcile);
-registerCommand('unix.sync-repo', handleUnixSyncRepo);
-registerCommand('unix.sync-branch', handleUnixSyncBranch);
-registerCommand('unix.sync-board', handleUnixSyncBoard);
-registerCommand('unix.sync-user', handleUnixSyncUser);
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);

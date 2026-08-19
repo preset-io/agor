@@ -41,14 +41,11 @@ echo "🔧 Fixing home directory permissions..."
 mkdir -p /home/agor/.agor /home/agor/.cache
 sudo -n chown -R agor:agor /home/agor 2>/dev/null || true
 
-# Setup agor_executor home (for Unix isolation when executor_unix_user is configured)
-sudo -n mkdir -p /home/agor_executor/.cache /home/agor_executor/.agor
-sudo -n chown -R agor_executor:agor_executor /home/agor_executor 2>/dev/null || true
 echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
-DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
+DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/agentic-tool-opencode/dist /app/packages/agentic-tools/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
   # Clean and recreate dist directories with correct ownership.
   # Use the explicit workspace list instead of /app/packages/*/dist globs:
@@ -62,6 +59,8 @@ if sudo -n true 2>/dev/null; then
     /app/packages/executor/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/client/node_modules/.tmp/tsconfig.tsbuildinfo \
     /app/packages/core/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tool-opencode/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/agentic-tools/node_modules/.tmp/tsconfig.tsbuildinfo \
     2>/dev/null || true
   sudo -n mkdir -p $DIST_DIRS
 
@@ -75,7 +74,7 @@ if sudo -n true 2>/dev/null; then
   # incremental cache survives from an earlier container, `tsc` can incorrectly
   # decide there is nothing to emit, leaving dist empty and making the startup
   # wait loop time out. Remove stale build info alongside dist.
-  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
+  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
   sudo -n rm -rf $BUILD_INFO_DIRS 2>/dev/null || true
   sudo -n mkdir -p $BUILD_INFO_DIRS
   sudo -n chown -R agor:agor $BUILD_INFO_DIRS
@@ -84,8 +83,8 @@ if sudo -n true 2>/dev/null; then
 else
   # Fallback: try without sudo (might work depending on host permissions)
   rm -rf $DIST_DIRS 2>/dev/null || true
-  rm -rf /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
-  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  rm -rf /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/agentic-tool-opencode/node_modules/.tmp /app/packages/agentic-tools/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
   mkdir -p $DIST_DIRS 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
@@ -127,6 +126,38 @@ while [ ! -f "/app/packages/core/dist/api/index.d.ts" ] || [ ! -f "/app/packages
 done
 echo "✅ @agor/core initial build complete (including type definitions)"
 
+echo "🔨 Building @agor/agentic-tool-opencode (initial build)..."
+pnpm --filter @agor/agentic-tool-opencode build
+
+echo "⏳ Waiting for @agor/agentic-tool-opencode type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/agentic-tool-opencode/dist/shared/index.d.ts" ] || [ ! -f "/app/packages/agentic-tool-opencode/dist/runtime/index.d.ts" ] || [ ! -f "/app/packages/agentic-tool-opencode/dist/ui/index.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for agentic-tool-opencode type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/agentic-tool-opencode initial build complete (including type definitions)"
+
+echo "🔨 Building @agor/agentic-tools (initial build)..."
+pnpm --filter @agor/agentic-tools build
+
+echo "⏳ Waiting for @agor/agentic-tools type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/agentic-tools/dist/index.d.ts" ] || [ ! -f "/app/packages/agentic-tools/dist/ui.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for agentic-tools type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/agentic-tools initial build complete (including type definitions)"
+
 echo "🔨 Building @agor/executor (initial build)..."
 pnpm --filter @agor/executor build
 
@@ -143,25 +174,7 @@ while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
 done
 echo "✅ @agor/executor initial build complete (including type definitions)"
 
-# In strict/insulated Unix modes, executors are launched as non-daemon Unix
-# users. Expose only the compiled runtime packages through the group-private
-# /app bind mount. Keeping the executor in place means the watch processes below
-# update exactly the files subsequent executor launches use; no second pnpm
-# installation or stale runtime copy is involved.
-if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
-  echo "📦 Exposing compiled executor runtime for Unix impersonation..."
-  sudo chmod o+x /app /app/packages \
-    /app/packages/core /app/packages/git /app/packages/executor
-  sudo chmod a+r /app/packages/core/package.json \
-    /app/packages/git/package.json /app/packages/executor/package.json
-  sudo chmod -R a+rX /app/packages/core/dist /app/packages/git/dist \
-    /app/packages/executor/bin /app/packages/executor/dist
-  # Preserve runtime readability for files added later by the watch compilers.
-  find /app/packages/core/dist /app/packages/git/dist /app/packages/executor/dist \
-    -type d -exec sudo setfacl -m d:o::rx {} +
-  export AGOR_EXECUTOR_PATH=/app/packages/executor/bin/agor-executor
-  echo "✅ Compiled executor runtime ready: $AGOR_EXECUTOR_PATH"
-fi
+export AGOR_EXECUTOR_PATH=/app/packages/executor/bin/agor-executor
 
 echo "🔨 Building @agor-live/client (initial build)..."
 pnpm --filter @agor-live/client build
@@ -187,18 +200,33 @@ GIT_PID=$!
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
+pnpm --filter @agor/agentic-tool-opencode dev &
+AGENTIC_TOOL_OPENCODE_PID=$!
+
+pnpm --filter @agor/agentic-tools dev &
+AGENTIC_TOOLS_PID=$!
+
 pnpm --filter @agor/executor dev &
 EXECUTOR_PID=$!
 
 pnpm --filter @agor-live/client dev &
 CLIENT_PID=$!
 
-echo "✅ Watch modes started (git, core, executor, and client will rebuild on file changes)"
+echo "✅ Watch modes started (git, core, agentic tools, executor, and client will rebuild on file changes)"
 
-# Initialize database and configure daemon settings for Docker
-# (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
-echo "📦 Initializing Agor environment..."
-pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+# `agor init` is the SQLite installation bootstrap and intentionally creates
+# ~/.agor/agor.db. PostgreSQL deployments get their database state from the
+# migrations and daemon bootstrap below, but still need the deployment-owned
+# identity and secrets that `agor init` normally creates. Generate a complete
+# config on first start and persist it in the agor-home volume.
+if [ "${AGOR_DB_DIALECT:-sqlite}" = "postgresql" ]; then
+  echo "🪪 Ensuring PostgreSQL development deployment config exists..."
+  pnpm tsx scripts/ensure-development-config.ts
+  echo "⏭️  Skipping SQLite database initialization for PostgreSQL deployment"
+else
+  echo "📦 Initializing Agor environment..."
+  pnpm agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+fi
 
 # Run database migrations (idempotent: safe to run on every start)
 # This ensures schema is up-to-date even when using existing database volumes
@@ -206,89 +234,13 @@ pnpm agor init --skip-if-exists --set-config --daemon-port "${DAEMON_PORT:-3030}
 echo "🔄 Running database migrations..."
 pnpm agor db migrate --yes
 
-# Configure executor Unix user isolation if enabled
-if [ "$AGOR_USE_EXECUTOR" = "true" ]; then
-  echo "🔒 Enabling executor Unix user isolation..."
-  echo "   Executor will run as: ${AGOR_EXECUTOR_USERNAME:-agor_executor}"
-
-  # Add executor_unix_user to existing execution section (only if not already present)
-  if ! grep -q "executor_unix_user" /home/agor/.agor/config.yaml 2>/dev/null; then
-    # Use sed to add executor_unix_user under the existing execution: section
-    sed -i '/^execution:/a\  executor_unix_user: agor_executor' /home/agor/.agor/config.yaml
-    echo "✅ Executor Unix user configured"
-  else
-    echo "✅ Executor Unix user already configured"
-  fi
-fi
-
-# Translate public-facing RBAC env vars to the internal AGOR_SET_* contract the
-# sed logic below reads. The postgres entrypoint also performs this translation
-# before exec'ing us — doing it again here is idempotent (same export values)
-# and lets plain `docker-compose.yml` consumers set AGOR_RBAC_ENABLED /
-# AGOR_UNIX_USER_MODE directly, matching the names documented in the postgres
-# profile and CLAUDE.md.
-if [ "$AGOR_RBAC_ENABLED" = "true" ]; then
-  export AGOR_SET_RBAC_FLAG="true"
-fi
-if [ -n "$AGOR_UNIX_USER_MODE" ]; then
-  export AGOR_SET_UNIX_MODE="$AGOR_UNIX_USER_MODE"
-fi
-
-# Configure RBAC settings from environment (set by postgres entrypoint or by
-# the public-facing translation above).
-if [ "$AGOR_SET_RBAC_FLAG" = "true" ] || [ -n "$AGOR_SET_UNIX_MODE" ]; then
-  echo "🔐 Configuring RBAC settings..."
-
-  # Enable branch RBAC if flag is set
-  if [ "$AGOR_SET_RBAC_FLAG" = "true" ]; then
-    if ! grep -q "branch_rbac" /home/agor/.agor/config.yaml 2>/dev/null; then
-      sed -i '/^execution:/a\  branch_rbac: true' /home/agor/.agor/config.yaml
-      echo "✅ Branch RBAC enabled"
-    else
-      # Update existing value to true
-      sed -i 's/branch_rbac:.*/branch_rbac: true/' /home/agor/.agor/config.yaml
-      echo "✅ Branch RBAC updated to enabled"
-    fi
-  fi
-
-  # Set Unix user mode if provided
-  if [ -n "$AGOR_SET_UNIX_MODE" ]; then
-    if ! grep -q "unix_user_mode" /home/agor/.agor/config.yaml 2>/dev/null; then
-      sed -i "/^execution:/a\  unix_user_mode: $AGOR_SET_UNIX_MODE" /home/agor/.agor/config.yaml
-      echo "✅ Unix user mode set to: $AGOR_SET_UNIX_MODE"
-    else
-      # Update existing value
-      sed -i "s/unix_user_mode:.*/unix_user_mode: $AGOR_SET_UNIX_MODE/" /home/agor/.agor/config.yaml
-      echo "✅ Unix user mode updated to: $AGOR_SET_UNIX_MODE"
-    fi
-  fi
-
-  # Set daemon.unix_user when RBAC is enabled (required for sudo impersonation)
-  # The daemon runs as 'agor' user in Docker, so git operations via sudo su need to know this
-  # Check specifically for 'unix_user:' under the daemon section (not elsewhere in the file)
-  if ! grep -A10 "^daemon:" /home/agor/.agor/config.yaml 2>/dev/null | grep -q "unix_user:"; then
-    # Add unix_user under daemon section
-    sed -i '/^daemon:/a\  unix_user: agor' /home/agor/.agor/config.yaml
-    echo "✅ Daemon Unix user set to: agor"
-  else
-    echo "✅ Daemon Unix user already configured"
-  fi
-fi
+# Runtime deployment overrides are consumed directly from the environment by
+# the daemon. Never materialize them into the operator-owned config.yaml.
 
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring development admin user exists..."
-ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts user create-admin --dev-default 2>&1)
+ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin --dev-default 2>&1)
 echo "$ADMIN_OUTPUT"
-
-# In strict mode the daemon validates that a session creator's unix_username exists as a
-# real OS account before spawning the executor. The admin DB user is created above via the
-# CLI (direct DB write, no Feathers hook), so the normal after-create hook that calls
-# unix.sync-user never fires. Provision the OS account explicitly here while we still have
-# a clean pre-daemon window and sudoers access.
-if [ "$AGOR_SET_UNIX_MODE" = "strict" ]; then
-  echo "🔒 Provisioning bootstrap admin OS user (strict mode)..."
-  pnpm agor local ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
-fi
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)
 # Use dedicated script to query the database
@@ -357,5 +309,7 @@ VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" p
 kill $DAEMON_PID 2>/dev/null || true
 kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
+kill $AGENTIC_TOOLS_PID 2>/dev/null || true
+kill $AGENTIC_TOOL_OPENCODE_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
 kill $GIT_PID 2>/dev/null || true

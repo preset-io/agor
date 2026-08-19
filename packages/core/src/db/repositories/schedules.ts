@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { normalizeScheduleAgenticToolDefaultReference } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -67,7 +68,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       ...storedConfig,
       preset_id:
         (row.agentic_tool_preset_id as PersistedScheduleAgenticToolConfig['preset_id']) ??
-        undefined,
+        storedConfig.preset_id,
     };
 
     return attachHiddenTenant(
@@ -109,7 +110,13 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       throw new RepositoryError('Schedule must have an agentic_tool_config');
     }
 
-    const { preset_id, ...storedAgenticToolConfig } = s.agentic_tool_config;
+    const { preset_id, ...configWithoutPreset } = s.agentic_tool_config;
+    const storesDefaultReference = Boolean(
+      preset_id && normalizeScheduleAgenticToolDefaultReference(preset_id)
+    );
+    const storedAgenticToolConfig = storesDefaultReference
+      ? s.agentic_tool_config
+      : configWithoutPreset;
     return {
       schedule_id: scheduleId,
       branch_id: s.branch_id,
@@ -122,7 +129,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       // Drizzle's jsonb / text-with-json roundtrip handles this for us;
       // pass the object through.
       agentic_tool_config: storedAgenticToolConfig as unknown,
-      agentic_tool_preset_id: preset_id ?? null,
+      agentic_tool_preset_id: storesDefaultReference ? null : (preset_id ?? null),
       mcp_server_ids: s.mcp_server_ids ?? null,
       enabled: s.enabled ?? true,
       allow_concurrent_runs: s.allow_concurrent_runs ?? false,
@@ -252,7 +259,10 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * workers can enter the correct tenant DB scope before loading schedule
    * contents or spawning sessions.
    */
-  async findDueRefs(now: number = Date.now()): Promise<DueScheduleRef[]> {
+  async findDueRefs(now: number = Date.now(), limit = 25): Promise<DueScheduleRef[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Due schedule discovery limit must be between 1 and 1000');
+    }
     const tenantColumn = (schedules as unknown as { tenant_id?: unknown }).tenant_id;
     const columns =
       isPostgresDatabase(this.db) && tenantColumn
@@ -263,6 +273,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       .from(schedules)
       .where(this.dueCondition(now))
       .orderBy(asc(schedules.next_run_at))
+      .limit(limit)
       .all();
 
     return (rows as Array<{ schedule_id: string; tenant_id?: unknown }>).map((row) => ({
@@ -271,6 +282,15 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         ? { tenant_id: row.tenant_id }
         : {}),
     }));
+  }
+
+  /**
+   * Serialize the short admission decision for one schedule on PostgreSQL.
+   * Call inside an existing tenant database scope/transaction. No rendering,
+   * launching, or other external work belongs under this row lock.
+   */
+  async lockForRunAdmission(scheduleId: ScheduleID): Promise<void> {
+    await lockRowForUpdate(this.db, this.db, schedules, eq(schedules.schedule_id, scheduleId));
   }
 
   /**

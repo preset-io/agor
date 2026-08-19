@@ -505,6 +505,125 @@
       "when": 1785452400000,
       "tag": "0073_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1785888000000,
+      "tag": "0074_scheduler_ha_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1785974400000,
+      "tag": "0075_task_queue_ha",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "6",
+      "when": 1786060800000,
+      "tag": "0076_task_runtime_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "6",
+      "when": 1786150000000,
+      "tag": "0077_knowledge_embedding_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1786150100000,
+      "tag": "0078_executor_session_token_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1786150200000,
+      "tag": "0079_gateway_listener_ha",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "6",
+      "when": 1786320000000,
+      "tag": "0080_environment_health_ha",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "6",
+      "when": 1786321000000,
+      "tag": "0081_mcp_oauth_pending_flows",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "6",
+      "when": 1786400000000,
+      "tag": "0082_mcp_catalog_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1786500000000,
+      "tag": "0083_mcp_catalog_registry_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1786600000000,
+      "tag": "0084_mcp_catalog_last_seen",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "6",
+      "when": 1786700000000,
+      "tag": "0085_github_install_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
+      "when": 1786800000000,
+      "tag": "0086_transcript_hydration_keysets",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "6",
+      "when": 1786900000000,
+      "tag": "0087_add_user_filesystem_home",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1787000000000,
+      "tag": "0088_drop_mcp_catalog_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1787100000000,
+      "tag": "0089_knowledge_assistant_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1787184000000,
+      "tag": "0090_knowledge_teammate_attribution",
+      "breakpoints": true
     }
   ]
 }

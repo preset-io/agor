@@ -6,10 +6,8 @@ import type { SessionRepository } from '@agor/core/db/repositories/sessions';
 import type { SessionID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@agor/core/sdk', () => ({
-  Gemini: {
-    ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
-  },
+vi.mock('@google/gemini-cli-core', () => ({
+  ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
 }));
 
 import { GeminiPromptService } from './prompt-service.js';

@@ -1,20 +1,24 @@
 /**
  * Config Service
  *
- * Provides REST + WebSocket API for configuration management.
- * Wraps @agor/core/config functions for UI access.
+ * Narrow read-only runtime configuration resolver.
+ *
+ * This is not a config.yaml CRUD surface. It only resolves task-scoped
+ * user/tenant credentials for trusted executors; deployment configuration is
+ * operator-owned and immutable at runtime.
  */
 
-import { type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
+import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { type AgorConfig, type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import {
-  type AgenticToolName,
-  type AuthenticatedParams,
-  type Params,
-  type TaskID,
-  TOOL_API_KEY_NAMES,
-  type UserID,
+import type {
+  AgenticToolName,
+  AuthenticatedParams,
+  DeepReadonly,
+  Params,
+  TaskID,
+  UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from './session-token-service.js';
@@ -93,7 +97,10 @@ export class ConfigService {
   /** App reference injected after registration for cross-service calls */
   app?: Application;
 
-  constructor(db: TenantScopeAwareDatabase) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    private readonly config: DeepReadonly<AgorConfig>
+  ) {
     this.db = db;
   }
 
@@ -119,8 +126,8 @@ export class ConfigService {
        * Explicit task-scoped executor JWT proof. The Socket.io connection can
        * authenticate as the session creator user while dropping custom JWT
        * claims from later service params, so executors include the minted token
-       * on this secret-resolution call and the daemon validates it against the
-       * in-memory session-token registry.
+       * on this secret-resolution call and the daemon validates its signature,
+       * scope, and active token authority.
        */
       executorSessionToken?: string;
     },
@@ -231,8 +238,7 @@ export class ConfigService {
       (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
     );
     if (result.useNativeAuth) {
-      const config = await loadConfig();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
+      if (this.config.multi_tenancy?.mode === 'required_from_auth') {
         throw new BadRequest(
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
         );
@@ -253,6 +259,9 @@ export class ConfigService {
 /**
  * Service factory function
  */
-export function createConfigService(db: TenantScopeAwareDatabase): ConfigService {
-  return new ConfigService(db);
+export function createConfigService(
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
+): ConfigService {
+  return new ConfigService(db, config);
 }

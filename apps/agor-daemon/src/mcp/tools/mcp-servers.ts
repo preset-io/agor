@@ -1,3 +1,4 @@
+import { NotFound } from '@agor/core/feathers';
 import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
@@ -8,10 +9,14 @@ import type {
   MCPServer,
   UpdateMCPServerInput,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
+  mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
   mcpOptionalString,
@@ -101,6 +106,7 @@ export async function listAttachedMcpServers(
   sessionId: string,
   opts: { includeDisabled?: boolean } = {}
 ): Promise<McpServerSummary[]> {
+  const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
   const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
     ...ctx.baseServiceParams,
     query: {
@@ -116,12 +122,140 @@ export async function listAttachedMcpServers(
       const mcpServer = await ctx.app
         .service('mcp-servers')
         .get(sms.mcp_server_id, ctx.baseServiceParams);
+      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== session.created_by) {
+        continue;
+      }
       summaries.push(await summarizeMcpServer(ctx, mcpServer));
     } catch (error) {
       console.warn(`Failed to fetch MCP server ${sms.mcp_server_id}:`, error);
     }
   }
   return summaries;
+}
+
+type McpCatalogFindResult =
+  | MCPServer[]
+  | {
+      data: MCPServer[];
+      total?: number;
+    };
+
+function getMcpCatalogFindData(result: McpCatalogFindResult): MCPServer[] {
+  return Array.isArray(result) ? result : result.data;
+}
+
+function getMcpCatalogFindTotal(result: McpCatalogFindResult): number {
+  const data = getMcpCatalogFindData(result);
+  return Array.isArray(result) ? data.length : (result.total ?? data.length);
+}
+
+function compareCatalogServers(a: MCPServer, b: MCPServer): number {
+  const aCreated = a.created_at instanceof Date ? a.created_at.getTime() : 0;
+  const bCreated = b.created_at instanceof Date ? b.created_at.getTime() : 0;
+  if (bCreated !== aCreated) return bCreated - aCreated;
+  return a.mcp_server_id < b.mcp_server_id ? -1 : a.mcp_server_id > b.mcp_server_id ? 1 : 0;
+}
+
+/**
+ * The catalog is deliberately different from the effective MCP set:
+ *
+ * - global rows are eligible for every session, subject to service-level
+ *   authorization;
+ * - Agor-provided session rows are discoverable to a caller with trusted
+ *   current-session context, even before a junction row attaches them; and
+ * - user/imported session rows are not catalog-visible because their
+ *   session-specific authorization is owned by `session-mcp-servers`.
+ *
+ * Keeping the last rule here is important: querying all session rows would
+ * disclose another user's configured MCPs. The caller's tenant and session
+ * authorization remain in `baseServiceParams` and the verified `sessionId`.
+ */
+function isMcpCatalogServerVisible(ctx: McpContext, mcpServer: MCPServer): boolean {
+  const isAdmin = hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN);
+  if (mcpServer.owner_user_id && mcpServer.owner_user_id !== ctx.userId && !isAdmin) {
+    return false;
+  }
+  if (mcpServer.scope === 'global') return true;
+  return (
+    mcpServer.scope === 'session' &&
+    mcpServer.source === 'agor' &&
+    !mcpServer.owner_user_id &&
+    !!ctx.sessionId
+  );
+}
+
+function assertMcpServerUsableByCaller(ctx: McpContext, mcpServer: MCPServer): void {
+  if (!isMcpServerUsableByCaller(mcpServer, ctx.baseServiceParams)) {
+    // Do not turn a caller-supplied server ID into an existence oracle.
+    throw new NotFound('MCP server not found');
+  }
+}
+
+async function listCatalogMcpServers(
+  ctx: McpContext,
+  includeDisabled: boolean,
+  limit: number,
+  offset: number
+): Promise<{ servers: MCPServer[]; total: number }> {
+  // Fetch enough from each scoped query to produce the requested page after
+  // merging. The MCP input limit is bounded; the service also applies its
+  // own pagination to each query.
+  const fetchLimit = limit + offset;
+  const queryBase = {
+    ...(includeDisabled ? {} : { enabled: true }),
+    ...(hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)
+      ? {}
+      : { usableByUserId: ctx.userId }),
+    $limit: fetchLimit,
+    $skip: 0,
+    $sort: { created_at: -1, mcp_server_id: 1 },
+  };
+  const queries = [
+    { ...queryBase, scope: 'global' as const },
+    ...(ctx.sessionId
+      ? [
+          {
+            ...queryBase,
+            scope: 'session' as const,
+            source: 'agor' as const,
+            ownerless: true,
+          },
+        ]
+      : []),
+  ];
+
+  const results = (await Promise.all(
+    queries.map((query) =>
+      ctx.app.service('mcp-servers').find({
+        ...ctx.baseServiceParams,
+        query,
+      })
+    )
+  )) as McpCatalogFindResult[];
+
+  const visibleById = new Map<string, MCPServer>();
+  let total = 0;
+  for (const result of results) {
+    const data = getMcpCatalogFindData(result);
+    const visible = data.filter((mcpServer) => isMcpCatalogServerVisible(ctx, mcpServer));
+    for (const mcpServer of visible) {
+      visibleById.set(mcpServer.mcp_server_id, mcpServer);
+    }
+
+    // The service total includes only rows from this scoped query. Account
+    // for rows filtered defensively above, while retaining a correct
+    // has-more signal when the service truncated the query.
+    total += Math.max(
+      visible.length,
+      getMcpCatalogFindTotal(result) - data.length + visible.length
+    );
+  }
+
+  const catalog = [...visibleById.values()].sort(compareCatalogServers);
+  return {
+    servers: catalog.slice(offset, offset + limit),
+    total: Math.max(total, catalog.length),
+  };
 }
 
 const mcpNameSchema = z
@@ -187,6 +321,18 @@ const mcpAuthInputSchema = z
       .enum(['per_user', 'shared'])
       .optional()
       .describe("OAuth token ownership. Defaults to 'per_user' (recommended)."),
+    oauth_compatibility_mode: z
+      .enum(['strict', 'legacy'])
+      .optional()
+      .describe(
+        'OAuth compatibility policy. Defaults to strict; use legacy explicitly for older providers.'
+      ),
+    oauth_dcr_mode: z
+      .enum(['disabled', 'advertised', 'fallback'])
+      .optional()
+      .describe(
+        'Dynamic registration policy. Defaults to advertised; fallback additionally permits the legacy issuer-relative /register guess.'
+      ),
     insecure: z.boolean().optional().describe('Allow insecure auth behavior if supported.'),
   })
   .superRefine((auth, issue) => {
@@ -209,6 +355,8 @@ const mcpAuthInputSchema = z
         'oauth_scope',
         'oauth_grant_type',
         'oauth_mode',
+        'oauth_compatibility_mode',
+        'oauth_dcr_mode',
         'insecure',
       ] as const,
     };
@@ -534,27 +682,24 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_list',
     {
       description:
-        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`.',
+        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`. If the catalog is empty, do not invent an unvetted third-party server or request a broad Slack token; configure an official server in Agor User Settings > MCP Servers instead. The official Slack MCP endpoint is https://mcp.slack.com/mcp, and this is separate from Slack gateway-channel setup or Claude connector settings.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         includeDisabled: z
           .boolean()
           .optional()
           .describe('Include disabled MCP servers (default: false)'),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
       const includeDisabled = args.includeDisabled === true;
+      const limit = args.limit ?? 25;
+      const offset = args.offset ?? 0;
 
-      const result = await ctx.app.service('mcp-servers').find({
-        ...ctx.baseServiceParams,
-        query: {
-          scope: 'global',
-          ...(includeDisabled ? {} : { enabled: true }),
-          $limit: 100,
-        },
-      });
-      const data = (Array.isArray(result) ? result : result.data) as MCPServer[];
+      const catalog = await listCatalogMcpServers(ctx, includeDisabled, limit, offset);
+      const data = catalog.servers;
 
       const servers: McpServerSummary[] = [];
       for (const mcpServer of data) {
@@ -563,6 +708,13 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
 
       return textResult({
         mcp_servers: servers,
+        pagination: {
+          total: catalog.total,
+          limit,
+          offset,
+          hasMore: offset + servers.length < catalog.total,
+          nextOffset: offset + servers.length < catalog.total ? offset + servers.length : null,
+        },
         summary: {
           total: servers.length,
           oauth_servers: servers.filter((s) => s.auth_type === 'oauth').length,
@@ -593,6 +745,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const mcpServer: MCPServer = await ctx.app
         .service('mcp-servers')
         .get(args.mcpServerId, ctx.baseServiceParams);
+      assertMcpServerUsableByCaller(ctx, mcpServer);
 
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
@@ -619,7 +772,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_create',
     {
       description:
-        'Register a new MCP server definition. Permissions are service-enforced: only admins can create MCP configs. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
+        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerCreateSchema,
     },
@@ -689,7 +842,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_update',
     {
       description:
-        'Update an existing MCP server definition. Permissions are service-enforced: only admins can update MCP configs. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
+        'Update an existing MCP server definition. Permissions are service-enforced: admins always may, members only under the workspace `mcp_member_policy`, and nobody but an admin or the owner may touch a private server. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerUpdateSchema,
     },
@@ -745,7 +898,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_add_mcp_server',
     {
       description:
-        'Attach a registered MCP server to a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced via the same session-scoped route as the UI: caller must be allowed to edit that session config. Verify with `agor_sessions_get_current`/`agor_sessions_get`; the agent may need a restart/re-prompt before its MCP client sees new tools.',
+        'Attach a registered MCP server to a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced via the same session-scoped route as the UI: the caller must be allowed to edit that session config, and a server private to another user cannot be attached to it. Verify with `agor_sessions_get_current`/`agor_sessions_get`; the agent may need a restart/re-prompt before its MCP client sees new tools.',
       annotations: { destructiveHint: false, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId(
@@ -826,7 +979,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_set_mcp_servers',
     {
       description:
-        'Replace the session-specific MCP links for a session by diffing through the same add/remove route the UI uses. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced per add/remove. This manages session links only; enabled global MCP servers are still effective for every session even if omitted here.',
+        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. This manages session links only; enabled global MCP servers are still effective for every session even if omitted here.',
       annotations: { destructiveHint: true, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerIds: z
@@ -863,48 +1016,45 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const toAdd = desired.filter((id) => !currentSet.has(id));
       const toRemove = current.filter((id) => !desiredSet.has(id));
 
-      const failures: Array<{ mcp_server_id: string; action: 'add' | 'remove'; reason: string }> =
-        [];
-      for (const mcpServerId of toRemove) {
-        try {
-          await removeMcpServerFromSession(ctx, target.sessionId, mcpServerId);
-        } catch (error) {
-          failures.push({
-            mcp_server_id: mcpServerId,
-            action: 'remove',
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      for (const mcpServerId of toAdd) {
-        try {
-          await attachMcpServerToSession(ctx, target.sessionId, mcpServerId);
-        } catch (error) {
-          failures.push({
-            mcp_server_id: mcpServerId,
-            action: 'add',
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
+      try {
+        await ctx.app.service('/sessions/:id/mcp-servers').update(
+          null,
+          { mcpServerIds: desired },
+          {
+            ...ctx.baseServiceParams,
+            route: { id: target.sessionId },
+          }
+        );
+      } catch (error) {
+        const payload = {
+          session_id: target.sessionId,
+          desired_mcp_server_ids: desired,
+          failures: [
+            {
+              mcp_server_id: desired[0] ?? target.sessionId,
+              action: 'replace' as const,
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          unchanged_mcp_server_ids: current,
+          next_steps: [
+            'The atomic replacement was rejected; the existing session-specific MCP links were left unchanged.',
+          ],
+        };
+        return { ...textResult(payload), isError: true };
       }
 
-      const payload = {
+      return textResult({
         session_id: target.sessionId,
         desired_mcp_server_ids: desired,
-        added_mcp_server_ids: toAdd.filter(
-          (id) => !failures.some((f) => f.action === 'add' && f.mcp_server_id === id)
-        ),
-        removed_mcp_server_ids: toRemove.filter(
-          (id) => !failures.some((f) => f.action === 'remove' && f.mcp_server_id === id)
-        ),
+        added_mcp_server_ids: toAdd,
+        removed_mcp_server_ids: toRemove,
         unchanged_mcp_server_ids: desired.filter((id) => currentSet.has(id)),
-        failures: failures.length > 0 ? failures : undefined,
         next_steps: [
           'Verify with agor_sessions_get_current/agor_sessions_get. Enabled global MCP servers remain effective even if not listed here.',
           'Restart or re-prompt an existing agent if its MCP client does not hot-reload MCP link changes.',
         ],
-      };
-      return failures.length > 0 ? { ...textResult(payload), isError: true } : textResult(payload);
+      });
     }
   );
 }

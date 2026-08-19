@@ -23,19 +23,24 @@
 
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
+import type { BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
-import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   boardPresenceRoomName,
+  tenantChannelName,
+  tenantUserChannelName,
+} from '../realtime/routing';
+import type { TerminalAttachmentIdentity } from '../services/terminals';
+import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
+import { executorTaskChannelName } from '../utils/realtime-publish';
+import {
   configureChannels,
   createSocketIOConfig,
   createTokenBucket,
   getSocketAuthState,
   parseTerminalChannel,
   type SocketIOOptions,
-  tenantChannelName,
-  tenantUserChannelName,
 } from './socketio';
 
 // ---------------------------------------------------------------------------
@@ -49,13 +54,15 @@ interface FakeSocket {
   handshake: { auth?: { token?: string }; headers?: Record<string, string> };
   connected: boolean;
   joined: Set<string>;
+  readonly rooms: Set<string>;
   left: Set<string>;
   /** Events actually delivered TO this socket (models room fanout). */
   received: Array<{ event: string; data: unknown }>;
-  handlers: Map<string, (...args: any[]) => void>;
-  on(event: string, fn: (...args: any[]) => void): void;
-  join(channel: string): void;
-  leave(channel: string): void;
+  handlers: Map<string, (...args: any[]) => any>;
+  on(event: string, fn: (...args: any[]) => any): void;
+  emit(event: string, data: unknown): void;
+  join(channel: string): void | Promise<void>;
+  leave(channel: string): void | Promise<void>;
   broadcast: {
     emit: (event: string, data: unknown) => void;
     to: (channel: string) => { emit: (event: string, data: unknown) => void };
@@ -63,6 +70,9 @@ interface FakeSocket {
   // socket.to(room) — broadcasts to a room EXCLUDING this socket. Mirrors the
   // real socket.io semantics used by the terminal:output relay.
   to: (channel: string) => { emit: (event: string, data: unknown) => void };
+  readonly local: {
+    to: (channel: string) => { emit: (event: string, data: unknown) => void };
+  };
 }
 
 interface FakeIO {
@@ -79,27 +89,35 @@ interface FakeIO {
   on(event: string, fn: any): void;
   use(fn: any): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
+  readonly local: Pick<FakeIO, 'to'>;
 }
 
 function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
-  const handlers = new Map<string, (...args: any[]) => void>();
-  return {
+  const handlers = new Map<string, (...args: any[]) => any>();
+  const socket: FakeSocket = {
     id,
     data: {},
     handshake: { auth: {}, headers: {} },
     connected: true,
     joined: new Set(),
+    get rooms() {
+      return new Set([id, ...this.joined]);
+    },
     left: new Set(),
     received: [],
     handlers,
     on(event, fn) {
       handlers.set(event, fn);
     },
+    emit(event, data) {
+      this.received.push({ event, data });
+    },
     join(channel) {
       this.joined.add(channel);
     },
     leave(channel) {
       this.left.add(channel);
+      this.joined.delete(channel);
     },
     broadcast: {
       emit: (event: string, data: unknown) => {
@@ -108,6 +126,7 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
       to: (channel: string) => ({
         emit: (event: string, data: unknown) => {
           io?.emitted.push({ channel, event, data });
+          deliverToRoom(io, channel, event, data, id);
         },
       }),
     },
@@ -119,7 +138,11 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
         deliverToRoom(io, channel, event, data, id);
       },
     }),
+    get local() {
+      return { to: this.to };
+    },
   };
+  return socket;
 }
 
 /**
@@ -163,6 +186,9 @@ function makeIO(): FakeIO {
     use(fn) {
       this.middlewares.push(fn);
     },
+    get local() {
+      return this;
+    },
     to(channel: string) {
       return {
         emit: (event: string, data: unknown) => {
@@ -176,43 +202,349 @@ function makeIO(): FakeIO {
   return io;
 }
 
-function makeApp(): Application {
+function makeApp() {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
   // app.on('login'), and app.emit for the terminal:ready/error relay.
   const eventHandlers = new Map<string, (...args: any[]) => void>();
+  const matchesOwnedAttachment = vi.fn(
+    (identity: TerminalAttachmentIdentity) =>
+      identity.terminalId === TERMINAL &&
+      identity.tenantId === 'default' &&
+      identity.userId === ALICE &&
+      identity.branchId === BRANCH &&
+      identity.ownerBootId === 'daemon-a-boot'
+  );
   return {
-    service: () => ({ get: async (userId: string) => ({ user_id: userId }) }),
+    service: (path: string) =>
+      path === 'terminals'
+        ? { matchesOwnedAttachment }
+        : { get: async (userId: string) => ({ user_id: userId }) },
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
     eventHandlers,
-  } as any;
+    matchesOwnedAttachment,
+  };
 }
 
 function buildHarness(opts: Partial<SocketIOOptions> = {}) {
   const app = makeApp();
   const io = makeIO();
-  const config = createSocketIOConfig(app, {
-    corsOrigin: '*',
-    jwtSecret: 'test-secret',
-    credentialsAllowed: false,
-    webTerminalEnabled: true,
-    ...opts,
-  } as SocketIOOptions);
+  const config = createSocketIOConfig(
+    app as unknown as Application,
+    {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      workIdentity: { instanceId: 'daemon-a', bootId: 'daemon-a-boot' },
+      ...opts,
+    } as SocketIOOptions
+  );
   config.callback(io as any);
+  openHarnesses.add(io);
   return { io, config, app };
 }
+
+const openHarnesses = new Set<FakeIO>();
+
+afterEach(() => {
+  for (const io of openHarnesses) io.engine.closeHandler?.();
+  openHarnesses.clear();
+});
 
 function connect(io: FakeIO, socket: FakeSocket) {
   io.sockets.sockets.set(socket.id, socket);
   io.connectionHandler?.(socket);
 }
 
+it('binds a server-only terminal subscription capability to the Feathers connection', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(join).toBeTypeOf('function');
+  expect(
+    Object.getOwnPropertyDescriptor(socket.feathers, TERMINAL_REQUEST_JOIN_CHANNEL)?.enumerable
+  ).toBe(false);
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  await expect(join?.(terminalChannel(), allocation)).resolves.toBe(true);
+  expect(socket.joined).toContain(terminalChannel());
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+  await expect(join?.(terminalChannel(ALICE, TERMINAL, 'other-tenant'), allocation)).resolves.toBe(
+    false
+  );
+  await expect(join?.(terminalChannel(), { ...allocation, userId: BOB })).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, TERMINAL, 'other-tenant'));
+
+  socket.connected = false;
+  await expect(join?.(terminalChannel(ALICE, 'other-terminal'), allocation)).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, 'other-terminal'));
+});
+
+it('does not bind a terminal subscription capability to an anonymous socket', () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('anonymous-terminal-requester', io);
+  connect(io, socket);
+
+  expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
+});
+
+it('revokes a captured terminal subscription capability on logout', async () => {
+  const { app, io } = buildHarness();
+  const socket = makeSocket('logout-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(capturedJoin).toBeTypeOf('function');
+
+  (app as any).eventHandlers.get('logout')?.({}, { connection });
+
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  await expect(capturedJoin?.(terminalChannel(), allocation)).resolves.toBe(false);
+  expect(socket.joined).not.toContain(terminalChannel());
+  expect(connection?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
+});
+
+it('revokes the previous user and tenant capability on authentication replacement', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('replacement-terminal-requester', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+
+  connection!.user = { user_id: BOB };
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: BOB } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
+    }
+  );
+
+  await expect(
+    capturedJoin?.(terminalChannel(ALICE, TERMINAL, 'tenant-a'), {
+      userId: ALICE,
+      terminalId: TERMINAL,
+      branchId: BRANCH,
+    })
+  ).resolves.toBe(false);
+  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(replacementJoin).toBeTypeOf('function');
+  await expect(
+    replacementJoin?.(terminalChannel(BOB, TERMINAL, 'tenant-b'), {
+      userId: BOB,
+      terminalId: TERMINAL,
+      branchId: BRANCH,
+    })
+  ).resolves.toBe(true);
+  expect(socket.joined).not.toContain(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
+  expect(socket.joined).toContain(terminalChannel(BOB, TERMINAL, 'tenant-b'));
+});
+
+it('removes a terminal room when authentication changes while its join is pending', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('pending-terminal-requester', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
+  let releaseJoin!: () => void;
+  let markJoinStarted!: () => void;
+  const joinGate = new Promise<void>((resolve) => {
+    releaseJoin = resolve;
+  });
+  const joinStarted = new Promise<void>((resolve) => {
+    markJoinStarted = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  socket.join = async (candidate) => {
+    if (candidate === channel) {
+      markJoinStarted();
+      await joinGate;
+    }
+    await normalJoin(candidate);
+  };
+
+  const pending = capturedJoin?.(channel, {
+    userId: ALICE,
+    terminalId: TERMINAL,
+    branchId: BRANCH,
+  });
+  await joinStarted;
+  connection!.user = { user_id: BOB };
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: BOB } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
+    }
+  );
+  releaseJoin();
+
+  await expect(pending).resolves.toBe(false);
+  expect(socket.joined).not.toContain(channel);
+  expect(socket.left).toContain(channel);
+  expect(socket.received).not.toContainEqual({
+    event: 'terminal:allocated',
+    data: expect.objectContaining({ userId: ALICE }),
+  });
+});
+
+it('does not let a stale join remove the replacement generation from the same room', async () => {
+  const { app, io } = buildHarness({
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const socket = makeSocket('same-identity-replacement', io);
+  socket.feathers = { user: { user_id: ALICE } };
+  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, socket);
+  const connection = socket.feathers;
+  const staleJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  let releaseStaleJoin!: () => void;
+  let markStaleJoinStarted!: () => void;
+  const staleJoinGate = new Promise<void>((resolve) => {
+    releaseStaleJoin = resolve;
+  });
+  const staleJoinStarted = new Promise<void>((resolve) => {
+    markStaleJoinStarted = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  let terminalJoinCount = 0;
+  socket.join = async (candidate) => {
+    if (candidate === channel && terminalJoinCount++ === 0) {
+      markStaleJoinStarted();
+      await staleJoinGate;
+    }
+    await normalJoin(candidate);
+  };
+
+  const staleResult = staleJoin?.(channel, allocation);
+  await staleJoinStarted;
+  (app as any).eventHandlers.get('login')?.(
+    { user: { user_id: ALICE } },
+    {
+      connection,
+      params: { authentication: { payload: { tenant_id: 'tenant-a' } } },
+    }
+  );
+  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  expect(replacementJoin).not.toBe(staleJoin);
+  const replacementResult = replacementJoin?.(channel, allocation);
+
+  releaseStaleJoin();
+  await expect(staleResult).resolves.toBe(false);
+  await expect(replacementResult).resolves.toBe(true);
+  expect(socket.joined).toContain(channel);
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+});
+
+it('does not let a failed concurrent join remove a successful same-generation claim', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('concurrent-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel();
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+  let releaseFailedJoin!: () => void;
+  let markFailedJoinStarted!: () => void;
+  const failedJoinGate = new Promise<void>((resolve) => {
+    releaseFailedJoin = resolve;
+  });
+  const failedJoinStarted = new Promise<void>((resolve) => {
+    markFailedJoinStarted = resolve;
+  });
+  const normalJoin = socket.join.bind(socket);
+  let terminalJoinCount = 0;
+  socket.join = async (candidate) => {
+    if (candidate === channel && terminalJoinCount++ === 0) {
+      markFailedJoinStarted();
+      await failedJoinGate;
+      throw new Error('first join failed');
+    }
+    await normalJoin(candidate);
+  };
+
+  const failedAttempt = join?.(channel, allocation);
+  await failedJoinStarted;
+  const successfulAttempt = join?.(channel, allocation);
+
+  releaseFailedJoin();
+  await expect(failedAttempt).resolves.toBe(false);
+  await expect(successfulAttempt).resolves.toBe(true);
+  expect(socket.joined).toContain(channel);
+  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+});
+
+it('does not retry or remove an already-established authorized membership', async () => {
+  const { io } = buildHarness();
+  const socket = makeSocket('redundant-terminal-requester', io);
+  asUser(socket, ALICE);
+  connect(io, socket);
+  const join = socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  const channel = terminalChannel();
+  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
+
+  await expect(join?.(channel, allocation)).resolves.toBe(true);
+  let redundantLowLevelJoins = 0;
+  socket.join = async () => {
+    redundantLowLevelJoins += 1;
+    throw new Error('redundant join should not run');
+  };
+
+  await expect(join?.(channel, allocation)).resolves.toBe(true);
+  expect(redundantLowLevelJoins).toBe(0);
+  expect(socket.joined).toContain(channel);
+  expect(socket.left).not.toContain(channel);
+});
+
+function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
+  browser.handlers.get('join')?.(terminalChannel());
+  const executor = makeSocket('exec-sock', io);
+  asServiceForUser(executor, ALICE);
+  connect(io, executor);
+  executor.handlers.get('join')?.(terminalChannel());
+  return executor;
+}
+
 // Identity helpers — keep all strings UUID-shaped enough for log slicing.
-const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
-const BOB = '22222222-bbbb-bbbb-bbbb-222222222222';
+const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111' as UserID;
+const BOB = '22222222-bbbb-bbbb-bbbb-222222222222' as UserID;
+const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+const BRANCH = '44444444-dddd-dddd-dddd-444444444444' as BranchID;
+
+function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
+  return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
+}
 
 function asUser(socket: FakeSocket, userId: string) {
   socket.feathers = { user: { user_id: userId } };
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 /**
  * Simulate a socket that presented a service token in the initial handshake.
@@ -243,27 +575,38 @@ function asServicePostConnect(socket: FakeSocket) {
  * `_isServiceAccount`) — that's the whole point of the terminal-scoped token.
  * Mirrors what ServiceJWTStrategy mints for a token carrying terminal_user_id.
  */
-function asServiceForUser(socket: FakeSocket, userId: string) {
+function asServiceForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
   socket.feathers = {
     user: {
       user_id: 'executor-service',
       role: 'terminal-executor',
       _isTerminalExecutor: true,
       terminal_user_id: userId,
+      terminal_id: terminalId,
+      terminal_branch_id: BRANCH,
+      terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 /** Handshake-token variant of a user-scoped terminal executor socket. */
-function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
+function asServiceHandshakeForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
   socket.feathers = {
     user: {
       user_id: 'executor-service',
       role: 'terminal-executor',
       _isTerminalExecutor: true,
       terminal_user_id: userId,
+      terminal_id: terminalId,
+      terminal_branch_id: BRANCH,
+      terminal_owner_boot_id: 'daemon-a-boot',
     },
   };
   socket.data.terminalUserId = userId;
+  socket.data.terminalId = terminalId;
+  socket.data.terminalBranchId = BRANCH;
+  socket.data.terminalOwnerBootId = 'daemon-a-boot';
+  socket.data.tenant = { tenant_id: 'default', source: 'static' };
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +614,12 @@ function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
 // ---------------------------------------------------------------------------
 
 describe('parseTerminalChannel', () => {
-  it('extracts user id from a well-formed channel', () => {
-    expect(parseTerminalChannel(`user/${ALICE}/terminal`)).toBe(ALICE);
+  it('extracts tenant, user, and terminal ids from a well-formed channel', () => {
+    expect(parseTerminalChannel(terminalChannel())).toEqual({
+      tenantId: 'default',
+      userId: ALICE,
+      terminalId: TERMINAL,
+    });
   });
   it('rejects non-terminal channels', () => {
     expect(parseTerminalChannel('user/abc/other')).toBeNull();
@@ -280,8 +627,8 @@ describe('parseTerminalChannel', () => {
     expect(parseTerminalChannel('')).toBeNull();
   });
   it('rejects empty or nested userIds', () => {
-    expect(parseTerminalChannel('user//terminal')).toBeNull();
-    expect(parseTerminalChannel('user/a/b/terminal')).toBeNull();
+    expect(parseTerminalChannel('tenant//user/a/terminal/b')).toBeNull();
+    expect(parseTerminalChannel('tenant/t/user/a/terminal/')).toBeNull();
   });
 });
 
@@ -314,7 +661,7 @@ describe('Socket.IO lifecycle logging', () => {
     warnSpy.mockRestore();
   });
 
-  it('logs post-connect authentication once at info with only the short user ID', () => {
+  it('logs first authentication and identity changes but omits same-identity repeats', () => {
     const { app, io } = buildHarness();
     const socket = makeSocket('alice-sock');
     connect(io, socket);
@@ -325,16 +672,82 @@ describe('Socket.IO lifecycle logging', () => {
       { user: { user_id: ALICE, email: 'alice@example.com' } },
       { connection }
     );
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE, email: 'repeat@example.com' } },
+      { connection }
+    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(debugSpy.mock.calls.flat().join(' ')).not.toContain('re-authenticated');
     expect(logSpy).toHaveBeenCalledWith(
       'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
     );
     expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('repeat@example.com');
+
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: BOB, email: 'bob@example.com' } },
+      { connection }
+    );
+
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'socket authenticated: alice-sock user:22222222bbbbbbbbbbbb2222'
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('bob@example.com');
+  });
+
+  it('keeps post-connect authenticated sockets out of unauthenticated disconnect metrics', () => {
+    vi.useFakeTimers();
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-auth');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
+    socket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith(
+      '🔌 Socket.io disconnected: post-connect-auth (reason: ping timeout, remaining: 0)'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
+  });
+
+  it('joins post-connect browser auth only to tenant-scoped raw rooms', () => {
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const socket = makeSocket('alice-sock');
+    connect(io, socket);
+    const connection = { user: { user_id: ALICE } };
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE } },
+      { connection, params: {} }
+    );
+
+    expect(socket.joined).toContain(tenantChannelName('tenant-a'));
+    expect(socket.joined).toContain(tenantUserChannelName('tenant-a', ALICE));
+    expect([...socket.joined]).not.toContain(`user:${ALICE}`);
+    expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeTypeOf('function');
   });
 
   it('uses the same single authentication signal for handshake-authenticated users', async () => {
-    const { io } = buildHarness();
+    const { app, io } = buildHarness();
     const socket = makeSocket('handshake-sock');
     socket.handshake.auth = {
       token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
@@ -347,12 +760,135 @@ describe('Socket.IO lifecycle logging', () => {
       });
     });
     connect(io, socket);
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: ALICE } },
+      { connection: socket.feathers }
+    );
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
       'socket authenticated: handshake-sock user:11111111aaaaaaaaaaaa1111'
     );
     expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
+  });
+
+  it.each([
+    {
+      kind: 'full service',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'service',
+        _isServiceAccount: true,
+      },
+      joinsUserRoom: false,
+    },
+    {
+      kind: 'terminal executor',
+      user: {
+        user_id: 'executor-service',
+        email: 'executor@agor.internal',
+        role: 'terminal-executor',
+        _isTerminalExecutor: true,
+        terminal_user_id: ALICE,
+      },
+      joinsUserRoom: false,
+    },
+  ])('logs post-connect $kind authentication as service', ({ user, joinsUserRoom }) => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('post-connect-service');
+    connect(io, socket);
+
+    const connection = {};
+    socket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user }, { connection });
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    expect(logSpy).toHaveBeenCalledWith('socket authenticated: post-connect-service service');
+    expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
+      joinsUserRoom
+    );
+  });
+
+  it.each([
+    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: false },
+    { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
+  ])(
+    'deduplicates handshake $kind authentication followed by the same service login',
+    async ({ terminalUserId, joinsUserRoom }) => {
+      const { app, io } = buildHarness();
+      const socket = makeSocket('handshake-service');
+      socket.handshake.auth = {
+        token: issueRuntimeToken(
+          {
+            sub: 'executor-service',
+            type: 'service',
+            ...(terminalUserId ? { terminal_user_id: terminalUserId } : {}),
+          },
+          'test-secret',
+          '5m'
+        ),
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        io.middlewares[0]?.(socket, (error?: Error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      connect(io, socket);
+      (app as any).eventHandlers.get('login')?.(
+        { user: socket.feathers?.user },
+        { connection: socket.feathers }
+      );
+
+      expect(logSpy).toHaveBeenCalledOnce();
+      expect(logSpy).toHaveBeenCalledWith('socket authenticated: handshake-service service');
+      expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
+        joinsUserRoom
+      );
+    }
+  );
+
+  it('revokes prior raw tenant and board rooms when authentication is replaced by service', () => {
+    const { app, io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const socket = makeSocket('replacement-sock');
+    const connection = {};
+    socket.feathers = connection;
+    socket.data.tenant = { tenant_id: 'tenant-a', source: 'static' };
+    socket.data.currentBoardId = 'board-1';
+    socket.data.authorizedBoardIds = new Set(['board-1']);
+    socket.joined.add(tenantChannelName('tenant-a'));
+    socket.joined.add(tenantUserChannelName('tenant-a', ALICE));
+    socket.joined.add(boardPresenceRoomName('tenant-a', 'board-1'));
+    socket.joined.add(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
+    connect(io, socket);
+
+    (app as any).eventHandlers.get('login')?.(
+      { user: { user_id: 'executor-service', _isServiceAccount: true } },
+      { connection }
+    );
+
+    expect([...socket.joined].filter((room) => room.startsWith('tenant:'))).toEqual([]);
+    expect(socket.joined.has(terminalChannel(ALICE, TERMINAL, 'tenant-a'))).toBe(false);
+    expect(socket.data.authorizedBoardIds).toEqual(new Set());
+    expect(socket.data.currentBoardId).toBeUndefined();
+    expect(socket.data.tenant).toBeUndefined();
+  });
+
+  it('revokes terminal output room membership on logout', () => {
+    const { app, io } = buildHarness();
+    const socket = makeSocket('logout-sock');
+    asUser(socket, ALICE);
+    const connection = socket.feathers;
+    socket.joined.add(terminalChannel());
+    connect(io, socket);
+
+    (app as any).eventHandlers.get('logout')?.({}, { connection });
+
+    expect(socket.joined.has(terminalChannel())).toBe(false);
   });
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
@@ -364,11 +900,15 @@ describe('Socket.IO lifecycle logging', () => {
 
     vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0');
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
 
     io.engine.closeHandler?.();
     vi.advanceTimersByTime(5 * 60 * 1000);
@@ -376,10 +916,11 @@ describe('Socket.IO lifecycle logging', () => {
   });
 
   it.each(['transport close', 'client namespace disconnect'])(
-    'demotes benign disconnect reason %s below info',
+    'keeps benign authenticated disconnect reason %s below info',
     (reason) => {
       const { io } = buildHarness();
       const socket = makeSocket('browser-sock');
+      asUser(socket, ALICE);
       connect(io, socket);
 
       socket.handlers.get('disconnect')?.(reason);
@@ -393,6 +934,8 @@ describe('Socket.IO lifecycle logging', () => {
     const { io } = buildHarness();
     const transportErrorSocket = makeSocket('transport-error');
     const pingTimeoutSocket = makeSocket('ping-timeout');
+    asUser(transportErrorSocket, ALICE);
+    asUser(pingTimeoutSocket, ALICE);
     connect(io, transportErrorSocket);
     connect(io, pingTimeoutSocket);
 
@@ -402,13 +945,83 @@ describe('Socket.IO lifecycle logging', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
   });
+
+  it('aggregates sockets that disconnect before authentication and resets each interval', () => {
+    vi.useFakeTimers();
+    const { app, io } = buildHarness();
+    const firstAnonymousSocket = makeSocket('anonymous-1');
+    const secondAnonymousSocket = makeSocket('anonymous-2');
+    const previouslyAuthenticatedSocket = makeSocket('authenticated');
+
+    connect(io, firstAnonymousSocket);
+    connect(io, secondAnonymousSocket);
+    connect(io, previouslyAuthenticatedSocket);
+    const connection = {};
+    previouslyAuthenticatedSocket.feathers = connection;
+    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
+    previouslyAuthenticatedSocket.feathers = {};
+    debugSpy.mockClear();
+    logSpy.mockClear();
+    warnSpy.mockClear();
+
+    firstAnonymousSocket.handlers.get('disconnect')?.('ping timeout');
+    secondAnonymousSocket.handlers.get('disconnect')?.('client namespace disconnect');
+    previouslyAuthenticatedSocket.handlers.get('disconnect')?.('ping timeout');
+
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Socket.io disconnected: authenticated (reason: ping timeout')
+    );
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('anonymous-');
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=2'
+    );
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
+    );
+
+    io.engine.closeHandler?.();
+    const logCountAfterClose = logSpy.mock.calls.length;
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
+  });
+
+  it('preserves transport-error warnings while aggregating unauthenticated disconnects', () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const socket = makeSocket('transport-error');
+    connect(io, socket);
+    debugSpy.mockClear();
+
+    socket.handlers.get('disconnect')?.('transport error');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
+    expect(debugSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith(
+      'ws_active_connections=0 ws_unauthenticated_disconnects=1'
+    );
+  });
 });
 
 describe('getSocketAuthState', () => {
   it('reports user auth when feathers.user.user_id is present', () => {
     const s = makeSocket();
     asUser(s, ALICE);
-    expect(getSocketAuthState(s as any)).toEqual({ userId: ALICE, isService: false });
+    expect(getSocketAuthState(s as any)).toEqual({
+      userId: ALICE,
+      isService: false,
+      tenant: { tenant_id: 'default', source: 'static' },
+    });
   });
   it('reports service auth for handshake-tagged sockets (socket.data.isService)', () => {
     const s = makeSocket();
@@ -432,7 +1045,11 @@ describe('getSocketAuthState', () => {
     expect(getSocketAuthState(s as any)).toEqual({
       userId: null,
       isService: true,
+      tenant: { tenant_id: 'default', source: 'static' },
       terminalUserId: ALICE,
+      terminalId: TERMINAL,
+      terminalBranchId: BRANCH,
+      terminalOwnerBootId: 'daemon-a-boot',
     });
   });
   it('a terminal-scoped identity carries no _isServiceAccount (no REST RBAC bypass)', () => {
@@ -567,7 +1184,11 @@ describe('terminal:* handler authorization', () => {
       const { io } = buildHarness();
       const s = makeSocket('anon');
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'rm -rf ~\r' });
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'rm -rf ~\r',
+      });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('terminal:input rejected'));
     });
@@ -578,7 +1199,7 @@ describe('terminal:* handler authorization', () => {
       asUser(s, ALICE);
       connect(io, s);
       // Alice forges Bob's userId — must be rejected.
-      s.handlers.get('terminal:input')?.({ userId: BOB, input: ': pwn\r' });
+      s.handlers.get('terminal:input')?.({ userId: BOB, terminalId: TERMINAL, input: ': pwn\r' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('does not match'));
     });
@@ -588,14 +1209,19 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'echo hi\r' });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'echo hi\r',
+      });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: 'exec-sock',
           event: 'terminal:input',
           // The handler must re-emit with the trusted userId (not whatever
           // the client sent), so executors never see attacker-controlled ids.
-          data: { userId: ALICE, input: 'echo hi\r' },
+          data: { userId: ALICE, terminalId: TERMINAL, input: 'echo hi\r' },
         },
       ]);
     });
@@ -605,7 +1231,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'echo hi\r' });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:input')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        input: 'echo hi\r',
+      });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('web terminal disabled'));
     });
@@ -615,11 +1246,12 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
+      attachTerminal(io, s);
       // Burst = 1000 tokens. Fire 1500 events back-to-back; expect ~1000
       // through, the rest dropped. Use ≤1000 / ≥500 bounds to allow tiny
       // wall-clock refill during the loop without making the test flaky.
       for (let i = 0; i < 1500; i++) {
-        s.handlers.get('terminal:input')?.({ userId: ALICE, input: 'x' });
+        s.handlers.get('terminal:input')?.({ userId: ALICE, terminalId: TERMINAL, input: 'x' });
       }
       expect(io.emitted.length).toBeLessThanOrEqual(1100);
       expect(io.emitted.length).toBeGreaterThanOrEqual(900);
@@ -633,7 +1265,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:resize')?.({ userId: BOB, cols: 1, rows: 1 });
+      s.handlers.get('terminal:resize')?.({ userId: BOB, terminalId: TERMINAL, cols: 1, rows: 1 });
       expect(io.emitted).toEqual([]);
     });
 
@@ -642,12 +1274,18 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:resize')?.({ userId: ALICE, cols: 80, rows: 24 });
+      attachTerminal(io, s);
+      s.handlers.get('terminal:resize')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        cols: 80,
+        rows: 24,
+      });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: 'exec-sock',
           event: 'terminal:resize',
-          data: { userId: ALICE, cols: 80, rows: 24 },
+          data: { userId: ALICE, terminalId: TERMINAL, cols: 80, rows: 24 },
         },
       ]);
     });
@@ -683,12 +1321,13 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hello' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
         },
       ]);
     });
@@ -701,12 +1340,13 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hello' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hello' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
         },
       ]);
       expect(io.excludedSenders).toEqual(['exec-sock']);
@@ -717,12 +1357,12 @@ describe('terminal:* handler authorization', () => {
       // joined to `user/<id>/terminal`. The relay must reach both browsers
       // while excluding the executor that produced the output.
       const { io } = buildHarness();
-      const channel = `user/${ALICE}/terminal`;
+      const channel = terminalChannel();
 
       const exec = makeSocket('exec-sock', io);
       asServiceForUser(exec, ALICE);
       connect(io, exec);
-      exec.join(channel);
+      exec.handlers.get('join')?.(channel);
 
       const browserA = makeSocket('browser-a', io);
       asUser(browserA, ALICE);
@@ -734,9 +1374,16 @@ describe('terminal:* handler authorization', () => {
       connect(io, browserB);
       browserB.join(channel);
 
-      exec.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      exec.handlers.get('terminal:output')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        data: 'hello',
+      });
 
-      const frame = { event: 'terminal:output', data: { userId: ALICE, data: 'hello' } };
+      const frame = {
+        event: 'terminal:output',
+        data: { userId: ALICE, terminalId: TERMINAL, data: 'hello' },
+      };
       expect(browserA.received).toEqual([frame]);
       expect(browserB.received).toEqual([frame]);
       // The executor is a member of the room but must NOT receive its own output.
@@ -749,12 +1396,13 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock', io);
       asServiceHandshakeForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hi' });
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'hi' });
       expect(io.emitted).toEqual([
         {
-          channel: `user/${ALICE}/terminal`,
+          channel: terminalChannel(),
           event: 'terminal:output',
-          data: { userId: ALICE, data: 'hi' },
+          data: { userId: ALICE, terminalId: TERMINAL, data: 'hi' },
         },
       ]);
     });
@@ -764,7 +1412,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: BOB, data: 'x' });
+      s.handlers.get('terminal:output')?.({ userId: BOB, terminalId: TERMINAL, data: 'x' });
       s.handlers.get('terminal:tab')?.({ userId: BOB, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
     });
@@ -776,8 +1424,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s); // service, but no terminal scope
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
-      s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'x' });
+      s.handlers.get('terminal:exit')?.({ userId: ALICE, terminalId: TERMINAL, exitCode: 0 });
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
@@ -790,10 +1438,48 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s);
       connect(io, s);
-      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
-      s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
+      s.handlers.get('terminal:output')?.({ userId: ALICE, terminalId: TERMINAL, data: 'x' });
+      s.handlers.get('terminal:exit')?.({ userId: ALICE, terminalId: TERMINAL, exitCode: 0 });
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
+    });
+
+    it('rejects events from a stale duplicate after a replacement executor joins', () => {
+      const { io, app } = buildHarness();
+      const stale = makeSocket('stale-executor', io);
+      asServiceForUser(stale, ALICE);
+      connect(io, stale);
+      stale.handlers.get('join')?.(terminalChannel());
+
+      const replacement = makeSocket('replacement-executor', io);
+      asServiceForUser(replacement, ALICE);
+      connect(io, replacement);
+      replacement.handlers.get('join')?.(terminalChannel());
+      expect(stale.joined.has(terminalChannel())).toBe(false);
+      expect(io.emitted).toContainEqual({
+        channel: 'stale-executor',
+        event: 'terminal:shutdown',
+        data: { terminalId: TERMINAL, userId: ALICE },
+      });
+
+      io.emitted.length = 0;
+      app.emit.mockClear();
+      stale.handlers.get('terminal:exit')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        exitCode: 0,
+      });
+      expect(app.emit).not.toHaveBeenCalled();
+      expect(io.emitted).toEqual([]);
+
+      replacement.handlers.get('terminal:ready')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+      });
+      expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+      });
     });
   });
 
@@ -803,9 +1489,16 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE, sessionName: 'agor-x', tabName: 't' });
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('terminal:ready')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        sessionName: 'agor-x',
+        tabName: 't',
+      });
       expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
         userId: ALICE,
+        terminalId: TERMINAL,
         sessionName: 'agor-x',
         tabName: 't',
       });
@@ -816,8 +1509,13 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'boom' });
-      expect(app.emit).toHaveBeenCalledWith('terminal:error', { userId: ALICE, message: 'boom' });
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL, message: 'boom' });
+      expect(app.emit).toHaveBeenCalledWith('terminal:error', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        message: 'boom',
+      });
     });
 
     it("rejects an executor scoped to ALICE flipping BOB's readiness (cross-user forgery)", () => {
@@ -825,8 +1523,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: BOB });
-      s.handlers.get('terminal:error')?.({ userId: BOB, message: 'spoof' });
+      s.handlers.get('terminal:ready')?.({ userId: BOB, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: BOB, terminalId: TERMINAL, message: 'spoof' });
       expect(app.emit).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not act for'));
     });
@@ -838,8 +1536,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL });
       expect(app.emit).not.toHaveBeenCalled();
     });
 
@@ -848,8 +1546,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'spoof' });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL, message: 'spoof' });
       expect(app.emit).not.toHaveBeenCalled();
     });
 
@@ -858,8 +1556,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('terminal:ready')?.({ userId: ALICE });
-      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, terminalId: TERMINAL });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, terminalId: TERMINAL });
       expect(app.emit).not.toHaveBeenCalled();
     });
   });
@@ -869,7 +1567,7 @@ describe('terminal:* handler authorization', () => {
       const { io } = buildHarness();
       const s = makeSocket('anon');
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
+      s.handlers.get('join')?.(terminalChannel());
       expect(s.joined.size).toBe(0);
     });
 
@@ -893,8 +1591,8 @@ describe('terminal:* handler authorization', () => {
       // Authed users are auto-joined to `user:<id>` presence room on
       // connect — assert specifically that the terminal channel is NOT
       // joined rather than `joined.size === 0`.
-      s.handlers.get('join')?.(`user/${BOB}/terminal`);
-      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel(BOB));
+      expect(s.joined.has(terminalChannel(BOB))).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('join rejected'));
     });
 
@@ -903,8 +1601,19 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(true);
+    });
+
+    it('rejects the same user and terminal id in another tenant', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock');
+      asUser(s, ALICE);
+      connect(io, s);
+      const otherTenant = terminalChannel(ALICE, TERMINAL, 'tenant-b');
+      s.handlers.get('join')?.(otherTenant);
+      expect(s.joined.has(otherTenant)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('tenant does not match'));
     });
 
     it('allows a user-scoped executor to join ONLY its own user terminal channel', () => {
@@ -912,13 +1621,63 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServiceForUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      s.handlers.get('join')?.(`user/${BOB}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
+      s.handlers.get('join')?.(terminalChannel());
+      s.handlers.get('join')?.(terminalChannel(BOB));
+      expect(s.joined.has(terminalChannel())).toBe(true);
       // Scoped to ALICE — must NOT be able to join BOB's channel and harvest
       // his terminal traffic.
-      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(false);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not join'));
+      expect(s.joined.has(terminalChannel(BOB))).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('scope or owner boot fence'));
+    });
+
+    it('rejects an executor capability minted by a previous daemon boot', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('stale-executor');
+      asServiceForUser(s, ALICE);
+      s.feathers.user.terminal_owner_boot_id = 'old-boot';
+      connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('owner boot fence'));
+    });
+
+    it('rejects an executor capability for a different branch attachment', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('wrong-branch-executor');
+      asServiceForUser(s, ALICE);
+      s.feathers.user.terminal_branch_id = 'other-branch';
+      connect(io, s);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('live attachment'));
+    });
+
+    it('rejects executor reconnect after the local attachment is retired', () => {
+      const { io, app } = buildHarness();
+      const original = makeSocket('original-executor', io);
+      asServiceForUser(original, ALICE);
+      connect(io, original);
+      original.handlers.get('join')?.(terminalChannel());
+
+      app.matchesOwnedAttachment.mockReturnValue(false);
+      app.eventHandlers.get('terminal:shutdown-local')?.({
+        terminalId: TERMINAL,
+        userId: ALICE,
+      });
+
+      const reconnect = makeSocket('reconnecting-executor', io);
+      asServiceForUser(reconnect, ALICE);
+      connect(io, reconnect);
+      reconnect.handlers.get('join')?.(terminalChannel());
+      expect(reconnect.joined.has(terminalChannel())).toBe(false);
+
+      io.emitted.length = 0;
+      original.handlers.get('terminal:output')?.({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        data: 'stale',
+      });
+      expect(io.emitted).toEqual([]);
     });
 
     it('rejects a join from an unscoped service token entirely', () => {
@@ -926,8 +1685,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('exec-sock');
       asServicePostConnect(s); // service, no terminal scope
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
     });
 
     it('rejects join when allow_web_terminal is false', () => {
@@ -935,8 +1694,8 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
-      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(false);
+      s.handlers.get('join')?.(terminalChannel());
+      expect(s.joined.has(terminalChannel())).toBe(false);
     });
 
     it("rejects a user leaving another user's terminal channel", () => {
@@ -944,7 +1703,7 @@ describe('terminal:* handler authorization', () => {
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('leave')?.(`user/${BOB}/terminal`);
+      s.handlers.get('leave')?.(terminalChannel(BOB));
       expect(s.left.size).toBe(0);
     });
 
@@ -962,24 +1721,52 @@ describe('terminal:* handler authorization', () => {
   });
 
   describe('cursor presence routing', () => {
-    it('joins and leaves board presence rooms explicitly', () => {
+    it('does not deliver the same board id across tenant rooms', async () => {
       const { io } = buildHarness();
-      const s = makeSocket('alice-sock', io);
-      asUser(s, ALICE);
-      connect(io, s);
+      const tenantA = makeSocket('tenant-a', io);
+      const tenantB = makeSocket('tenant-b', io);
+      asUser(tenantA, ALICE);
+      asUser(tenantB, BOB);
+      tenantA.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+      tenantB.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+      connect(io, tenantA);
+      connect(io, tenantB);
+      await tenantA.handlers.get('presence:watch-board')?.('shared-board-id');
+      await tenantB.handlers.get('presence:watch-board')?.('shared-board-id');
 
-      s.handlers.get('presence:watch-board')?.('board-1');
-      expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+      tenantA.handlers.get('cursor-move')?.({
+        boardId: 'shared-board-id',
+        x: 1,
+        y: 2,
+        timestamp: 1,
+      });
 
-      s.handlers.get('presence:unwatch-board')?.('board-1');
-      expect(s.left.has(boardPresenceRoomName('board-1'))).toBe(true);
+      expect(tenantB.received).not.toContainEqual(
+        expect.objectContaining({ event: 'cursor-moved' })
+      );
+      expect(tenantA.joined).toContain(boardPresenceRoomName('tenant-a', 'shared-board-id'));
+      expect(tenantB.joined).toContain(boardPresenceRoomName('tenant-b', 'shared-board-id'));
     });
 
-    it('routes cursor-moved only to the active board room and emits a lightweight global presence update', () => {
+    it('joins and leaves board presence rooms explicitly', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock', io);
       asUser(s, ALICE);
       connect(io, s);
+
+      await s.handlers.get('presence:watch-board')?.('board-1');
+      expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
+
+      s.handlers.get('presence:unwatch-board')?.('board-1');
+      expect(s.left.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
+    });
+
+    it('routes cursor-moved only to the active board room and emits a lightweight global presence update', async () => {
+      const { io } = buildHarness();
+      const s = makeSocket('alice-sock', io);
+      asUser(s, ALICE);
+      connect(io, s);
+      await s.handlers.get('presence:watch-board')?.('board-1');
 
       s.handlers.get('cursor-move')?.({
         boardId: 'board-1',
@@ -989,7 +1776,7 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(io.emitted).toContainEqual({
-        channel: boardPresenceRoomName('board-1'),
+        channel: boardPresenceRoomName('default', 'board-1'),
         event: 'cursor-moved',
         data: {
           userId: ALICE,
@@ -1001,7 +1788,7 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(io.emitted).toContainEqual({
-        channel: '*',
+        channel: tenantChannelName('default'),
         event: 'presence-updated',
         data: {
           userId: ALICE,
@@ -1011,11 +1798,12 @@ describe('terminal:* handler authorization', () => {
       });
     });
 
-    it('coalesces global presence updates but still streams per-board cursor movement', () => {
+    it('coalesces global presence updates but still streams per-board cursor movement', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock', io);
       asUser(s, ALICE);
       connect(io, s);
+      await s.handlers.get('presence:watch-board')?.('board-1');
 
       s.handlers.get('cursor-move')?.({
         boardId: 'board-1',
@@ -1031,12 +1819,16 @@ describe('terminal:* handler authorization', () => {
       });
 
       expect(
-        io.emitted.filter((entry) => entry.event === 'presence-updated' && entry.channel === '*')
+        io.emitted.filter(
+          (entry) =>
+            entry.event === 'presence-updated' && entry.channel === tenantChannelName('default')
+        )
       ).toHaveLength(1);
       expect(
         io.emitted.filter(
           (entry) =>
-            entry.event === 'cursor-moved' && entry.channel === boardPresenceRoomName('board-1')
+            entry.event === 'cursor-moved' &&
+            entry.channel === boardPresenceRoomName('default', 'board-1')
         )
       ).toHaveLength(2);
     });
@@ -1050,16 +1842,16 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     asServiceForUser(s, ALICE);
     connect(io, s);
     s.handlers.get('presence:watch-board')?.('board-1');
-    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(false);
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(false);
   });
 
-  it('DOES join a normal authenticated user to a board presence room', () => {
+  it('DOES join a normal authenticated user to a board presence room', async () => {
     const { io } = buildHarness();
     const s = makeSocket('alice-sock');
     asUser(s, ALICE);
     connect(io, s);
-    s.handlers.get('presence:watch-board')?.('board-1');
-    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+    await s.handlers.get('presence:watch-board')?.('board-1');
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(true);
   });
 
   it('drops cursor-move / cursor-leave from a terminal-executor socket (no broadcast)', () => {
@@ -1072,13 +1864,60 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     expect(io.emitted).toEqual([]);
   });
 
-  it('still broadcasts cursor-move from a normal user', () => {
+  it('still broadcasts cursor-move from a normal user', async () => {
     const { io } = buildHarness();
     const s = makeSocket('alice-sock', io);
     asUser(s, ALICE);
     connect(io, s);
+    await s.handlers.get('presence:watch-board')?.('board-1');
     s.handlers.get('cursor-move')?.({ boardId: 'board-1', x: 1, y: 2, timestamp: 1 });
     expect(io.emitted.some((e) => e.event === 'cursor-moved')).toBe(true);
+  });
+
+  it('does not grant or emit to a board rejected by Feathers authorization', async () => {
+    const { app, io } = buildHarness();
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { get: vi.fn(async () => Promise.reject(new Error('forbidden'))) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const s = makeSocket('alice-sock', io);
+    asUser(s, ALICE);
+    connect(io, s);
+
+    await s.handlers.get('presence:watch-board')?.('private-board');
+    s.handlers.get('cursor-move')?.({
+      boardId: 'private-board',
+      x: 1,
+      y: 2,
+      timestamp: 1,
+    });
+
+    expect(s.joined.has(boardPresenceRoomName('default', 'private-board'))).toBe(false);
+    expect(io.emitted).toEqual([]);
+  });
+
+  it('does not restore a board room when logout races an in-flight authorization', async () => {
+    const { app, io } = buildHarness();
+    let resolveBoard!: (value: { board_id: string }) => void;
+    const boardLookup = new Promise<{ board_id: string }>((resolve) => {
+      resolveBoard = resolve;
+    });
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { get: vi.fn(async () => boardLookup) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const s = makeSocket('alice-sock', io);
+    asUser(s, ALICE);
+    connect(io, s);
+    const acknowledge = vi.fn();
+
+    const watch = s.handlers.get('presence:watch-board')?.('board-1', acknowledge);
+    (app as any).eventHandlers.get('logout')?.({}, { connection: s.feathers });
+    resolveBoard({ board_id: 'board-1' });
+    await watch;
+
+    expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(false);
+    expect(acknowledge).toHaveBeenCalledWith({ ok: false });
   });
 });
 
@@ -1297,8 +2136,60 @@ describe('configureChannels tenant isolation', () => {
     expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
   });
 
+  it('revokes prior tenant and session-stream channels before replacing authentication', () => {
+    const { app, handlers, joins, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+    const login = (tenantId: string, userId: string) =>
+      handlers.get('login')?.(
+        {
+          user: { user_id: userId },
+          authentication: { payload: { tenant_id: tenantId } },
+        },
+        { connection }
+      );
+
+    login('tenant-a', ALICE);
+    joins.set('session-stream:session-a', [connection]);
+    login('tenant-b', BOB);
+
+    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
+    expect(leaves.get('session-stream:session-a')).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-b'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-b', BOB))).toEqual([connection]);
+    expect(connection.tenant).toEqual({ tenant_id: 'tenant-b', source: 'auth_claim' });
+  });
+
+  it('revokes prior broadcast channels when authentication changes to a terminal executor', () => {
+    const { app, handlers, joins, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.({ user: { user_id: ALICE }, authentication: {} }, { connection });
+    handlers.get('login')?.(
+      { user: { user_id: 'executor-service', _isTerminalExecutor: true } },
+      { connection }
+    );
+
+    expect(joins.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get('authenticated')).toEqual([connection, connection]);
+    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
+    expect(connection.tenant).toBeUndefined();
+    expect(connection.data.tenant).toBeUndefined();
+  });
+
   it('leaves tenant-scoped channels on logout', () => {
-    const { app, handlers, leaves } = makeChannelHarness();
+    const { app, handlers, joins, leaves } = makeChannelHarness();
     configureChannels(app, {
       multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
     });
@@ -1306,6 +2197,9 @@ describe('configureChannels tenant isolation', () => {
       data: { tenant: { tenant_id: 'tenant-a', source: 'static' } },
       feathers: { user: { user_id: ALICE } },
     } as any;
+    // These channels exist only after an authenticated join in real Feathers.
+    joins.set(tenantChannelName('tenant-a'), [connection]);
+    joins.set(tenantUserChannelName('tenant-a', ALICE), [connection]);
 
     handlers.get('logout')?.({}, { connection });
 

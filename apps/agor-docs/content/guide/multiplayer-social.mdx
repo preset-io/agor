@@ -1,6 +1,6 @@
 ---
 title: Multiplayer & Social
-description: "Real-time collaboration on Agor boards: live cursors, facepile, scoped comments, attention pulse, and shared multiplayer terminal sessions."
+description: 'Real-time collaboration on Agor boards: live cursors, facepile, scoped comments, attention pulse, and shared multiplayer terminal sessions.'
 ---
 
 # Multiplayer & Social
@@ -45,7 +45,13 @@ Comments create a **persistent conversation layer** on top of your AI work:
 <img
   src="/screenshots/marketing/agor-marketing-social-comment-context.png"
   alt="Agor board comment attached to a branch card, showing a teammate discussing multiplayer presence"
-  style={{ maxWidth: '860px', width: '100%', borderRadius: '12px', marginTop: '12px', marginBottom: '20px' }}
+  style={{
+    maxWidth: '860px',
+    width: '100%',
+    borderRadius: '12px',
+    marginTop: '12px',
+    marginBottom: '20px',
+  }}
 />
 
 - Thread replies for focused discussion
@@ -98,7 +104,7 @@ Combined with the **[favicon status dots](/guide/rich-chat-ux#-favicon-status-in
 
 Terminal sessions are branch-scoped. Users only see terminals for branches they're actively using.
 
-> **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `insulated` or `strict` mode in shared environments. See [Security](/security).
+> **Privacy note:** With `unix_user_mode: simple` (the default), the terminal runs as the daemon user and gives `member+` users access to daemon-readable files (config, DB, JWT secret). Use `sandbox` mode in shared Linux environments. See [Security](/security).
 
 ---
 
@@ -143,7 +149,7 @@ When teammates share a board, sessions still execute under a specific user's ide
 
 - The session's Anthropic / OpenAI key is the **session creator's** key (billing follows usage).
 - Env vars merge: `gateway/channel → user globals → session-scoped`, so a Slack-driven session run as you carries _your_ `GITHUB_TOKEN`, not a shared bot token.
-- In `unix_user_mode: strict`, the executor process literally runs as the user's Unix account.
+- In `unix_user_mode: sandbox`, the executor runs as the daemon user inside an RBAC-derived filesystem boundary.
 
 This is what makes co-locating teams on one Agor instance work without secret-sharing: everyone keeps their own credentials, but the boards, branches, and conversations are shared.
 
@@ -157,11 +163,15 @@ Agor speaks the full MCP transport matrix:
 
 - **`stdio`**: local binaries (`@modelcontextprotocol/server-filesystem`, `@modelcontextprotocol/server-github`, etc.).
 - **`sse` / `http`**: remote HTTP-based MCP servers, with header-based auth or OAuth 2.1.
-- **OAuth 2.1 with auto-discovery**: Agor probes both OAuth 2.0 and OIDC discovery endpoints, completes the authorization code flow in-browser, and persists refresh tokens encrypted in the daemon database.
+- **Strict MCP OAuth by default**: Agor binds protected-resource and authorization-server metadata, sends the protected `resource`, requires PKCE S256, validates the issuer returned to the callback, and requires HTTPS endpoints. Exact loopback HTTP is allowed only for standalone/SQLite development; PostgreSQL and hosted deployments reject it. A narrow **Legacy compatibility** setting enables non-standard discovery only for a server that needs it; Agor never silently downgrades.
+- **Client registration**: pre-registering an OAuth client is preferred. Dynamic Client Registration is disabled by default and can be enabled only as an explicit per-server fallback.
+- **Durable PostgreSQL grants**: access/refresh tokens and the client credentials bound to a grant are encrypted with the deployment master secret in tenant-scoped rows. Protect the database, backups, and `AGOR_MASTER_SECRET` as credential-bearing infrastructure.
 
 ### Per-user, not per-instance
 
-Each user authenticates **their own** OAuth grant per MCP server. When a session attaches an OAuth-secured MCP server, Agor injects the _acting user's_ token, never another user's. Token refresh is handled transparently; revocation is per-user, per-server. The UI surfaces auth state with a `userAuthenticatedMcpServerIds` set so you can see at a glance which servers you're connected to.
+Each user authenticates **their own** OAuth grant per MCP server. When a session attaches an OAuth-secured MCP server, Agor injects the _acting user's_ token, never another user's. PostgreSQL coordinates rotating-token refresh across daemons. The UI refetches durable state after realtime hints, so a callback handled by another daemon still converges correctly.
+
+Per-user grants are self-service. A server configured with a **shared** grant uses one workspace credential; only a current admin can start, complete, refresh/replace, or disconnect it. Disconnect removes the grant from Agor but **does not revoke it at the OAuth provider**. Use the provider's security settings when provider-side revocation is required.
 
 This is how a shared Linear or Slack MCP server can sit on the team's Agor instance and still respect each member's individual permissions. Your prompt against Linear runs with _your_ Linear scope, your teammate's runs with theirs.
 

@@ -3,6 +3,7 @@ import type {
   Artifact,
   Board,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -112,13 +113,7 @@ export interface SettingsModalProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteBranch?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateBranch?: (
@@ -348,6 +343,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // ADMIN role on writes for both services (see register-hooks.ts); hiding
   // the menu entries here avoids showing members a tab where every action
   // would 403.
+  //
+  // The MCP Servers tab is offered to everyone. What a member may do there is
+  // the tenant's `mcp_member_policy`, which members may read precisely so a
+  // refusal is legible to the person it refuses; the tab shows them that
+  // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Menu items for left sidebar navigation.
@@ -620,6 +620,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           <MCPServersTable
             mcpServerById={mcpServerById}
             client={client}
+            userById={userById}
+            currentUser={currentUser}
             onCreate={onCreateMCPServer}
             onDelete={onDeleteMCPServer}
           />

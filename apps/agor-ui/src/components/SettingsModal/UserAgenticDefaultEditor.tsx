@@ -1,43 +1,72 @@
-import type { AgenticToolName, AgenticToolPreset, AgorClient } from '@agor-live/client';
-import { Alert, Form, Select, Typography } from 'antd';
-import { useEffect, useState } from 'react';
-import { useAgorStore } from '../../store/agorStore';
+import {
+  agenticToolRequiresModelSelection,
+  getAgenticToolModelConfiguration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
+import type { AgenticToolName, AgorClient } from '@agor-live/client';
+import { Alert, Button, Form, Select, Typography } from 'antd';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { useAgenticConfigurationSources } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 
 interface Props {
   tool: AgenticToolName;
   client: AgorClient | null;
+  modelCatalogClient: AgorClient | null;
   isAdmin: boolean;
 }
 
-/** User-level default strategy. Runtime resources resolve this once, then store a concrete selection. */
-export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmin }) => {
+/** User-level default strategy. Runtime resources resolve this for their stable execution owner. */
+export const UserAgenticDefaultEditor: React.FC<Props> = ({
+  tool,
+  client,
+  modelCatalogClient,
+  isAdmin,
+}) => {
   const form = Form.useFormInstance();
   const source = Form.useWatch('defaultSelectionSource', form) ?? 'workspace_default';
-  const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
-  const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(tool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false;
-
-  useEffect(() => {
-    if (!client) return;
-    let active = true;
-    void client
-      .service('agentic-tool-presets')
-      .find({ query: { tool } })
-      .then((result) => {
-        if (active) setPresets(Array.isArray(result) ? result : result.data);
-      });
-    return () => {
-      active = false;
-    };
-  }, [client, tool]);
-
+  const { presets, inlineAllowed, loaded, loadError, loading, retry } =
+    useAgenticConfigurationSources({ tool, client });
   const workspaceDefault = presets.find((preset) => preset.is_default);
+  const requiresModelSelection = agenticToolRequiresModelSelection(tool);
+  const catalogUnavailable = tool === 'opencode' && modelCatalogClient === null;
+  const missingSelectionError =
+    getAgenticToolModelConfiguration(tool)?.missingSelectionError ?? 'Choose a model';
+  const hasCompleteModel = (presetId?: string) => {
+    const preset = presets.find((candidate) => candidate.preset_id === presetId);
+    return Boolean(
+      preset && isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig)
+    );
+  };
+  const workspaceDefaultUsable = Boolean(
+    workspaceDefault &&
+      (!requiresModelSelection ||
+        isAgenticToolModelSelectionComplete(tool, workspaceDefault.configuration.modelConfig))
+  );
 
   return (
     <>
-      <Form.Item name="defaultSelectionSource" label="Default for new configurations">
+      <Form.Item
+        name="defaultSelectionSource"
+        label="Default for new configurations"
+        rules={[
+          {
+            validator: (_, nextSource) =>
+              nextSource === 'inline' && catalogUnavailable
+                ? Promise.reject(
+                    new Error('OpenCode model selection is unavailable for this execution owner')
+                  )
+                : loaded &&
+                    !loadError &&
+                    nextSource === 'workspace_default' &&
+                    requiresModelSelection &&
+                    !workspaceDefaultUsable
+                  ? Promise.reject(new Error(missingSelectionError))
+                  : Promise.resolve(),
+          },
+        ]}
+      >
         <Select
+          loading={loading}
           options={[
             {
               value: 'workspace_default',
@@ -49,21 +78,39 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
             {
               value: 'inline',
               label: 'Define my own configuration',
-              disabled: !inlineAllowed,
+              disabled: !inlineAllowed || catalogUnavailable,
             },
           ]}
         />
       </Form.Item>
 
-      {source === 'workspace_default' && !workspaceDefault && (
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          title="Unable to load configuration presets"
+          action={
+            <Button size="small" onClick={retry}>
+              Retry
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      {source === 'workspace_default' && loaded && !workspaceDefaultUsable && (
         <Alert
           type="warning"
           showIcon
-          title="No workspace default is configured"
+          title={
+            workspaceDefault
+              ? 'The workspace default is incomplete for this tool'
+              : 'No workspace default is configured'
+          }
           description={
             isAdmin
-              ? 'Create a preset and mark it as the default in Workspace Settings → Agentic Tools.'
-              : 'Choose another option or ask a workspace administrator to configure a default.'
+              ? 'Create a complete preset and mark it as the default in Workspace Settings → Agentic Tools.'
+              : 'Choose another option or ask a workspace administrator to configure a complete default.'
           }
           style={{ marginBottom: 16 }}
         />
@@ -73,20 +120,49 @@ export const UserAgenticDefaultEditor: React.FC<Props> = ({ tool, client, isAdmi
         <Form.Item
           name="defaultPresetId"
           label="Preset"
-          rules={[{ required: true, message: 'Choose a preset' }]}
+          rules={[
+            { required: true, message: 'Choose a preset' },
+            {
+              validator: (_, presetId) =>
+                loaded &&
+                !loadError &&
+                requiresModelSelection &&
+                presetId &&
+                !hasCompleteModel(presetId)
+                  ? Promise.reject(new Error(missingSelectionError))
+                  : Promise.resolve(),
+            },
+          ]}
         >
           <Select
-            options={presets.map((preset) => ({ value: preset.preset_id, label: preset.name }))}
+            loading={loading}
+            options={presets.map((preset) => ({
+              value: preset.preset_id,
+              label: preset.name,
+              disabled:
+                requiresModelSelection &&
+                !isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig),
+            }))}
           />
         </Form.Item>
       )}
 
-      {source === 'inline' ? (
-        <AgenticToolConfigForm agenticTool={tool} showHelpText={false} client={client} />
+      {source === 'inline' && catalogUnavailable ? (
+        <Alert
+          type="warning"
+          showIcon
+          title="OpenCode model selection is unavailable for this execution owner"
+        />
+      ) : source === 'inline' ? (
+        <AgenticToolConfigForm
+          agenticTool={tool}
+          showHelpText={false}
+          client={modelCatalogClient}
+        />
       ) : (
         <Typography.Paragraph type="secondary">
-          New resources resolve this choice when they are created. Existing sessions, schedules, and
-          gateway channels are not rewritten.
+          New resources resolve this choice using their stable execution owner. Existing sessions,
+          schedules, and gateway channels are not rewritten.
         </Typography.Paragraph>
       )}
     </>

@@ -18,7 +18,10 @@
  * regardless of tool match.
  */
 
-import { resolveModelConfigWithFallback } from '../models/resolve-config.js';
+import {
+  type AgenticToolModelConfigurationPolicy,
+  resolveModelConfigWithFallback,
+} from '../models/resolve-config.js';
 import {
   type AgenticToolName,
   isAgenticToolName,
@@ -50,6 +53,8 @@ export interface ResolveChildSessionConfigArgs {
   overrides?: ChildSessionOverrides;
   /** Override `new Date()` for deterministic tests. */
   now?: Date;
+  /** Tool-owned model semantics supplied by the integration registry. */
+  modelConfiguration?: AgenticToolModelConfigurationPolicy;
 }
 
 export interface ResolvedChildSessionConfig {
@@ -66,7 +71,7 @@ export interface ResolvedChildSessionConfig {
 export function resolveChildSessionConfig(
   args: ResolveChildSessionConfigArgs
 ): ResolvedChildSessionConfig {
-  const { parent, user, overrides, now } = args;
+  const { parent, user, overrides, now, modelConfiguration } = args;
   const requestedTool = args.effectiveTool ?? parent.agentic_tool;
   if (!isAgenticToolName(requestedTool)) {
     throw new Error(
@@ -102,7 +107,7 @@ export function resolveChildSessionConfig(
       sameTool ? parent.model_config : undefined,
       userToolDefaults?.modelConfig,
     ],
-    { now }
+    { now, policy: modelConfiguration }
   );
 
   return { permission_config, model_config };

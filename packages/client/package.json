@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/client",
-  "version": "0.23.4",
+  "version": "0.25.2",
   "description": "TypeScript client for connecting to the Agor daemon",
   "type": "module",
   "main": "./dist/index.js",
@@ -44,14 +44,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@feathersjs/authentication-client": "^5.0.45",
-    "@feathersjs/feathers": "^5.0.45",
-    "@feathersjs/rest-client": "^5.0.45",
-    "@feathersjs/socketio-client": "^5.0.45",
+    "@feathersjs/authentication-client": "^5.0.46",
+    "@feathersjs/feathers": "^5.0.46",
+    "@feathersjs/rest-client": "^5.0.46",
+    "@feathersjs/socketio-client": "^5.0.46",
     "js-yaml": "^5.2.3",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",

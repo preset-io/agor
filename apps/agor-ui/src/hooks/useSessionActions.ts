@@ -21,7 +21,7 @@ import { useState } from 'react';
 import type { NewSessionConfig } from '../components/NewSessionModal';
 
 interface UseSessionActionsResult {
-  createSession: (config: NewSessionConfig) => Promise<Session | null>;
+  createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
   archiveSession: (sessionId: SessionID) => Promise<Session | null>;
@@ -46,10 +46,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const createSession = async (config: NewSessionConfig): Promise<Session | null> => {
+  const createSession = async (config: NewSessionConfig): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      throw new Error('Client not connected');
     }
 
     try {
@@ -106,7 +106,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to create session';
       setError(message);
       console.error('Failed to create session:', err);
-      return null;
+      throw err;
     } finally {
       setCreating(false);
     }
@@ -130,9 +130,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       // Send the prompt to the forked session to actually execute it
       // Skip if prompt is empty (allows forking without initial prompt)
       if (prompt.trim()) {
-        await client.sessions.prompt(forkedSession.session_id, prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(forkedSession.session_id, prompt);
       }
 
       return forkedSession;
@@ -170,9 +168,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Send the prompt to the forked session
       if (prompt.trim()) {
-        await client.sessions.prompt(forkedSession.session_id, prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(forkedSession.session_id, prompt);
       }
 
       return forkedSession;
@@ -206,9 +202,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       // Send the prompt to the spawned session to actually execute it
       if (config.prompt?.trim()) {
-        await client.sessions.prompt(spawnedSession.session_id, config.prompt, {
-          messageSource: 'agor',
-        });
+        await client.sessions.prompt(spawnedSession.session_id, config.prompt);
       }
 
       return spawnedSession;

@@ -9,6 +9,7 @@ import type { BranchID, MCPServer, MCPServerID, Session, SessionID, UUID } from 
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { MCPServerNotUsableError } from '../../mcp/ownership';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { BranchRepository } from './branches';
@@ -132,6 +133,17 @@ describe('SessionMCPServerRepository.addServer', () => {
     expect(servers[0].mcp_server_id).toBe(server1.mcp_server_id);
   });
 
+  dbTest('deduplicates five concurrent attachments', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await Promise.all(
+      Array.from({ length: 5 }, () => repo.addServer(session.session_id, server1.mcp_server_id))
+    );
+
+    expect(await repo.listServers(session.session_id)).toHaveLength(1);
+  });
+
   dbTest('should re-enable disabled server when added again', async ({ db }) => {
     const { session, server1 } = await setupTestData(db);
     const repo = new SessionMCPServerRepository(db);
@@ -178,6 +190,55 @@ describe('SessionMCPServerRepository.addServer', () => {
     expect(serverIds).toContain(server1.mcp_server_id);
     expect(serverIds).toContain(server2.mcp_server_id);
     expect(serverIds).toContain(server3.mcp_server_id);
+  });
+
+  dbTest('should reject a private server owned by another session creator', async ({ db }) => {
+    const { session } = await setupTestData(db);
+    const mcpServerRepo = new MCPServerRepository(db);
+    const privateServer = await mcpServerRepo.create(
+      createMCPServerData({ owner_user_id: 'another-user' as UUID, scope: 'session' })
+    );
+    const repo = new SessionMCPServerRepository(db);
+
+    await expect(repo.addServer(session.session_id, privateServer.mcp_server_id)).rejects.toThrow(
+      MCPServerNotUsableError
+    );
+    expect(await repo.listServers(session.session_id)).toEqual([]);
+  });
+
+  dbTest(
+    'does not partially replace a session when a private server is rejected',
+    async ({ db }) => {
+      const { session, server1 } = await setupTestData(db);
+      const mcpServerRepo = new MCPServerRepository(db);
+      const privateServer = await mcpServerRepo.create(
+        createMCPServerData({ owner_user_id: 'another-user' as UUID, scope: 'session' })
+      );
+      const repo = new SessionMCPServerRepository(db);
+      await repo.addServer(session.session_id, server1.mcp_server_id);
+
+      await expect(
+        repo.setServers(session.session_id, [privateServer.mcp_server_id])
+      ).rejects.toThrow(MCPServerNotUsableError);
+      expect(
+        (await repo.listServers(session.session_id)).map((server) => server.mcp_server_id)
+      ).toEqual([server1.mcp_server_id]);
+    }
+  );
+
+  dbTest('deduplicates the desired set before atomically replacing links', async ({ db }) => {
+    const { session, server1, server2 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await repo.setServers(session.session_id, [
+      server1.mcp_server_id,
+      server1.mcp_server_id,
+      server2.mcp_server_id,
+    ]);
+
+    expect(
+      (await repo.listServers(session.session_id)).map((server) => server.mcp_server_id)
+    ).toEqual([server1.mcp_server_id, server2.mcp_server_id]);
   });
 });
 

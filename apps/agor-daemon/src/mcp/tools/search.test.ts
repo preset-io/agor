@@ -1,6 +1,7 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { ToolDispatcher } from '../register-tool-proxy.js';
 import { ToolRegistry } from '../tool-registry.js';
 import { registerSearchTools } from './search.js';
 
@@ -24,7 +25,10 @@ function textResult(data: unknown) {
   };
 }
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<{
+type ToolHandler = (
+  args: Record<string, unknown>,
+  requestContext?: unknown
+) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -42,18 +46,20 @@ type ToolConfig = {
 function captureExecuteTool(targetHandler = vi.fn(async (args: unknown) => textResult({ args }))) {
   let config: ToolConfig | undefined;
   let handler: ToolHandler | undefined;
+  const dispatcher = new ToolDispatcher();
+  const requestContext = { requestId: 'test-request' };
+  dispatcher.register(
+    'agor_sessions_list',
+    {
+      inputSchema: z.object({
+        branchId: z.string().optional(),
+        limit: z.number().optional(),
+      }),
+    },
+    targetHandler
+  );
 
   const fakeServer = {
-    _registeredTools: {
-      agor_sessions_list: {
-        enabled: true,
-        inputSchema: z.object({
-          branchId: z.string().optional(),
-          limit: z.number().optional(),
-        }),
-        handler: targetHandler,
-      },
-    },
     registerTool: (name: string, cfg: ToolConfig, cb: ToolHandler) => {
       if (name === 'agor_execute_tool') {
         config = cfg;
@@ -62,10 +68,11 @@ function captureExecuteTool(targetHandler = vi.fn(async (args: unknown) => textR
     },
   } as unknown as McpServer;
 
-  registerSearchTools(fakeServer, new ToolRegistry());
+  registerSearchTools(fakeServer, new ToolRegistry(), dispatcher);
 
   if (!config || !handler) throw new Error('agor_execute_tool was not registered');
-  return { config, handler, targetHandler };
+  const invoke = (args: Record<string, unknown>) => handler!(args, requestContext);
+  return { config, handler: invoke, targetHandler, requestContext };
 }
 
 function captureSearchTools(registry = new ToolRegistry()) {
@@ -83,7 +90,7 @@ function captureSearchTools(registry = new ToolRegistry()) {
 
 describe('agor_execute_tool', () => {
   it('accepts the canonical tool_name field and forwards nested arguments', async () => {
-    const { handler, targetHandler } = captureExecuteTool();
+    const { handler, targetHandler, requestContext } = captureExecuteTool();
 
     const result = await handler({
       tool_name: 'agor_sessions_list',
@@ -91,7 +98,7 @@ describe('agor_execute_tool', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(targetHandler).toHaveBeenCalledWith({ branchId: 'branch-1' }, {});
+    expect(targetHandler).toHaveBeenCalledWith({ branchId: 'branch-1' }, requestContext);
   });
 
   it('rejects camelCase toolName with a clear schema error', () => {
@@ -122,7 +129,7 @@ describe('agor_execute_tool', () => {
   });
 
   it('does not leak proxy-only fields into flattened target-tool arguments', async () => {
-    const { handler, targetHandler } = captureExecuteTool();
+    const { handler, targetHandler, requestContext } = captureExecuteTool();
 
     const result = await handler({
       tool_name: 'agor_sessions_list',
@@ -131,7 +138,7 @@ describe('agor_execute_tool', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(targetHandler).toHaveBeenCalledWith({ branchId: 'branch-1', limit: 5 }, {});
+    expect(targetHandler).toHaveBeenCalledWith({ branchId: 'branch-1', limit: 5 }, requestContext);
   });
 
   it('points invalid tool names to search and details discovery flow', async () => {

@@ -10,16 +10,18 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
 import type { AgorConfig } from '@agor/core/config';
-import { loadConfig, loadConfigFromFile } from '@agor/core/config';
+import { resolveDaemonUrl } from '@agor/core/config';
+import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
-import {
-  formatPendingMigrationsMessage,
-  getPendingMigrationsInfo,
-} from '../../lib/check-migrations.js';
+import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
+import { loadDaemonConfigWithDeploymentIdentity } from '../../lib/daemon-deployment-config.js';
 import { getDaemonPid, startDaemon } from '../../lib/daemon-manager.js';
+import { probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonStart extends Command {
   static description = 'Start the Agor daemon in the background';
@@ -43,10 +45,37 @@ export default class DaemonStart extends Command {
   };
 
   async run(): Promise<void> {
+    try {
+      await this.start();
+    } catch (error) {
+      // oclif signals a clean exit by throwing; let those through untouched.
+      if (error && typeof error === 'object' && 'oclif' in error) throw error;
+
+      // Anything else that stops a start is a diagnosable local-install problem,
+      // and `agor doctor` is the one command that inspects all of them. Point
+      // there once, here, instead of teaching every failure path to do it.
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(chalk.red('✗ Failed to start the daemon'));
+      this.log('');
+      this.log(message);
+      // Failures that already name their own remedy don't need the generic one.
+      if (!message.includes('agor doctor')) {
+        this.log('');
+        this.log(chalk.dim('Diagnose and repair the local installation with:'));
+        this.log(`  ${chalk.cyan('agor doctor')}`);
+      }
+      this.exit(1);
+    }
+  }
+
+  private async start(): Promise<void> {
     const { flags } = await this.parse(DaemonStart);
 
     // 1. Load & validate config
-    const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();
+    const result = await loadDaemonConfigWithDeploymentIdentity(flags.config);
+    const config = result.config;
+    await assertLocalContextUnlocked(config);
+    const daemonUrl = resolveDaemonUrl(config);
 
     // 2. Check if already running
     const existingPid = getDaemonPid();
@@ -54,19 +83,30 @@ export default class DaemonStart extends Command {
       this.log(chalk.yellow(`Daemon already running (PID ${existingPid})`));
       return;
     }
+    if ((await probeAgorDaemon(daemonUrl)).running) {
+      this.error(
+        `An Agor daemon is already running at ${daemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
+      );
+    }
 
-    // 3. Fail fast on pending migrations. The daemon performs this same
+    // 3. Fail before detaching when an upgrade still needs package reconciliation.
+    await this.failOnUnreadyAgenticTools(config);
+
+    // 4. Fail fast on pending migrations. The daemon performs this same
     //    check on startup, but in background mode its stderr is redirected
     //    into ~/.agor/logs/daemon.log — so the error would be invisible at
     //    the user's terminal. Surface it inline here before spawning.
-    await this.failOnPendingMigrations();
+    await this.failOnPendingMigrations(resolveDatabaseUrl({ config }));
 
-    // 4. Foreground mode: import and run in-process (blocks forever)
+    // 5. Foreground mode: import and run in-process (blocks forever)
     if (flags.foreground) {
       this.log(chalk.bold('Starting Agor daemon in foreground...'));
       try {
         const daemonModule = await this.importDaemonModule();
-        await daemonModule.startDaemon({ config });
+        await daemonModule.startDaemon({
+          config,
+          ...(flags.config ? { configPath: resolve(flags.config) } : {}),
+        });
       } catch (error) {
         this.log(chalk.red('Failed to start daemon:'));
         this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
@@ -75,7 +115,7 @@ export default class DaemonStart extends Command {
       return;
     }
 
-    // 5. Background mode (default): spawn detached process
+    // 6. Background mode (default): spawn detached process
     this.log(chalk.bold('Starting Agor daemon...'));
 
     const daemonPath = this.resolveDaemonEntrypoint();
@@ -87,7 +127,10 @@ export default class DaemonStart extends Command {
     }
 
     try {
-      const pid = startDaemon(daemonPath, env);
+      const pid = startDaemon(daemonPath, env, {
+        daemonUrl,
+        ...(flags.config ? { configPath: resolve(flags.config) } : {}),
+      });
       this.log(chalk.green(`Daemon started (PID ${pid})`));
       this.log(chalk.dim('  Logs: ~/.agor/logs/daemon.log'));
     } catch (error) {
@@ -97,10 +140,22 @@ export default class DaemonStart extends Command {
     }
   }
 
-  private async failOnPendingMigrations(): Promise<void> {
-    let info: Awaited<ReturnType<typeof getPendingMigrationsInfo>>;
+  private async failOnUnreadyAgenticTools(config: AgorConfig): Promise<void> {
     try {
-      info = await getPendingMigrationsInfo();
+      await assertConfiguredAgenticToolsReady(config);
+    } catch (error) {
+      this.error(
+        chalk.red(
+          `✗ Agentic tools are not ready\n${error instanceof Error ? error.message : String(error)}`
+        )
+      );
+    }
+  }
+
+  private async failOnPendingMigrations(dbUrl: string): Promise<void> {
+    let blocker: string | null;
+    try {
+      blocker = await getDaemonStartMigrationBlocker(dbUrl);
     } catch (error) {
       // Don't swallow the failure silently — the old behavior (pre-regression)
       // was to warn and continue, but that is what led to the daemon dying in
@@ -114,11 +169,11 @@ export default class DaemonStart extends Command {
       );
     }
 
-    if (info === null) return;
+    if (blocker === null) return;
 
     // Write directly to stderr so the message is not swallowed by oclif's
     // log level filters and is clearly separated from any stdout consumers.
-    process.stderr.write(chalk.red(formatPendingMigrationsMessage(info)));
+    process.stderr.write(chalk.red(blocker));
     this.exit(1);
   }
 
@@ -152,15 +207,5 @@ export default class DaemonStart extends Command {
     // Resolve to compiled daemon entrypoint
     const here = dirname(fileURLToPath(import.meta.url));
     return resolve(here, '../../../agor-daemon/dist/main.js');
-  }
-
-  private async loadConfigFromPath(configPath: string): Promise<AgorConfig> {
-    try {
-      return await loadConfigFromFile(configPath);
-    } catch (error) {
-      this.log(chalk.red(`Failed to load config from ${configPath}:`));
-      this.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
-      this.exit(1);
-    }
   }
 }

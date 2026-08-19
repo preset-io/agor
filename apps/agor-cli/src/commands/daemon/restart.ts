@@ -2,12 +2,23 @@
  * `agor daemon restart` - Restart daemon
  */
 
-import { isDaemonRunning } from '@agor-live/client';
-import { getDaemonUrl } from '@agor-live/client/config';
+import { assertConfiguredAgenticToolsReady } from '@agor/core/agentic-integrations';
+import { type AgorConfig, getDaemonUrl, resolveDaemonUrl } from '@agor/core/config';
+import { resolveDatabaseUrl } from '@agor/core/db';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
+import { getDaemonStartMigrationBlocker } from '../../lib/check-migrations.js';
 import { getDaemonPath, isInstalledPackage } from '../../lib/context.js';
-import { startDaemon, stopDaemon } from '../../lib/daemon-manager.js';
+import { loadDaemonConfigWithDeploymentIdentity } from '../../lib/daemon-deployment-config.js';
+import {
+  getDaemonPid,
+  getManagedDaemonIdentity,
+  startDaemon,
+  stopDaemon,
+} from '../../lib/daemon-manager.js';
+import { isExpectedManagedDaemon, probeAgorDaemon } from '../../lib/daemon-probe.js';
+import { confirmLegacyManagedDaemonStop } from '../../lib/legacy-daemon-stop.js';
+import { assertLocalContextUnlocked } from '../../lib/local-context.js';
 
 export default class DaemonRestart extends Command {
   static description = 'Restart daemon';
@@ -37,9 +48,75 @@ export default class DaemonRestart extends Command {
       this.exit(1);
     }
 
+    // Validate the PID first so a crashed daemon cannot leave a stale config
+    // or URL record that influences the replacement process.
+    const existingPid = getDaemonPid();
+    const identity = getManagedDaemonIdentity();
+    let restartConfig: AgorConfig;
     try {
+      const result = await loadDaemonConfigWithDeploymentIdentity(identity?.configPath);
+      restartConfig = result.config;
+    } catch (error) {
+      this.log(chalk.red('✗ Failed to load daemon configuration'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+    await assertLocalContextUnlocked(restartConfig);
+
+    // Validate the new package set before stopping a currently healthy daemon.
+    try {
+      await assertConfiguredAgenticToolsReady(restartConfig);
+    } catch (error) {
+      this.log(chalk.red('✗ Agentic tools are not ready'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+
+    let migrationBlocker: string | null;
+    try {
+      migrationBlocker = await getDaemonStartMigrationBlocker(
+        resolveDatabaseUrl({ config: restartConfig })
+      );
+    } catch (error) {
+      this.log(chalk.red('✗ Failed to check database migration status'));
+      this.log(error instanceof Error ? error.message : String(error));
+      this.exit(1);
+    }
+    if (migrationBlocker) {
+      process.stderr.write(chalk.red(migrationBlocker));
+      this.exit(1);
+    }
+
+    const oldDaemonUrl = identity?.daemonUrl ?? (await getDaemonUrl());
+    const replacementDaemonUrl = resolveDaemonUrl(restartConfig);
+
+    try {
+      if (
+        replacementDaemonUrl !== oldDaemonUrl &&
+        (await probeAgorDaemon(replacementDaemonUrl)).running
+      ) {
+        throw new Error(
+          `An Agor daemon is already running at the replacement URL ${replacementDaemonUrl}. Stop its service, container, or foreground terminal before restarting.`
+        );
+      }
+
       // Stop daemon if running
-      const stopped = stopDaemon();
+      let stopped = false;
+      if (existingPid !== null) {
+        const managedInstanceId = identity?.instanceId;
+        if (!identity) {
+          await confirmLegacyManagedDaemonStop(existingPid, oldDaemonUrl);
+        } else if (!(await isExpectedManagedDaemon(oldDaemonUrl, managedInstanceId))) {
+          throw new Error(
+            `Refusing to signal PID ${existingPid}: it cannot be verified as the CLI-managed Agor daemon at ${oldDaemonUrl}.`
+          );
+        }
+        stopped = stopDaemon();
+      } else if ((await probeAgorDaemon(oldDaemonUrl)).running) {
+        throw new Error(
+          `An Agor daemon is running at ${oldDaemonUrl}, but it is not managed by this CLI. Stop its service, container, or foreground terminal instead.`
+        );
+      }
       if (stopped) {
         this.log(chalk.green('✓ Daemon stopped'));
       }
@@ -48,7 +125,13 @@ export default class DaemonRestart extends Command {
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Start daemon
-      const pid = startDaemon(daemonPath);
+      const restartEnv = identity?.configPath
+        ? { AGOR_CONFIG_PATH: identity.configPath }
+        : undefined;
+      const pid = startDaemon(daemonPath, restartEnv, {
+        daemonUrl: replacementDaemonUrl,
+        ...(identity?.configPath ? { configPath: identity.configPath } : {}),
+      });
 
       this.log(chalk.green('✓ Daemon restarted successfully'));
       this.log('');
@@ -60,8 +143,10 @@ export default class DaemonRestart extends Command {
 
       // Wait a moment and check if it's actually running
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const daemonUrl = await getDaemonUrl();
-      const running = await isDaemonRunning(daemonUrl);
+      const running = await isExpectedManagedDaemon(
+        replacementDaemonUrl,
+        getManagedDaemonIdentity()?.instanceId
+      );
 
       if (!running) {
         this.log(chalk.yellow('⚠ Daemon started but not responding'));

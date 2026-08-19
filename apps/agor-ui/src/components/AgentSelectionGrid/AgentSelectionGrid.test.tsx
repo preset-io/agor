@@ -5,26 +5,67 @@
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionGrid } from './AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from './availableAgents';
 
+const store = vi.hoisted(() => ({
+  agenticToolSettingsByName: new Map(),
+  agenticToolSettingsHydrated: true,
+}));
+
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ agenticToolSettingsByName: new Map() }),
+    selector({
+      agenticToolSettingsByName: store.agenticToolSettingsByName,
+      agenticToolSettingsHydrated: store.agenticToolSettingsHydrated,
+    }),
 }));
 
 const agents: AgenticToolOption[] = [
   { id: 'claude-code', name: 'Claude Code', icon: '🤖', description: 'x' },
-  { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y', beta: true },
+  { id: 'opencode', name: 'OpenCode', icon: '🌐', description: 'y' },
 ];
+
+afterEach(() => {
+  store.agenticToolSettingsByName = new Map();
+  store.agenticToolSettingsHydrated = true;
+});
 
 function gridEl(container: HTMLElement): HTMLElement {
   return container.querySelector('[style*="grid"]') as HTMLElement;
 }
 
 describe('AgentSelectionGrid tile layout', () => {
+  it('does not expose or select tools before deployment settings hydrate', () => {
+    store.agenticToolSettingsHydrated = false;
+    const onSelect = vi.fn();
+    render(
+      <AgentSelectionGrid
+        agents={agents}
+        selectedAgentId="claude-code-cli"
+        onSelect={onSelect}
+        fallbackToFirstVisibleAgent
+      />
+    );
+
+    expect(screen.getByLabelText('Loading agentic tool availability')).toBeInTheDocument();
+    expect(screen.queryByText('Claude Code')).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('shows a non-operator action when no deployment/workspace tool is available', () => {
+    store.agenticToolSettingsByName = new Map(
+      agents.map((agent) => [agent.id, { tool: agent.id, enabled: false }])
+    );
+    render(<AgentSelectionGrid agents={agents} selectedAgentId={null} onSelect={vi.fn()} />);
+    expect(screen.getByText('No agentic tools are enabled for this workspace')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Deployment package changes require a separate deployment operator/)
+    ).toBeInTheDocument();
+  });
+
   it('does not replace an unavailable persisted selection unless fallback is opted in', () => {
     const onSelect = vi.fn();
     render(
@@ -73,6 +114,8 @@ describe('AgentSelectionGrid tile layout', () => {
   });
 
   it('renders every agent name in full in the small variant (no text BETA pill)', () => {
+    expect(AVAILABLE_AGENTS.find((agent) => agent.id === 'opencode')?.beta).not.toBe(true);
+
     render(
       <AgentSelectionGrid
         agents={AVAILABLE_AGENTS}

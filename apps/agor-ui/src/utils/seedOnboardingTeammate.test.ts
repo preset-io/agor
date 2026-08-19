@@ -25,7 +25,9 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateEmoji: '🤖',
     agent: 'claude-code',
     suggestedIntegrations: ['Slack', 'GitHub'],
-    user: { name: 'Ada', email: 'ada@example.com', persona: 'developer' },
+    canManageIntegrations: true,
+    goals: ['ship-without-busywork'],
+    user: { name: 'Ada', email: 'ada@example.com' },
     client: {} as SeedOnboardingTeammateInput['client'],
     repoById: new Map(),
     onCreateBranch,
@@ -40,7 +42,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
 describe('seedOnboardingTeammate', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates a teammate branch + persona-primed onboarding session when the framework repo is present', async () => {
+  it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -68,17 +70,18 @@ describe('seedOnboardingTeammate', () => {
     expect(sessionArg).toEqual(
       expect.objectContaining({ branchId: 'branch-1', boardId: 'board-1', onCreateSession })
     );
-    // Agent choice + persona are threaded through to the onboarding prompt.
+    // Agent choice + goals are threaded through to the onboarding prompt.
     expect(sessionArg.sessionConfig).toEqual(
       expect.objectContaining({
         branch_id: 'branch-1',
         agent: 'claude-code',
-        title: '🤖 Rusty onboarding',
+        title: '🤖 Rusty — first session',
       })
     );
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
-    expect(initialPrompt).toContain('developer');
+    // The selected goal's bootstrap line is threaded into the first-session prompt.
+    expect(initialPrompt).toContain('Desired outcome: less shipping busywork');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
@@ -149,6 +152,33 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn.mock.calls[0][0]).toMatch(/couldn't start your AI teammate/i);
     expect(result).toEqual({});
   });
+
+  // The LLM step is skippable, so `agent` can legitimately be null at completion.
+  // Bootstrapping a claude-code session anyway would fail on the first turn with
+  // no credentials — the workspace is still created, but the caller gets no
+  // session id and therefore lands the user on their board.
+  for (const agent of [null, undefined] as const) {
+    it(`creates the workspace but no session when the LLM step was skipped (agent: ${agent})`, async () => {
+      createTeammateBranchMock.mockResolvedValue({
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+      } as Branch);
+
+      const { input, onWarn, onCreateSession } = setup({ agent });
+      const result = await seedOnboardingTeammate(input);
+
+      // The teammate's branch still lands on the board...
+      expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+      // ...but nothing is prompted, and no claude-code default sneaks in.
+      expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+      expect(onCreateSession).not.toHaveBeenCalled();
+      expect(result).toEqual({});
+
+      // The user is told why there's no session waiting for them.
+      expect(onWarn).toHaveBeenCalledTimes(1);
+      expect(onWarn.mock.calls[0][0]).toMatch(/connect an ai model/i);
+    });
+  }
 
   it('does nothing when no teammate was named (the workspace step was skipped)', async () => {
     const { input, onWarn } = setup({ teammateName: '   ' });

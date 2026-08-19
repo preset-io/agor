@@ -1,0 +1,1 @@
+export { McpLogo } from './McpLogo';

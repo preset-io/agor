@@ -1,9 +1,8 @@
 # Fast PR + main checks.
 #
 # Everything in this workflow is expected to pass on every PR push.
-# The slow / cross-Node-version / publish-path stuff lives in
-# `heavy-checks.yml` and runs on a nightly cron (and on-demand via
-# workflow_dispatch), not on every push.
+# The slow / cross-Node-version / publish-path stuff runs through the release
+# workflow and on demand via `heavy-checks.yml`, not on every push.
 #
 # Shape: one job, `ci` — one install, then all checks via turbo's
 # internal task graph. The five-jobs-after-an-install fanout we used to
@@ -11,17 +10,16 @@
 # ~4 redundant installs per CI run.
 #
 # `pnpm audit` lives in its own workflow (`audit.yml`) — path-filtered to
-# dependency-manifest changes only, and also invoked by `heavy-checks.yml`
-# nightly to catch ambient CVEs.
+# dependency-manifest changes and on its own nightly schedule to catch ambient
+# CVEs. It is also included in the on-demand `heavy-checks.yml` aggregate.
 name: CI
 
 on:
+  # Do not path-filter main pushes: every main-head transition must complete
+  # this gate so a docs-only successor cannot strand an already-tested image
+  # promotion. PRs keep the fast path filters below.
   push:
     branches: [main]
-    paths-ignore:
-      - 'apps/agor-docs/**'
-      - '*.md'
-      - 'context/**'
   pull_request:
     branches: [main]
     paths-ignore:
@@ -51,9 +49,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Cheap structural check — runs before lint so its output is the
-      # first thing you see in failure output.
+      # Cheap structural checks — run before lint so their output is the
+      # first thing you see in failure output. Each stays its own step so a
+      # failure names the specific guard rather than a generic `pnpm check`.
       - run: pnpm check:agor-live-deps
+      - run: pnpm check:agentic-tool-packages
+
+      # Boundary guards. These encode invariants no type or lint rule can
+      # express — ID handling, tenant isolation, realtime scoping, and the
+      # daemon's declared filesystem capability surface — so they have to be
+      # enforced here, not left to whoever remembers to run `pnpm check`.
+      - run: pnpm check:shortid
+      - run: pnpm check:multitenancy-boundaries
+      - run: pnpm check:daemon-filesystem-boundaries
+      - run: pnpm check:realtime-boundaries
 
       # Biome at the repo root — not a turbo task. Runs independently of
       # the build graph.
@@ -69,11 +78,15 @@ jobs:
       # Test runs against a narrower filter set than build/typecheck —
       # only the packages with real test suites worth gating on. Kept as
       # a separate turbo invocation to preserve that filter.
-      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor
+      - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor --filter=agor-live
 
-  # The Node-version matrix (`npm install agor-live` compat across 22/24/25)
-  # used to live here. It now runs nightly + workflow_dispatch in
-  # `heavy-checks.yml`. PR pushes rely on the agor-live publish smoke
-  # test (which itself does `npm install` of the packed tarball on Node 22)
+      # CLI init tests spawn real child processes and pseudo-terminals. Keep
+      # them required, but outside Turbo's CPU-heavy parallel test fanout.
+      - run: pnpm --filter @agor/cli test
+
+  # The Node-version matrix (`npm install agor-live` compat across 22/24/26)
+  # used to live here. It now runs for releases and on-demand via
+  # `heavy-checks.yml`. PR pushes rely on the agor-live packaged smoke
+  # test (which itself does `npm install` of the packed tarball on Node 24)
   # to catch publish-path regressions when publish-relevant paths change.
   # The `audit` job moved to `audit.yml` (path-filtered to dep changes).

@@ -46,13 +46,13 @@ export function extractTokenUsage(raw: unknown): TokenUsage | undefined {
  * fallback writer even after the daemon adopts the user-message write up-front
  * inside `POST /sessions/:id/prompt`.
  *
- * Callers should always pass `existingMessages` (the result of
- * `messagesRepo.findBySessionId(sessionId)` they already fetched to compute
- * `nextIndex`) so the guard can fire. The `nextIndex` argument is still used
- * for the freshly-created row's `index`; if the guard fires, callers should
- * recompute their next index from the returned message:
+ * Callers should always pass `existingMessages` (the at-most-one-row result of
+ * `messagesRepo.findInitialUserMessagesByTaskId(taskId)`) so the guard can fire.
+ * The `nextIndex` argument is still derived separately from the session's last
+ * row and used for the freshly-created row's `index`; if the guard fires,
+ * callers should recompute their next index from the returned message:
  *
- *   nextIndex = userMessage.index + 1;
+ *   nextIndex = Math.max(nextIndex, userMessage.index + 1);
  */
 export async function createUserMessage(
   sessionId: SessionID,
@@ -202,10 +202,10 @@ export async function createAssistantMessage(
     },
   };
 
-  await messagesService.create(message);
+  const persisted = await messagesService.create(message);
   await patchTaskModelIfKnown(tasksService, taskId, resolvedModel);
 
-  return message;
+  return persisted;
 }
 
 /**
@@ -247,7 +247,8 @@ export async function createSystemMessage(
   taskId: TaskID | undefined,
   nextIndex: number,
   resolvedModel: string | undefined,
-  messagesService: MessagesService
+  messagesService: MessagesService,
+  metadata?: Pick<NonNullable<Message['metadata']>, 'is_provider_failure_result'>
 ): Promise<Message> {
   const message: Message = {
     message_id: messageId,
@@ -260,11 +261,11 @@ export async function createSystemMessage(
     content: content as Message['content'],
     task_id: taskId,
     metadata: {
+      ...metadata,
       ...(resolvedModel ? { model: resolvedModel } : {}),
       is_meta: true, // Mark as synthetic system message
     },
   };
 
-  await messagesService.create(message);
-  return message;
+  return await messagesService.create(message);
 }

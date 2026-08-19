@@ -1,5 +1,5 @@
 import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
+import type { AuthenticatedParams, BranchID, HookContext, Params } from '@agor/core/types';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -51,6 +51,20 @@ export function isTaskScopedExecutorRequest(context: HookContext, taskId: string
 /** Whether this request carries a validated executor-session scope. */
 export function hasExecutorRuntimeScope(context: HookContext): boolean {
   return scopedPayload(context) !== null;
+}
+
+/**
+ * The session an executor-session token is scoped to, or undefined when the
+ * request carries no executor scope.
+ *
+ * Callers that exempt executors from a per-session rule should compare against
+ * this rather than {@link hasExecutorRuntimeScope}, so the exemption is bound to
+ * the session it was minted for instead of depending on
+ * {@link executorRuntimeScopeGuard} having pinned the claims upstream.
+ */
+export function executorRuntimeScopeSessionId(context: HookContext): string | undefined {
+  const payload = scopedPayload(context);
+  return payload ? getExecutorSessionTokenSessionId(payload) : undefined;
 }
 
 function expectClaim(claim: string | undefined, label: string): string {
@@ -172,6 +186,25 @@ async function requireMessageReadScope(
 
   const taskId = expectClaim(scope.taskId, 'task');
   expectExistingMatch(taskId, existing.task_id, 'task');
+}
+
+async function requireRepoReadScope(
+  context: HookContext,
+  id: string | undefined,
+  scope: Scope
+): Promise<void> {
+  if (context.method !== 'get' || !id) {
+    throw new Forbidden('Executor token is not valid for this endpoint');
+  }
+
+  const branchId = expectClaim(scope.branchId, 'branch') as BranchID;
+  // Resolve the allowed repo from the token-scoped branch under the request's
+  // trusted tenant context. Never authorize from the client-supplied repo id.
+  const branch = await context.app.service('branches').get(branchId, {
+    ...context.params,
+    provider: undefined,
+  });
+  expectExistingMatch(String(branch.repo_id), id, 'repo');
 }
 
 type AuthHook = (context: HookContext) => Promise<HookContext>;
@@ -316,13 +349,8 @@ export function executorRuntimeScopeGuard() {
           throw new Forbidden('Executor token branch scope is required for this request');
         }
       }
-    } else if (path === 'messages/bulk') {
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      for (const record of recordsFromData(context.data)) {
-        scopeTaskRecord(record, scope);
-      }
+    } else if (path === 'repos') {
+      await requireRepoReadScope(context, id, scope);
     } else if (path === 'messages/streaming' || path === 'tasks/streaming') {
       if (context.method !== 'create') {
         throw new Forbidden('Executor token is not valid for this endpoint');

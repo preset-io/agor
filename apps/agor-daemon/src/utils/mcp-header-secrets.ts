@@ -1,4 +1,5 @@
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
+import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import { redactMCPCustomHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServer, Params } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -87,15 +88,20 @@ export const shouldExposeMCPHeaderSecrets = shouldExposeMCPServerSecrets;
 export function redactMCPServerSecrets(server: MCPServer): MCPServer {
   const headers = redactMCPCustomHeaders(server.headers);
   const auth = redactMCPAuthSecrets(server.auth);
+  // `env` is where a stdio server keeps its credentials, so it is redacted on
+  // the same terms as `headers`: a shared (ownerless) row is usable — and
+  // therefore readable — by every member, and its env routinely holds API keys.
+  const env = redactMCPEnvSecrets(server.env);
 
-  if (headers === server.headers && auth === server.auth) return server;
+  if (headers === server.headers && auth === server.auth && env === server.env) return server;
 
   return {
     ...server,
     ...(headers !== server.headers ? { headers } : {}),
     ...(auth !== server.auth ? { auth } : {}),
+    ...(env !== server.env ? { env } : {}),
   };
 }
 
-// Back-compat alias for older call-sites/tests; now covers auth+headers.
+// Back-compat alias for older call-sites/tests; now covers auth+headers+env.
 export const redactMCPServerHeaderSecrets = redactMCPServerSecrets;

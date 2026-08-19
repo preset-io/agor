@@ -1,5 +1,10 @@
 # Executor Isolation: Implementation Plan
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 **Status:** 🚀 Ready to Implement
 **Related:** executor-isolation.md, executor-subprocess-spawning.md, ipc-implementation-examples.md, unix-user-integration.md
 **Last Updated:** 2025-01-20

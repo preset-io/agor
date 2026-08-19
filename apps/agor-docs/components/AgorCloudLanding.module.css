@@ -1,0 +1,976 @@
+/* Agor Cloud marketing landing page.
+ *
+ * Shares the site's landing visual language (see LandingPage.module.css): the
+ * root class is named `landingShell` on purpose so the global
+ * `body:has([class*="landingShell"])` rules in app/styles.css apply: full-bleed
+ * opt-out of the docs content panel, forced-dark navbar glass, and the dark
+ * hero treatment even when the reader has the light docs theme selected. Tokens
+ * and the reveal system are duplicated here (not imported) so this page stays
+ * self-contained. */
+
+/* Visually-hidden helper for screen-reader-only text. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.landingShell {
+  --font-display-stack: var(--font-display), "Space Grotesk", system-ui, sans-serif;
+  --font-body-stack: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono-stack: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
+  --landing-ink: #eafff9;
+  --landing-muted: #9fc4bd;
+  --landing-line: rgba(255, 255, 255, 0.12);
+  --landing-teal: #34e6c4;
+  --landing-gradient: linear-gradient(90deg, #2e9a92 0%, #34e6c4 50%, #a8f5ed 100%);
+  --landing-amber: #e8c468;
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  margin-top: -4rem;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  background:
+    radial-gradient(circle at 82% 8%, rgba(46, 154, 146, 0.12), transparent 34rem),
+    linear-gradient(180deg, #07100f 0%, #0a1614 36%, #081210 72%, #07100f 100%);
+  /* clip (not hidden) keeps sticky/absolute glows contained without creating a
+   * scroll container. */
+  overflow: clip;
+}
+
+/* Force the dark background even under the light docs theme (matches the
+ * homepage landing treatment). */
+:global(.dark) .landingShell {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(46, 154, 146, 0.12), transparent 34rem),
+    linear-gradient(180deg, #07100f 0%, #0a1614 36%, #081210 72%, #07100f 100%);
+}
+
+.landingShell > section,
+.landingShell > footer {
+  position: relative;
+  z-index: 1;
+}
+
+/* --- Reveal-on-scroll system (IntersectionObserver stamps .isVisible) ------ */
+.landingShell [data-reveal] {
+  opacity: 0;
+  transform: translateY(30px);
+  transition:
+    opacity 680ms cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+    transform 680ms cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+    translate 300ms ease,
+    border-color 300ms ease,
+    box-shadow 300ms ease;
+  will-change: opacity, transform;
+}
+
+.landingShell .isVisible {
+  opacity: 1;
+  transform: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landingShell [data-reveal],
+  .landingShell .isVisible {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* --- Shared section scaffolding ------------------------------------------- */
+.section {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(64px, 9vw, 104px) clamp(20px, 4vw, 28px);
+}
+
+/* Aurora shader divider (same treatment as the homepage's showcase-section
+ * seam): bleeds slightly above the section it's in, low-opacity and masked
+ * to fade out, so it reads as atmospheric texture behind the heading rather
+ * than a hard section boundary. */
+.sectionDivider {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  width: 100vw;
+  height: 420px;
+  transform: translateX(-50%);
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
+  -webkit-mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
+}
+
+.sectionHead {
+  max-width: 860px;
+  margin: 0 auto clamp(40px, 5vw, 60px);
+  text-align: center;
+}
+
+.eyebrow {
+  display: block;
+  margin: 0 0 18px;
+  color: var(--landing-teal);
+  font-family: var(--font-mono-stack);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.section h2 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2.2rem, 4vw, 3.5rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+}
+
+.lead {
+  max-width: 62ch;
+  margin: 20px auto 0;
+  color: var(--landing-muted);
+  font-size: clamp(1.02rem, 1.4vw, 1.2rem);
+  line-height: 1.65;
+}
+
+.headingAccent {
+  font-weight: 600;
+  background: linear-gradient(110deg, #34e6c4, #7ad9ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.headingStrong {
+  font-weight: 700;
+  color: var(--landing-ink);
+}
+
+/* Combined with .headingStrong on the "Preset Cloud" heading link — keeps
+ * the same weight/color as the plain-text usages elsewhere but adds a
+ * subtle underline so it still reads as a link at heading size. */
+.headingLink {
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.4);
+  text-underline-offset: 6px;
+  transition: text-decoration-color 0.25s ease;
+}
+
+.headingLink:hover {
+  text-decoration-color: rgba(52, 230, 196, 0.9);
+}
+
+/* --- Buttons (mirrors LandingPage primary/secondary) ---------------------- */
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-family: var(--font-display-stack);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.landingShell .primaryButton {
+  color: #031311;
+  background: linear-gradient(135deg, #2e9a92 0%, #34e6c4 100%);
+  box-shadow: 0 16px 34px rgba(52, 230, 196, 0.28);
+}
+
+.landingShell .primaryButton:hover {
+  color: #031311;
+  transform: translateY(-2px);
+  box-shadow: 0 20px 44px rgba(52, 230, 196, 0.36);
+}
+
+.landingShell .secondaryButton {
+  border: 1px solid var(--landing-line);
+  color: var(--landing-ink);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+}
+
+.landingShell .secondaryButton:hover {
+  transform: translateY(-2px);
+  border-color: rgba(52, 230, 196, 0.35);
+  color: var(--landing-ink);
+}
+
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 3px;
+}
+
+/* --- Hero ----------------------------------------------------------------- */
+.hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: calc(100vh - 64px);
+  padding: 120px clamp(20px, 4vw, 28px) 96px;
+  text-align: center;
+  overflow: hidden;
+}
+
+/* Lightfall shader backdrop (see components/Lightfall). Sits behind
+ * .heroGlow and .heroInner — see their z-index. Reduced-motion is handled
+ * via Lightfall's own `paused` prop (stops its render loop entirely, unlike
+ * a CSS hide which would leave the WebGL loop running invisibly). */
+.heroBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Heavier scrim than the homepage's — this hero centers a glass card over
+ * the shader rather than free-floating text, so the card needs a calmer
+ * backdrop to read against. */
+.heroBackdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse 76% 66% at 50% 35%,
+      rgba(7, 16, 15, 0.68) 0%,
+      rgba(7, 16, 15, 0.42) 55%,
+      rgba(7, 16, 15, 0.18) 78%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(7, 16, 15, 0.6) 0%,
+      rgba(7, 16, 15, 0.22) 30%,
+      rgba(7, 16, 15, 0.97) 100%
+    );
+}
+
+/* Soft radial glows over the shader: CSS only, reduced-motion safe. */
+.heroGlow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 40% at 50% 12%, rgba(52, 230, 196, 0.18), transparent 70%),
+    radial-gradient(38% 34% at 82% 70%, rgba(122, 217, 255, 0.1), transparent 70%),
+    radial-gradient(40% 40% at 12% 60%, rgba(46, 154, 146, 0.12), transparent 70%);
+}
+
+.heroInner {
+  position: relative;
+  z-index: 2;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: clamp(30px, 3.4vw, 52px) clamp(22px, 4vw, 56px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  background: rgba(7, 16, 15, 0.42);
+  backdrop-filter: blur(9px) saturate(1.15);
+  -webkit-backdrop-filter: blur(9px) saturate(1.15);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .heroInner {
+    background: rgba(7, 16, 15, 0.82);
+  }
+}
+
+.heroBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 7px 15px;
+  border: 1px solid rgba(52, 230, 196, 0.22);
+  border-radius: 100px;
+  background: rgba(7, 16, 15, 0.7);
+  color: var(--landing-teal);
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.heroBadgeDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--landing-teal);
+  box-shadow: 0 0 0 3px rgba(52, 230, 196, 0.2);
+}
+
+.hero h1 {
+  max-width: 20ch;
+  margin: 0 auto;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2.9rem, 6vw, 5.1rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+
+.heroSub {
+  max-width: 60ch;
+  margin: 24px auto 0;
+  color: var(--landing-muted);
+  font-size: clamp(1.05rem, 1.5vw, 1.28rem);
+  line-height: 1.62;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 34px;
+}
+
+.metaLine {
+  margin: 26px 0 0;
+  color: #6f928c;
+  font-size: 0.9rem;
+  letter-spacing: 0.01em;
+}
+
+/* --- Card grids ----------------------------------------------------------- */
+.grid {
+  display: grid;
+  gap: 20px;
+}
+
+.grid2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.grid3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.card {
+  padding: 26px;
+  border: 1px solid rgba(52, 230, 196, 0.12);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 34, 31, 0.7), rgba(10, 22, 20, 0.5));
+  transition:
+    translate 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+.card:hover {
+  translate: 0 -5px;
+  border-color: rgba(52, 230, 196, 0.32);
+  box-shadow: 0 24px 48px -28px rgba(52, 230, 196, 0.35);
+}
+
+.cardIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(52, 230, 196, 0.22);
+  border-radius: 12px;
+  background: radial-gradient(
+    circle at 30% 25%,
+    rgba(52, 230, 196, 0.22),
+    rgba(52, 230, 196, 0.06)
+  );
+  color: var(--landing-teal);
+  transition:
+    border-color 0.3s ease,
+    transform 0.3s ease;
+}
+
+.card:hover .cardIcon {
+  border-color: rgba(52, 230, 196, 0.5);
+  transform: scale(1.08);
+}
+
+.card h3 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.17rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.card p {
+  margin: 10px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.95rem;
+  line-height: 1.62;
+}
+
+/* --- Capability screenshot carousel (same grammar as the homepage's
+ * surface explorer: tab pills, chrome frame, sliding track, arrows,
+ * click-the-shot-to-advance) --------------------------------------------- */
+.capabilityTabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.capabilityTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border: 1px solid rgba(52, 230, 196, 0.16);
+  border-radius: 999px;
+  background: rgba(52, 230, 196, 0.04);
+  color: var(--landing-muted);
+  font-family: var(--font-display-stack);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.25s,
+    background 0.25s,
+    color 0.25s;
+}
+
+.capabilityTab:hover {
+  border-color: rgba(52, 230, 196, 0.4);
+  color: var(--landing-ink);
+}
+
+.capabilityTabActive,
+.capabilityTabActive:hover {
+  background: var(--landing-teal);
+  border-color: var(--landing-teal);
+  color: #04110e;
+}
+
+.capabilityFrame {
+  position: relative;
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 20px;
+  background: #081210;
+  box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
+}
+
+.capabilityViewport {
+  overflow: hidden;
+}
+
+.capabilityTrack {
+  display: flex;
+  transition: transform 0.55s cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.capabilitySlide {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.capabilityShotButton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.capabilityShot {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: clamp(230px, calc(100dvh - 400px), 560px);
+  object-fit: cover;
+  object-position: top;
+}
+
+.capabilityArrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(52, 230, 196, 0.25);
+  border-radius: 50%;
+  background: rgba(8, 18, 16, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--landing-muted);
+  cursor: pointer;
+  translate: 0 -50%;
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease,
+    color 0.25s ease,
+    scale 0.25s ease;
+}
+
+.capabilityArrow:hover {
+  border-color: rgba(52, 230, 196, 0.6);
+  background: rgba(10, 24, 21, 0.75);
+  color: var(--landing-teal);
+  scale: 1.07;
+}
+
+.capabilityArrowLeft {
+  left: 14px;
+}
+
+.capabilityArrowRight {
+  right: 14px;
+}
+
+.capabilityInfo {
+  max-width: 62ch;
+  margin: 22px auto 0;
+  text-align: center;
+}
+
+.capabilityInfo h3 {
+  margin: 0;
+  color: var(--landing-teal);
+  font-family: var(--font-display-stack);
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.capabilityInfo p {
+  margin: 10px 0 0;
+  color: var(--landing-muted);
+  line-height: 1.62;
+}
+
+.supportGrid {
+  margin-top: 48px;
+}
+
+@media (max-width: 720px) {
+  .capabilityArrow {
+    display: none;
+  }
+}
+
+/* Pivot line under the "why graduate" grid. */
+.pivot {
+  max-width: 52ch;
+  margin: clamp(36px, 4vw, 48px) auto 0;
+  text-align: center;
+  color: var(--landing-ink);
+  font-size: clamp(1.15rem, 1.8vw, 1.5rem);
+  font-weight: 300;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+/* --- Deployment options --------------------------------------------------- */
+.deployGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.deployCard {
+  display: flex;
+  flex-direction: column;
+  padding: 28px;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(15, 34, 31, 0.72), rgba(10, 22, 20, 0.5));
+  transition:
+    translate 0.3s ease,
+    border-color 0.3s ease;
+}
+
+.deployCard:hover {
+  translate: 0 -5px;
+  border-color: rgba(52, 230, 196, 0.3);
+}
+
+.deployCardFeatured {
+  border-color: rgba(52, 230, 196, 0.4);
+  box-shadow: 0 20px 50px rgba(52, 230, 196, 0.12);
+}
+
+.badge {
+  align-self: flex-start;
+  margin-bottom: 16px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-family: var(--font-mono-stack);
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.badgeNow {
+  background: rgba(52, 230, 196, 0.16);
+  color: var(--landing-teal);
+}
+
+.badgeAws {
+  background: rgba(122, 217, 255, 0.14);
+  color: #9bdcff;
+}
+
+.badgeEnterprise {
+  background: rgba(232, 196, 104, 0.14);
+  color: var(--landing-amber);
+}
+
+.deployCard h3 {
+  margin: 0 0 6px;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.28rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.deployCard p {
+  margin: 10px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.95rem;
+  line-height: 1.62;
+}
+
+.deployNote {
+  margin: 28px auto 0;
+  max-width: 56ch;
+  text-align: center;
+  color: #6f928c;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* --- Trust / security band (tinted, full-bleed) --------------------------- */
+.band {
+  position: relative;
+  border-top: 1px solid rgba(52, 230, 196, 0.1);
+  border-bottom: 1px solid rgba(52, 230, 196, 0.1);
+  background:
+    radial-gradient(60% 100% at 50% 0%, rgba(46, 154, 146, 0.12), transparent 70%),
+    rgba(6, 13, 12, 0.55);
+}
+
+.trustLayout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: center;
+}
+
+.trustText {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.trustLayout .sectionHead {
+  margin: 0;
+  text-align: left;
+}
+
+.trustLayout .lead {
+  margin-left: 0;
+}
+
+/* A real screenshot instead of leaving this column implicitly empty-feeling
+ * next to the checklist — same frame treatment as the capability shots. */
+.trustShotFrame {
+  overflow: hidden;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 20px;
+  background: #081210;
+  box-shadow: 0 40px 100px -50px rgba(0, 0, 0, 0.8);
+}
+
+.trustShot {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  object-fit: cover;
+  object-position: top;
+}
+
+.trustList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trustItem {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.trustCheck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(52, 230, 196, 0.12);
+  color: var(--landing-teal);
+  flex-shrink: 0;
+}
+
+.trustItem strong {
+  display: block;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.trustItem span {
+  color: var(--landing-muted);
+  font-size: 0.94rem;
+  line-height: 1.58;
+}
+
+/* --- "Who runs it" split -------------------------------------------------- */
+.operator {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(32px, 5vw, 56px);
+  align-items: center;
+}
+
+.operator h2 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2rem, 3.4vw, 3rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.06;
+}
+
+.operator p {
+  margin: 18px 0 0;
+  color: var(--landing-muted);
+  font-size: 1.02rem;
+  line-height: 1.68;
+}
+
+.operatorStats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.stat {
+  padding: 22px;
+  border: 1px solid rgba(52, 230, 196, 0.12);
+  border-radius: 16px;
+  background: rgba(10, 22, 20, 0.5);
+}
+
+.statValue {
+  display: block;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.statLabel {
+  display: block;
+  margin-top: 6px;
+  color: var(--landing-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+/* --- Final CTA ------------------------------------------------------------ */
+.finalCta {
+  padding-bottom: clamp(72px, 9vw, 112px);
+}
+
+.ctaCard {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: clamp(40px, 6vw, 68px) clamp(24px, 4vw, 56px);
+  border: 1px solid rgba(52, 230, 196, 0.2);
+  border-radius: 28px;
+  background:
+    radial-gradient(70% 120% at 50% 0%, rgba(52, 230, 196, 0.14), transparent 70%),
+    linear-gradient(180deg, rgba(15, 34, 31, 0.8), rgba(8, 18, 16, 0.7));
+  text-align: center;
+}
+
+.ctaCard h2 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2.1rem, 3.6vw, 3.3rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+}
+
+.ctaCard p {
+  max-width: 52ch;
+  margin: 18px auto 0;
+  color: var(--landing-muted);
+  font-size: 1.05rem;
+  line-height: 1.62;
+}
+
+.ctaCard .heroActions {
+  margin-top: 30px;
+}
+
+/* --- Footer --------------------------------------------------------------- */
+.footer {
+  border-top: 1px solid rgba(52, 230, 196, 0.12);
+  padding: 48px clamp(20px, 4vw, 28px);
+}
+
+.footerInner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 40px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footerBrand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--landing-ink);
+}
+
+.footerBrand strong {
+  font-family: var(--font-display-stack);
+  font-size: 1.15rem;
+}
+
+.footerBrand p {
+  margin: 2px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.85rem;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  align-items: center;
+}
+
+/* `.landingShell` prefix out-ranks the global `.dark a` link-color rule so
+ * anchor and <button> footer links render identically. */
+.landingShell .footerLink {
+  color: var(--landing-muted);
+  font-size: 0.92rem;
+  text-decoration: none;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.2s ease;
+}
+
+.landingShell .footerLink:hover {
+  color: var(--landing-teal);
+}
+
+.landingShell .footerLink:focus-visible {
+  outline: 2px solid #a8f5ed;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* --- Responsive ----------------------------------------------------------- */
+@media (max-width: 900px) {
+  .grid3 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .deployGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .trustLayout,
+  .operator {
+    grid-template-columns: 1fr;
+  }
+
+  .trustLayout .sectionHead,
+  .operator {
+    text-align: left;
+  }
+}
+
+@media (max-width: 620px) {
+  .grid2,
+  .grid3 {
+    grid-template-columns: 1fr;
+  }
+
+  .operatorStats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .heroActions .primaryButton,
+  .heroActions .secondaryButton {
+    width: 100%;
+    max-width: 340px;
+  }
+}

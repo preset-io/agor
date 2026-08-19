@@ -17,4 +17,13 @@ describe('executor MCP custom headers wiring', () => {
     );
     expect(source).toContain('...(headers ? { headers } : {})');
   });
+
+  it('routes Codex custom headers through environment-backed HTTP headers', () => {
+    const source = readFileSync(new URL('./codex/prompt-service.ts', import.meta.url), 'utf8');
+    expect(source).toContain(
+      'mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders })'
+    );
+    expect(source).toContain('serverConfig.env_http_headers = envHttpHeaders');
+    expect(source).not.toContain('serverConfig.headers = customHeaders');
+  });
 });

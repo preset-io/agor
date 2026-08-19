@@ -90,4 +90,19 @@ describe('MCP HTTP header helpers', () => {
       'X-Datadog-Parent-Org-Id': '5678',
     });
   });
+
+  it('never persists the sentinel when there is nothing stored to restore', () => {
+    // A stale form echoes back a header that a concurrent edit removed.
+    // Storing the sentinel would send `••••••••` upstream as the literal
+    // header value.
+    expect(
+      restoreRedactedMCPCustomHeaders({
+        current: { 'X-Other': 'kept' },
+        next: {
+          'DD-API-KEY': MCP_HEADER_REDACTED_SENTINEL,
+          'X-Other': 'kept',
+        },
+      })
+    ).toEqual({ 'X-Other': 'kept' });
+  });
 });

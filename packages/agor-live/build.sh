@@ -1,13 +1,12 @@
 #!/bin/bash
 
-# Build & Publish Script for agor-live + @agor-live/client
+# Build and release-artifact script for agor-live + aligned npm packages
 #
 # Usage:
 #   ./build.sh                    # Build only
-#   ./build.sh --publish          # Build and publish both packages
-#   ./build.sh --bump patch       # Bump version (patch/minor/major), build, and publish
+#   ./build.sh --bump patch       # Bump version and build release tarballs
 #   ./build.sh --bump minor       # Bump to next minor version
-#   ./build.sh --dry-run          # Show what would be published without actually publishing
+#   ./build.sh --version 0.25.0-rc.1 # Set an explicit aligned release candidate
 #   ./build.sh --skip-install     # Skip pnpm install step
 #   ./build.sh --with-sandpack    # Include self-hosted Sandpack bundler in build
 
@@ -20,17 +19,19 @@ export NODE_OPTIONS="--max-old-space-size=4096 ${NODE_OPTIONS:-}"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 
-PUBLISH=false
-DRY_RUN=false
 SKIP_INSTALL=false
 WITH_SANDPACK=false
 BUMP=""
+TARGET_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --publish)   PUBLISH=true; shift ;;
-    --dry-run)   DRY_RUN=true; PUBLISH=true; shift ;;
-    --bump)      BUMP="$2"; PUBLISH=true; shift 2 ;;
+    --bump)
+      [[ $# -ge 2 ]] || { echo "--bump requires patch, minor, or major"; exit 1; }
+      BUMP="$2"; shift 2 ;;
+    --version)
+      [[ $# -ge 2 ]] || { echo "--version requires an exact SemVer version"; exit 1; }
+      TARGET_VERSION="$2"; shift 2 ;;
     --skip-install) SKIP_INSTALL=true; shift ;;
     --with-sandpack) WITH_SANDPACK=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -41,24 +42,42 @@ if [[ -n "$BUMP" && "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "majo
   echo "Invalid bump type: $BUMP (must be patch, minor, or major)"
   exit 1
 fi
+if [[ -n "$BUMP" && -n "$TARGET_VERSION" ]]; then
+  echo "Use either --bump or --version, not both"
+  exit 1
+fi
+if [[ -n "$TARGET_VERSION" ]] && ! [[ "$TARGET_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "Invalid version: $TARGET_VERSION (must be an exact SemVer version)"
+  exit 1
+fi
 
 # ── Setup paths ──────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CLIENT_DIR="$REPO_ROOT/packages/client"
+CLI_DIR="$REPO_ROOT/apps/agor-cli"
+INTERNAL_STAGE="$SCRIPT_DIR/.internal.stage"
+RELEASE_DIR="$SCRIPT_DIR/release"
+INTEGRATION_IDS=(claude codex copilot gemini opencode cursor)
+INTEGRATION_DIRS=()
+for id in "${INTEGRATION_IDS[@]}"; do
+  INTEGRATION_DIRS+=("$REPO_ROOT/packages/agor-$id")
+done
 
 echo "🏗️  Building agor-live + @agor-live/client"
 echo ""
 echo "📍 Repository root: $REPO_ROOT"
 echo "📦 agor-live:       $SCRIPT_DIR"
 echo "📦 @agor-live/client: $CLIENT_DIR"
+echo "📦 @agor/cli:         $CLI_DIR"
+echo "🧩 Agentic tools:   ${INTEGRATION_IDS[*]}"
 echo ""
 
 # ── Version bump ─────────────────────────────────────────────────────────────
 
+CURRENT_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
 if [[ -n "$BUMP" ]]; then
-  CURRENT_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
   IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
   case $BUMP in
@@ -69,23 +88,51 @@ if [[ -n "$BUMP" ]]; then
 
   NEW_VERSION="$MAJOR.$MINOR.$PATCH"
   echo "📌 Version bump: $CURRENT_VERSION → $NEW_VERSION ($BUMP)"
+elif [[ -n "$TARGET_VERSION" ]]; then
+  NEW_VERSION="$TARGET_VERSION"
+  echo "📌 Version set: $CURRENT_VERSION → $NEW_VERSION"
+else
+  NEW_VERSION="$CURRENT_VERSION"
+fi
 
-  # Update both package.json files
-  node -e "
-    const fs = require('fs');
-    for (const p of ['$SCRIPT_DIR/package.json', '$CLIENT_DIR/package.json']) {
-      const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-      pkg.version = '$NEW_VERSION';
-      fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
-    }
-  "
+if [[ -n "$BUMP" || -n "$TARGET_VERSION" ]]; then
+  # Update the base, CLI, client, and every version-aligned integration package.
+  node - "$NEW_VERSION" "$SCRIPT_DIR" "$CLI_DIR" "$CLIENT_DIR" "${INTEGRATION_DIRS[@]}" <<'NODE'
+const fs = require('fs');
+const [version, base, cli, client, ...integrations] = process.argv.slice(2);
+for (const directory of [base, cli, client, ...integrations]) {
+  const packagePath = `${directory}/package.json`;
+  const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+  pkg.version = version;
+  fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+}
+for (const directory of integrations) {
+  const sourcePath = `${directory}/src/index.ts`;
+  const source = fs.readFileSync(sourcePath, 'utf8').replace(
+    /AGOR_INTEGRATION_VERSION = '[^']+'/,
+    `AGOR_INTEGRATION_VERSION = '${version}'`
+  );
+  fs.writeFileSync(sourcePath, source);
+}
+NODE
   echo "  ✓ Updated agor-live/package.json"
+  echo "  ✓ Updated @agor/cli/package.json"
   echo "  ✓ Updated @agor-live/client/package.json"
+  echo "  ✓ Updated version-aligned agentic tool packages"
   echo ""
 else
-  NEW_VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
-
-  # Sync client version to match agor-live (no bump, just align)
+  # Sync CLI/client versions to match agor-live (no bump, just align)
+  CLI_VERSION=$(node -p "require('$CLI_DIR/package.json').version")
+  if [[ "$CLI_VERSION" != "$NEW_VERSION" ]]; then
+    node -e "
+      const fs = require('fs');
+      const pkg = JSON.parse(fs.readFileSync('$CLI_DIR/package.json', 'utf8'));
+      pkg.version = '$NEW_VERSION';
+      fs.writeFileSync('$CLI_DIR/package.json', JSON.stringify(pkg, null, 2) + '\n');
+    "
+    echo "📌 Synced @agor/cli version: $CLI_VERSION → $NEW_VERSION"
+    echo ""
+  fi
   CLIENT_VERSION=$(node -p "require('$CLIENT_DIR/package.json').version")
   if [[ "$CLIENT_VERSION" != "$NEW_VERSION" ]]; then
     node -e "
@@ -100,6 +147,10 @@ else
 fi
 
 echo "📦 Version: $NEW_VERSION"
+echo ""
+
+cd "$REPO_ROOT"
+pnpm check:agentic-tool-packages
 echo ""
 
 # ── Install dependencies ─────────────────────────────────────────────────────
@@ -126,9 +177,10 @@ echo "🧹 Cleaning previous builds..."
 # daemon/executor isn't knocked offline during the build window.
 DIST_STAGE="$SCRIPT_DIR/dist.stage"
 rm -rf "$DIST_STAGE"
-rm -rf "$SCRIPT_DIR/node_modules/@agor"
+rm -rf "$INTERNAL_STAGE"
 rm -rf "$CLIENT_DIR/dist"
 mkdir -p "$DIST_STAGE"
+mkdir -p "$INTERNAL_STAGE"
 
 # ── Build all components ─────────────────────────────────────────────────────
 #
@@ -213,8 +265,8 @@ echo ""
 echo "📋 Copying build artifacts to agor-live..."
 
 echo "  → Copying git..."
-mkdir -p "$DIST_STAGE/git"
-cp -r "$REPO_ROOT/packages/git/dist/"* "$DIST_STAGE/git/"
+mkdir -p "$INTERNAL_STAGE/git"
+cp -r "$REPO_ROOT/packages/git/dist/"* "$INTERNAL_STAGE/git/"
 
 echo "  → Creating package.json for bundled @agor/git..."
 jq '
@@ -227,11 +279,11 @@ jq '
     types: "./index.d.ts",
     exports: (.exports | walk(if type == "string" then strip_dist else . end))
   }
-' "$REPO_ROOT/packages/git/package.json" > "$DIST_STAGE/git/package.json"
+' "$REPO_ROOT/packages/git/package.json" > "$INTERNAL_STAGE/git/package.json"
 
 echo "  → Copying core..."
-mkdir -p "$DIST_STAGE/core"
-cp -r "$REPO_ROOT/packages/core/dist/"* "$DIST_STAGE/core/"
+mkdir -p "$INTERNAL_STAGE/core"
+cp -r "$REPO_ROOT/packages/core/dist/"* "$INTERNAL_STAGE/core/"
 
 echo "  → Creating package.json for bundled @agor/core..."
 jq '
@@ -244,7 +296,43 @@ jq '
     types: "./index.d.ts",
     exports: (.exports | walk(if type == "string" then strip_dist else . end))
   }
-' "$REPO_ROOT/packages/core/package.json" > "$DIST_STAGE/core/package.json"
+' "$REPO_ROOT/packages/core/package.json" > "$INTERNAL_STAGE/core/package.json"
+
+echo "  → Copying OpenCode agentic-tool package..."
+mkdir -p "$INTERNAL_STAGE/agentic-tool-opencode"
+cp -r "$REPO_ROOT/packages/agentic-tool-opencode/dist/"* "$INTERNAL_STAGE/agentic-tool-opencode/"
+
+echo "  → Creating package.json for bundled @agor/agentic-tool-opencode..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/agentic-tool-opencode",
+    version: "0.1.0",
+    type: "module",
+    main: "./shared/index.js",
+    types: "./shared/index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/agentic-tool-opencode/package.json" > "$INTERNAL_STAGE/agentic-tool-opencode/package.json"
+
+echo "  → Copying agentic-tool registry package..."
+mkdir -p "$INTERNAL_STAGE/agentic-tools"
+cp -r "$REPO_ROOT/packages/agentic-tools/dist/"* "$INTERNAL_STAGE/agentic-tools/"
+
+echo "  → Creating package.json for bundled @agor/agentic-tools..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/agentic-tools",
+    version: "0.1.0",
+    type: "module",
+    main: "./index.js",
+    types: "./index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/agentic-tools/package.json" > "$INTERNAL_STAGE/agentic-tools/package.json"
+
+node "$SCRIPT_DIR/scripts/validate-internal-package-contract.mjs" "$INTERNAL_STAGE"
 
 echo "  → Copying CLI..."
 mkdir -p "$DIST_STAGE/cli"
@@ -253,9 +341,13 @@ cp -r "$REPO_ROOT/apps/agor-cli/dist/"* "$DIST_STAGE/cli/"
 echo "  → Copying daemon..."
 mkdir -p "$DIST_STAGE/daemon"
 # .build-info (sha + builtAt) is stamped into apps/agor-daemon/dist by the
-# daemon's own build script (apps/agor-daemon/scripts/stamp-build-info.mjs)
-# and gets carried along by this cp -r. loadBuildInfo() reads it at boot.
-cp -r "$REPO_ROOT/apps/agor-daemon/dist/"* "$DIST_STAGE/daemon/"
+# daemon's own build script (apps/agor-daemon/scripts/stamp-build-info.mjs).
+# loadBuildInfo() reads it at boot.
+#
+# Copy from `dist/.` rather than `dist/*`: the glob does NOT match dotfiles, so
+# `dist/*` silently dropped .build-info and every published build reported
+# buildSha "dev" instead of the commit it was built from.
+cp -r "$REPO_ROOT/apps/agor-daemon/dist/." "$DIST_STAGE/daemon/"
 
 echo "  → Copying executor..."
 mkdir -p "$DIST_STAGE/executor"
@@ -264,6 +356,17 @@ cp -r "$REPO_ROOT/packages/executor/dist/"* "$DIST_STAGE/executor/"
 echo "  → Copying UI..."
 mkdir -p "$DIST_STAGE/ui"
 cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
+
+# Build outputs are copied wholesale above, but declaration source maps, compiled
+# tests, incremental compiler state, and editor backups are not runtime assets.
+# Keep them out of both the application dist tree and the materialized internal
+# packages so switching from postinstall-created links to npm's standard bundled
+# dependencies does not add unnecessary files to the global install.
+echo "  → Removing non-runtime build artifacts..."
+find "$DIST_STAGE" "$INTERNAL_STAGE" -type f \
+  \( -name '*.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
+     -o -name '*.tsbuildinfo' -o -name '*.backup' \) -delete
+find "$DIST_STAGE" "$INTERNAL_STAGE" -type d -name test -prune -exec rm -rf {} +
 
 if [[ "$WITH_SANDPACK" == true ]]; then
   # sandpack-bundler outputs to www/ or dist/ depending on version
@@ -299,21 +402,13 @@ if ! mv "$DIST_STAGE" "$SCRIPT_DIR/dist"; then
 fi
 rm -rf "$SCRIPT_DIR/dist.old"
 
-echo ""
-echo "📦 Setting up @agor package symlinks for local development..."
-mkdir -p "$SCRIPT_DIR/node_modules/@agor"
-for package_name in core git; do
-  rm -rf "$SCRIPT_DIR/node_modules/@agor/$package_name"
-  ln -s "../../dist/$package_name" "$SCRIPT_DIR/node_modules/@agor/$package_name"
-done
-
 # ── Package sizes ────────────────────────────────────────────────────────────
 
 echo ""
 echo "📊 Package sizes:"
 du -sh "$SCRIPT_DIR/dist" | awk '{print "  agor-live total: " $1}'
-du -sh "$SCRIPT_DIR/dist/core" | awk '{print "    Core:     " $1}'
-du -sh "$SCRIPT_DIR/dist/git" | awk '{print "    Git:      " $1}'
+du -sh "$INTERNAL_STAGE/core" | awk '{print "    Core:     " $1}'
+du -sh "$INTERNAL_STAGE/git" | awk '{print "    Git:      " $1}'
 du -sh "$SCRIPT_DIR/dist/cli" | awk '{print "    CLI:      " $1}'
 du -sh "$SCRIPT_DIR/dist/daemon" | awk '{print "    Daemon:   " $1}'
 du -sh "$SCRIPT_DIR/dist/executor" | awk '{print "    Executor: " $1}'
@@ -324,48 +419,40 @@ fi
 du -sh "$CLIENT_DIR/dist" | awk '{print "  @agor-live/client: " $1}'
 
 echo ""
+echo "📦 Packing immutable release artifacts..."
+rm -rf "$RELEASE_DIR"
+mkdir -p "$RELEASE_DIR"
+for directory in "${INTEGRATION_DIRS[@]}" "$CLIENT_DIR"; do
+  npm pack --ignore-scripts --pack-destination "$RELEASE_DIR" "$directory" >/dev/null
+done
+CLIENT_TARBALL="$RELEASE_DIR/agor-live-client-$NEW_VERSION.tgz"
+if [[ ! -f "$CLIENT_TARBALL" ]]; then
+  echo "  ✗ @agor-live/client pack did not produce the expected tarball: $CLIENT_TARBALL"
+  exit 1
+fi
+LIVE_TARBALL=$(node "$SCRIPT_DIR/scripts/pack-release.mjs" \
+  --destination "$RELEASE_DIR" --internal-root "$INTERNAL_STAGE")
+if [[ -z "$LIVE_TARBALL" || ! -f "$LIVE_TARBALL" ]]; then
+  echo "  ✗ agor-live pack did not produce the expected tarball: ${LIVE_TARBALL:-<no path returned>}"
+  exit 1
+fi
+echo "  ✓ $(basename "$LIVE_TARBALL")"
+rm -rf "$INTERNAL_STAGE"
+
+echo ""
+echo "🔍 Checking package-content budget..."
+node "$SCRIPT_DIR/scripts/check-package-content.mjs" "$LIVE_TARBALL"
+
+echo ""
 echo "✅ Build complete!"
 
-# ── Publish ──────────────────────────────────────────────────────────────────
+echo ""
+echo "📦 Package structure:"
+tree -L 2 -d "$SCRIPT_DIR/dist" 2>/dev/null || find "$SCRIPT_DIR/dist" -type d -maxdepth 2 | sed 's|^|  |'
 
-if [[ "$PUBLISH" == true ]]; then
-  echo ""
-
-  if [[ "$DRY_RUN" == true ]]; then
-    echo "🧪 Dry run — showing what would be published..."
-    echo ""
-    echo "── agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && pnpm publish --dry-run --no-git-checks 2>&1 | tail -20
-    echo ""
-    echo "── @agor-live/client@$NEW_VERSION ──"
-    cd "$CLIENT_DIR" && pnpm publish --access public --dry-run --no-git-checks 2>&1 | tail -20
-  else
-    echo "🚀 Publishing packages..."
-    echo ""
-    # IMPORTANT: use `pnpm publish` (not `npm publish`). pnpm transforms
-    # `workspace:*` into a concrete semver range when packing the tarball;
-    # plain `npm publish` leaves the protocol verbatim and breaks consumers.
-    # `--no-git-checks` skips pnpm's "branch must be main / clean tree" guard
-    # since this script runs from feature/release branches with dist/ artifacts.
-    echo "── Publishing agor-live@$NEW_VERSION ──"
-    cd "$SCRIPT_DIR" && npm whoami >/dev/null 2>&1 || npm login
-    cd "$SCRIPT_DIR" && pnpm publish --no-git-checks
-    echo ""
-    echo "── Publishing @agor-live/client@$NEW_VERSION ──"
-    cd "$CLIENT_DIR" && pnpm publish --access public --no-git-checks
-    echo ""
-    echo "✅ Both packages published!"
-    echo "  npm i agor-live@$NEW_VERSION"
-    echo "  npm i @agor-live/client@$NEW_VERSION"
-  fi
-else
-  echo ""
-  echo "📦 Package structure:"
-  tree -L 2 -d "$SCRIPT_DIR/dist" 2>/dev/null || find "$SCRIPT_DIR/dist" -type d -maxdepth 2 | sed 's|^|  |'
-
-  echo ""
-  echo "🚀 Next steps:"
-  echo "  ./build.sh --dry-run         # Preview publish"
-  echo "  ./build.sh --publish          # Publish current version ($NEW_VERSION)"
-  echo "  ./build.sh --bump patch       # Bump + publish"
-fi
+echo ""
+echo "🚀 Next steps:"
+echo "  Review artifacts in $RELEASE_DIR"
+printf "  Install this exact build: sudo npm install -g %q %q\n" "$CLIENT_TARBALL" "$LIVE_TARBALL"
+echo "  Then run the deployment's operator-controlled stop → migrate → start sequence"
+echo "  Merge the version-bump PR, then push v$NEW_VERSION to run the protected release workflow"

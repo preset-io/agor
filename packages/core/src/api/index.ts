@@ -33,8 +33,19 @@ import type {
   KnowledgeSearchResult,
   KnowledgeSemanticSettingsPatch,
   KnowledgeSemanticSettingsPublic,
+  MCPCatalogConnectData,
+  MCPCatalogConnectResult,
+  MCPCatalogEntry,
+  MCPMemberPolicySetting,
   MCPServer,
   Message,
+  MessageCreate,
+  MessagePatch,
+  OpenCodeModelCatalog,
+  OpenCodeOAuthAttempt,
+  OpenCodeOAuthAttemptPatch,
+  OpenCodeOAuthConnectRequest,
+  OpenCodeProviderSettings,
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
@@ -62,7 +73,7 @@ import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
 import io, { type Socket } from 'socket.io-client';
-import { DAEMON } from '../config/constants';
+import { DAEMON, MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
 
 /**
  * Default daemon URL for client connections
@@ -109,7 +120,6 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface QueuedSessionPromptResult {
@@ -142,14 +152,12 @@ export interface SessionsClientHelpers {
 }
 
 /**
- * Body shape for `POST /tasks/:id/run`. Matches the prompt route's options
- * so the same defaults (`stream: true`, agor messageSource for socket
- * callers) apply when explicitly triggering an already-created task.
+ * Body shape for `POST /tasks/:id/run`. Message provenance is derived by the
+ * daemon from the authenticated transport rather than accepted from callers.
  */
 export interface TaskRunRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
-  messageSource?: 'gateway' | 'agor';
 }
 
 export interface TaskRunOptions extends TaskRunRequest {
@@ -207,6 +215,9 @@ export interface ServiceTypes {
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
+  'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
   'kb/versions': KnowledgeDocumentVersion;
@@ -218,6 +229,8 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'opencode-auth': OpenCodeProviderSettings;
+  'opencode-models': OpenCodeModelCatalog;
 }
 
 /**
@@ -317,6 +330,55 @@ export interface KnowledgeReindexService {
   ): Promise<{ queued: number; status: KnowledgeEmbeddingStatus }>;
 }
 
+export interface OpenCodeAuthService {
+  find(params?: Params): Promise<OpenCodeProviderSettings>;
+  get(attemptId: string, params?: Params): Promise<OpenCodeOAuthAttempt>;
+  create(
+    data:
+      | { providerId: string; apiKey: string; metadata?: Record<string, string> }
+      | OpenCodeOAuthConnectRequest,
+    params?: Params
+  ): Promise<OpenCodeProviderSettings | OpenCodeOAuthAttempt>;
+  patch(
+    attemptId: string,
+    data: OpenCodeOAuthAttemptPatch,
+    params?: Params
+  ): Promise<OpenCodeOAuthAttempt>;
+  remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
+}
+
+export interface OpenCodeModelsService {
+  find(params?: Params): Promise<OpenCodeModelCatalog>;
+}
+
+/**
+ * Marketplace connect command endpoint.
+ *
+ * Create-only: it installs one catalog entry and returns the session that can
+ * use it. There is nothing to read back, so it exposes no find/get.
+ */
+export interface MCPCatalogConnectService {
+  create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
+}
+
+/**
+ * Singleton tenant-wide MCP member policy endpoint.
+ *
+ * Readable by members — the value explains why a write of theirs was refused —
+ * and writable by admins. The daemon enforces both; this typing only describes
+ * the shape.
+ */
+export interface MCPMemberPolicyService {
+  find(params?: Params): Promise<MCPMemberPolicySetting>;
+  // `can_configure` is the daemon's answer about the caller, not a field a
+  // caller submits, so a write names the policy and nothing else.
+  patch(
+    id: null,
+    data: Pick<MCPMemberPolicySetting, 'policy'>,
+    params?: Params
+  ): Promise<MCPMemberPolicySetting>;
+}
+
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
  */
@@ -350,9 +412,7 @@ export interface SessionsService
   getGenealogy(id: string, params?: Params): Promise<unknown>;
 }
 
-/**
- * Tasks service with bulk creation support
- */
+/** Tasks service with lifecycle methods. */
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
@@ -366,12 +426,6 @@ export interface TasksService extends AgorService<Task> {
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
   /**
-   * Create multiple tasks in a single request
-   * Returns array of created tasks with IDs
-   */
-  createMany(data: Partial<Task>[]): Promise<Task[]>;
-
-  /**
    * Mark a task as completed
    */
   complete(id: string, data: { report?: unknown }, params?: Params): Promise<Task>;
@@ -382,16 +436,13 @@ export interface TasksService extends AgorService<Task> {
   fail(id: string, data: { error: string }, params?: Params): Promise<Task>;
 }
 
-/**
- * Messages service with bulk creation support
- */
-export interface MessagesService extends AgorService<Message> {
-  /**
-   * Create multiple messages in a single request
-   * Returns array of created messages with IDs
-   */
-  createMany(data: Partial<Message>[]): Promise<Message[]>;
-}
+/** Public Message CRUD surface. Full replacement is daemon-internal. */
+export type MessagesService = Omit<
+  AgorService<Message, ClientInput<MessageCreate>>,
+  'update' | 'patch'
+> & {
+  patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
+};
 
 /**
  * Repos service with branch management
@@ -647,16 +698,17 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
-
-  // Bulk operation endpoints
-  service(path: 'messages/bulk'): MessagesService;
-  service(path: 'tasks/bulk'): TasksService;
+  service(path: 'opencode-auth'): OpenCodeAuthService;
+  service(path: 'opencode-models'): OpenCodeModelsService;
 
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 
   // Generic fallback for custom routes and dynamic paths
@@ -812,7 +864,205 @@ function isPaginatedResult<T>(result: FindResult<T>): result is Paginated<T> {
   );
 }
 
-function extendFindAllOnService(service: AgorService<unknown>): void {
+function isAscendingHydrationSort(path: string, sort: unknown): boolean {
+  if (sort === undefined) return true;
+  if (!sort || typeof sort !== 'object' || Array.isArray(sort)) return false;
+  const entries = Object.entries(sort);
+  if (path === 'messages') {
+    return (
+      entries.length >= 1 &&
+      entries.length <= 2 &&
+      entries[0][0] === 'index' &&
+      entries[0][1] === 1 &&
+      (entries.length === 1 || (entries[1][0] === 'message_id' && entries[1][1] === 1))
+    );
+  }
+  return (
+    entries.length === 2 &&
+    entries[0][0] === 'created_at' &&
+    entries[0][1] === 1 &&
+    entries[1][0] === 'task_id' &&
+    entries[1][1] === 1
+  );
+}
+
+function hydrationKeysetFor(
+  path: string,
+  query: Record<string, unknown>
+): { idField: 'message_id' | 'task_id'; pageLimit: number } | null {
+  if (query.$skip !== undefined && query.$skip !== 0) return null;
+  if (query.$select !== undefined) return null;
+  if (!isAscendingHydrationSort(path, query.$sort)) return null;
+
+  if (
+    path === 'messages' &&
+    query.message_id === undefined &&
+    (typeof query.task_id === 'string' || typeof query.session_id === 'string')
+  ) {
+    return { idField: 'message_id', pageLimit: MESSAGE_PAGINATION.MAX_LIMIT };
+  }
+  if (path === 'tasks' && query.task_id === undefined && typeof query.session_id === 'string') {
+    return { idField: 'task_id', pageLimit: PAGINATION.MAX_LIMIT };
+  }
+  return null;
+}
+
+function sortHydratedRows(path: string, rows: unknown[]): unknown[] {
+  if (path === 'messages') {
+    return rows.sort((left, right) => {
+      const a = left as { index?: unknown; message_id?: unknown };
+      const b = right as { index?: unknown; message_id?: unknown };
+      const indexDiff = Number(a.index ?? 0) - Number(b.index ?? 0);
+      return indexDiff || String(a.message_id).localeCompare(String(b.message_id));
+    });
+  }
+  return rows.sort((left, right) => {
+    const a = left as { created_at?: unknown; task_id?: unknown };
+    const b = right as { created_at?: unknown; task_id?: unknown };
+    const createdDiff =
+      new Date(String(a.created_at)).getTime() - new Date(String(b.created_at)).getTime();
+    return createdDiff || String(a.task_id).localeCompare(String(b.task_id));
+  });
+}
+
+const MAX_HYDRATION_STABILITY_ATTEMPTS = 3;
+
+class HydrationMembershipChangedError extends Error {}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+async function scanAtIdHighWater(
+  service: AgorService<unknown>,
+  params: Params | undefined,
+  path: string,
+  idField: 'message_id' | 'task_id',
+  pageLimit: number,
+  idsOnly = false
+): Promise<{ rows: unknown[]; ids: string[] }> {
+  const originalQuery =
+    params?.query && typeof params.query === 'object'
+      ? ({ ...params.query } as Record<string, unknown>)
+      : {};
+  const baseQuery = { ...originalQuery };
+  delete baseQuery.$limit;
+  delete baseQuery.$skip;
+  delete baseQuery.$sort;
+  delete baseQuery.$select;
+  delete baseQuery[idField];
+
+  // Capture a traversal boundary. IDs are immutable but deliberately are not
+  // monotonic by commit time, so the caller verifies every multi-page walk
+  // against a second collection before accepting it as one stable membership
+  // view.
+  const boundaryResult = await service.find({
+    ...(params ?? {}),
+    query: {
+      ...baseQuery,
+      $sort: { [idField]: -1 },
+      $limit: 1,
+      $select: [idField],
+    },
+  });
+  const boundaryData = normalizeFindResult(boundaryResult);
+  if (boundaryData.length === 0) return { rows: [], ids: [] };
+  const through = (boundaryData[0] as Record<string, unknown>)[idField];
+  if (typeof through !== 'string') {
+    throw new Error(`Cannot hydrate ${path}: boundary page omitted ${idField}`);
+  }
+
+  const rows: unknown[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const cursor = after ? { $gt: after, $lte: through } : { $lte: through };
+    const pageResult = await service.find({
+      ...(params ?? {}),
+      query: {
+        ...baseQuery,
+        [idField]: cursor,
+        $sort: { [idField]: 1 },
+        $limit: pageLimit,
+        ...(idsOnly ? { $select: [idField] } : {}),
+      },
+    });
+    const page = normalizeFindResult(pageResult);
+    if (page.length === 0) {
+      throw new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: keyset ended before ${idField} high-water mark`
+      );
+    }
+
+    for (const row of page) {
+      const id = (row as Record<string, unknown>)[idField];
+      if (typeof id !== 'string' || (after !== undefined && id <= after) || id > through) {
+        throw new HydrationMembershipChangedError(
+          `Cannot hydrate ${path}: ${idField} keyset did not advance`
+        );
+      }
+      after = id;
+      rows.push(row);
+    }
+    // Do not infer exhaustion from the requested limit. An older/more
+    // conservative daemon may clamp the page below this client's compiled-in
+    // ceiling. The immutable boundary (or an actually empty page) is the only
+    // version-skew-safe completion signal for this keyset walk.
+    if (after === through) break;
+  }
+
+  return { rows, ids: rows.map((row) => String((row as Record<string, unknown>)[idField])) };
+}
+
+async function findAllAtStableIdMembership(
+  service: AgorService<unknown>,
+  params: Params | undefined,
+  path: string,
+  idField: 'message_id' | 'task_id',
+  pageLimit: number
+): Promise<unknown[]> {
+  const originalQuery =
+    params?.query && typeof params.query === 'object'
+      ? ({ ...params.query } as Record<string, unknown>)
+      : {};
+  const probeResult = await service.find({
+    ...(params ?? {}),
+    query: {
+      ...originalQuery,
+      $sort: { [idField]: 1 },
+      $limit: pageLimit,
+    },
+  });
+  const probe = normalizeFindResult(probeResult);
+  if (!isPaginatedResult(probeResult) || probe.length < probeResult.limit) {
+    return sortHydratedRows(path, probe);
+  }
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < MAX_HYDRATION_STABILITY_ATTEMPTS; attempt += 1) {
+    try {
+      const candidate = await scanAtIdHighWater(service, params, path, idField, pageLimit);
+      const verification = await scanAtIdHighWater(service, params, path, idField, pageLimit, true);
+      if (sameIds(candidate.ids, verification.ids)) {
+        return sortHydratedRows(path, candidate.rows);
+      }
+      lastError = new HydrationMembershipChangedError(
+        `Cannot hydrate ${path}: membership changed while keyset pages were being read`
+      );
+    } catch (error) {
+      if (!(error instanceof HydrationMembershipChangedError)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw (
+    lastError ??
+    new HydrationMembershipChangedError(
+      `Cannot hydrate ${path}: membership did not stabilize after bounded retries`
+    )
+  );
+}
+
+function extendFindAllOnService(service: AgorService<unknown>, rawPath: string): void {
   const findAllService = service as AgorService<unknown> & {
     [SERVICE_FIND_ALL_EXTENDED]?: boolean;
   };
@@ -822,13 +1072,28 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
   }
 
   findAllService.findAll = async (params?: Params) => {
+    const path = rawPath.replace(/^\//, '');
+    const query =
+      params?.query && typeof params.query === 'object'
+        ? (params.query as Record<string, unknown>)
+        : {};
+    const keyset = hydrationKeysetFor(path, query);
+    if (keyset) {
+      return findAllAtStableIdMembership(service, params, path, keyset.idField, keyset.pageLimit);
+    }
+
     const firstResult = await service.find(params);
     if (!isPaginatedResult(firstResult)) {
       return firstResult;
     }
 
     const allData = [...firstResult.data];
-    let total = firstResult.total;
+    const total = firstResult.total;
+    // Feathers `total` describes the whole matching query, not the tail that
+    // begins at `$skip`. Preserve the caller's offset semantics while still
+    // validating that every continuation page belongs to one stable walk.
+    const initialSkip = firstResult.skip;
+    const expectedRows = Math.max(0, total - initialSkip);
     let nextSkip = firstResult.skip + firstResult.data.length;
     const pageLimit =
       typeof firstResult.limit === 'number' && firstResult.limit > 0
@@ -842,7 +1107,7 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
     const baseQuery =
       params?.query && typeof params.query === 'object' ? { ...params.query } : undefined;
 
-    while (allData.length < total) {
+    while (allData.length < expectedRows) {
       const nextParams: Params = {
         ...(params ?? {}),
         query: {
@@ -854,17 +1119,22 @@ function extendFindAllOnService(service: AgorService<unknown>): void {
 
       const nextResult = await service.find(nextParams);
       if (!isPaginatedResult(nextResult)) {
-        allData.push(...nextResult);
-        break;
+        throw new Error('Paginated findAll() received a non-paginated continuation page');
       }
 
+      if (nextResult.total !== total || nextResult.skip !== nextSkip) {
+        throw new Error('Paginated findAll() changed while pages were being read');
+      }
       if (nextResult.data.length === 0) {
-        break;
+        throw new Error('Paginated findAll() ended before the advertised total');
       }
 
       allData.push(...nextResult.data);
       nextSkip = nextResult.skip + nextResult.data.length;
-      total = nextResult.total;
+    }
+
+    if (allData.length !== expectedRows) {
+      throw new Error('Paginated findAll() did not return the advertised total');
     }
 
     return allData;
@@ -950,7 +1220,7 @@ function extendServiceFactory(client: AgorClient): void {
 
   augmentedClient.service = ((path: string) => {
     const service = rawService(path);
-    extendFindAllOnService(service);
+    extendFindAllOnService(service, path);
     return service;
   }) as AgorClient['service'];
 
@@ -1040,20 +1310,61 @@ export async function createRestClient(
   // Lazy-load REST client (only imported when needed, not in browser bundles)
   const { default: rest } = await import('@feathersjs/rest-client');
 
-  // When an API key is provided, wrap fetch to inject the Authorization header
-  const fetchFn = apiKey
-    ? (input: string | URL | globalThis.Request, init?: RequestInit) => {
-        const headers = new Headers(init?.headers);
-        headers.set('Authorization', `Bearer ${apiKey}`);
-        return fetchImpl(input, { ...init, headers });
-      }
-    : fetchImpl;
+  // Inject the Authorization header at the transport layer rather than relying on
+  // the Feathers authentication hook.
+  //
+  // That hook only decorates the *standard* service methods. Calls to custom methods
+  // registered via `service.methods(...)` — board `toYaml`/`clone`/`fromYaml`, repo
+  // `createBranch`, … — went out with no credentials at all, and the daemon correctly
+  // answered 401 "Not authenticated". Only the CLI hit this: the UI is on Socket.IO,
+  // where the connection itself is authenticated.
+  //
+  // The token is tracked here rather than read back from the authentication client
+  // because this client is configured with `storage: undefined`, so
+  // `getAccessToken()` resolves to null.
+  let bearerToken: string | null = apiKey ?? null;
+
+  const fetchFn = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+
+    // Never attach a bearer to the login exchange itself: the credentials live in
+    // the request body, and a stale token here would 401 the very call meant to
+    // replace it.
+    const target = typeof input === 'string' ? input : input.toString();
+    const isAuthenticationRequest = /\/authentication\/?(?:\?|$)/.test(target);
+
+    if (!isAuthenticationRequest && !headers.has('Authorization') && bearerToken) {
+      headers.set('Authorization', `Bearer ${bearerToken}`);
+    }
+
+    return fetchImpl(input, { ...init, headers });
+  };
 
   // Configure REST transport
   client.configure(rest(url).fetch(fetchFn));
 
   // Configure authentication with no storage (CLI will manage tokens separately)
   client.configure(authentication({ storage: undefined }));
+
+  // Remember the credential each successful login establishes, so `fetchFn` above
+  // can authenticate custom-method calls the Feathers hook does not cover.
+  if (!apiKey) {
+    const authenticateWithClient = client.authenticate.bind(client);
+    client.authenticate = async (data?: Parameters<typeof authenticateWithClient>[0]) => {
+      const result = await authenticateWithClient(data);
+      const established =
+        (result as { accessToken?: unknown } | undefined)?.accessToken ??
+        (data as { accessToken?: unknown } | undefined)?.accessToken;
+      if (typeof established === 'string') bearerToken = established;
+      return result;
+    };
+
+    const logoutFromClient = client.logout.bind(client);
+    client.logout = async () => {
+      bearerToken = null;
+      return logoutFromClient();
+    };
+  }
 
   // Create a dummy socket object to satisfy the interface
   client.io = {

@@ -1,12 +1,12 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: xterm requires an exact ANSI terminal palette
 // biome-ignore-all lint/plugin/noHardcodedColorProperty: xterm requires compound terminal overlay colors
-import type { AgorClient, User, UserID } from '@agor-live/client';
+import type { AgorClient, TerminalAllocatedEvent, User, UserID } from '@agor-live/client';
 import { hasMinimumRole } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { App, Badge, Modal } from 'antd';
+import { App, Badge, Button, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { loadWebglRenderer } from '../../utils/xtermWebgl';
 import '@xterm/xterm/css/xterm.css';
@@ -93,6 +93,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [reconnectGeneration, setReconnectGeneration] = useState(0);
+  const [socketConnected, setSocketConnected] = useState(client?.io.connected === true);
   const [modalReady, setModalReady] = useState(false);
   const [zellijMissing, setZellijMissing] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<{
@@ -108,6 +111,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const canUseTerminal = hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
   useEffect(() => {
+    // Explicit reconnect increments this value to replace the owner-local
+    // attachment; reading it makes that lifecycle dependency intentional.
+    void reconnectGeneration;
     if (!open || !modalReady || !terminalDivRef.current || !client) return;
 
     // Skip terminal setup for users without terminal access
@@ -121,13 +127,18 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
 
     let mounted = true;
     let currentChannel: string | null = null;
+    let currentTerminalId: string | null = null;
     let initialCommandsSent = false;
+    const failedTerminalIds = new Set<string>();
     // Monotonic attach generation: each (re)attach bumps it and a disconnect
     // bumps it, so a stale/out-of-order attach resolve can't flip the modal
     // back to connected after the socket has moved on.
     let attachGeneration = 0;
     let transformData: (value: string) => string = (value) => value;
     const socket = client.io;
+    setSocketConnected(socket.connected);
+    setIsConnected(false);
+    setNeedsReconnect(false);
 
     // Cleanup channel listeners
     const removeChannelListeners = () => {
@@ -136,6 +147,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         socket.off('terminal:exit', handleChannelExit);
         socket.off('terminal:ready', handleChannelReady);
         socket.off('terminal:error', handleChannelError);
+        socket.off('terminal:allocated', handleTerminalAllocated);
         socket.off('connect', handleReconnect);
         socket.off('disconnect', handleDisconnect);
         if (currentChannel) {
@@ -144,20 +156,31 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }
     };
 
+    const handleTerminalAllocated = (payload: TerminalAllocatedEvent) => {
+      if (payload.userId !== user?.user_id || payload.branchId !== branchId) return;
+      currentTerminalId = payload.terminalId;
+    };
+
     // Channel-based event handlers
-    const handleChannelOutput = (payload: { userId: string; data: string }) => {
+    const handleChannelOutput = (payload: { userId: string; terminalId: string; data: string }) => {
       if (!terminalRef.current) return;
-      if (payload.userId === user?.user_id) {
+      if (payload.userId === user?.user_id && payload.terminalId === currentTerminalId) {
         terminalRef.current.write(transformData(payload.data));
       }
     };
 
-    const handleChannelExit = (payload: { userId: string; exitCode: number }) => {
+    const handleChannelExit = (payload: {
+      userId: string;
+      terminalId: string;
+      exitCode: number;
+    }) => {
       if (!terminalRef.current) return;
-      if (payload.userId === user?.user_id) {
+      if (payload.userId === user?.user_id && payload.terminalId === currentTerminalId) {
+        failedTerminalIds.add(payload.terminalId);
         terminalRef.current.writeln(`\r\n\r\n[Terminal exited with code ${payload.exitCode}]`);
         terminalRef.current.writeln('[Close and reopen terminal to start a new session]');
         setIsConnected(false);
+        setNeedsReconnect(true);
       }
     };
 
@@ -165,19 +188,27 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     // its PTY is spawned and attached. We flip on this rather than on the
     // terminals.create resolution so a post-spawn executor crash surfaces
     // instead of leaving the modal wedged on a blank screen.
-    const handleChannelReady = (payload: { userId: string }) => {
-      if (payload.userId !== user?.user_id) return;
+    const handleChannelReady = (payload: { userId: string; terminalId: string }) => {
+      if (payload.userId !== user?.user_id || payload.terminalId !== currentTerminalId) return;
+      if (failedTerminalIds.has(payload.terminalId)) return;
       setIsConnected(true);
       setReconnecting(false);
+      setNeedsReconnect(false);
     };
 
-    const handleChannelError = (payload: { userId: string; message?: string }) => {
-      if (payload.userId !== user?.user_id) return;
+    const handleChannelError = (payload: {
+      userId: string;
+      terminalId: string;
+      message?: string;
+    }) => {
+      if (payload.userId !== user?.user_id || payload.terminalId !== currentTerminalId) return;
+      failedTerminalIds.add(payload.terminalId);
       if (terminalRef.current) {
         terminalRef.current.writeln(`\r\n[Terminal error: ${payload.message ?? 'attach failed'}]`);
       }
       setIsConnected(false);
       setReconnecting(false);
+      setNeedsReconnect(true);
     };
 
     // Create xterm instance with common configuration
@@ -275,16 +306,21 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     socket.on('terminal:exit', handleChannelExit);
     socket.on('terminal:ready', handleChannelReady);
     socket.on('terminal:error', handleChannelError);
+    socket.on('terminal:allocated', handleTerminalAllocated);
 
     terminal.onData((data) => {
+      if (!currentTerminalId) return;
       socket.emit('terminal:input', {
         userId: user?.user_id,
+        terminalId: currentTerminalId,
         input: data,
       });
     });
     terminal.onResize(({ cols, rows }) => {
+      if (!currentTerminalId) return;
       socket.emit('terminal:resize', {
         userId: user?.user_id,
+        terminalId: currentTerminalId,
         cols,
         rows,
       });
@@ -302,6 +338,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           branchId,
         })) as {
           userId: UserID;
+          terminalId: string;
           channel: string;
           sessionName: string;
           isNew: boolean;
@@ -317,11 +354,17 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         }
 
         currentChannel = result.channel;
+        currentTerminalId = result.terminalId;
         setSessionInfo({
           zellijSession: result.sessionName,
           zellijReused: !result.isNew,
           branchName: result.branchName,
         });
+        // Allocation is delivered before executor startup. If that executor
+        // already failed while the create response was in flight, preserve
+        // its actionable output and do not send terminal I/O into a retired
+        // attachment.
+        if (failedTerminalIds.has(result.terminalId)) return;
         // Only clear for new sessions - reconnections will get screen via redraw
         if (result.isNew) {
           terminal.clear();
@@ -334,6 +377,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         // This ensures the tab bar and status bar are properly rendered
         socket.emit('terminal:resize', {
           userId: user?.user_id,
+          terminalId: result.terminalId,
           cols: terminal.cols,
           rows: terminal.rows,
         });
@@ -345,6 +389,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           for (const cmd of initialCommands) {
             socket.emit('terminal:input', {
               userId: user?.user_id,
+              terminalId: result.terminalId,
               input: `${cmd}\r`,
             });
           }
@@ -355,6 +400,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         if (result.ready) {
           setIsConnected(true);
           setReconnecting(false);
+          setNeedsReconnect(false);
         }
       } catch (error) {
         if (!mounted || generation !== attachGeneration) return;
@@ -378,21 +424,23 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       }
     };
 
-    // The socket auto-reconnects after a network blip or daemon restart, but
-    // the server-side room membership and (possibly) the executor are gone.
-    // Re-join + re-issue create on every (re)connect and surface a visible
-    // "reconnecting" state rather than silently freezing.
+    // A transport reconnect is not a PTY resume protocol. The owner boot may
+    // be gone, so require an explicit user reconnect which creates a fresh
+    // attachment (and may reattach Zellij on a surviving runtime).
     const handleReconnect = () => {
-      setReconnecting(true);
+      setSocketConnected(true);
       setIsConnected(false);
-      void attach();
+      setReconnecting(false);
+      setNeedsReconnect(true);
     };
     const handleDisconnect = () => {
       // Invalidate any in-flight attach so a late resolve can't flip us back
       // to connected while we're actually down.
       attachGeneration++;
+      setSocketConnected(false);
       setIsConnected(false);
-      setReconnecting(true);
+      setReconnecting(false);
+      setNeedsReconnect(true);
     };
     socket.on('connect', handleReconnect);
     socket.on('disconnect', handleDisconnect);
@@ -413,21 +461,31 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         terminalRef.current = null;
       }
       fitAddonRef.current = null;
-      // Zellij session persists - just clean up listeners
+      if (currentTerminalId && socket.connected) {
+        void client
+          .service('terminals')
+          .remove(currentTerminalId)
+          .catch(() => undefined);
+      }
       removeChannelListeners();
-      setIsConnected(false);
-      setReconnecting(false);
-      setSessionInfo({});
-      setZellijMissing(false);
     };
-  }, [open, modalReady, client, initialCommands, canUseTerminal, branchId, user?.user_id]);
+  }, [
+    open,
+    modalReady,
+    client,
+    initialCommands,
+    canUseTerminal,
+    branchId,
+    user?.user_id,
+    reconnectGeneration,
+  ]);
 
   const handleClose = () => {
     if (isConnected) {
       modal.confirm({
         title: 'Close Terminal?',
         content:
-          'The Zellij session will continue running in the background. You can reconnect by reopening the terminal.',
+          'This Agor terminal attachment will close. If this runtime supports persistent Zellij sessions, the branch shell may be available when you reconnect.',
         okText: 'Close',
         okType: 'primary',
         cancelText: 'Cancel',
@@ -468,7 +526,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       ) : zellijMissing ? (
         <div style={{ padding: '24px', color: '#fff', maxWidth: 560 }}>
           <p style={{ marginTop: 0 }}>
-            <strong>Zellij isn't installed on the daemon host.</strong>
+            <strong>Zellij isn't installed in the selected terminal runtime.</strong>
           </p>
           <p>
             The web terminal uses{' '}
@@ -480,8 +538,8 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
             >
               Zellij
             </a>{' '}
-            for persistent, multiplexed sessions. Install it to enable terminals — everything else
-            in Agor works without it.
+            for optional shell persistence on that runtime. Agor terminal transport remains
+            ephemeral. Install it to enable terminals — everything else in Agor works without it.
           </p>
           <p style={{ marginBottom: 0 }}>
             <a
@@ -496,7 +554,22 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: '#fff' }}>
-          {reconnecting ? (
+          {needsReconnect ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Badge status="error" text="Disconnected" />
+              <Button
+                size="small"
+                disabled={!socketConnected}
+                onClick={() => {
+                  setNeedsReconnect(false);
+                  setReconnecting(true);
+                  setReconnectGeneration((generation) => generation + 1);
+                }}
+              >
+                Reconnect
+              </Button>
+            </div>
+          ) : reconnecting ? (
             <Badge status="warning" text="Reconnecting…" />
           ) : !isConnected ? (
             <Badge status="processing" text="Connecting to terminal…" />

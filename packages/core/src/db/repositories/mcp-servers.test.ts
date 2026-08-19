@@ -160,6 +160,32 @@ describe('MCPServerRepository.findAll', () => {
     expect(user1Servers[0].owner_user_id).toBe(user1);
   });
 
+  dbTest('should keep shared and caller-owned servers for usableByUserId', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const user1 = generateId() as UserID;
+    const user2 = generateId() as UserID;
+
+    await repo.create(createMCPServerData({ name: 'shared' }));
+    await repo.create(createMCPServerData({ name: 'user1', owner_user_id: user1 }));
+    await repo.create(createMCPServerData({ name: 'user2', owner_user_id: user2 }));
+
+    const visible = await repo.findAll({ usableByUserId: user1 });
+
+    expect(visible.map((server) => server.name)).toEqual(['shared', 'user1']);
+  });
+
+  dbTest('should restrict ownerless queries to shared rows', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    await repo.create(createMCPServerData({ name: 'shared' }));
+    await repo.create(
+      createMCPServerData({ name: 'private', owner_user_id: generateId() as UserID })
+    );
+
+    const visible = await repo.findAll({ ownerless: true });
+
+    expect(visible.map((server) => server.name)).toEqual(['shared']);
+  });
+
   dbTest('should filter by enabled status', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     await repo.create(createMCPServerData({ name: 'enabled-1', enabled: true }));
@@ -397,6 +423,39 @@ describe('MCPServerRepository custom headers', () => {
       expect(updated.headers).toEqual({
         'DD-API-KEY': 'secret-value',
         'X-Datadog-Parent-Org-Id': '5678',
+      });
+    }
+  );
+
+  dbTest(
+    'should preserve existing OAuth secrets when update sends redacted sentinel',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({
+          name: 'oauth-server',
+          transport: 'http',
+          url: 'https://mcp.example.com/mcp',
+          auth: {
+            type: 'oauth',
+            oauth_client_id: 'old-client-id',
+            oauth_client_secret: 'stored-client-secret',
+          },
+        })
+      );
+
+      const updated = await repo.update(created.mcp_server_id, {
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'new-client-id',
+          oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+        },
+      });
+
+      expect(updated.auth).toMatchObject({
+        type: 'oauth',
+        oauth_client_id: 'new-client-id',
+        oauth_client_secret: 'stored-client-secret',
       });
     }
   );

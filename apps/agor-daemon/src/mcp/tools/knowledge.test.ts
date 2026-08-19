@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/db', () => ({
@@ -12,8 +12,8 @@ vi.mock('@agor/core/feathers', () => ({
 vi.mock('../../utils/branch-workspace-path.js', () => ({
   resolveBranchWorkspacePath: vi.fn(),
 }));
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn(async () => undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
@@ -37,8 +37,15 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
-  getTeammateConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
-    branch.teammate ?? branch.assistant,
+  getTeammateConfig: (branch: {
+    teammate?: unknown;
+    assistant?: unknown;
+    custom_context?: { teammate?: unknown; assistant?: unknown };
+  }) =>
+    branch.custom_context?.teammate ??
+    branch.custom_context?.assistant ??
+    branch.teammate ??
+    branch.assistant,
   isTeammate: (branch: { teammate?: unknown; assistant?: unknown }) =>
     Boolean(branch.teammate ?? branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
@@ -99,6 +106,48 @@ function textResultJson(result: unknown): unknown {
   if (typeof text !== 'string') throw new Error('Expected text result');
   return JSON.parse(text);
 }
+
+describe('Knowledge MCP collection pagination', () => {
+  it('pages namespaces only after the service returns the authorized set', async () => {
+    const find = vi.fn(async () =>
+      Array.from({ length: 4 }, (_, index) => ({
+        namespace_id: `ns-${index}`,
+        slug: `space-${index}`,
+        display_name: `Space ${index}`,
+        kind: 'global',
+        archived: false,
+      }))
+    );
+    const tools = await captureKnowledgeTools({ 'kb/namespaces': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_namespaces_list.handler?.({ limit: 2, offset: 2 })
+    ) as { total: number; data: Array<{ namespace_id: string }>; nextOffset: number | null };
+
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ query: { archived: false } }));
+    expect(result.total).toBe(4);
+    expect(result.data.map((namespace) => namespace.namespace_id)).toEqual(['ns-2', 'ns-3']);
+    expect(result.nextOffset).toBeNull();
+  });
+
+  it('applies history offset after document authorization', async () => {
+    const find = vi.fn(async () =>
+      Array.from({ length: 5 }, (_, index) => ({ version_id: `version-${index}` }))
+    );
+    const tools = await captureKnowledgeTools({ 'kb/versions': { find } });
+
+    const result = textResultJson(
+      await tools.agor_kb_history.handler?.({ documentId: 'doc-1', limit: 2, offset: 2 })
+    ) as { total: number; data: Array<{ version_id: string }>; nextOffset: number | null };
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ document_id: 'doc-1' }) })
+    );
+    expect(result.total).toBe(5);
+    expect(result.data.map((version) => version.version_id)).toEqual(['version-2', 'version-3']);
+    expect(result.nextOffset).toBe(4);
+  });
+});
 
 describe('Knowledge MCP input schemas', () => {
   it('rejects renamed branch_id instead of accepting it as an alias', async () => {
@@ -173,6 +222,41 @@ describe('Knowledge MCP input schemas', () => {
     expect(data).not.toHaveProperty('kind');
     expect(data).not.toHaveProperty('content_text');
     expect(data).not.toHaveProperty('first_line_is_title');
+  });
+
+  it('passes trusted current-Session assistant attribution to Knowledge writes', async () => {
+    const putDocument = vi.fn().mockResolvedValue({ document_id: 'doc-1' });
+    const tools = await captureKnowledgeTools(
+      {
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+          }),
+        },
+        'kb/documents': { putDocument },
+      },
+      {
+        authenticatedSession: {
+          session_id: 'session-1',
+          agentic_tool: 'codex',
+          branch_id: 'branch-1',
+        },
+      }
+    );
+
+    await tools.agor_kb_put.handler?.({
+      namespace: 'global',
+      path: 'page.md',
+      content: '# Page',
+    });
+
+    expect(putDocument.mock.calls[0][1]).toMatchObject({
+      knowledgeWriteAttribution: {
+        sessionId: 'session-1',
+        agenticTool: 'codex',
+        teammateName: 'Scout',
+      },
+    });
   });
 
   it('requires document content to be a string when provided', async () => {
@@ -525,7 +609,8 @@ describe('Knowledge MCP input schemas', () => {
           namespace_slug: 'global',
           include_my_drafts: true,
           include_other_user_drafts: false,
-          limit: 100,
+          limit: 26,
+          offset: 0,
         }),
       })
     );
@@ -572,6 +657,7 @@ describe('Knowledge MCP input schemas', () => {
           ],
         },
       ],
+      pagination: { limit: 25, offset: 0, hasMore: false, nextOffset: null },
     });
     expect(JSON.stringify(result)).not.toContain('sensitive body');
     expect(JSON.stringify(result)).not.toContain('current_version');

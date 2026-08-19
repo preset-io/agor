@@ -1,3 +1,8 @@
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  agenticToolRequiresModelSelection,
+  getAgenticToolModelSelectionError,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -7,11 +12,7 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  getDefaultModelForTool,
-  getDefaultPermissionMode,
-} from '@agor-live/client';
+import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
 import {
   ApiOutlined,
   ExperimentOutlined,
@@ -46,6 +47,10 @@ export interface AgenticConfigChipRowProps {
   client: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
+  branchId?: string;
+  catalogEnabled?: boolean;
+  /** Require integration-owned exact model selection on direct create/edit surfaces. */
+  validateModelSelection?: boolean;
   /** Form field holding the configuration source. */
   fieldName?: string;
   /** Offer "Save as my default" under the chips while Custom is active. */
@@ -94,6 +99,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   client,
   mcpServerById,
   currentUser,
+  branchId,
+  catalogEnabled = true,
+  validateModelSelection = false,
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
   showEffort = true,
@@ -126,13 +134,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
-  const configError = getSourceError(source);
-  const configResolvable = !configError;
-
-  useEffect(() => {
-    onConfigValidityChange?.(configResolvable, configError);
-  }, [configError, configResolvable, onConfigValidityChange]);
-
   // Normalize only after a successful load. A transient service failure must
   // never rewrite a stored preset/default while an unrelated setting is saved.
   useEffect(() => {
@@ -148,6 +149,18 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   };
 
   const resolved = configForSource(source);
+  const resolvedModelConfig = resolved.modelConfig as ModelConfig | undefined;
+  const configError =
+    getSourceError(source) ??
+    (validateModelSelection
+      ? getAgenticToolModelSelectionError(tool, resolvedModelConfig)
+      : undefined);
+  const configResolvable = !configError;
+
+  useEffect(() => {
+    onConfigValidityChange?.(configResolvable, configError);
+  }, [configError, configResolvable, onConfigValidityChange]);
+
   const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
   const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
   const explicitEffort = isInline ? formEffort : resolved.modelConfig?.effort;
@@ -264,10 +277,16 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       )}
 
       <Flex gap={token.marginXS} align="center" wrap="wrap">
-        {resolvedModel && (
+        {(resolvedModel || agenticToolRequiresModelSelection(tool)) && (
           <EditableChip
             icon={<RobotOutlined />}
-            label={shortModelName(tool, resolvedModel)}
+            label={
+              agenticToolRequiresModelSelection(tool)
+                ? resolvedModelConfig?.provider && resolvedModel
+                  ? `${resolvedModelConfig.provider}/${resolvedModel}`
+                  : 'Select provider/model'
+                : shortModelName(tool, resolvedModel)
+            }
             title="Model"
             editable={inlineAllowed}
             managedNote={managedNote}
@@ -279,6 +298,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
                 onChange={onModelChange}
                 agentic_tool={tool}
                 client={client}
+                branchId={branchId}
+                catalogEnabled={catalogEnabled}
                 showAdvisor={false}
               />
             )}

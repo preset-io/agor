@@ -99,6 +99,7 @@ describe('KnowledgeDocumentEditsService', () => {
     const versionsRepo = new KnowledgeDocumentVersionRepository(db);
     const initialVersion = await versionsRepo.findLatestForDocument(document.document_id);
     expect(initialVersion).not.toBeNull();
+    const assistantSessionId = generateId();
 
     const response = await editsService.create(
       {
@@ -121,7 +122,14 @@ describe('KnowledgeDocumentEditsService', () => {
           },
         ],
       },
-      { user: owner }
+      {
+        user: owner,
+        knowledgeWriteAttribution: {
+          sessionId: assistantSessionId,
+          agenticTool: 'codex',
+          teammateName: 'Scout',
+        },
+      }
     );
 
     expect(response.dryRun).toBe(false);
@@ -130,6 +138,19 @@ describe('KnowledgeDocumentEditsService', () => {
 
     const finalVersion = await versionsRepo.findLatestForDocument(document.document_id);
     expect(finalVersion?.content_text).toContain('New tail');
+    expect(finalVersion).toMatchObject({
+      created_by: owner.user_id,
+      created_by_session_id: assistantSessionId,
+      created_by_agentic_tool: 'codex',
+      created_by_teammate_name: 'Scout',
+      metadata: expect.objectContaining({ session_id: assistantSessionId }),
+    });
+    expect(await new KnowledgeDocumentRepository(db).findById(document.document_id)).toMatchObject({
+      updated_by: owner.user_id,
+      updated_by_session_id: assistantSessionId,
+      updated_by_agentic_tool: 'codex',
+      updated_by_teammate_name: 'Scout',
+    });
   });
 
   dbTest('rejects edits when caller lacks permission', async ({ db }) => {

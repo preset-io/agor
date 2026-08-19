@@ -3,15 +3,16 @@
  *
  * Each function is one socket handler — `replaceIfChanged` / cascade /
  * index-rebuild logic, `Object.is` bail-outs, per-collection `bumpRevision`
- * calls — writing through the store primitives (`setMap` / `applyMaps` /
- * `evictBranchAndSessions`). `useAgorData`'s subscribe effect wires socket
+ * calls — writing through the store primitives (`setMap` / `applyMaps` and the
+ * named branch lifecycle cascades). `useAgorData`'s subscribe effect wires socket
  * events straight to these.
  *
  * Background hydration: each handler bumps the matching per-collection revision
  * counter (`bumpRevision`, from `agorHydration`) so an in-flight background
  * hydration discards its snapshot rather than clobbering this live write —
- * INCLUDING the branch-eviction cascade, which mutates the sessions maps and so
- * bumps `sessions` too.
+ * INCLUDING the branch-eviction cascade, which mutates sessions and, for a
+ * hard delete, every normalized FK-cascade/SET NULL slice, and so bumps the
+ * matching revisions.
  *
  * IMMER breadth/depth rule applied here:
  *  - HOT single-map `*:patched` writes → RAW reducer via `setMap`
@@ -23,7 +24,7 @@
  *    which commits every changed slice in ONE store notify — reference-stable so
  *    the contract the tests pin holds exactly.
  *  - the branch-eviction CASCADE → the store's immer action
- *    (`evictBranchAndSessions`).
+ *    (`evictArchivedBranch` / `applyBranchHardDeleteCascade`).
  */
 import type {
   Artifact,
@@ -52,12 +53,14 @@ import { type AgorState, agorStore } from './agorStore';
 // Thin bindings to the store primitives. The vanilla store and its actions are
 // stable module singletons, so these resolve the live action each call. The
 // signatures are pulled straight off `AgorState` so the generic `setMap` key→
-// value inference (and the `applyMaps` reducer / `evictBranchAndSessions`
+// value inference (and the `applyMaps` reducer / branch cascade
 // shapes) carry through to every callback below.
 const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
 const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
-const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (branchId) =>
-  agorStore.getState().evictBranchAndSessions(branchId);
+const evictArchivedBranch: AgorState['evictArchivedBranch'] = (branchId) =>
+  agorStore.getState().evictArchivedBranch(branchId);
+const applyBranchHardDeleteCascade: AgorState['applyBranchHardDeleteCascade'] = (branchId) =>
+  agorStore.getState().applyBranchHardDeleteCascade(branchId);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {
@@ -206,12 +209,9 @@ export function branchCreated(branch: Branch) {
 export function branchPatched(branch: Branch) {
   bumpRevision('branches');
   if (branch.archived) {
-    // The eviction cascade mutates BOTH the branches map (bumped above) and the
-    // sessions maps, so bump the sessions revision too — otherwise a sessions
-    // hydration in flight could resurrect the evicted sessions with a
-    // pre-eviction snapshot.
+    // Archive preserves the board-object placement for a future unarchive.
     bumpRevision('sessions');
-    evictBranchAndSessions(branch.branch_id);
+    evictArchivedBranch(branch.branch_id);
     return;
   }
 
@@ -220,9 +220,15 @@ export function branchPatched(branch: Branch) {
 export function branchRemoved(branch: Branch) {
   bumpRevision('branches');
   // Mirror the archive path: a hard delete should also evict any sessions we
-  // still track on that branch (and bump `sessions` for the cascade).
+  // still track on that branch and its FK-cascaded board placement.
   bumpRevision('sessions');
-  evictBranchAndSessions(branch.branch_id);
+  bumpRevision('boardObjects');
+  bumpRevision('boards');
+  bumpRevision('comments');
+  bumpRevision('sessionMcp');
+  bumpRevision('gatewayChannels');
+  bumpRevision('artifacts');
+  applyBranchHardDeleteCascade(branch.branch_id);
   // Collapse exceptions survive archive/move but not a hard delete.
   removeCollapsedBranchNode(branch.branch_id);
 }

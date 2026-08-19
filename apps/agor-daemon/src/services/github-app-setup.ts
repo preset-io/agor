@@ -14,10 +14,10 @@
  *                                        in `setup_url` so it's returned on the
  *                                        post-install redirect.
  * 3. GET  /api/github/setup/callback   — Consumes the state token (one-shot),
- *                                        verifying the install originated from
- *                                        an authenticated admin session. Shows
- *                                        the installation_id so the admin can
- *                                        finish configuring the channel.
+ *                                        proving possession of a bearer issued
+ *                                        to an authenticated admin. Shows the
+ *                                        untrusted installation_id so the admin
+ *                                        can verify it and finish configuring.
  * 4. GET  /api/github/installations    — Lists installations for a GitHub App
  *                                        so the admin can pick which org/repos
  *                                        to connect.
@@ -37,7 +37,7 @@ import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor
 import { type AuthenticatedParams, hasMinimumRole, ROLES } from '@agor/core/types';
 import type express from 'express';
 import { escapeHtml } from '../utils/html.js';
-import { consumeInstallState, issueInstallState } from './github-install-state.js';
+import { type ConsumeResult, GitHubInstallStateService } from './github-install-state.js';
 
 // ============================================================================
 // Helpers
@@ -138,6 +138,12 @@ function renderErrorPage(opts: {
 </html>`;
 }
 
+/** Prevent short-lived callback authority from entering browser/proxy caches. */
+function setSensitiveResponseHeaders(res: express.Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+}
+
 // ============================================================================
 // Route Handlers
 // ============================================================================
@@ -150,8 +156,9 @@ function renderErrorPage(opts: {
  * install instruction page and passes the token along as a query parameter.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Feathers app typing
-function handleIssueState(app: any, config: AgorConfig) {
+function handleIssueState(app: any, config: AgorConfig, installStates: GitHubInstallStateService) {
   return async (req: express.Request, res: express.Response) => {
+    setSensitiveResponseHeaders(res);
     const authed = await authenticateRequest(app, req, config);
     if (!authed) {
       res.status(401).json({ error: 'Authentication required to initiate GitHub App install' });
@@ -163,8 +170,14 @@ function handleIssueState(app: any, config: AgorConfig) {
       res.status(403).json({ error: 'Admin role required to initiate GitHub App install' });
       return;
     }
-    const state = issueInstallState(authed.user_id, authed.tenantId);
-    res.json({ state });
+    try {
+      const state = await installStates.issueInstallState(authed.user_id, authed.tenantId);
+      res.json({ state });
+    } catch {
+      // Never log or reflect the underlying failure: it may retain state hash
+      // metadata. PostgreSQL initiation fails closed without a local fallback.
+      res.status(503).json({ error: 'GitHub App install setup is temporarily unavailable' });
+    }
   };
 }
 
@@ -185,6 +198,7 @@ function handleIssueState(app: any, config: AgorConfig) {
  */
 function handleNewApp(uiUrl: string, daemonUrl: string) {
   return (req: express.Request, res: express.Response) => {
+    setSensitiveResponseHeaders(res);
     const appName = (req.query.name as string) || 'Agor';
     const org = req.query.org as string | undefined;
     const state = typeof req.query.state === 'string' ? req.query.state : '';
@@ -271,23 +285,57 @@ function handleNewApp(uiUrl: string, daemonUrl: string) {
  * GET /api/github/setup/callback?installation_id=ID&state=XYZ
  *
  * GitHub redirects the browser here after the app is installed.
- * Verifies the CSRF state token (one-shot), then shows the installation_id
- * for the admin to enter in the channel setup form. The callback deliberately
- * does not select or mutate a channel: the create flow runs before a channel
- * exists, and multiple GitHub channels may exist in the same tenant.
+ * Verifies the CSRF state token (one-shot), then shows the untrusted
+ * installation_id for the admin to verify before entering it in the channel
+ * setup form. The callback deliberately does not select or mutate a channel:
+ * the create flow runs before a channel exists, and multiple GitHub channels
+ * may exist in the same tenant.
  *
  * Authentication: callers do not (and cannot) attach a Bearer header here
- * because the request is a browser redirect from GitHub. Authentication is
- * proven by the state token — it is only issued from an authenticated
- * admin session (POST /api/github/setup/state) and is validated here.
+ * because the request is a browser redirect from GitHub. State possession
+ * proves only that the caller has a bearer issued to an authenticated admin
+ * session (POST /api/github/setup/state). It does not authenticate GitHub, the
+ * callback caller, or the installation_id, which GitHub documents as spoofable.
  */
-function handleSetupCallback(uiUrl: string) {
+function handleSetupCallback(uiUrl: string, installStates: GitHubInstallStateService) {
   return async (req: express.Request, res: express.Response) => {
+    setSensitiveResponseHeaders(res);
     const state = typeof req.query.state === 'string' ? req.query.state : undefined;
     const installationIdRaw =
       typeof req.query.installation_id === 'string' ? req.query.installation_id : undefined;
 
-    const consumed = consumeInstallState(state);
+    // Reject malformed provider output before burning the one-shot state. This
+    // value is display-only and GitHub documents it as caller-spoofable.
+    if (!installationIdRaw) {
+      res.status(400).send('Missing installation_id parameter');
+      return;
+    }
+
+    if (!/^[1-9]\d*$/.test(installationIdRaw)) {
+      res.status(400).send('installation_id must be a positive integer');
+      return;
+    }
+    const installationIdNum = Number(installationIdRaw);
+    if (!Number.isSafeInteger(installationIdNum)) {
+      res.status(400).send('installation_id must be a positive integer');
+      return;
+    }
+
+    let consumed: ConsumeResult;
+    try {
+      consumed = await installStates.consumeInstallState(state);
+    } catch {
+      res.setHeader('Content-Type', 'text/html');
+      res.status(503).send(
+        renderErrorPage({
+          title: 'Install setup unavailable',
+          heading: 'Install setup unavailable',
+          body: 'Agor could not verify the one-time install token. Try this callback again, or restart the install from Agor Settings → Gateway Channels.',
+          uiUrl,
+        })
+      );
+      return;
+    }
     if (!consumed.ok) {
       res.setHeader('Content-Type', 'text/html');
       const status = consumed.reason === 'missing' ? 401 : 400;
@@ -307,22 +355,14 @@ function handleSetupCallback(uiUrl: string) {
       return;
     }
 
-    if (!installationIdRaw) {
-      res.status(400).send('Missing installation_id parameter');
-      return;
-    }
-
-    const installationIdNum = Number(installationIdRaw);
-    if (!Number.isSafeInteger(installationIdNum) || installationIdNum <= 0) {
-      res.status(400).send('installation_id must be a positive integer');
-      return;
-    }
-
+    // GitHub documents installation_id as caller-spoofable. This value remains
+    // display-only: the callback does not persist credentials, select a channel,
+    // call GitHub, or authorize later gateway configuration.
     res.setHeader('Content-Type', 'text/html');
     res.send(`<!DOCTYPE html>
 <html>
 <head>
-  <title>GitHub App Installed — Agor</title>
+  <title>GitHub Installation ID Received — Agor</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0d1117; color: #e6edf3; }
     .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; max-width: 420px; text-align: center; }
@@ -333,9 +373,9 @@ function handleSetupCallback(uiUrl: string) {
 </head>
 <body>
   <div class="card">
-    <h2>GitHub App Installed</h2>
-    <p>Installation ID <code>${escapeHtml(installationIdNum)}</code></p>
-    <p style="margin-top: 12px;">Return to Agor and enter this ID to finish configuring the gateway channel.</p>
+    <h2>GitHub installation ID received</h2>
+    <p>Unverified installation ID <code>${escapeHtml(installationIdNum)}</code></p>
+    <p style="margin-top: 12px;">Confirm this ID in your GitHub App settings, then return to Agor and enter it to finish configuring the gateway channel.</p>
   </div>
 </body>
 </html>`);
@@ -463,21 +503,24 @@ export function registerGitHubAppSetupRoutes(
     daemonUrl: string;
     db: TenantScopeAwareDatabase;
     config: AgorConfig;
+    /** Test seam; production selects PostgreSQL/shared vs SQLite/local from db. */
+    installStates?: GitHubInstallStateService;
   }
-): void {
-  app.post('/api/github/setup/state', handleIssueState(app, opts.config));
+): GitHubInstallStateService {
+  const installStates = opts.installStates ?? new GitHubInstallStateService({ db: opts.db });
+  app.post('/api/github/setup/state', handleIssueState(app, opts.config, installStates));
   app.get('/api/github/setup/new', handleNewApp(opts.uiUrl, opts.daemonUrl));
-  app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl));
+  app.get('/api/github/setup/callback', handleSetupCallback(opts.uiUrl, installStates));
   app.get('/api/github/installations', handleListInstallations(app, opts.db, opts.config));
 
-  console.log(
-    '[github-app-setup] Routes registered: POST /state, GET /setup/new, /setup/callback, /installations'
-  );
+  console.log('[github-app-setup] Routes registered: setup=enabled, installations=enabled');
+  return installStates;
 }
 
 // Internal test hooks (for unit tests only).
 export const __testables = {
   escapeHtml,
+  setSensitiveResponseHeaders,
   readBearerToken,
   handleIssueState,
   handleListInstallations,

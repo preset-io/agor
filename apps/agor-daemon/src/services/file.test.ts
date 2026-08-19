@@ -1,13 +1,14 @@
+import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
 
 const impersonationMocks = vi.hoisted(() => ({
-  resolveExecutorReadAsUser: vi.fn(),
+  resolveDelegatedExecutionHomeKey: vi.fn(),
 }));
 
-vi.mock('../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: impersonationMocks.resolveExecutorReadAsUser,
+vi.mock('../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: impersonationMocks.resolveDelegatedExecutionHomeKey,
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
@@ -19,7 +20,7 @@ vi.mock('../utils/spawn-executor.js', () => ({
 describe('FileService executor failures', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue(undefined);
+    impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue(undefined);
   });
 
   it('does not report executor failure as an empty repository', async () => {
@@ -29,19 +30,21 @@ describe('FileService executor failures', () => {
     });
     const service = new FileService(
       { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-      null as never,
-      { settings: { authentication: { secret: 'test' } } } as never
+      { run: vi.fn() } as never,
+      { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
     );
 
     await expect(
-      service.find({
-        query: { branch_id: 'branch-1' },
-        user: {
-          user_id: 'user-1',
-          email: 'member@example.com',
-          role: 'member',
-        },
-      })
+      runWithTenantContext('tenant-a', () =>
+        service.find({
+          query: { branch_id: 'branch-1' },
+          user: {
+            user_id: 'user-1',
+            email: 'member@example.com',
+            role: 'member',
+          },
+        })
+      )
     ).rejects.toThrow('Failed to browse files: executor unavailable');
   });
 
@@ -74,12 +77,12 @@ describe('FileService executor failures', () => {
   ])(
     'passes the resolved execution-substrate identity through file $operation',
     async ({ invoke, command, data }) => {
-      impersonationMocks.resolveExecutorReadAsUser.mockResolvedValue('alice');
+      impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue('alice');
       vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-        null as never,
-        { settings: { authentication: { secret: 'test' } } } as never
+        { run: vi.fn() } as never,
+        { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
       );
       const params = {
         query: { branch_id: 'branch-1' },
@@ -90,12 +93,86 @@ describe('FileService executor failures', () => {
         },
       };
 
-      await invoke(service, params);
+      await runWithTenantContext('tenant-a', () => invoke(service, params));
 
       expect(runExecutorCommand).toHaveBeenCalledWith(
         expect.objectContaining({ command }),
-        expect.objectContaining({ asUser: 'alice' })
+        expect.objectContaining({ delegatedHomeKey: 'alice' })
       );
     }
   );
+
+  it('scopes database reads but leaves executor work outside the transaction', async () => {
+    const db = { run: vi.fn() } as never;
+    const findById = vi.fn(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return { branch_id: 'branch-1' };
+    });
+    impersonationMocks.resolveDelegatedExecutionHomeKey.mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return 'alice';
+    });
+    vi.mocked(runExecutorCommand).mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      return { success: true, data: { files: [] } };
+    });
+    const service = new FileService({ findById } as never, db, {
+      get: () => ({}),
+      settings: { authentication: { secret: 'test' } },
+    } as never);
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { branch_id: 'branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(findById).toHaveBeenCalledOnce();
+    expect(runExecutorCommand).toHaveBeenCalledOnce();
+  });
+
+  it('fails before repository access when tenant identity is missing', async () => {
+    const findById = vi.fn();
+    const service = new FileService(
+      { findById } as never,
+      { run: vi.fn() } as never,
+      {
+        get: () => ({}),
+        settings: { authentication: { secret: 'test' } },
+      } as never
+    );
+
+    await expect(
+      service.find({
+        query: { branch_id: 'branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    ).rejects.toThrow('Missing active tenant context for file database access');
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('reuses the branch authorized by the registered RBAC preload', async () => {
+    const findById = vi.fn();
+    vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data: { files: [] } });
+    const service = new FileService(
+      { findById } as never,
+      { run: vi.fn() } as never,
+      {
+        get: () => ({}),
+        settings: { authentication: { secret: 'test' } },
+      } as never
+    );
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { branch_id: 'branch-1' },
+        branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      } as never)
+    );
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(runExecutorCommand).toHaveBeenCalledOnce();
+  });
 });

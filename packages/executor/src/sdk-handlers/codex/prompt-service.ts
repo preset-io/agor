@@ -26,15 +26,21 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
+import {
+  getMcpServersForSession,
+  listMcpToolsWithPermission,
+  PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+} from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem } from '@agor/core/sdk';
-import { Codex } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
+import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
 import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
+import type * as CodexSdk from '@openai/codex-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -51,23 +57,14 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
-/**
- * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
- * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
- *
- * Agor has no equivalent for `minimal`. Codex has no `max` — both Agor `max`
- * and Agor `xhigh` map to Codex `xhigh` (the Codex ceiling).
- */
-function toCodexReasoningEffort(
-  effort: EffortLevel | undefined
-): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
-  if (!effort) return undefined;
-  return effort === 'max' || effort === 'xhigh' ? 'xhigh' : effort;
-}
+type CodexSdkReasoningEffort = NonNullable<
+  NonNullable<
+    Parameters<InstanceType<typeof CodexSdk.Codex>['startThread']>[0]
+  >['modelReasoningEffort']
+>;
 
 /**
  * Codex CLI config payload, sourced from the SDK's public `CodexOptions`
@@ -91,6 +88,30 @@ type CodexConfigValue = CodexConfigObject[string];
  * clears the prompt.
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
+
+/**
+ * Apply the server's `tool_permissions` to its Codex config.
+ *
+ * Codex's approval mode is per-server, not per-tool, so a gated tool cannot be
+ * singled out for a prompt — and `exec --json` has no channel to prompt on
+ * anyway (see `MCP_AUTO_APPROVE`). `disabled_tools` is the only per-tool lever
+ * Codex exposes, so both `deny` and `ask` fail closed there; `allow` and
+ * unlisted tools keep the server-wide auto-approve.
+ */
+function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): void {
+  const blocked = listMcpToolsWithPermission(server, PERMISSIONS_BLOCKED_WITHOUT_PROMPT);
+  if (blocked.length === 0) return;
+
+  config.disabled_tools = blocked as CodexConfigValue[];
+
+  const asked = listMcpToolsWithPermission(server, ['ask']);
+  console.warn(
+    `   ⛔ [Codex MCP] Disabling ${blocked.length} tool(s) on "${server.name}" per tool_permissions` +
+      (asked.length > 0
+        ? ` (${asked.length} set to "ask"; Codex runs headless with no approval prompt, so they fail closed)`
+        : '')
+  );
+}
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
@@ -252,7 +273,7 @@ export type CodexStreamEvent =
     };
 
 export class CodexPromptService {
-  private codex?: InstanceType<typeof Codex.Codex>;
+  private codex?: InstanceType<typeof CodexSdk.Codex>;
   private lastApiKey: string | null = null;
   private lastBaseUrl: string | null = null;
   private lastClientFingerprint: string | null = null;
@@ -397,10 +418,10 @@ export class CodexPromptService {
     apiKey: string | undefined,
     baseUrl: string | undefined,
     config: CodexConfigObject | undefined
-  ): ConstructorParameters<typeof Codex.Codex>[0] {
+  ): ConstructorParameters<typeof CodexSdk.Codex>[0] {
     const useSubscription = this.useNativeAuth && !apiKey;
 
-    const options: ConstructorParameters<typeof Codex.Codex>[0] = {
+    const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(config ? { config } : {}),
@@ -505,7 +526,7 @@ export class CodexPromptService {
    * keeps abandoned app-server/MCP transports from overlapping the new client.
    */
   private async closeCodexClient(
-    client: InstanceType<typeof Codex.Codex> | undefined
+    client: InstanceType<typeof CodexSdk.Codex> | undefined
   ): Promise<void> {
     if (!client) return;
     const candidate = client as unknown as {
@@ -524,15 +545,16 @@ export class CodexPromptService {
   }
 
   private async replaceCodexClient(
-    options: ConstructorParameters<typeof Codex.Codex>[0]
+    options: ConstructorParameters<typeof CodexSdk.Codex>[0]
   ): Promise<void> {
     const previous = this.codex;
     this.codex = undefined;
     await this.closeCodexClient(previous);
+    const Codex = await loadManagedAgenticToolSdk<typeof CodexSdk>('codex');
     this.codex = new Codex.Codex(options);
   }
 
-  private getCodexClient(): InstanceType<typeof Codex.Codex> {
+  private getCodexClient(): InstanceType<typeof CodexSdk.Codex> {
     if (!this.codex) {
       throw new Error('Codex SDK client was not initialized before use');
     }
@@ -629,18 +651,27 @@ export class CodexPromptService {
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    forUserId: UserID | undefined,
-    requireMcpServers = false
+    context: {
+      forUserId?: UserID;
+      sessionOwnerId: UserID;
+      requireMcpServers?: boolean;
+    }
   ): Promise<{ servers: CodexConfigObject; total: number }> {
+    const { forUserId, sessionOwnerId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
-    const serversWithSource = await getMcpServersForSession(sessionId, {
-      sessionMCPRepo: this.sessionMCPServerRepo,
-      mcpServerRepo: this.mcpServerRepo,
-      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-      forUserId,
-    });
+    const serversWithSource = await getMcpServersForSession(
+      sessionId,
+      {
+        sessionMCPRepo: this.sessionMCPServerRepo,
+        mcpServerRepo: this.mcpServerRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+        forUserId,
+        sessionOwnerId,
+      },
+      { toolFiltering: 'exclude' }
+    );
 
     const mcpServers = serversWithSource.map((s) => s.server);
 
@@ -686,6 +717,7 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
+      applyMcpToolPermissions(serverConfig, server);
       applyGatewayMcpStartupGuard(serverConfig, requireMcpServers);
       codexDebug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
@@ -712,6 +744,7 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
+      applyMcpToolPermissions(serverConfig, server);
       let canRequireServer = requireMcpServers;
       codexDebug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
@@ -722,9 +755,9 @@ export class CodexPromptService {
       // Resolve the Authorization header via the shared MCP auth helper —
       // covers bearer / JWT (with token-mint) / OAuth (with cached & DB
       // tokens). Codex passes the bearer through `bearer_token_env_var`,
-      // not a header map, so we extract the bearer token and route it via
-      // an env var. Non-bearer schemes log a warning since Codex's CLI
-      // only supports bearer auth.
+      // while custom headers use `env_http_headers`, so secret values stay
+      // out of the SDK's generated `--config` arguments. Non-bearer schemes
+      // log a warning since Codex's CLI only supports bearer auth.
       try {
         const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
@@ -733,7 +766,26 @@ export class CodexPromptService {
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
-          serverConfig.headers = customHeaders;
+          // Codex's streamable-HTTP MCP config takes `env_http_headers`: a map
+          // of header NAME -> the NAME of an env var whose value Codex reads at
+          // runtime. (It will not accept literal header values here the way
+          // Claude's `.mcp.json` `headers` object does — that indirection is
+          // also what keeps secrets out of the SDK-generated `--config` argv.)
+          // The env var name itself is arbitrary to Codex; we synthesize a
+          // unique one per session + server + position so concurrent sessions
+          // and multi-header servers don't clobber each other in the shared
+          // process.env. The index (not the header name) keys the suffix
+          // because header names like `X-API-Key` aren't valid env-var
+          // identifiers.
+          const envHttpHeaders: Record<string, string> = {};
+          for (const [index, [headerName, headerValue]] of Object.entries(
+            customHeaders
+          ).entries()) {
+            const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}_HEADER_${index + 1}`;
+            process.env[envVarName] = headerValue;
+            envHttpHeaders[headerName] = envVarName;
+          }
+          serverConfig.env_http_headers = envHttpHeaders;
           codexDebug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
         if (authHeader) {
@@ -1014,7 +1066,13 @@ export class CodexPromptService {
       | CodexSandboxMode
       | undefined;
     const configuredSandboxMode = codexConfig?.sandboxMode ?? defaults.sandboxMode;
-    const sandboxMode = sandboxModeEnvOverride ?? configuredSandboxMode;
+    // When Agor wraps the whole executor in its own OS-level sandbox (SRT), do
+    // NOT let Codex start its own nested bwrap — run full-access INSIDE Agor's
+    // sandbox, which already enforces the filesystem/network boundary. One layer.
+    const outerSandbox = process.env.AGOR_OUTER_SANDBOX === '1';
+    const sandboxMode: CodexSandboxMode = outerSandbox
+      ? 'danger-full-access'
+      : (sandboxModeEnvOverride ?? configuredSandboxMode);
     const approvalPolicy = codexConfig?.approvalPolicy ?? defaults.approvalPolicy;
     const networkAccess = codexConfig?.networkAccess ?? defaults.networkAccess;
     // Apps can mutate remote systems outside the filesystem sandbox. Only
@@ -1055,11 +1113,17 @@ export class CodexPromptService {
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      forUserId,
-      requireMcpServers
+      {
+        forUserId,
+        sessionOwnerId: session.created_by as UserID,
+        requireMcpServers,
+      }
     );
 
     const codexConfigPayload: CodexConfigObject = {
+      // Agor owns durable task continuation. Codex goals can automatically
+      // continue after an internal answer without completing the SDK turn.
+      features: { goals: false },
       model_instructions_file: instructionsFile,
       ...(Object.keys(mcpServersConfig).length > 0 ? { mcp_servers: mcpServersConfig } : {}),
       // Codex Apps (for example the GitHub connector supplied by a plugin)
@@ -1095,7 +1159,7 @@ export class CodexPromptService {
     // model + modelReasoningEffort are passed through from session.model_config
     // so the UI's per-session model picker actually controls what Codex runs.
     const sessionModel = session.model_config?.model;
-    const sessionEffort = toCodexReasoningEffort(session.model_config?.effort);
+    const sessionEffort = session.model_config?.effort;
     const threadOptions = {
       workingDirectory: branch.path,
       skipGitRepoCheck: false,
@@ -1103,7 +1167,8 @@ export class CodexPromptService {
       approvalPolicy,
       networkAccessEnabled: networkAccess,
       ...(sessionModel ? { model: sessionModel } : {}),
-      ...(sessionEffort ? { modelReasoningEffort: sessionEffort } : {}),
+      // Codex CLI accepts `max`; the SDK's ModelReasoningEffort type currently lags it.
+      ...(sessionEffort ? { modelReasoningEffort: sessionEffort as CodexSdkReasoningEffort } : {}),
     };
 
     // Check if MCP servers were added after session creation

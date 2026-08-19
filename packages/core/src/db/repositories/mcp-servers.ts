@@ -13,9 +13,10 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
+import { restoreRedactedMCPEnvSecrets } from '../../tools/mcp/env-secrets';
 import {
   normalizeMCPCustomHeaders,
   restoreRedactedMCPCustomHeaders,
@@ -58,6 +59,7 @@ export class MCPServerRepository
       display_name: row.data.display_name,
       description: row.data.description,
       import_path: row.data.import_path,
+      catalog_entry_name: row.data.catalog_entry_name,
 
       // Transport config
       command: row.data.command,
@@ -114,6 +116,7 @@ export class MCPServerRepository
         display_name: data.display_name,
         description: data.description,
         import_path: data.import_path,
+        catalog_entry_name: data.catalog_entry_name,
         command: data.command,
         args: data.args,
         url: data.url,
@@ -225,6 +228,16 @@ export class MCPServerRepository
         conditions.push(eq(mcpServers.source, filters.source));
       }
 
+      if (filters?.usableByUserId) {
+        conditions.push(
+          or(isNull(mcpServers.owner_user_id), eq(mcpServers.owner_user_id, filters.usableByUserId))
+        );
+      }
+
+      if (filters?.ownerless) {
+        conditions.push(isNull(mcpServers.owner_user_id));
+      }
+
       if (conditions.length > 0) {
         query = query.where(and(...conditions));
       }
@@ -270,6 +283,12 @@ export class MCPServerRepository
         merged.auth = restoreRedactedMCPAuthSecrets({
           current: current.auth,
           next: updates.auth,
+        });
+      }
+      if ('env' in updates) {
+        merged.env = restoreRedactedMCPEnvSecrets({
+          current: current.env,
+          next: updates.env,
         });
       }
       const insertData = this.mcpServerToInsert(merged);

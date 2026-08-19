@@ -5,13 +5,23 @@
  * Safe to run multiple times (idempotent).
  */
 
-import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig, setConfigValue } from '@agor/core/config';
+import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integrations';
 import {
-  createDatabase,
+  type AgorConfig,
+  createInitialConfig,
+  getConfigPath,
+  getDaemonUrl,
+  getDefaultConfig,
+  loadConfig,
+  prepareInitialDeploymentConfig,
+} from '@agor/core/config';
+import {
+  createDatabaseAsync,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   runMigrations,
@@ -25,29 +35,113 @@ import {
   loadOpenSourceTelemetryAgorVersion,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
-import { isDaemonRunning } from '@agor-live/client';
+import { diagnoseGit } from '@agor/git';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
+import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
+import {
+  AGENTIC_TOOL_INTEGRATIONS,
+  type InstallableAgenticTool,
+  normalizeAgenticToolName,
+  resolveManagedAgenticToolVersion,
+  validateInteractiveAgenticToolSelection,
+  writeAgenticToolSelectionManifest,
+} from '../lib/agentic-tool-integrations.js';
+import { getDaemonPid, getManagedDaemonIdentity } from '../lib/daemon-manager.js';
+import { probeAgorDaemon } from '../lib/daemon-probe.js';
+import { assertLocalContextUnlockedWhenIdentified } from '../lib/local-context.js';
+
+export function isFreshInitState(state: {
+  baseExists: boolean;
+  configExists: boolean;
+  databaseExists: boolean;
+  reposExist: boolean;
+  branchesExist: boolean;
+}): boolean {
+  return (
+    !state.baseExists ||
+    (!state.configExists && !state.databaseExists && !state.reposExist && !state.branchesExist)
+  );
+}
+
+export function createInstallTelemetryConfig(config: AgorConfig, instanceId: string): AgorConfig {
+  return {
+    ...config,
+    telemetry: { ...config.telemetry, enabled: true, instance_id: instanceId },
+  };
+}
+
+export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
+  return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+}
+
+export function formatInitBackupTimestamp(date = new Date()): string {
+  return date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+
+/** Parse only the fixed integration allowlist; `all` and `none` are explicit headless shorthands. */
+export function parseInitialAgenticTools(value: string): InstallableAgenticTool[] {
+  const names = value
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  if (names.length === 0) {
+    throw new Error(
+      'Agentic-tool policy cannot be empty. Use `none` for an intentionally empty deployment.'
+    );
+  }
+  if (names.length === 1 && names[0] === 'none') return [];
+  if (names.length === 1 && names[0] === 'all') {
+    return Object.keys(AGENTIC_TOOL_INTEGRATIONS) as InstallableAgenticTool[];
+  }
+  if (names.includes('all') || names.includes('none')) {
+    throw new Error('Use `all` or `none` by itself, or provide a comma-separated tool list.');
+  }
+  const normalized = names.map(normalizeAgenticToolName);
+  const unknown = names.filter((_, index) => !normalized[index]);
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown agentic tool: ${unknown.join(', ')}. Choose from ${Object.keys(AGENTIC_TOOL_INTEGRATIONS).join(', ')}, all, or none.`
+    );
+  }
+  return [...new Set(normalized as InstallableAgenticTool[])];
+}
+
+export function assertInitSupportsConfiguredDatabase(dialect = process.env.AGOR_DB_DIALECT): void {
+  if (dialect === 'postgresql') {
+    throw new Error(
+      '`agor init` currently supports SQLite installations only. For PostgreSQL deployments, configure the deployment environment and run `agor db migrate --yes`; the daemon will bootstrap required database state.'
+    );
+  }
+}
 
 export default class Init extends Command {
-  static description = 'Initialize Agor environment (creates ~/.agor/ and database)';
+  private readonly deploymentId = randomUUID();
+  private initialDaemonConfig: NonNullable<AgorConfig['daemon']> = {
+    deployment_id: this.deploymentId,
+  };
+  private initialConfig: AgorConfig = {
+    ...getDefaultConfig(),
+    daemon: { ...getDefaultConfig().daemon, deployment_id: this.deploymentId },
+  };
+  private requestedAgenticTools: InstallableAgenticTool[] | undefined;
+  private selectedAgenticTools: InstallableAgenticTool[] | undefined;
+  private nonInteractive = false;
+  static description =
+    'Create the Agor config/database and install the agentic tools selected for first use';
 
-  static examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --local',
-  ];
+  static examples = ['<%= config.bin %> <%= command.id %>'];
 
   static flags = {
     local: Flags.boolean({
       char: 'l',
-      description: 'Initialize local .agor/ directory in current working directory',
+      description: 'Deprecated: per-directory installations are no longer supported',
       default: false,
     }),
     force: Flags.boolean({
       char: 'f',
-      description:
-        'Force re-initialization without prompts (deletes database, repos, and branches)',
+      description: 'Force re-initialization without prompts (deletes the entire .agor directory)',
       default: false,
     }),
     'skip-if-exists': Flags.boolean({
@@ -63,13 +157,17 @@ export default class Init extends Command {
       description: 'Daemon host (default: localhost)',
       required: false,
     }),
-    'set-config': Flags.boolean({
-      description: 'Set daemon config values even if .agor already exists (for Docker/deployment)',
-      default: false,
-    }),
     'instance-label': Flags.string({
       description: 'Instance label for deployment identification (e.g., "staging", "prod-us-east")',
       required: false,
+    }),
+    'agentic-tools': Flags.string({
+      description: 'Comma-separated agentic tools to configure and install (or "all" / "none")',
+      required: false,
+    }),
+    'non-interactive': Flags.boolean({
+      description: 'Initialize missing state without prompts or deleting existing data',
+      default: false,
     }),
   };
 
@@ -82,6 +180,24 @@ export default class Init extends Command {
     }
   }
 
+  /** Init owns config creation until this command returns; no other flow may use this helper. */
+  private async persistDuringInitialCreation(config: AgorConfig): Promise<void> {
+    config = prepareInitialDeploymentConfig(
+      { ...config, daemon: { ...config.daemon, ...this.initialDaemonConfig } },
+      { deploymentId: this.deploymentId }
+    );
+    if (await this.pathExists(getConfigPath())) return;
+    await createInitialConfig(config);
+  }
+
+  private resetFreshConfig(): void {
+    const defaults = getDefaultConfig();
+    this.initialConfig = {
+      ...defaults,
+      daemon: { ...defaults.daemon, ...this.initialDaemonConfig },
+    };
+  }
+
   private expandHome(path: string): string {
     if (path.startsWith('~/')) {
       return join(homedir(), path.slice(2));
@@ -89,36 +205,47 @@ export default class Init extends Command {
     return path;
   }
 
-  /**
-   * Count rows in database tables for display
-   */
-  private async getDbStats(dbPath: string): Promise<{
-    sessions: number;
-    tasks: number;
-    messages: number;
-    repos: number;
-  } | null> {
-    try {
-      const { createDatabase, select, sessions, tasks, messages, repos } = await import(
-        '@agor/core/db'
-      );
-      const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
+  private closeSQLiteDatabase(db: unknown): void {
+    (db as { $client?: { close?: () => void } }).$client?.close?.();
+  }
 
-      // Count rows by selecting all and measuring length
-      const sessionRows = await select(db).from(sessions).all();
-      const taskRows = await select(db).from(tasks).all();
-      const messageRows = await select(db).from(messages).all();
-      const repoRows = await select(db).from(repos).all();
+  private async assertDaemonStoppedBeforeReinit(): Promise<void> {
+    // Use the same environment/config resolution and health probe as
+    // `agor daemon status` so re-init cannot drift from the CLI's canonical
+    // answer about which daemon endpoint is active.
+    //
+    // Only consider daemons that belong to *this* Agor home. A daemon this home
+    // manages (PID file present) always counts. The configured URL counts only once
+    // a config exists here — otherwise `getDaemonUrl()` hands back the global
+    // default and initializing a brand-new home fails because some unrelated
+    // deployment happens to occupy that port. That false positive also made the
+    // `agor init` test suite dependent on no daemon running on 3030.
+    const managedUrl = getDaemonPid() !== null ? getManagedDaemonIdentity()?.daemonUrl : undefined;
 
-      return {
-        sessions: sessionRows.length,
-        tasks: taskRows.length,
-        messages: messageRows.length,
-        repos: repoRows.length,
-      };
-    } catch {
-      return null;
+    // A daemon this home manages is unambiguously ours, whatever it answers with.
+    if (managedUrl && (await probeAgorDaemon(managedUrl)).running) {
+      throw new Error(this.daemonRunningMessage(managedUrl));
     }
+
+    if (!(await this.pathExists(getConfigPath()))) return;
+
+    const configuredUrl = await getDaemonUrl();
+    if (!configuredUrl || configuredUrl === managedUrl) return;
+
+    const probe = await probeAgorDaemon(configuredUrl);
+    if (!probe.running) return;
+
+    // Something is answering on our configured port, but a port is not ownership.
+    // Only block when it is demonstrably the same deployment; otherwise this is an
+    // unrelated daemon and re-initializing here cannot disturb it.
+    const ourDeploymentId = (await loadConfig().catch(() => undefined))?.daemon?.deployment_id;
+    if (ourDeploymentId && probe.deploymentId && probe.deploymentId !== ourDeploymentId) return;
+
+    throw new Error(this.daemonRunningMessage(configuredUrl));
+  }
+
+  private daemonRunningMessage(daemonUrl: string): string {
+    return `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`;
   }
 
   /**
@@ -165,26 +292,76 @@ export default class Init extends Command {
 
   async run(): Promise<void> {
     const { flags } = await this.parse(Init);
+    assertInitSupportsConfiguredDatabase();
+    if (flags.local) {
+      this.error(
+        '`agor init --local` is no longer supported because daemon configuration and data must share one canonical installation at ~/.agor. Run `agor init` without --local.'
+      );
+    }
+    this.nonInteractive = flags['non-interactive'];
+    const requestedTools = flags['agentic-tools'] ?? process.env.AGOR_AGENTIC_TOOLS;
+    if (requestedTools !== undefined) {
+      try {
+        this.requestedAgenticTools = parseInitialAgenticTools(requestedTools);
+      } catch (error) {
+        this.error(error instanceof Error ? error.message : String(error));
+      }
+    }
+    this.initialDaemonConfig = {
+      deployment_id: this.deploymentId,
+      host: flags['daemon-host'] ?? process.env.DAEMON_HOST ?? 'localhost',
+      ...((flags['daemon-port'] ?? process.env.DAEMON_PORT)
+        ? { port: Number(flags['daemon-port'] ?? process.env.DAEMON_PORT) }
+        : {}),
+      ...((flags['instance-label'] ?? process.env.INSTANCE_LABEL)
+        ? { instanceLabel: flags['instance-label'] ?? process.env.INSTANCE_LABEL }
+        : {}),
+    };
 
     this.log('✨ Initializing Agor...\n');
 
+    // Git is a runtime prerequisite for remote clones and branch/worktree
+    // materialization. Check before creating any state so a minimal fresh host
+    // fails here with remediation instead of later in the onboarding wizard.
+    const git = await diagnoseGit();
+    if (git.status !== 'ready') this.error(git.detail ?? 'Git is unavailable.');
+    this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
+
     // Determine base directory early
-    const baseDir = flags.local ? join(process.cwd(), '.agor') : join(homedir(), '.agor');
+    const baseDir = join(homedir(), '.agor');
+    if (await this.pathExists(join(baseDir, 'config.yaml'))) {
+      await assertLocalContextUnlockedWhenIdentified(await loadConfig());
+    }
 
     // If --skip-if-exists and directory already exists, handle config and exit
-    if (flags['skip-if-exists'] && (await this.pathExists(baseDir))) {
+    if (
+      flags['skip-if-exists'] &&
+      (await this.pathExists(join(baseDir, 'agor.db'))) &&
+      (await this.pathExists(join(baseDir, 'config.yaml')))
+    ) {
       this.log(chalk.green('✓ Agor already initialized at: ') + chalk.cyan(baseDir));
-
-      // If --set-config is enabled, update daemon config values (for Docker/deployment)
-      if (flags['set-config']) {
-        await this.setDaemonConfig(flags);
-        this.log(chalk.green('✓ Daemon configuration updated'));
-      }
 
       await this.warnExistingInstallTelemetryUnconfigured();
 
       this.log(chalk.dim('Skipping initialization (use --force to re-initialize)\n'));
       return;
+    }
+
+    // Fail before any onboarding/destructive prompts. This also catches a
+    // partially initialized legacy install whose database is missing while
+    // its daemon still owns open database/WAL handles.
+    try {
+      await this.assertDaemonStoppedBeforeReinit();
+    } catch (error) {
+      this.error(
+        `Failed to initialize Agor: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    if (!flags.force && !this.nonInteractive && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      this.error(
+        'Interactive `agor init` requires a TTY. For headless setup, use `agor init --non-interactive --agentic-tools <comma-separated-list|all|none>`.'
+      );
     }
 
     try {
@@ -194,13 +371,30 @@ export default class Init extends Command {
 
       // Check if already initialized
       const alreadyExists = await this.pathExists(baseDir);
+      const configExists = await this.pathExists(join(baseDir, 'config.yaml'));
       const dbExists = await this.pathExists(dbPath);
       const reposExist = await this.pathExists(reposDir);
       const branchesExist = await this.pathExists(branchesDir);
+      const freshState = isFreshInitState({
+        baseExists: alreadyExists,
+        configExists,
+        databaseExists: dbExists,
+        reposExist,
+        branchesExist,
+      });
 
-      if (!alreadyExists) {
+      if (freshState) {
+        if (
+          (flags.force || this.nonInteractive) &&
+          this.requestedAgenticTools === undefined &&
+          !(await this.pathExists(getConfigPath()))
+        ) {
+          this.error(
+            'Fresh noninteractive initialization requires an explicit agentic-tool policy. Pass `--agentic-tools <comma-separated-list|all|none>` (or set AGOR_AGENTIC_TOOLS).'
+          );
+        }
         // Fresh initialization
-        await this.performInit(baseDir, dbPath, flags.force);
+        await this.performInit(baseDir, dbPath, flags.force || this.nonInteractive);
         return;
       }
 
@@ -209,23 +403,28 @@ export default class Init extends Command {
       await this.warnExistingInstallTelemetryUnconfigured();
       this.log('');
 
+      if (this.nonInteractive) {
+        this.error(
+          'Refusing noninteractive re-initialization because existing data was found. Use --skip-if-exists for idempotent startup or run interactively to confirm destructive re-initialization.'
+        );
+      }
+
       // Gather information about what exists
-      const dbStats = dbExists ? await this.getDbStats(dbPath) : null;
       const repos = reposExist ? await this.listDirs(reposDir) : [];
       const branches = branchesExist ? await this.listDirs(branchesDir) : [];
 
-      // Show what will be deleted
-      this.log(chalk.bold.red('⚠  Re-initialization will delete:'));
+      // The action applies to the directory as one deployment boundary, not
+      // only to the well-known paths we can summarize below.
+      this.log(chalk.bold.yellow('⚠  Re-initialization affects the entire installation:'));
+      this.log(`${chalk.cyan('  Directory:')} ${baseDir}`);
+      this.log(
+        chalk.dim(
+          '    Backup moves it intact. Delete permanently removes everything in it, including config.yaml, database sidecars, logs, repositories, worktrees, and installed tools.'
+        )
+      );
       this.log('');
 
-      if (dbExists && dbStats) {
-        this.log(`${chalk.cyan('  Database:')} ${dbPath}`);
-        this.log(
-          chalk.dim(
-            `    ${dbStats.sessions} sessions, ${dbStats.tasks} tasks, ${dbStats.messages} messages, ${dbStats.repos} repos`
-          )
-        );
-      } else if (dbExists) {
+      if (dbExists) {
         this.log(`${chalk.cyan('  Database:')} ${dbPath}`);
       }
 
@@ -253,30 +452,46 @@ export default class Init extends Command {
 
       // If --force, skip prompts and nuke everything
       if (flags.force) {
+        await this.prepareAgenticToolSelection(true);
+        this.resetFreshConfig();
         this.log(chalk.yellow('🗑️  --force flag set: deleting everything without prompts...'));
-        await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
+        await this.deleteExistingInstall(baseDir);
         await this.performInit(baseDir, dbPath, true);
         return;
       }
 
-      // Prompt user for confirmation
-      const { confirmed } = await inquirer.prompt([
+      const { action } = await inquirer.prompt<{
+        action: 'backup' | 'delete' | 'cancel';
+      }>([
         {
-          type: 'confirm',
-          name: 'confirmed',
-          message: 'Delete all existing data and re-initialize?',
-          default: false,
+          type: 'list',
+          name: 'action',
+          message: 'How would you like to re-initialize?',
+          choices: [
+            { name: 'Back up and re-initialize (recommended)', value: 'backup' },
+            { name: 'Delete and re-initialize', value: 'delete' },
+            { name: 'Cancel', value: 'cancel' },
+          ],
         },
       ]);
 
-      if (!confirmed) {
+      if (action === 'cancel') {
         this.log(chalk.dim('Cancelled. Use --force to skip this prompt.'));
-        process.exit(0);
         return;
       }
 
-      // User confirmed - clean up and reinitialize
-      await this.cleanupExisting(baseDir, dbPath, reposDir, branchesDir);
+      // Resolve upgraded-install tool policy before deleting anything. A
+      // missing headless policy or a cancelled selector must leave data intact.
+      await this.prepareAgenticToolSelection(false);
+      // Tool selection may inspect the old config, but a re-init establishes a
+      // new deployment boundary with fresh identity and secrets.
+      this.resetFreshConfig();
+
+      if (action === 'backup') {
+        await this.backupExistingInstall(baseDir);
+      } else {
+        await this.deleteExistingInstall(baseDir);
+      }
       await this.performInit(baseDir, dbPath, false);
     } catch (error) {
       this.error(
@@ -288,32 +503,24 @@ export default class Init extends Command {
   /**
    * Clean up existing installation
    */
-  private async cleanupExisting(
-    _baseDir: string,
-    dbPath: string,
-    reposDir: string,
-    branchesDir: string
-  ): Promise<void> {
+  private async deleteExistingInstall(baseDir: string): Promise<void> {
     this.log('');
     this.log('🗑️  Cleaning up existing installation...');
+    await rm(baseDir, { recursive: true, force: true });
+    this.log(`${chalk.green('   ✓')} Deleted ${baseDir}`);
+  }
 
-    // Delete database
-    if (await this.pathExists(dbPath)) {
-      await rm(dbPath, { force: true });
-      this.log(`${chalk.green('   ✓')} Deleted database`);
+  private async backupExistingInstall(baseDir: string): Promise<void> {
+    const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp()}`;
+    let backupDir = prefix;
+    for (let suffix = 2; await this.pathExists(backupDir); suffix += 1) {
+      backupDir = `${prefix}.${suffix}`;
     }
 
-    // Delete repos
-    if (await this.pathExists(reposDir)) {
-      await rm(reposDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted repos`);
-    }
-
-    // Delete branches
-    if (await this.pathExists(branchesDir)) {
-      await rm(branchesDir, { recursive: true, force: true });
-      this.log(`${chalk.green('   ✓')} Deleted branches`);
-    }
+    this.log('');
+    this.log('📦 Backing up existing installation...');
+    await rename(baseDir, backupDir);
+    this.log(`${chalk.green('   ✓')} Moved ${baseDir} to ${backupDir}`);
   }
 
   /**
@@ -324,6 +531,11 @@ export default class Init extends Command {
     dbPath: string,
     skipPrompts: boolean = false
   ): Promise<void> {
+    // Make the deployment choice before creating any state so rejecting the
+    // empty selection (or cancelling the prompt) does not strand a partial DB.
+    const configAlreadyExists = await this.pathExists(getConfigPath());
+    const selectedTools = await this.prepareAgenticToolSelection(skipPrompts);
+
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
@@ -344,16 +556,19 @@ export default class Init extends Command {
     // Initialize database
     this.log('');
     this.log('💾 Setting up database...');
-    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    try {
+      await runMigrations(db);
+      this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
 
-    await runMigrations(db);
-    this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
-
-    // Seed initial data
-    this.log('');
-    this.log('🌱 Seeding initial data...');
-    await seedInitialData(db);
-    this.log(`${chalk.green('   ✓')} Created Main Board`);
+      // Seed initial data
+      this.log('');
+      this.log('🌱 Seeding initial data...');
+      await seedInitialData(db);
+      this.log(`${chalk.green('   ✓')} Created Main Board`);
+    } finally {
+      this.closeSQLiteDatabase(db);
+    }
 
     // Create the admin user (auth is always required — anonymous mode was removed).
     if (!skipPrompts) {
@@ -363,7 +578,7 @@ export default class Init extends Command {
       // creation to the daemon-owned first-run bootstrap. This avoids
       // partially failing after destructive re-initialization has already
       // recreated the database and seeded initial data.
-      if (process.env.NODE_ENV === 'production') {
+      if (shouldDeferAdminSetup(this.nonInteractive)) {
         this.log(`${chalk.green('   ✓')} Admin setup deferred to daemon first-run bootstrap`);
         this.log(
           chalk.dim(
@@ -372,14 +587,17 @@ export default class Init extends Command {
         );
       } else {
         try {
-          const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
-
-          await createUser(db, {
-            email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
-            password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
-            name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
-            role: 'admin',
-          });
+          const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+          try {
+            await createUser(db, {
+              email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
+              password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
+              name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
+              role: 'admin',
+            });
+          } finally {
+            this.closeSQLiteDatabase(db);
+          }
 
           this.log(`${chalk.green('   ✓')} Development admin user created`);
           this.log(chalk.dim(`     Email: ${DEVELOPMENT_DEFAULT_ADMIN_USER.email}`));
@@ -397,7 +615,22 @@ export default class Init extends Command {
     if (!skipPrompts) {
       await this.promptTelemetrySetup();
     } else if (process.env.AGOR_TELEMETRY === undefined) {
-      await this.saveTelemetryPreference(false, false);
+      // Stamp a stable ID now so later opt-in never requires a config rewrite.
+      // Explicit hard opt-out intentionally omits it.
+      await this.saveTelemetryPreference(false, true);
+    }
+    if (!configAlreadyExists) {
+      this.initialConfig.agentic_tools = { installed: selectedTools };
+      await this.persistDuringInitialCreation(this.initialConfig);
+    }
+    if (process.env.AGOR_MANAGED_AGENTIC_TOOLS === '1') {
+      try {
+        await this.config.runCommand('install', ['--sync']);
+      } catch (error) {
+        throw new Error(
+          `Agentic tool installation did not complete: ${error instanceof Error ? error.message : String(error)}. The new config was preserved. Recovery: agor install --sync`
+        );
+      }
     }
 
     // Success summary
@@ -411,11 +644,43 @@ export default class Init extends Command {
     this.log(`   Logs: ${chalk.cyan(join(baseDir, 'logs'))}`);
     this.log('');
 
+    this.log(chalk.bold('Agentic tools:'));
+    const configured = new Set(this.initialConfig.agentic_tools?.installed ?? []);
+    const tools = await diagnoseAgenticTools(
+      resolveManagedAgenticToolVersion(this.config.version) as string
+    );
+    for (const tool of tools) {
+      const isConfigured = configured.has(tool.id);
+      const marker =
+        tool.status === 'ready'
+          ? chalk.green('✓')
+          : isConfigured
+            ? chalk.yellow('⚠')
+            : chalk.dim('○');
+      const detail =
+        tool.status === 'ready'
+          ? (tool.version ?? tool.path ?? 'ready')
+          : isConfigured
+            ? 'installation incomplete'
+            : 'not selected by this deployment';
+      this.log(`   ${marker} ${tool.name}: ${detail}`);
+    }
+    let missingTools = tools.filter((tool) => tool.status !== 'ready');
+    missingTools = missingTools.filter((tool) => configured.has(tool.id));
+    if (missingTools.length > 0) {
+      this.log(
+        chalk.yellow(
+          `   ${missingTools.length} selected agentic tool(s) need installation or repair.`
+        )
+      );
+      this.log(chalk.dim('   Repair the configured package set with: agor install --sync'));
+      this.log(chalk.dim('   Recheck at any time with: agor doctor'));
+    }
+    this.log('');
+
     // Check if daemon is running
-    const config = await loadConfig();
-    const host = config.daemon?.host || 'localhost';
-    const port = config.daemon?.port || 3030;
-    const daemonRunning = await isDaemonRunning(`http://${host}:${port}`);
+    const daemonUrl = await getDaemonUrl();
+    const daemonRunning = (await probeAgorDaemon(daemonUrl)).running;
     const isDevMode = await this.isDevMode();
 
     this.log(chalk.bold('Next steps:'));
@@ -457,6 +722,95 @@ export default class Init extends Command {
     return 'local';
   }
 
+  private async selectInitialAgenticTools(skipPrompts: boolean): Promise<InstallableAgenticTool[]> {
+    if (await this.pathExists(getConfigPath())) {
+      const existing = await loadConfig();
+      this.initialConfig = existing;
+      const declared = existing.agentic_tools?.installed;
+      if (declared !== undefined) {
+        if (
+          this.requestedAgenticTools &&
+          this.requestedAgenticTools.join(',') !== declared.join(',')
+        ) {
+          throw new Error(
+            'agentic_tools.installed is deployment-owned in config.yaml. Edit it explicitly instead of passing --agentic-tools.'
+          );
+        }
+        if (this.requestedAgenticTools) return this.requestedAgenticTools;
+        if (skipPrompts) return declared;
+        return await this.promptForAgenticTools(declared);
+      }
+
+      const policy = await resolveAgenticToolSelectionPolicy(existing);
+      if (this.requestedAgenticTools) {
+        await writeAgenticToolSelectionManifest(this.requestedAgenticTools);
+        return this.requestedAgenticTools;
+      }
+      if (skipPrompts) {
+        if (policy.source === 'missing-manifest') {
+          throw new Error(
+            'This upgraded install has no agentic-tool selection. Pass --agentic-tools <comma-separated-list|all|none> before re-initializing.'
+          );
+        }
+        return [...policy.selected];
+      }
+
+      const selected = await this.promptForAgenticTools(policy.selected);
+      await writeAgenticToolSelectionManifest(selected);
+      return selected;
+    }
+    if (this.requestedAgenticTools) return this.requestedAgenticTools;
+    if (skipPrompts) {
+      throw new Error(
+        'Fresh noninteractive initialization requires an explicit agentic-tool policy. Pass `--agentic-tools <comma-separated-list|all|none>` (or set AGOR_AGENTIC_TOOLS).'
+      );
+    }
+
+    return await this.promptForAgenticTools();
+  }
+
+  private async prepareAgenticToolSelection(
+    skipPrompts: boolean
+  ): Promise<InstallableAgenticTool[]> {
+    this.selectedAgenticTools ??= await this.selectInitialAgenticTools(skipPrompts);
+    return this.selectedAgenticTools;
+  }
+
+  private async promptForAgenticTools(
+    previouslySelected: readonly InstallableAgenticTool[] = []
+  ): Promise<InstallableAgenticTool[]> {
+    const agorVersion = resolveManagedAgenticToolVersion(this.config.version) as string;
+    const checked = new Set(previouslySelected);
+    this.log('');
+    this.log(chalk.bold('Agentic tool packages'));
+    this.log(
+      chalk.dim(
+        `Selected packages will be downloaded with npm, installed at ${agorVersion}, and recorded as this deployment's tool policy.`
+      )
+    );
+    this.log(
+      chalk.dim(
+        'Each selection uses additional disk and setup time. Provider credentials are configured after the daemon starts.'
+      )
+    );
+    this.log(chalk.dim('Unchecked tools will not be available to workspaces on this deployment.'));
+    this.log(chalk.dim('Use ↑/↓ to move, Space to select, and Enter to continue.'));
+    const { selectedTools } = await inquirer.prompt<{ selectedTools: InstallableAgenticTool[] }>([
+      {
+        type: 'checkbox',
+        name: 'selectedTools',
+        message: 'Which agentic tools should this deployment support?',
+        choices: Object.entries(AGENTIC_TOOL_INTEGRATIONS).map(([tool, definition]) => ({
+          name: `${definition.displayName} (${definition.packageName}@${agorVersion})`,
+          value: tool,
+          checked: checked.has(tool as InstallableAgenticTool),
+        })),
+        validate: validateInteractiveAgenticToolSelection,
+      },
+    ]);
+    return selectedTools;
+  }
+
   private async warnExistingInstallTelemetryUnconfigured(): Promise<void> {
     try {
       const config = await loadConfig();
@@ -468,8 +822,11 @@ export default class Init extends Command {
           `   Agor will not send telemetry unless an admin enables it. Learn more: ${AGOR_TELEMETRY_DOCS_URL}`
         )
       );
-      this.log(chalk.gray('   To enable later: agor telemetry on'));
-      this.log(chalk.gray('   To keep it disabled: agor telemetry off'));
+      this.log(
+        chalk.gray(
+          '   Configure later with AGOR_TELEMETRY=1/0 or telemetry.enabled in config.yaml.'
+        )
+      );
     } catch {
       // Existing-install warning should never block init.
     }
@@ -479,7 +836,9 @@ export default class Init extends Command {
     enabled: boolean,
     ensureInstanceId: boolean
   ): Promise<string | null> {
-    const config = await loadConfig();
+    const config = (await this.pathExists(getConfigPath()))
+      ? await loadConfig()
+      : this.initialConfig;
     const instanceId =
       config.telemetry?.instance_id ??
       (ensureInstanceId ? generateTelemetryInstanceId() : undefined);
@@ -490,7 +849,7 @@ export default class Init extends Command {
     if (instanceId) {
       config.telemetry.instance_id = instanceId;
     }
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+    this.initialConfig = pruneDefaultOpenSourceTelemetryDestination(config);
     return instanceId ?? null;
   }
 
@@ -555,9 +914,14 @@ export default class Init extends Command {
 
   private async emitInstallTelemetry(enabled: boolean, instanceId: string | null): Promise<void> {
     if (!instanceId || isTelemetryFullyDisabledByEnv()) return;
-    const config = await loadConfig();
-    config.telemetry = { ...config.telemetry, enabled: true, instance_id: instanceId };
-    const logger = createOpenSourceTelemetryLogger(config);
+    const config = (await this.pathExists(getConfigPath()))
+      ? await loadConfig()
+      : this.initialConfig;
+    // The one-time install ping needs telemetry enabled for this logger only.
+    // Never mutate initialConfig: it contains the user's persisted opt-in choice.
+    const logger = createOpenSourceTelemetryLogger(
+      createInstallTelemetryConfig(config, instanceId)
+    );
     logger.track({
       event: 'install.completed',
       properties: {
@@ -573,13 +937,6 @@ export default class Init extends Command {
       },
     });
     await logger.flush();
-
-    const saved = await loadConfig();
-    saved.telemetry = {
-      ...saved.telemetry,
-      install_ping_sent_at: new Date().toISOString(),
-    };
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(saved));
   }
 
   /**
@@ -653,43 +1010,18 @@ export default class Init extends Command {
     ]);
 
     // Create admin user directly in database (no daemon required)
-    const db = createDatabase({ url: `file:${dbPath}`, dialect: 'sqlite' });
-
-    const _user = await createUser(db, {
-      email,
-      password,
-      name: username,
-      role: 'admin',
-    });
+    const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    try {
+      await createUser(db, {
+        email,
+        password,
+        name: username,
+        role: 'admin',
+      });
+    } finally {
+      this.closeSQLiteDatabase(db);
+    }
 
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
-  }
-
-  /**
-   * Set daemon configuration from flags or environment variables
-   */
-  private async setDaemonConfig(flags: {
-    'daemon-port'?: number;
-    'daemon-host'?: string;
-    'instance-label'?: string;
-  }): Promise<void> {
-    // Get daemon port from flag or environment variable
-    const daemonPort = flags['daemon-port'] || process.env.DAEMON_PORT;
-    if (daemonPort) {
-      await setConfigValue('daemon.port', Number(daemonPort));
-      this.log(`${chalk.green('   ✓')} Set daemon.port = ${daemonPort}`);
-    }
-
-    // Get daemon host from flag or default
-    const daemonHost = flags['daemon-host'] || 'localhost';
-    await setConfigValue('daemon.host', daemonHost);
-    this.log(`${chalk.green('   ✓')} Set daemon.host = ${daemonHost}`);
-
-    // Get instance label from flag or environment variable
-    const instanceLabel = flags['instance-label'] || process.env.INSTANCE_LABEL;
-    if (instanceLabel) {
-      await setConfigValue('daemon.instanceLabel', instanceLabel);
-      this.log(`${chalk.green('   ✓')} Set daemon.instanceLabel = ${instanceLabel}`);
-    }
   }
 }

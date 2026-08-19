@@ -6,12 +6,15 @@
  */
 
 import {
+  materializeAgenticToolConfiguration,
+  normalizeAgenticToolModelConfiguration,
+} from '@agor/agentic-tools/config';
+import {
   assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
   getEnvVarBlockReason,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
-  resolveAgenticToolPreset,
   resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
@@ -31,8 +34,9 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git/pure';
+import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
@@ -52,11 +56,14 @@ import type {
   UserRole,
 } from '@agor/core/types';
 import {
+  AGENTIC_TOOL_NAMES,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
+  isValidExecutionHomeKey,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 
@@ -92,6 +99,23 @@ function tenantInsertValues(params?: Params): { tenant_id?: string } {
   const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
   return tenantId && usersTableHasTenantColumn() ? { tenant_id: tenantId } : {};
 }
+
+/**
+ * Public User transport surface. UsersService is not a DrizzleService and
+ * defines no `update` — listing the verb here would make Feathers' hook wiring
+ * throw "Can not apply hooks. 'update' is not a function" at startup.
+ */
+export const USERS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'getGitEnvironment',
+  'getAvatarSettings',
+  'updateAvatarSettings',
+  'syncAvatars',
+] as const;
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
@@ -211,6 +235,7 @@ interface CreateUserData {
   emoji?: string;
   role?: UserRole;
   unix_username?: string;
+  filesystem_home?: string;
   must_change_password?: boolean;
   avatar_url?: string | null;
   avatar?: string | null;
@@ -229,6 +254,7 @@ interface UpdateUserData {
   emoji?: string;
   role?: UserRole;
   unix_username?: string;
+  filesystem_home?: string;
   must_change_password?: boolean;
   avatar_url?: string | null;
   avatar?: string | null;
@@ -253,6 +279,13 @@ interface UpdateUserData {
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
   default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
   default_mcp_server_ids?: string[];
+}
+
+function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
+  if (value === undefined || isValidExecutionHomeKey(value)) return;
+  throw new BadRequest(
+    'Execution home key must start with a lowercase letter or underscore, contain only lowercase letters, numbers, hyphens, or underscores, and be at most 32 characters.'
+  );
 }
 
 /**
@@ -377,6 +410,7 @@ export class UsersService {
    * Create new user
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -406,6 +440,7 @@ export class UsersService {
         emoji: data.emoji || defaultEmoji,
         role,
         unix_username: data.unix_username,
+        filesystem_home: data.filesystem_home,
         must_change_password: data.must_change_password ?? false,
         created_at: now,
         updated_at: now,
@@ -429,6 +464,7 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    assertValidExecutionHomeKeyWrite(data.unix_username);
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 
@@ -453,21 +489,11 @@ export class UsersService {
     if (data.emoji !== undefined) updates.emoji = data.emoji;
     if (data.role) updates.role = data.role;
     if (data.unix_username !== undefined) updates.unix_username = data.unix_username;
+    if (data.filesystem_home !== undefined) updates.filesystem_home = data.filesystem_home;
     if (data.onboarding_completed !== undefined)
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
-    if (data.default_agentic_selection) {
-      for (const [tool, selection] of Object.entries(data.default_agentic_selection)) {
-        if (!selection) continue;
-        if (selection.source === 'preset') {
-          await resolveAgenticToolPreset(this.db, tool as AgenticToolName, selection.preset_id);
-        } else if (selection.source === 'inline') {
-          await assertInlineAgenticConfigurationAllowed(this.db, tool as AgenticToolName);
-        }
-      }
-    }
-
     if (
       data.avatar_url !== undefined ||
       data.avatar !== undefined ||
@@ -502,6 +528,63 @@ export class UsersService {
         default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
         default_mcp_server_ids?: string[];
       };
+      const nextDefaultAgenticConfig = {
+        ...(data.default_agentic_config ?? current.default_agentic_config),
+      };
+      const nextDefaultAgenticSelection =
+        data.default_agentic_selection ?? current.default_agentic_selection;
+      const changedDefaultTools = AGENTIC_TOOL_NAMES.filter(
+        (tool) =>
+          (data.default_agentic_config !== undefined &&
+            JSON.stringify(current.default_agentic_config?.[tool]) !==
+              JSON.stringify(nextDefaultAgenticConfig[tool])) ||
+          (data.default_agentic_selection !== undefined &&
+            JSON.stringify(current.default_agentic_selection?.[tool]) !==
+              JSON.stringify(nextDefaultAgenticSelection?.[tool]))
+      );
+      for (const tool of changedDefaultTools) {
+        const selection = nextDefaultAgenticSelection?.[tool];
+        try {
+          if (selection?.source === 'preset' || selection?.source === 'workspace_default') {
+            await materializeAgenticToolConfiguration(this.db, {
+              tool,
+              source: {
+                reference:
+                  selection.source === 'preset'
+                    ? selection.preset_id
+                    : WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+              },
+              executionOwnerId: id,
+            });
+          } else {
+            await assertInlineAgenticConfigurationAllowed(this.db, tool);
+            const configuration = nextDefaultAgenticConfig[tool] ?? {};
+            const modelConfig = normalizeAgenticToolModelConfiguration(
+              tool,
+              configuration.modelConfig
+            );
+            nextDefaultAgenticConfig[tool] = {
+              ...configuration,
+              ...(modelConfig
+                ? {
+                    modelConfig: {
+                      mode: modelConfig.mode,
+                      model: modelConfig.model,
+                      ...(modelConfig.provider ? { provider: modelConfig.provider } : {}),
+                      ...(modelConfig.effort ? { effort: modelConfig.effort } : {}),
+                      ...(modelConfig.advisorModel
+                        ? { advisorModel: modelConfig.advisorModel }
+                        : {}),
+                    },
+                  }
+                : {}),
+            };
+          }
+        } catch (error) {
+          if (isInvalidModelConfigError(error)) throw new BadRequest(error.message);
+          throw error;
+        }
+      }
 
       // Handle per-tool credential patches (encrypt-on-write, drop-on-null).
       const nextAgenticTools: StoredAgenticTools = data.agentic_tools
@@ -630,9 +713,8 @@ export class UsersService {
             ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
             : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
-        default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
-        default_agentic_selection:
-          data.default_agentic_selection ?? current.default_agentic_selection,
+        default_agentic_config: nextDefaultAgenticConfig,
+        default_agentic_selection: nextDefaultAgenticSelection,
         default_mcp_server_ids: data.default_mcp_server_ids ?? current.default_mcp_server_ids,
       };
     }

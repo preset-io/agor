@@ -19,6 +19,7 @@ vi.mock('@agor/core/db', async () => {
 import { checkMigrationStatus, createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   formatPendingMigrationsMessage,
+  getDaemonStartMigrationBlocker,
   getPendingMigrationsInfo,
   type PendingMigrationsInfo,
 } from './check-migrations.js';
@@ -86,6 +87,25 @@ describe('getPendingMigrationsInfo', () => {
     checkMigrationStatusMock.mockRejectedValueOnce(new Error('db unreachable'));
 
     await expect(getPendingMigrationsInfo()).rejects.toThrow('db unreachable');
+  });
+});
+
+describe('getDaemonStartMigrationBlocker', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns an actionable blocker for every daemon start path', async () => {
+    checkMigrationStatusMock.mockResolvedValueOnce({
+      hasPending: true,
+      pending: ['0005_add_widgets'],
+      applied: ['0000_init'],
+      dbAheadOfBinary: false,
+    });
+
+    await expect(getDaemonStartMigrationBlocker()).resolves.toMatch(
+      /Database migrations required[\s\S]*agor db migrate/
+    );
   });
 });
 

@@ -1,13 +1,13 @@
 /**
  * Tests for `agor_mcp_servers_list`.
  *
- * Catalog-only contract: this tool MUST NOT include rows from the
+ * Catalog contract: this tool MUST NOT include rows from the
  * `session-mcp-servers` junction. Per-session attachment lives on
- * `agor_sessions_get_current.attached_mcp_servers`. Locking the boundary so
- * the previous "globals + current session merge" behavior doesn't sneak back.
+ * `agor_sessions_get_current.attached_mcp_servers`, while Agor-provided
+ * session-scoped entries remain discoverable before they are attached.
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
 
 vi.mock('../resolve-ids.js', () => ({
@@ -58,36 +58,74 @@ async function captureTool(
     userId: ctx.userId as any,
     sessionId: ctx.sessionId as any,
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as any,
-    baseServiceParams: {},
+    baseServiceParams: {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: ctx.userId, role: 'member' },
+    } as any,
   });
   if (!handler) throw new Error(`Tool ${toolName} not registered`);
   return handler;
 }
 
-describe('agor_mcp_servers_list (catalog-only)', () => {
-  it('returns global-scope servers and does NOT consult session-mcp-servers', async () => {
+describe('agor_mcp_servers_list', () => {
+  it('returns eligible global and official session-scope servers without consulting attachments', async () => {
     let sessionMcpServersWasCalled = false;
     const app = makeFakeApp({
       'mcp-servers': {
-        find: async (params: { query?: { scope?: string } }) => {
-          // Catalog query is scope:'global' — the previous implementation
-          // also did a session-mcp-servers.find first; if that lookup ever
-          // comes back the test below would fail.
-          expect(params.query?.scope).toBe('global');
+        find: async (params: { query?: { scope?: string; source?: string } }) => {
+          if (params.query?.scope === 'global') {
+            return {
+              data: [
+                {
+                  mcp_server_id: 'srv-a',
+                  name: 'a',
+                  display_name: 'A',
+                  transport: 'http',
+                  scope: 'global',
+                  source: 'user',
+                  enabled: true,
+                  auth: { type: 'none' },
+                },
+                {
+                  mcp_server_id: 'srv-foreign',
+                  name: 'foreign-private-global',
+                  transport: 'http',
+                  scope: 'global',
+                  source: 'user',
+                  owner_user_id: 'user-2',
+                  enabled: true,
+                  auth: { type: 'bearer', token: 'foreign-secret' },
+                },
+              ],
+            };
+          }
+
+          expect(params.query).toMatchObject({
+            scope: 'session',
+            source: 'agor',
+            ownerless: true,
+          });
           return {
             data: [
               {
-                mcp_server_id: 'srv-a',
-                name: 'a',
-                display_name: 'A',
+                mcp_server_id: 'srv-official',
+                name: 'official-slack',
+                display_name: 'Slack',
                 transport: 'http',
+                scope: 'session',
+                source: 'agor',
                 enabled: true,
-                auth: { type: 'none' },
+                url: 'https://mcp.slack.com/mcp',
+                headers: { Authorization: 'Bearer official-secret' },
+                auth: { type: 'oauth', oauth_access_token: 'official-secret' },
               },
               {
-                mcp_server_id: 'srv-b',
-                name: 'b',
-                transport: 'stdio',
+                mcp_server_id: 'srv-private',
+                name: 'private-session-server',
+                transport: 'http',
+                scope: 'session',
+                source: 'user',
                 enabled: true,
                 auth: { type: 'none' },
               },
@@ -117,7 +155,18 @@ describe('agor_mcp_servers_list (catalog-only)', () => {
       auth_type: 'none',
       oauth_authenticated: true,
     });
-    expect(payload.summary).toMatchObject({ total: 2, oauth_servers: 0, needs_auth: 0 });
+    expect(payload.mcp_servers).toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-official', auth_type: 'oauth' })
+    );
+    expect(payload.mcp_servers).not.toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-private' })
+    );
+    expect(payload.mcp_servers).not.toContainEqual(
+      expect.objectContaining({ mcp_server_id: 'srv-foreign' })
+    );
+    expect(JSON.stringify(payload)).not.toContain('official-secret');
+    expect(JSON.stringify(payload)).not.toContain('foreign-secret');
+    expect(payload.summary).toMatchObject({ total: 2, oauth_servers: 1, needs_auth: 1 });
   });
 
   it('omits disabled servers by default and includes them when asked', async () => {
@@ -138,9 +187,160 @@ describe('agor_mcp_servers_list (catalog-only)', () => {
     await list({});
     await list({ includeDisabled: true });
 
-    expect(calls[0]).toMatchObject({ scope: 'global', enabled: true });
-    expect(calls[1]).toMatchObject({ scope: 'global' });
-    expect(calls[1]).not.toHaveProperty('enabled');
+    expect(calls[0]).toMatchObject({ scope: 'global', enabled: true, usableByUserId: 'user-1' });
+    expect(calls[1]).toMatchObject({
+      scope: 'session',
+      source: 'agor',
+      ownerless: true,
+      enabled: true,
+      usableByUserId: 'user-1',
+    });
+    expect(calls[2]).toMatchObject({ scope: 'global', usableByUserId: 'user-1' });
+    expect(calls[2]).not.toHaveProperty('enabled');
+    expect(calls[3]).toMatchObject({
+      scope: 'session',
+      source: 'agor',
+      ownerless: true,
+      usableByUserId: 'user-1',
+    });
+    expect(calls[3]).not.toHaveProperty('enabled');
+  });
+
+  it('returns an empty catalog when no eligible servers are configured', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        find: async () => ({ data: [] }),
+      },
+    });
+
+    const list = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_list'
+    );
+    const result = await list({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload).toMatchObject({
+      mcp_servers: [],
+      pagination: { total: 0, hasMore: false, nextOffset: null },
+      summary: { total: 0, oauth_servers: 0, authenticated: 0, needs_auth: 0 },
+    });
+  });
+
+  it('merges scopes into one stable created-at order before paging', async () => {
+    const find = async (params: { query?: { scope?: string } }) => {
+      if (params.query?.scope === 'global') {
+        return {
+          total: 2,
+          data: [
+            {
+              mcp_server_id: 'global-new',
+              name: 'global-new',
+              transport: 'http',
+              scope: 'global',
+              source: 'user',
+              enabled: true,
+              created_at: new Date('2026-08-11T10:00:00Z'),
+              auth: { type: 'none' },
+            },
+            {
+              mcp_server_id: 'global-old',
+              name: 'global-old',
+              transport: 'http',
+              scope: 'global',
+              source: 'user',
+              enabled: true,
+              created_at: new Date('2026-08-11T08:00:00Z'),
+              auth: { type: 'none' },
+            },
+          ],
+        };
+      }
+      return {
+        total: 1,
+        data: [
+          {
+            mcp_server_id: 'official-mid',
+            name: 'official-mid',
+            transport: 'http',
+            scope: 'session',
+            source: 'agor',
+            enabled: true,
+            created_at: new Date('2026-08-11T09:00:00Z'),
+            auth: { type: 'none' },
+          },
+        ],
+      };
+    };
+    const app = makeFakeApp({ 'mcp-servers': { find } });
+    const list = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_list'
+    );
+
+    const firstPage = JSON.parse((await list({ limit: 2 })).content[0].text);
+    expect(
+      firstPage.mcp_servers.map((server: { mcp_server_id: string }) => server.mcp_server_id)
+    ).toEqual(['global-new', 'official-mid']);
+    expect(firstPage.pagination).toMatchObject({ total: 3, hasMore: true, nextOffset: 2 });
+
+    const finalPage = JSON.parse((await list({ limit: 2, offset: 2 })).content[0].text);
+    expect(
+      finalPage.mcp_servers.map((server: { mcp_server_id: string }) => server.mcp_server_id)
+    ).toEqual(['global-old']);
+    expect(finalPage.pagination).toMatchObject({ total: 3, hasMore: false, nextOffset: null });
+  });
+
+  it('does not expose a foreign server through direct OAuth status lookup', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        get: async () => ({
+          mcp_server_id: 'foreign-server',
+          name: 'private-foreign',
+          transport: 'http',
+          scope: 'global',
+          source: 'user',
+          owner_user_id: 'user-2',
+          enabled: true,
+          auth: { type: 'oauth' },
+        }),
+      },
+    });
+    const authStatus = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_auth_status'
+    );
+
+    await expect(authStatus({ mcpServerId: 'foreign-server' })).rejects.toThrow(
+      'MCP server not found'
+    );
+  });
+
+  it('allows an owner to check auth status for their session-scoped user server', async () => {
+    const app = makeFakeApp({
+      'mcp-servers': {
+        get: async () => ({
+          mcp_server_id: 'owned-server',
+          name: 'private-owned',
+          transport: 'http',
+          scope: 'session',
+          source: 'user',
+          owner_user_id: 'user-1',
+          enabled: true,
+          auth: { type: 'oauth' },
+        }),
+      },
+    });
+    const authStatus = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_auth_status'
+    );
+
+    const result = await authStatus({ mcpServerId: 'owned-server' });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      mcp_server_id: 'owned-server',
+      oauth_authenticated: false,
+    });
   });
 });
 
@@ -452,19 +652,14 @@ describe('agor_mcp_servers_create/update/attach', () => {
     });
   });
 
-  it('sets session-specific MCP server links by diffing add/remove operations', async () => {
-    const createCalls: Array<string> = [];
-    const removeCalls: Array<string> = [];
+  it('sets session-specific MCP server links with one atomic replacement', async () => {
+    const updateCalls: Array<unknown> = [];
     const app = makeFakeApp({
       '/sessions/:id/mcp-servers': {
         find: async () => [{ mcp_server_id: 'full-keep' }, { mcp_server_id: 'full-remove' }],
-        create: async (data: { mcpServerId: string }) => {
-          createCalls.push(data.mcpServerId);
+        update: async (id: unknown, data: unknown, params: unknown) => {
+          updateCalls.push({ id, data, params });
           return data;
-        },
-        remove: async (id: string) => {
-          removeCalls.push(id);
-          return { mcp_server_id: id };
         },
       },
     });
@@ -476,8 +671,12 @@ describe('agor_mcp_servers_create/update/attach', () => {
     const result = await set({ mcpServerIds: ['keep', 'add'] });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(removeCalls).toEqual(['full-remove']);
-    expect(createCalls).toEqual(['full-add']);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0]).toMatchObject({
+      id: null,
+      data: { mcpServerIds: ['full-keep', 'full-add'] },
+      params: { route: { id: 'sess-current' } },
+    });
     expect(payload).toMatchObject({
       session_id: 'sess-current',
       desired_mcp_server_ids: ['full-keep', 'full-add'],
@@ -487,12 +686,11 @@ describe('agor_mcp_servers_create/update/attach', () => {
     });
   });
 
-  it('marks set session-specific MCP links as an MCP error when diff operations fail', async () => {
+  it('marks set session-specific MCP links as an MCP error when replacement fails', async () => {
     const app = makeFakeApp({
       '/sessions/:id/mcp-servers': {
         find: async () => [{ mcp_server_id: 'full-remove' }],
-        create: async () => ({}),
-        remove: async () => {
+        update: async () => {
           throw new Error('RBAC denied');
         },
       },
@@ -507,7 +705,7 @@ describe('agor_mcp_servers_create/update/attach', () => {
 
     expect(result.isError).toBe(true);
     expect(payload.failures).toEqual([
-      { mcp_server_id: 'full-remove', action: 'remove', reason: 'RBAC denied' },
+      { mcp_server_id: 'sess-current', action: 'replace', reason: 'RBAC denied' },
     ]);
   });
 

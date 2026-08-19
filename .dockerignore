@@ -1,9 +1,12 @@
 # Dependencies
 node_modules
 **/node_modules
+.pnpm-store
 npm-debug.log
 pnpm-debug.log
 yarn-error.log
+*.tgz
+*.tsbuildinfo
 
 # Build outputs
 dist
@@ -30,6 +33,13 @@ build
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+
+# Local backup/temp files
+*.bak
+*.backup
+*.orig
+*.rej
 
 # Testing
 coverage

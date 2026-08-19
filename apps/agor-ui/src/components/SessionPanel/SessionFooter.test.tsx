@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -5,7 +6,6 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES } from '@agor-live/client';
 import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
@@ -183,6 +183,32 @@ describe('SessionFooter', () => {
     expect(screen.getByTestId('model-chip')).toBeInTheDocument();
   });
 
+  it('Model chip truncates a long provider/model id instead of overflowing its border', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        session={
+          {
+            ...baseSession,
+            agentic_tool: 'opencode',
+            model_config: {
+              model: 'kimi-for-coding-highspeed',
+              provider: 'kimi-for-coding',
+              mode: 'exact',
+            },
+          } as unknown as Session
+        }
+      />,
+      { wrapper: Wrapper }
+    );
+    const chip = screen.getByTestId('model-chip');
+    const label = 'kimi-for-coding/kimi-for-coding-highspeed';
+    // Full id stays reachable on hover even when the chip has to ellipsize.
+    expect(chip).toHaveAttribute('title', label);
+    expect(chip.style.maxWidth).toBe('100%');
+    expect(within(chip).getByText(label).style.textOverflow).toBe('ellipsis');
+  });
+
   it('Timer chip renders as a plain div when footerTimerTask is present', () => {
     const timerTask = {
       task_id: 't1',
@@ -216,6 +242,20 @@ describe('SessionFooter', () => {
     const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
+  });
+
+  it('centers the MCP count chip against the label instead of its baseline', () => {
+    render(<SessionFooter {...baseProps} sessionMcpServerIds={['a', 'b', 'c']} />, {
+      wrapper: Wrapper,
+    });
+    const count = within(screen.getByTitle(/3 MCP servers need attention/)).getByText('3');
+
+    // Without a flex line on antd's content span the chip falls back to
+    // `vertical-align` against the label's baseline and renders visibly high.
+    const content = count.parentElement;
+    expect(content?.style.display).toBe('inline-flex');
+    expect(content?.style.alignItems).toBe('center');
+    expect(count.style.alignItems).toBe('center');
   });
 
   it('opens session settings from the final footer overflow action', async () => {

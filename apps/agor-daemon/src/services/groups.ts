@@ -77,6 +77,18 @@ export function branchGroupGrantPermissionLevelOrDefault(value: unknown): Branch
   return nextCan;
 }
 
+/**
+ * Public Group transport surface. The service is a plain object, not a
+ * DrizzleService, and defines no `update`; pinning the list keeps it that way.
+ */
+export const GROUPS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+] as const;
+
 export function createGroupsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
   return {

@@ -1,0 +1,159 @@
+# Opt-in, production-shaped HA smoke environment. This file intentionally uses
+# two named services rather than Compose deploy.replicas so each diagnostic
+# identity and failure action is deterministic.
+
+x-daemon-environment: &daemon-environment
+  AGOR_DEPLOYMENT_MODE: ha
+  AGOR_HA_SUPPORT_PROFILE: constrained-active-active
+  AGOR_HA_EXECUTION_TOPOLOGY: shared-local
+  AGOR_HA_SHARED_FILESYSTEM: 'true'
+  AGOR_HA_INGRESS_AFFINITY: 'true'
+  AGOR_DB_DIALECT: postgresql
+  DATABASE_URL: postgresql://agor_app:agor_dev_secret@postgres:5432/agor
+  REDIS_URL: redis://redis:6379/0
+  AGOR_REDIS_KEY_PREFIX: ${AGOR_REDIS_KEY_PREFIX:?set a deployment-unique Redis prefix}
+  AGOR_JWT_SECRET: ${AGOR_JWT_SECRET:?set a stable shared JWT secret (32+ characters)}
+  AGOR_MASTER_SECRET: ${AGOR_MASTER_SECRET:?set a stable shared master secret (32+ characters)}
+  AGOR_ADMIN_PASSWORD: ${AGOR_ADMIN_PASSWORD:?set the initial admin password}
+  # This checked-in stack is a disposable development smoke environment. The
+  # explicit double gate keeps admin/admin unavailable to production-mode
+  # daemon deployments while matching the repository's other dev variants.
+  AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: ${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-false}
+  # The production image serves the UI from the daemon. Browsers still send
+  # an Origin header on Socket.IO/auth requests, so the externally reachable
+  # ingress origin must be shared by both replicas' CORS configuration.
+  AGOR_BASE_URL: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
+  CORS_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
+  DAEMON_PORT: '3030'
+  DAEMON_HOST: 0.0.0.0
+  NODE_ENV: ${AGOR_HA_NODE_ENV:-production}
+
+x-daemon-common: &daemon-common
+  image: agor-ha-source:latest
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: production-source-ha
+    args:
+      AGOR_BUILD_SHA: ${AGOR_BUILD_SHA:-dev}
+  environment: *daemon-environment
+  volumes:
+    # The smoke profile has one shared container execution identity. Mount its
+    # complete home so short-lived auth helpers and Tasks on either daemon see
+    # the same CLI-native credential files. Keep Agor's own state/workspaces
+    # on the separately named historical volume: existing managed HA projects
+    # already have PostgreSQL rows whose absolute paths point into this mount.
+    # Nested Docker mounts are intentional. This is not per-user isolation.
+    - agor-ha-user-home:/home/agor
+    - agor-ha-home:/home/agor/.agor
+  restart: unless-stopped
+  healthcheck:
+    test:
+      [
+        'CMD',
+        'node',
+        '-e',
+        "fetch('http://127.0.0.1:3030/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+      ]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 20s
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres-dev.Dockerfile
+    environment:
+      POSTGRES_DB: agor
+      POSTGRES_USER: agor_bootstrap
+      POSTGRES_PASSWORD: agor_bootstrap_secret
+      POSTGRES_INITDB_ARGS: '-E UTF8 --locale=C'
+    volumes:
+      - agor-ha-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    # Fanout is intentionally ephemeral: Pub/Sub is not a durable state plane
+    # and ordinary authorized realtime payloads must not be retained here.
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    restart: unless-stopped
+
+  migrate:
+    <<: *daemon-common
+    # This one-shot preparation job owns both managed-tool reconciliation and
+    # schema migration. Daemons wait for it, preventing startup races against
+    # the shared agentic-tools directory.
+    command: ['sh', '-c', 'agor install --sync && agor db migrate --yes --offline-cutover']
+    restart: 'no'
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  daemon-a:
+    <<: *daemon-common
+    command: ['agor-daemon']
+    environment:
+      <<: *daemon-environment
+      AGOR_DAEMON_INSTANCE_ID: daemon-a
+      INSTANCE_LABEL: daemon-a
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${HA_DAEMON_A_PORT:-13031}:3030'
+
+  daemon-b:
+    <<: *daemon-common
+    command: ['agor-daemon']
+    environment:
+      <<: *daemon-environment
+      AGOR_DAEMON_INSTANCE_ID: daemon-b
+      INSTANCE_LABEL: daemon-b
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${HA_DAEMON_B_PORT:-13032}:3030'
+
+  ingress:
+    image: nginx:1.27-alpine
+    ports:
+      - '${HA_PORT:-3030}:8080'
+    volumes:
+      - ./docker/ha/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      daemon-a:
+        condition: service_healthy
+      daemon-b:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/nginx-health']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  agor-ha-user-home:
+  agor-ha-home:
+  agor-ha-postgres:

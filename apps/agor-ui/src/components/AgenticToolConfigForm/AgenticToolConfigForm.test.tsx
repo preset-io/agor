@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolConfigForm } from './AgenticToolConfigForm';
@@ -28,7 +28,7 @@ vi.mock('../EffortSelector', () => ({
   ),
 }));
 
-function renderForm(agenticTool: 'codex' | 'gemini') {
+function renderForm(agenticTool: 'codex' | 'gemini' | 'opencode') {
   render(
     <Form>
       <AgenticToolConfigForm agenticTool={agenticTool} />
@@ -37,15 +37,36 @@ function renderForm(agenticTool: 'codex' | 'gemini') {
 }
 
 describe('AgenticToolConfigForm reasoning effort', () => {
-  it('renders truthful Codex levels with inherited runtime configuration', () => {
-    renderForm('codex');
-    expect(screen.getByTestId('effort-selector')).toHaveTextContent(
-      'low,medium,high,xhigh|inherited'
-    );
-  });
+  it.each(['codex', 'opencode'] as const)(
+    'renders the exact five effort levels for %s with inherited runtime configuration',
+    (agenticTool) => {
+      renderForm(agenticTool);
+      expect(screen.getByTestId('effort-selector').textContent).toBe(
+        'low,medium,high,xhigh,max|inherited'
+      );
+    }
+  );
 
   it('omits the control for unsupported tools', () => {
     renderForm('gemini');
     expect(screen.queryByTestId('effort-selector')).not.toBeInTheDocument();
+  });
+
+  it('fails form validation for an incomplete OpenCode pair', async () => {
+    const onFinish = vi.fn();
+    render(
+      <Form
+        initialValues={{ modelConfig: { mode: 'exact', model: 'gpt-test' } }}
+        onFinish={onFinish}
+      >
+        <AgenticToolConfigForm agenticTool="opencode" />
+        <button type="submit">Save</button>
+      </Form>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(/exact OpenCode provider and model/i)).toBeInTheDocument();
+    await waitFor(() => expect(onFinish).not.toHaveBeenCalled());
   });
 });

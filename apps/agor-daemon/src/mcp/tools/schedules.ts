@@ -15,7 +15,7 @@ import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
   resolveBoardId,
@@ -25,10 +25,12 @@ import {
 } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
   mcpOptionalNonNegativeInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -102,16 +104,24 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         ),
         createdBy: mcpOptionalId('createdBy', 'User', 'Filter to schedules created by this user'),
         enabled: z.boolean().optional().describe('Filter by enabled flag'),
-        limit: mcpLimit(50).describe('Maximum number of schedules to return (default: 50)'),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
+      if (!args.boardId) {
+        query.$limit = args.limit;
+        query.$skip = args.offset;
+      }
       if (args.branchId) query.branch_id = await resolveBranchId(ctx, args.branchId);
       if (args.createdBy) query.created_by = await resolveUserId(ctx, args.createdBy);
       if (args.enabled !== undefined) query.enabled = args.enabled;
-      const result = await ctx.app.service('schedules').find({ query, ...ctx.baseServiceParams });
+      const result = await ctx.app.service('schedules').find({
+        query,
+        ...(args.boardId ? { paginate: false } : {}),
+        ...ctx.baseServiceParams,
+      });
 
       // boardId filter is post-query (we'd need a JOIN to do it in SQL);
       // keep it simple — schedule counts per board are small. Resolve
@@ -123,12 +133,11 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
           allData.map((s) => ctx.app.service('branches').get(s.branch_id, ctx.baseServiceParams))
         );
         const filtered = allData.filter((_, i) => branches[i]?.board_id === boardId);
-        return Array.isArray(result)
-          ? textResult(filtered)
-          : textResult({ ...result, data: filtered, total: filtered.length });
+        const data = filtered.slice(args.offset, args.offset + args.limit);
+        return textResult(mcpPageResult({ total: filtered.length, data }, args.limit, args.offset));
       }
 
-      return textResult(result);
+      return textResult(mcpPageResult(result, args.limit, args.offset));
     }
   );
 

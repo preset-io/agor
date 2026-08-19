@@ -30,9 +30,12 @@ import {
 } from '@agor/core/types';
 import {
   canReadKnowledgeDocument,
+  canReadKnowledgeGraphNode,
   canWriteKnowledgeDocument,
   hasKnowledgeNamespacePermission,
   isKnowledgeAdmin,
+  isKnowledgeDocumentGraphNode,
+  resolveKnowledgeGraphNodeDocument,
   resolveKnowledgeNamespacePermission,
 } from './knowledge-access.js';
 
@@ -46,6 +49,17 @@ export interface KnowledgeNamespaceGraphRequest {
   include_other_user_drafts?: boolean;
   includeOtherUserDrafts?: boolean;
 }
+
+/**
+ * Public knowledge-graph transport surface. The service is not a
+ * DrizzleService and defines no `update`; pinning the list keeps it that way.
+ */
+export const KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'create',
+  'link',
+  'neighbors',
+] as const;
 
 export type KnowledgeGraphParams = QueryParams<
   KnowledgeGraphNeighborsQuery & KnowledgeNamespaceGraphRequest
@@ -169,26 +183,11 @@ export class KnowledgeGraphService {
     return undefined;
   }
 
-  private documentIdFromNode(node: KnowledgeGraphNode): string | undefined {
-    if (node.document_id) return node.document_id;
-    if (node.uri.startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX)) {
-      return node.uri.slice(KNOWLEDGE_DOCUMENT_URI_PREFIX.length);
-    }
-    return undefined;
-  }
-
   private unitIdFromRef(ref: KnowledgeNodeRef): string | undefined {
     const unitId = ref.unit_id ?? ref.unitId;
     if (unitId) return unitId;
     if (ref.uri?.startsWith(KNOWLEDGE_UNIT_URI_PREFIX))
       return ref.uri.slice(KNOWLEDGE_UNIT_URI_PREFIX.length);
-    return undefined;
-  }
-
-  private unitIdFromNode(node: KnowledgeGraphNode): string | undefined {
-    if (node.unit_id) return node.unit_id;
-    if (node.uri.startsWith(KNOWLEDGE_UNIT_URI_PREFIX))
-      return node.uri.slice(KNOWLEDGE_UNIT_URI_PREFIX.length);
     return undefined;
   }
 
@@ -201,17 +200,6 @@ export class KnowledgeGraphService {
         ref.namespace ??
         ref.path ??
         parseKnowledgeUri(ref.uri)
-    );
-  }
-
-  private isDocumentNode(node: KnowledgeGraphNode): boolean {
-    return Boolean(
-      node.node_type === 'document' ||
-        node.node_type === 'document_unit' ||
-        node.document_id ||
-        this.documentIdFromNode(node) ||
-        this.unitIdFromNode(node) ||
-        parseKnowledgeUri(node.uri)
     );
   }
 
@@ -234,8 +222,10 @@ export class KnowledgeGraphService {
 
   private async assertCanLinkRef(ref: KnowledgeNodeRef, user?: User): Promise<void> {
     const node = await this.graph.findNode(ref);
-    const document = node ? await this.documentForNode(node) : await this.documentForRef(ref);
-    if (!document && (node ? this.isDocumentNode(node) : this.isDocumentRef(ref))) {
+    const document = node
+      ? await resolveKnowledgeGraphNodeDocument(this.documents, this.namespaces, node)
+      : await this.documentForRef(ref);
+    if (!document && (node ? isKnowledgeDocumentGraphNode(node) : this.isDocumentRef(ref))) {
       throw new NotFound('Knowledge document not found');
     }
     if (!document) return;
@@ -244,24 +234,8 @@ export class KnowledgeGraphService {
     }
   }
 
-  private async documentForNode(node: KnowledgeGraphNode): Promise<KnowledgeDocument | null> {
-    const documentId = this.documentIdFromNode(node);
-    if (documentId) {
-      return this.activeDocument(await this.documents.findById(documentId));
-    }
-    const unitId = this.unitIdFromNode(node);
-    if (unitId) return this.activeDocument(await this.documents.findByUnitId(unitId));
-    const parsed = parseKnowledgeUri(node.uri);
-    if (!parsed) return null;
-    return this.activeDocument(
-      await this.documents.findByNamespaceSlugAndPath(parsed.namespace_slug, parsed.path)
-    );
-  }
-
   private async canReadNode(node: KnowledgeGraphNode, user?: User): Promise<boolean> {
-    const document = await this.documentForNode(node);
-    if (!document && this.isDocumentNode(node)) return false;
-    return document ? this.canRead(document, user) : true;
+    return canReadKnowledgeGraphNode(this.documents, this.namespaces, node, user);
   }
 
   private attributionUserId(params?: KnowledgeGraphParams, requestedUserId?: UserID | null) {

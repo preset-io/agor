@@ -9,7 +9,8 @@
 import { Transform } from 'node:stream';
 import {
   type AgorConfig,
-  isTenantAgenticToolEnabled,
+  type ResolvedDeploymentConfig,
+  requireDeploymentId,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
@@ -17,17 +18,17 @@ import {
   resolveTenantContext,
 } from '@agor/core/config';
 import {
+  assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
-  MCPServerRepository,
   MessagesRepository,
-  RepoRepository,
+  resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
-  SessionMCPServerRepository,
-  SessionRepository,
+  type SessionRepository,
+  setMcpMemberPolicy,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -46,25 +47,41 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
+import {
+  filterMCPServersForSession,
+  isMCPServerUsableInSession,
+  MCPServerNotUsableError,
+} from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BranchArchiveOrDeleteOptions,
   HookContext,
+  MCPMemberPolicy,
+  MCPMemberPolicySetting,
   Message,
+  MessageID,
   MessageSource,
-  Paginated,
   Params,
-  PermissionRequestContent,
   ScheduleID,
   Session,
   SessionID,
   SessionMCPServer,
   StreamingEventType,
   Task,
+  TaskMetadata,
   User,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, MessageRole, ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  isBranchArchiveOrDeleteOptions,
+  isTaskPendingDispatch,
+  MCP_MEMBER_POLICIES,
+  MessageRole,
+  ROLES,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
@@ -80,7 +97,6 @@ import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
-  MessagesServiceImpl,
   ReposServiceImpl,
   SessionsServiceImpl,
   TasksServiceImpl,
@@ -93,8 +109,15 @@ import {
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
+import { createFeathersMetricsHook } from './metrics/feathers.js';
+import { getDaemonMetrics } from './metrics/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
+import {
+  deliverPermissionDecision,
+  type PermissionDecisionSubmission,
+} from './permissions/deliver-permission-decision.js';
 import type { GatewayService } from './services/gateway.js';
+import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -102,7 +125,12 @@ import {
 } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
-import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import {
+  isAuthenticationUserLookup,
+  markAuthenticationUserLookup,
+  markLocalAuthenticationLookup,
+} from './services/users.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -115,6 +143,7 @@ import {
   registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
 import {
   cacheBranchAccess,
   checkSessionOwnerOrAdmin,
@@ -129,9 +158,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
+import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import {
   buildPromptTaskMetadata,
-  type PromptTaskMetadataInput,
+  type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
 import {
@@ -146,9 +176,16 @@ import {
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
+import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
+import {
+  shouldReconcileStableInitialMessage,
+  stableInitialMessageIdForTask,
+} from './utils/task-initial-message.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
+  createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
@@ -159,6 +196,7 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
+import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 const DEBUG_AUTH_EVENTS =
@@ -205,6 +243,8 @@ export interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+  /** Trusted internal callback request, populated by MCP tooling only. */
+  _taskCompletionCallback?: NonNullable<TaskMetadata['completion_callback']>;
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -214,13 +254,6 @@ export function rejectRemovedClaudeCliRestart(): never {
 
 function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
-}
-
-/**
- * Type guard to check if result is paginated
- */
-function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
-  return !Array.isArray(result) && 'data' in result && 'total' in result;
 }
 
 /**
@@ -238,6 +271,8 @@ export interface RegisterRoutesContext {
   DB_PATH: string;
   DAEMON_PORT: number;
   DAEMON_VERSION: string;
+  /** User-facing agor-live release version advertised by protocol surfaces. */
+  AGOR_VERSION: string;
   /**
    * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
    * detect FE/BE drift after a deploy. The SHA is the canonical version
@@ -249,10 +284,15 @@ export interface RegisterRoutesContext {
    * Used by /health to surface the effective policy to admin users.
    */
   resolvedSecurity: import('@agor/core/config').ResolvedSecurity;
+  realtimeRuntime?: Pick<
+    import('./realtime/redis-realtime.js').RedisRealtimeRuntime,
+    'health' | 'isReady'
+  >;
+  distributedWorkIdentity: import('@agor/core/coordination').DistributedWorkIdentity;
+  deployment: ResolvedDeploymentConfig;
 
   // Service instances from registerServices()
   sessionsService: SessionsServiceImpl;
-  messagesService: MessagesServiceImpl;
   boardsService: BoardsServiceImpl | undefined;
   branchRepository: BranchRepository;
   usersRepository: UsersRepository;
@@ -282,10 +322,119 @@ export async function authorizeTaskTerminalRoute(input: {
   return internalParams;
 }
 
-export function findUnverifiedTerminationTask(tasks: readonly Task[]): Task | undefined {
+export function findMatchingUnverifiedTerminationTask(
+  tasks: readonly Task[],
+  expected: { taskId: string; terminationRequestedAt: string }
+): Task | undefined {
   return tasks.find(
-    (task) => task.status === TaskStatus.STOPPING && task.sdk_failure?.termination === 'unverified'
+    (task) =>
+      task.task_id === expected.taskId &&
+      task.status === TaskStatus.STOPPING &&
+      task.sdk_failure?.termination === 'unverified' &&
+      task.termination_request?.requested_at === expected.terminationRequestedAt
   );
+}
+
+/** Build the required short database unit used by authenticated long-route dependencies. */
+export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase) {
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for database operation');
+    return runWithTenantDatabaseScope(db, tenantId, work);
+  };
+}
+
+export function createUploadAuthMiddleware(input: {
+  authentication: {
+    create(
+      data: { strategy: 'jwt'; accessToken: string },
+      params: AuthenticatedParams
+    ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+  };
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
+  return async (req: any, res: any, next: NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const authParams: AuthenticatedParams = { headers: req.headers };
+      const result = await input.authentication.create(
+        { strategy: 'jwt', accessToken: token },
+        authParams
+      );
+      const authenticatedParams = {
+        user: result.user,
+        provider: 'rest',
+        authentication: result.authentication,
+        headers: req.headers,
+      };
+      req.feathers = {
+        ...authenticatedParams,
+        tenant:
+          authParams.tenant ??
+          resolveTenantContext(input.multiTenancy, {
+            params: {
+              authentication: result.authentication,
+              headers: req.headers,
+            },
+            authPayload: result.authentication?.payload,
+            headers: req.headers,
+          }),
+      };
+      next();
+    } catch (error) {
+      console.error('❌ [Upload Auth] Authentication failed:', error);
+      res.status(401).json({ error: 'Authentication required' });
+    }
+  };
+}
+
+export async function authorizeForceFailRoute(input: {
+  session: Pick<Session, 'session_id' | 'branch_id'>;
+  params: RouteParams;
+  body: Record<string, unknown>;
+  findTask: (taskId: string) => Promise<Task | undefined>;
+  isBranchOwner: (branchId: Session['branch_id'], userId: UUID) => Promise<boolean>;
+}): Promise<{ task: Task; confirmation: string; terminationRequestedAt: string }> {
+  const userId = input.params.user?.user_id;
+  const isAdmin = hasMinimumRole(input.params.user?.role, ROLES.ADMIN);
+  const isOwner =
+    !isAdmin && !!userId && (await input.isBranchOwner(input.session.branch_id, userId as UUID));
+  if (!isAdmin && !isOwner) {
+    throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+  }
+  if (typeof input.body.confirmation !== 'string') {
+    throw new BadRequest('Type STOP to confirm force-fail.');
+  }
+  if (
+    typeof input.body.task_id !== 'string' ||
+    typeof input.body.termination_requested_at !== 'string'
+  ) {
+    throw new BadRequest('Force-fail requires the exact Task termination request.');
+  }
+  const candidate = await input.findTask(input.body.task_id);
+  const task =
+    candidate?.session_id === input.session.session_id
+      ? findMatchingUnverifiedTerminationTask([candidate], {
+          taskId: input.body.task_id,
+          terminationRequestedAt: input.body.termination_requested_at,
+        })
+      : undefined;
+  if (!task) {
+    throw new Conflict(
+      'The Task termination state changed. Review the current Task before force-failing.'
+    );
+  }
+  return {
+    task,
+    confirmation: input.body.confirmation,
+    terminationRequestedAt: input.body.termination_requested_at,
+  };
 }
 
 /**
@@ -304,10 +453,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DB_PATH,
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService,
-    messagesService,
     boardsService,
     branchRepository,
     usersRepository: _usersRepository,
@@ -333,6 +485,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         hook(context)
       ) as Promise<Awaited<T>>;
     };
+  const inCurrentTenantDatabaseScope = createRequiredTenantDatabaseRunner(db);
 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
@@ -475,7 +628,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // no email, so we bucket purely by IP. Trust only Express's resolved
     // `req.ip` (which respects `app.set('trust proxy', n)`) — never
     // X-Forwarded-For directly.
-    keyGenerator: (req: Request): string => buildAuthRateLimitKey(req),
+    // express-rate-limit can resolve Feathers' Express 4 declaration copy
+    // alongside the daemon's Express 5 declarations. The runtime request is
+    // the same object; infer the middleware signature and narrow at our edge.
+    keyGenerator: (req): string => buildAuthRateLimitKey(req as unknown as Request),
     message: 'Too many authentication attempts. Please try again in 15 minutes.',
   });
 
@@ -675,38 +831,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // ============================================================================
-  // Initialize repositories and permission service
+  // Message streaming routes
   // ============================================================================
-
-  const _messagesRepo = new MessagesRepository(db);
-  const _sessionsRepo = new SessionRepository(db);
-  const _sessionMCPRepo = new SessionMCPServerRepository(db);
-  const _mcpServerRepo = new MCPServerRepository(db);
-  const _branchesRepo = new BranchRepository(db);
-  const _reposRepo = new RepoRepository(db);
-  const _tasksRepo = new TaskRepository(db);
-
-  const permissionService = new PermissionService((event, data) => {
-    app.service('sessions').emit(event, data);
-  });
-
-  // ============================================================================
-  // Messages bulk + streaming routes
-  // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/messages/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        return messagesService.createMany(data as Message[]);
-      },
-    },
-    {
-      create: { role: ROLES.MEMBER, action: 'create messages' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,
@@ -783,10 +909,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // These routes re-emit onto the `messages` / `tasks` services (which carry
-  // the real streaming payloads); their OWN default `created` event is just the
-  // `{ success: true }` ack and must never broadcast — one per chunk otherwise
-  // reaches every service-account socket. Publish it to no one.
+  // These routes re-emit canonical events onto the `messages` / `tasks`
+  // services. Their own `{ success: true }` acknowledgements must not
+  // broadcast as service events.
   app.service('/messages/streaming').publish(() => []);
   app.service('/tasks/streaming').publish(() => []);
 
@@ -805,11 +930,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const forkedSession = await sessionsService.fork(id, data, params);
         console.log(`✅ Fork created: ${shortId(forkedSession.session_id)}`);
 
-        console.log('📡 [FORK] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', forkedSession);
-        }
+        // fork() persists through an internal service call, so emit the
+        // standard event explicitly with its tenant/auth context. A raw
+        // app.io.emit would bypass Feathers publication authorization and, in
+        // HA, the Redis adapter would fan it out cluster-wide.
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: forkedSession,
+          params,
+          id: forkedSession.session_id,
+        });
 
         return forkedSession;
       },
@@ -831,11 +962,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const spawnedSession = await sessionsService.spawn(id, data, params);
         console.log(`✅ Spawn created: ${shortId(spawnedSession.session_id)}`);
 
-        console.log('📡 [SPAWN] Manually broadcasting created event to all clients');
-
-        if (app.io) {
-          app.io.emit('sessions created', spawnedSession);
-        }
+        emitServiceEvent(app, {
+          path: 'sessions',
+          event: 'created',
+          data: spawnedSession,
+          params,
+          id: spawnedSession.session_id,
+        });
 
         return spawnedSession;
       },
@@ -910,15 +1043,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
-   * Per-session "turn" lock — single source of truth for "who's allowed to
-   * spawn an executor for this session right now" mutual exclusion. Shared
-   * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
-   * queue processor's drain loop. See `utils/session-turn-lock.ts`.
-   *
-   * Without this, two concurrent prompts on the same idle session could
-   * both observe `status === 'idle'` and both spawn executors — a race
-   * that pre-dates the `/tasks/:id/run` route but is now fixed across all
-   * three entry points.
+   * Per-session local turn coalescing. This reduces redundant preparatory
+   * reads and duplicate drain triggers inside one daemon; it is not a
+   * correctness authority. Queue-position admission and the Session+Task
+   * dispatch fence in PostgreSQL are authoritative across daemons.
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
@@ -964,22 +1092,138 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
         `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
     );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
+    return inCurrentTenantDatabaseScope(
+      async () =>
+        (await app.service('sessions').patch(
+          session.session_id,
+          {
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+          },
+          params
+        )) as Session
+    );
+  }
+
+  /**
+   * Persist the first transcript row for a Task. Scheduled/idempotent prompts
+   * pass a stable message ID, so a replacement daemon can repair a kill after
+   * the dispatch claim without duplicating the prompt. Ordinary prompts retain
+   * the historical best-effort/random-ID behavior and executor fallback.
+   */
+  async function ensureInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    input: {
+      messageStartIndex: number;
+      startTimestamp: string;
+      messageSource?: MessageSource;
+      stableMessageId?: MessageID;
+    }
+  ): Promise<void> {
+    if (config.execution?.daemon_writes_user_message === false) return;
+
+    const messageRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+    if (input.stableMessageId) {
+      const existing = await messageRepo.findById(input.stableMessageId);
+      if (existing) {
+        if (existing.session_id !== task.session_id || existing.task_id !== task.task_id) {
+          throw new Conflict(
+            `Stable initial message identity ${input.stableMessageId} is already in use`
+          );
+        }
+        return;
+      }
+    }
+
+    const isCallback = task.metadata?.is_agor_callback === true;
+    const messageMetadata: Message['metadata'] = {};
+    if (isCallback) messageMetadata.is_agor_callback = true;
+    if (input.messageSource === 'gateway' || input.messageSource === 'agor') {
+      messageMetadata.source = input.messageSource;
+    }
+    const userMessage = buildInitialUserMessage({
+      messageId: input.stableMessageId,
+      sessionId: task.session_id,
+      taskId: task.task_id,
+      index: input.messageStartIndex,
+      timestamp: input.startTimestamp,
+      content: task.full_prompt,
+      type: isCallback ? 'system' : 'user',
+      metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
+    });
+
+    try {
+      await app.service('messages').create(userMessage, params);
+    } catch (error) {
+      if (input.stableMessageId) {
+        const winner = await messageRepo.findById(input.stableMessageId);
+        if (winner?.session_id === task.session_id && winner.task_id === task.task_id) return;
+        throw error;
+      }
+      // Don't fail the spawn — the executor's createUserMessage fallback
+      // (with skip-if-exists) will write the row when it connects.
+      console.warn(
+        formatStructuredLog('[messages.initial]', {
+          event: 'write_failed',
+          task_id: task.task_id,
+          outcome: 'executor_retry',
+          error_code: structuredLogErrorCode(error),
+        })
+      );
+    }
+  }
+
+  /** Repair one stable initial transcript row from durable Task state. */
+  async function reconcileStableInitialUserMessage(
+    task: Task,
+    params: RouteParams,
+    stableMessageId: MessageID,
+    fallback: {
+      messageStartIndex?: number;
+      startTimestamp?: string;
+      messageSource?: MessageSource;
+    } = {}
+  ): Promise<void> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for message reconciliation');
+    const persistedStartIndex = task.message_range?.start_index;
+    const hasPersistedStartIndex =
+      typeof persistedStartIndex === 'number' && persistedStartIndex >= 0;
+    const fallbackStartIndex =
+      typeof fallback.messageStartIndex === 'number' && fallback.messageStartIndex >= 0
+        ? fallback.messageStartIndex
+        : undefined;
+    const messageStartIndex = hasPersistedStartIndex
+      ? persistedStartIndex
+      : (fallbackStartIndex ??
+        (await runWithTenantDatabaseScope(db, tenantId, () =>
+          sessionsRepository.countMessages(task.session_id)
+        )));
+    const startTimestamp =
+      (hasPersistedStartIndex ? task.message_range?.start_timestamp : undefined) ??
+      task.started_at ??
+      fallback.startTimestamp ??
+      new Date().toISOString();
+    const persistedSource = task.metadata?.source ?? fallback.messageSource;
+    const messageSource =
+      persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
+
+    await ensureInitialUserMessage(task, params, {
+      messageStartIndex,
+      startTimestamp,
+      messageSource,
+      stableMessageId,
+    });
   }
 
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
    * `created` / `queued` → `dispatching`.
    *
-   * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
-   * drainer call this helper. Centralising the transition guarantees that:
+   * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
+   * queued-task drainer call this helper. Centralising the transition
+   * guarantees that:
    *
    *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
    *     `started_at` are recomputed against fresh state right before the
@@ -1007,21 +1251,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      stableInitialMessageId?: MessageID;
     },
     params: RouteParams
   ): Promise<Task> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      task,
+      options.stableInitialMessageId
+    );
+    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
+    const runtimeMessageSource =
+      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
+        ? persistedMessageSource
+        : undefined;
+
+    // A stable scheduled Task that has crossed the dispatch fence needs only
+    // deterministic projection repair. Do not make that reconciliation depend
+    // on mutable launch-time state (tool enablement, preset validity, or user
+    // defaults): no new executor launch will occur on this path.
+    if (shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
+      await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
+        messageSource: runtimeMessageSource,
+      });
+      return task;
+    }
+
     const {
       agenticToolEnabled,
       messageStartIndex,
       session: loadedSession,
-    } = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    } = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const session = await sessionsService.get(task.session_id, params);
       const agenticTool = requireActiveAgenticTool(session.agentic_tool);
       return {
         session,
-        agenticToolEnabled: await isTenantAgenticToolEnabled(agenticTool, tenantDb),
+        agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
         // Recompute message_range.start_index against the live message count.
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
       };
@@ -1029,12 +1295,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
-    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
-    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
-    const runtimeMessageSource =
-      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
-        ? persistedMessageSource
-        : undefined;
+    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
+      sessionsService.materializeAgenticToolPreset(loadedSession, params)
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon persists launch intent and writes required sentinel git fields
@@ -1048,71 +1311,89 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    // Patch task: queued/created → launch status, with real ranges. queue_position
-    // is cleared here so a draining task is no longer considered queued.
-    const updatedTask = (await app.service('tasks').patch(
-      task.task_id,
-      {
-        ...launchState,
-        ...(launchState.executor_mode
-          ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-          : {}),
-        queue_position: undefined,
-        message_range: {
-          start_index: messageStartIndex,
-          end_index: messageStartIndex + 1,
-          start_timestamp: startTimestamp,
-          end_timestamp: startTimestamp,
+    if (!isTaskPendingDispatch(task)) return task;
+
+    // Atomically claim queued/created → launch status. Process-local session
+    // locks reduce contention, but this expected-state transition is the
+    // cross-daemon fence that prevents duplicate executor launches.
+    const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      await assertTenantWritable(tenantDb, tenantId);
+      return tasksService.claimDispatchAndProjectSession(
+        task.task_id,
+        task.status,
+        {
+          ...launchState,
+          ...(launchState.executor_mode
+            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+            : {}),
+          queue_position: undefined,
+          message_range: {
+            start_index: messageStartIndex,
+            end_index: messageStartIndex + 1,
+            start_timestamp: startTimestamp,
+            end_timestamp: startTimestamp,
+          },
+          git_state: {
+            ref_at_start: refAtStart,
+            sha_at_start: gitStateAtStart,
+          },
         },
-        git_state: {
-          ref_at_start: refAtStart,
-          sha_at_start: gitStateAtStart,
-        },
-      },
-      { ...params, provider: undefined }
-    )) as Task;
+        { ...params, provider: undefined }
+      );
+    });
+    if (dispatchClaim.outcome !== 'claimed') {
+      const workIdentity = app.get('distributedWorkIdentity');
+      console.info(
+        formatStructuredLog('[distributed-work.task-dispatch]', {
+          event: 'claim_lost',
+          instance_id: workIdentity?.instanceId,
+          boot_id: workIdentity?.bootId,
+          tenant_id: tenantId,
+          task_id: task.task_id,
+          session_id: task.session_id,
+          observed_status: dispatchClaim.task.status,
+        })
+      );
+      if (shouldReconcileStableInitialMessage(dispatchClaim.task, stableInitialMessageId)) {
+        await reconcileStableInitialUserMessage(
+          dispatchClaim.task,
+          params,
+          stableInitialMessageId,
+          {
+            messageStartIndex,
+            startTimestamp,
+            messageSource: runtimeMessageSource,
+          }
+        );
+      }
+      return dispatchClaim.task;
+    }
+    const updatedTask = dispatchClaim.task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
     // write is harmless if the daemon path is enabled.
-    if (config.execution?.daemon_writes_user_message !== false) {
-      try {
-        const isCallback = task.metadata?.is_agor_callback === true;
-        const messageMetadata: Message['metadata'] = {};
-        if (isCallback) {
-          messageMetadata.is_agor_callback = true;
-        }
-        // Prefer task.metadata.source (set when the task was queued) over
-        // the request's messageSource — the latter applies only to the
-        // current draining tick, the former to where the prompt originated.
-        if (runtimeMessageSource) {
-          messageMetadata.source = runtimeMessageSource;
-        }
-
-        const userMessage = buildInitialUserMessage({
-          sessionId: task.session_id,
-          taskId: task.task_id,
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content: task.full_prompt,
-          // Callback messages are typed `system` so the UI shows the special
-          // Agor-callback styling. Normal prompts stay `user`.
-          type: isCallback ? 'system' : 'user',
-          metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        });
-        await app.service('messages').create(userMessage, params);
-      } catch (msgErr) {
-        // Don't fail the spawn — the executor's createUserMessage fallback
-        // (with skip-if-exists) will write the row when it connects.
-        console.warn(
-          `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
-          msgErr
-        );
-      }
+    // Prefer task.metadata.source (set when the task was queued) over the
+    // request's messageSource — the latter applies only to this drain tick.
+    if (stableInitialMessageId) {
+      await reconcileStableInitialUserMessage(updatedTask, params, stableInitialMessageId, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
+    } else {
+      await ensureInitialUserMessage(task, params, {
+        messageStartIndex,
+        startTimestamp,
+        messageSource: runtimeMessageSource,
+      });
     }
 
-    // Flip session to RUNNING and append to session.tasks. Done here so both
-    // callers (idle prompt and queue drain) get this for free.
+    // Re-apply the Session projection through Feathers so hooks/realtime see
+    // the transition. TaskRepository.claimDispatchAndProjectSession already
+    // committed the same projection atomically with the Task fence; this
+    // service patch is no longer correctness-critical on SQLite and is
+    // intentionally idempotent.
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
@@ -1121,21 +1402,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
     // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
+    await runWithTenantDatabaseScope(db, tenantId, () =>
+      app.service('sessions').patch(
+        task.session_id,
+        {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, task.task_id],
+        },
+        params
+      )
     );
 
     // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
     // non-owner is prompting. The prompter identity comes from `task.created_by`
     // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
+    // (`createPending` for the prompt/queue/callback paths and `create` for
+    // pre-created tasks run via `/tasks/:id/run`), so it survives the queue
     // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
     // that don't carry `queued_by_user_id` and is therefore not authoritative.
     // See `./utils/build-prompter-prefix.ts` for the helper + tests.
@@ -1241,7 +1524,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Prompt endpoint
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/prompt',
     {
@@ -1252,13 +1535,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stream?: boolean;
           messageSource?: MessageSource;
           /**
-           * Optional extra task metadata merged onto the queued/created task.
-           * Used by internal callers (e.g. widget submissions) to stamp
+           * Internal-only task metadata merged onto the queued/created task.
+           * Used by daemon callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * Transport provenance (`source`) is daemon-owned and deliberately
-           * excluded/sanitized even for stale or untyped clients.
+           * External transports are rejected, and the metadata builder also
+           * strips every internal field defensively for untrusted callers.
            */
-          metadata?: PromptTaskMetadataInput;
+          metadata?: InternalPromptTaskMetadataInput;
+          /**
+           * Internal-only stable task identity for idempotent producers such
+           * as the scheduler. External callers may not set this field.
+           */
+          idempotencyTaskId?: UUID;
         },
         params: RouteParams
       ) {
@@ -1272,29 +1560,136 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         let id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.prompt) throw new Error('Prompt required');
+        if (data.idempotencyTaskId && params.provider) {
+          throw new Forbidden('idempotencyTaskId is internal-only');
+        }
+        if (data.metadata !== undefined && params.provider) {
+          throw new Forbidden('Task metadata is internal-only');
+        }
+        const promptTenantId = getCurrentTenantId();
+        if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
+        await runWithTenantDatabaseScope(db, promptTenantId, (tenantDb) =>
+          assertTenantWritable(tenantDb, promptTenantId)
+        );
 
-        // Validate and normalize messageSource
+        // Derive external provenance server-side. Only provider-less,
+        // daemon-internal producers may preserve an explicit gateway source.
         const messageSource = normalizeMessageSource(data.messageSource, params);
         if (messageSource !== data.messageSource && data.messageSource !== undefined) {
           console.warn(
-            `[Daemon] Invalid messageSource value: ${data.messageSource}, defaulted based on provider`
+            `[Daemon] Ignored caller-supplied messageSource: ${data.messageSource}; using ${messageSource ?? 'no source'}`
           );
         }
 
-        let session = await sessionsService.get(id, params);
+        const requestedSessionId = id;
+        let session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+          sessionsService.get(requestedSessionId, params)
+        );
         id = session.session_id;
-        const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+        const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
 
-        if (!(await isTenantAgenticToolEnabled(activeAgenticTool, db))) {
-          throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
+        // Branch RBAC — fail fast before admitting a Task. This route creates
+        // its Task via `taskRepo.createPending` (repository admission), which
+        // deliberately bypasses `TasksService.create` and therefore its
+        // `ensureCanPromptInSession` hook. Without this check a 'session'-tier
+        // collaborator prompting ANOTHER user's session is admitted rather than
+        // rejected: the Task queues and the executor then runs under the session
+        // OWNER's identity/home (in `unix_user_mode: sandbox`, the owner's
+        // per-user home store), so the prompt either silently impersonates the
+        // owner or stalls into a hung task instead of returning a clean 403.
+        // Mirrors the `/tasks/:id/run` (~L1832) and upload (~L2233) routes.
+        // Internal/daemon callers (spawn-prompt forward, widget submissions,
+        // scheduler, gateway) are provider-less and skipped, as are executor
+        // service accounts.
+        const promptBranchId = session.branch_id;
+        const isInternalPrompt = !params.provider;
+        const isPromptServiceAccount =
+          (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (branchRbacEnabled && !isInternalPrompt && !isPromptServiceAccount && promptBranchId) {
+          const promptUserId = params.user?.user_id as UUID | undefined;
+          if (!promptUserId) {
+            throw new NotAuthenticated('Authentication required to prompt a session');
+          }
+          const access = await runWithTenantDatabaseScope(db, promptTenantId, async () => {
+            const wt = await branchRepository.findById(promptBranchId);
+            if (!wt) return null;
+            const isOwner = await branchRepository.isOwner(wt.branch_id, promptUserId);
+            const branchPermission = await branchRepository.resolveUserPermission(wt, promptUserId);
+            return { branchPermission, isOwner, wt };
+          });
+          if (!access) {
+            throw new NotFound(`Branch ${promptBranchId} not found`);
+          }
+          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            branch: access.wt,
+            session,
+            userId: promptUserId,
+            isOwner: access.isOwner,
+            userRole: params.user?.role,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+            branchPermission: access.branchPermission,
+          });
+          if (!allowed) {
+            throw new Forbidden(
+              effectiveLevel === 'session'
+                ? `You have 'session' permission — you can only prompt sessions you created. ` +
+                    `This session was created by another user. Ask a branch owner to upgrade ` +
+                    `your access to 'prompt' if you need to prompt other users' sessions.`
+                : `You need 'prompt' permission to prompt this session. You have ` +
+                    `'${effectiveLevel}' permission.`
+            );
+          }
         }
-        session = await sessionsService.materializeAgenticToolPreset(session, params);
-        if (
-          session.agentic_tool_preset_id &&
-          data.permissionMode !== undefined &&
-          data.permissionMode !== session.permission_config?.mode
-        ) {
-          throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+
+        const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
+          if (!data.idempotencyTaskId) return null;
+          const prior = await taskRepo.findById(data.idempotencyTaskId);
+          if (!prior) return null;
+          if (prior.session_id !== id) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          const expectedCreator = params.user?.user_id ?? session.created_by;
+          if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+          }
+          if (isTaskPendingDispatch(prior)) return null;
+
+          await reconcileStableInitialUserMessage(
+            prior,
+            params,
+            prior.metadata?.initial_message_id ?? (data.idempotencyTaskId as MessageID)
+          );
+          return prior;
+        };
+
+        // Scheduled recovery is reconciliation, not a fresh launch admission,
+        // once its stable Task has crossed the durable dispatch fence. Return
+        // that Task before consulting mutable tool/preset/user configuration.
+        const durableTask = await reconcileDurablyDispatchedTask();
+        if (durableTask) return durableTask;
+
+        try {
+          const activeAgenticTool = requireActiveAgenticTool(session.agentic_tool);
+          if (!(await isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool))) {
+            throw new Forbidden(`${activeAgenticTool} is disabled for this workspace`);
+          }
+          session = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.materializeAgenticToolPreset(session, params)
+          );
+          if (
+            session.agentic_tool_preset_id &&
+            data.permissionMode !== undefined &&
+            data.permissionMode !== session.permission_config?.mode
+          ) {
+            throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+          }
+        } catch (error) {
+          // Another daemon can cross the dispatch fence between the first
+          // stable-Task read and launch admission. Re-check before surfacing a
+          // mutable configuration failure; the winner no longer needs launch.
+          const concurrentlyDurableTask = await reconcileDurablyDispatchedTask();
+          if (concurrentlyDurableTask) return concurrentlyDurableTask;
+          throw error;
         }
 
         // Auto-unarchive on prompt
@@ -1302,10 +1697,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
           );
-          session = (await sessionsService.patch(
-            id,
-            { archived: false, archived_reason: undefined },
-            params
+          session = (await runWithTenantDatabaseScope(db, promptTenantId, () =>
+            sessionsService.patch(id, { archived: false, archived_reason: undefined }, params)
           )) as typeof session;
         }
 
@@ -1313,18 +1706,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // The route is one path: always materialize a Task. Whether it runs
-        // immediately or gets queued is the *response*, not a different code
-        // path. Sentinels and queue-position assignment live in
-        // `taskRepo.createPending` so callers don't reassemble them by hand.
-        //
-        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
-        // the subsequent spawn are atomic with respect to other entry points
-        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
-        // prompts on an idle session could both observe `status === 'idle'`
-        // and both spawn executors. Inside the lock the session is re-read,
-        // so the decision is made against the freshest possible state.
-        const taskRepo = new TaskRepository(db);
+        // Every prompt first takes one durable queue position. The subsequent
+        // Session+Task database claim decides whether this Task leaves the
+        // queue immediately or remains queued. This avoids a split
+        // read-session/create-CREATED race: two daemons can admit concurrently,
+        // but only the durable head can claim the idle Session.
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
@@ -1334,7 +1720,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            let lockedSession = await runWithTenantDatabaseScope(db, promptTenantId, () =>
+              sessionsService.get(id, params)
+            );
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
@@ -1346,85 +1734,81 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               taskRepo,
               params
             );
-            const queuedTasks = await taskRepo.findQueued(id as SessionID);
-            const shouldQueue =
-              !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
-              queuedTasks.length > 0;
 
-            if (shouldQueue) {
-              const queuedTask = await taskRepo.createPending({
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.QUEUED,
-                metadata: buildPromptTaskMetadata(data.metadata, messageSource, createdBy),
-              });
-              await tasksService.autoTitleSession(queuedTask, params);
-
-              console.log(
-                `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
-                  `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
-              );
-
-              app.service('tasks').emit('queued', queuedTask);
-
-              if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-                deferInFreshTenantScope(params, async () => {
-                  try {
-                    await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                  } catch (error) {
-                    console.error(
-                      `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                      error
-                    );
-                  }
-                });
-              }
-
-              // Uniform response: the entity is always a Task. Caller inspects
-              // `task.status` (`'queued'` here) and `task.queue_position` to know
-              // what happened.
-              return queuedTask;
+            const prior = data.idempotencyTaskId
+              ? await taskRepo.findById(data.idempotencyTaskId)
+              : null;
+            if (prior && prior.session_id !== id) {
+              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
-            console.log(`   Session agent: ${lockedSession.agentic_tool}`);
-            console.log(
-              `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
-            );
-
-            // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-            // which is the sole place that populates message_range / git_state,
-            // writes the user-message row, and spawns the executor. Both this
-            // path and processNextQueuedTask go through that helper so behavior
-            // stays in lockstep.
-            const idleTaskMetadata = buildPromptTaskMetadata(data.metadata, messageSource);
+            const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
+              trustedInternalMetadata: !params.provider,
+            });
+            if (data.idempotencyTaskId) {
+              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+            }
+            if (params._taskCompletionCallback) {
+              taskMetadata.completion_callback = params._taskCompletionCallback;
+            }
             const task = await taskRepo.createPending({
+              task_id: data.idempotencyTaskId,
               session_id: id as SessionID,
               full_prompt: data.prompt,
               created_by: createdBy,
-              status: TaskStatus.CREATED,
-              metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
+              status: TaskStatus.QUEUED,
+              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
             });
             await tasksService.autoTitleSession(task, params);
-            // Bypassing the service means no native 'created' emit; do it here
-            // so reactive clients see the new task before the executor spawns.
-            emitServiceEvent(app, {
-              path: 'tasks',
-              event: 'created',
-              data: task,
-              params,
-              id: task.task_id,
-            });
 
-            return await spawnTaskExecutor(
+            if (!prior) {
+              // Repository admission bypasses TasksService.create. Publish the
+              // entity before its possible patched/dispatch event so reactive
+              // clients observe a coherent lifecycle.
+              emitServiceEvent(app, {
+                path: 'tasks',
+                event: 'created',
+                data: task,
+                params,
+                id: task.task_id,
+              });
+            }
+
+            const admitted = await spawnTaskExecutor(
               task,
               {
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
+                ...(data.idempotencyTaskId
+                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
+                  : {}),
               },
               params
             );
+
+            if (admitted.status === TaskStatus.QUEUED) {
+              console.log(
+                `📬 [Prompt] Queued task for session ${shortId(id)} at position ${admitted.queue_position} ` +
+                  `(observed session status: ${lockedSession.status})`
+              );
+              app.service('tasks').emit('queued', admitted);
+
+              // Immediate triggers are a latency hint. Durable all-daemon
+              // discovery remains the recovery path if this process dies or
+              // another claim changes the Session after our observation.
+              deferInFreshTenantScope(params, async () => {
+                try {
+                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                } catch (error) {
+                  console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
+                }
+              });
+            }
+
+            // Uniform response: QUEUED means durable wait; DISPATCHING/RUNNING
+            // means this or another daemon already won the launch claim.
+            return admitted;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -1539,11 +1923,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        // Acquire the session-turn lock before validating session state and
-        // spawning. This is what closes the race against concurrent
-        // /tasks/:id/run on different tasks of the same session, against
-        // /sessions/:id/prompt's idle branch, and against the queue
-        // drainer — they all serialize through `sessionTurnLocks`.
+        // The local lock coalesces same-process contenders. The repository's
+        // Session-first dispatch claim is authoritative against other daemons
+        // and also refuses to jump a durable prompt queue.
         return await withSessionTurnLock(
           sessionTurnLocks,
           task.session_id,
@@ -1568,7 +1950,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               );
             }
 
-            return await runExistingTask(
+            const result = await runExistingTask(
               task,
               {
                 permissionMode: data.permissionMode,
@@ -1581,6 +1963,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 spawnFn: spawnTaskExecutor,
               }
             );
+            if (result.status === TaskStatus.CREATED) {
+              throw new Conflict(
+                `Cannot run task ${shortId(taskId)}: another Task or queued prompt owns the Session turn.`
+              );
+            }
+            return result;
           },
           { waiterTimeoutMs: 30_000 }
         );
@@ -2058,62 +2446,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     next();
   };
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
-  const uploadAuthMiddleware: any = async (req: any, res: any, next: any) => {
-    try {
-      if (DEBUG_UPLOAD) console.log('🔐 [Upload Auth] Attempting authentication');
-
-      let token = null;
-
-      // Bearer-only. We previously fell back to feathers-jwt / agor-access-token
-      // / jwt cookies, which made the upload endpoint vulnerable to CSRF (a
-      // forged form-post would inherit the user's cookie). All in-tree callers
-      // (UI FileUpload component) already send `Authorization: Bearer …`.
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-        if (DEBUG_UPLOAD) console.log('   Found token in Authorization header');
-      }
-
-      if (!token) {
-        if (DEBUG_UPLOAD) console.log('⚠️  [Upload Auth] No JWT token found, rejecting');
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-
-      if (DEBUG_UPLOAD) console.log('🔑 [Upload Auth] JWT token found, verifying...');
-
-      const authService = app.service('authentication');
-      const result = await authService.create({
-        strategy: 'jwt',
-        accessToken: token,
-      });
-
-      if (DEBUG_UPLOAD) {
-        console.log('✅ [Upload Auth] Authentication successful');
-        console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
-      }
-
-      const authParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
-        headers: req.headers,
-      };
-      req.feathers = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
-      };
-
-      next();
-    } catch (error) {
-      console.error('❌ [Upload Auth] Authentication failed:', error);
-      res.status(401).json({ error: 'Authentication required' });
-    }
-  };
+  const uploadAuthMiddleware = createUploadAuthMiddleware({
+    authentication: app.service('authentication'),
+    multiTenancy,
+  });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(
@@ -2367,6 +2703,65 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+        const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+          db,
+          getCurrentTenantId()
+        );
+        const session = await inCurrentTenantDatabaseScope(() =>
+          app.service('sessions').get(id, params)
+        );
+
+        // Stop is process control and must use the same authorization policy as
+        // prompting the target session. A session-tier collaborator may view a
+        // teammate's session but must not stop an executor running with that
+        // teammate's identity and credentials. Force-fail deliberately skips
+        // this check and applies its narrower owner-or-admin policy below.
+        if (
+          body.force_unverified !== true &&
+          branchRbacEnabled &&
+          params.provider &&
+          !(params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
+        ) {
+          const stopUserId = params.user?.user_id as UUID | undefined;
+          if (!stopUserId) {
+            throw new NotAuthenticated('Authentication required to stop a session');
+          }
+          if (!session.branch_id) {
+            throw new Forbidden('Not authorized to stop this session');
+          }
+          const access = await inCurrentTenantDatabaseScope(async () => {
+            const branch = await branchRepository.findById(session.branch_id);
+            if (!branch) return null;
+            const isOwner = await branchRepository.isOwner(branch.branch_id, stopUserId);
+            const branchPermission = await branchRepository.resolveUserPermission(
+              branch,
+              stopUserId
+            );
+            return { branch, branchPermission, isOwner };
+          });
+          if (!access) {
+            throw new NotFound(`Branch ${session.branch_id} not found`);
+          }
+          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            branch: access.branch,
+            session,
+            userId: stopUserId,
+            isOwner: access.isOwner,
+            userRole: params.user?.role,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+            branchPermission: access.branchPermission,
+          });
+          if (!allowed) {
+            throw new Forbidden(
+              effectiveLevel === 'session'
+                ? `You have 'session' permission — you can only stop sessions you created. ` +
+                    `This session was created by another user. Ask a branch owner to upgrade ` +
+                    `your access to 'prompt' if you need to stop other users' sessions.`
+                : `You need 'prompt' permission to stop this session. You have ` +
+                    `'${effectiveLevel}' permission.`
+            );
+          }
+        }
         const triggerPreservedQueue = () => {
           deferInFreshTenantScope(params, async () => {
             try {
@@ -2381,29 +2776,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-            const session = await app.service('sessions').get(id, params);
-            const task = findUnverifiedTerminationTask(
-              await findActiveTasksForSession(app, session.session_id, params)
-            );
-            if (!task) throw new BadRequest('Session has no unverified Task to force-fail.');
-            const taskId = task.task_id;
-            const userId = params.user?.user_id;
-            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
-            const isOwner =
-              !!userId &&
-              (await stopRouteRepositories.branchRepo.isOwner(session.branch_id, userId as UUID));
-            if (!isAdmin && !isOwner) {
-              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
-            }
-            if (typeof body.confirmation !== 'string') {
-              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
-            }
-            const failedTask = await forceFailUnverifiedTask({
-              app,
-              taskId,
-              confirmation: body.confirmation,
-              params,
+            const target = await inCurrentTenantDatabaseScope(async () => {
+              const session = await app.service('sessions').get(id, params);
+              return authorizeForceFailRoute({
+                session,
+                params,
+                body,
+                findTask: async (taskId) => {
+                  try {
+                    return await app.service('tasks').get(taskId, params);
+                  } catch (error) {
+                    if ((error as { code?: number }).code === 404) return undefined;
+                    throw error;
+                  }
+                },
+                isBranchOwner: (branchId, userId) =>
+                  stopRouteRepositories.branchRepo.isOwner(branchId, userId),
+              });
             });
+            const failedTask = await runInFreshTerminationTenantWriteDatabase(() =>
+              forceFailUnverifiedTask({
+                app,
+                taskId: target.task.task_id,
+                terminationRequestedAt: target.terminationRequestedAt,
+                confirmation: target.confirmation,
+                params,
+              })
+            );
             return {
               success: true,
               status: failedTask.status,
@@ -2421,6 +2820,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app,
               taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
+              findActiveTasks: (stopApp, sessionId, stopParams) =>
+                inCurrentTenantDatabaseScope(() =>
+                  findActiveTasksForSession(stopApp, sessionId, stopParams)
+                ),
+              runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             },
             id as SessionID,
             params,
@@ -2445,10 +2849,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Queue listing — task-centric (was message-centric pre-never-lose-prompt).
   // The queue is the set of tasks with status='queued', ranked by
   // queue_position. Each queued task carries the full prompt + metadata; on
-  // drain it transitions queued → running via spawnTaskExecutor.
+  // drain it transitions queued → dispatching via spawnTaskExecutor.
   //
-  // Enqueueing goes through `POST /sessions/:id/prompt` — the daemon decides
-  // run-vs-queue based on session state and reports it back via `task.status`.
+  // Enqueueing goes through `POST /sessions/:id/prompt`: every admission first
+  // takes a durable position, then the database claim decides whether it may
+  // leave the queue immediately and reports the actual status to the caller.
   // ============================================================================
 
   registerAuthenticatedRoute(
@@ -2475,14 +2880,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. Acquires the shared
-  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
-  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
-  // same session. The retry-on-existing-lock indirection (vs. a plain
-  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
-  // flight, schedule a retry instead of stacking concurrent drainers"
-  // semantics — important because callbacks can fire processNextQueuedTask
-  // from arbitrary points in the lifecycle.
+  // Queue processing implementation — task-centric. `sessionTurnLocks` and
+  // `queueRetryScheduled` only coalesce duplicate work inside this daemon.
+  // They may disappear on process death without losing correctness: the
+  // durable queue head plus Session-first dispatch claim are authoritative,
+  // and the all-daemon queue worker rediscovers missed work.
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
@@ -2609,22 +3011,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    const userId = nextTask.metadata?.queued_by_user_id;
+    // Recovery triggers carry trusted tenant routing but no request user. Restore
+    // the durable enqueuer identity before entering hooked Session reads/repairs
+    // so branch RBAC applies exactly as it did at admission time.
+    const userId = nextTask.metadata?.queued_by_user_id ?? nextTask.created_by;
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
-
     const taskParams: RouteParams = queuedByUser
-      ? ({
-          ...params,
-          user: queuedByUser,
-        } as RouteParams)
+      ? ({ ...params, user: queuedByUser } as RouteParams)
       : params;
-
-    console.log(
-      `📬 Processing queued task ${shortId(nextTask.task_id)} ` +
-        `(position ${nextTask.queue_position}) ` +
-        `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
-    );
 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
@@ -2632,10 +3027,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
-          `(will be processed when session becomes IDLE via patch hook)`
-      );
       return;
     }
 
@@ -2647,23 +3038,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    // spawnTaskExecutor handles the QUEUED → RUNNING transition (recomputes
+    // spawnTaskExecutor handles the QUEUED → DISPATCHING claim (recomputes
     // message_range/git_state, writes the user-message row, appends to
     // session.tasks, spawns the executor). We pass the messageSource from
     // task.metadata so callback styling survives the queue → run hop.
     const persistedSource = nextTask.metadata?.source;
     const source =
       persistedSource === 'gateway' || persistedSource === 'agor' ? persistedSource : undefined;
-    await spawnTaskExecutor(
+    const scheduledInitialTaskId = queuedSession.custom_context?.scheduled_run?.initial_task_id;
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      stillQueued,
+      scheduledInitialTaskId === stillQueued.task_id
+        ? (scheduledInitialTaskId as MessageID)
+        : undefined
+    );
+    const admitted = await spawnTaskExecutor(
       stillQueued,
       {
         stream: true,
         messageSource: source,
+        ...(stableInitialMessageId ? { stableInitialMessageId } : {}),
       },
       taskParams
     );
-
-    console.log(`✅ Queued task drained for session ${shortId(sessionId)}`);
+    if (admitted.status === TaskStatus.QUEUED) {
+      taskQueueDebug(
+        `⏸️  Queue head ${shortId(admitted.task_id)} remains queued after a lost/changed claim`
+      );
+      return;
+    }
+    console.log(
+      `[task-queue] event=dispatched session_id=${JSON.stringify(sessionId)} task_id=${JSON.stringify(admitted.task_id)} status=${JSON.stringify(admitted.status)}`
+    );
   }
 
   // Inject queue processor into sessions service.
@@ -2683,76 +3089,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/permission-decision',
     {
-      async create(data: PermissionDecision, params: RouteParams) {
+      async create(data: PermissionDecisionSubmission, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        if (!data.requestId) throw new Error('requestId required');
-        if (typeof data.allow !== 'boolean') throw new Error('allow field required');
-
-        const messagesServiceInst = app.service('messages');
-        const messages = await messagesServiceInst.find({
-          query: {
-            session_id: id,
-            type: 'permission_request',
+        return deliverPermissionDecision({
+          app,
+          sessionId: id as SessionID,
+          data,
+          params,
+          authorization: {
+            branchRbacEnabled,
+            branchRepository,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
           },
         });
-
-        const messageList = isPaginated(messages) ? messages.data : messages;
-        const permissionMessage = messageList.find((msg: Message) => {
-          const content = msg.content as PermissionRequestContent;
-          return content?.request_id === data.requestId;
-        });
-
-        if (!permissionMessage) {
-          throw new Error(`Permission request ${data.requestId} not found`);
-        }
-
-        const permissionContent = permissionMessage.content as PermissionRequestContent;
-
-        if (permissionContent?.status && permissionContent.status !== 'pending') {
-          return {
-            success: false,
-            alreadyResolved: true,
-            status: permissionContent.status,
-            message: `Permission request already ${permissionContent.status}`,
-          };
-        }
-
-        const resolvedTaskId = permissionContent.task_id || permissionMessage.task_id;
-
-        if (!resolvedTaskId) {
-          console.error(
-            `❌ [Permission] Cannot resolve permission: task_id missing from both content and message. requestId=${data.requestId}`
-          );
-          throw new Error(
-            'Cannot process permission decision: task_id is missing. This permission request may be corrupted.'
-          );
-        }
-
-        await messagesServiceInst.patch(permissionMessage.message_id, {
-          content: {
-            ...permissionContent,
-            status: data.allow ? 'approved' : 'denied',
-            scope: data.scope,
-            approved_by: data.decidedBy,
-            approved_at: new Date().toISOString(),
-          },
-        });
-
-        permissionService.resolvePermission(data);
-
-        app.service('messages').emit('permission_resolved', {
-          requestId: data.requestId,
-          taskId: resolvedTaskId,
-          sessionId: id,
-          allow: data.allow,
-          reason: data.reason,
-          remember: data.remember,
-          scope: data.scope,
-          decidedBy: data.decidedBy,
-        });
-
-        return { success: true };
       },
     },
     {
@@ -2769,16 +3119,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
 
+  const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
+  const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
+    runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
+    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'patched',
+        data: message,
+        id: message.message_id,
+      })
+    ),
+    publishResolved: (payload: Record<string, unknown>) =>
+      emitServiceEvent(app, {
+        path: 'messages',
+        event: 'widget:resolved',
+        data: payload,
+        method: 'patch',
+        id: payload.widget_id as string,
+      }),
     isBranchOwner: async (branchId: string, userId: UUID) =>
-      branchRepository.isOwner(branchId as import('@agor/core/types').BranchID, userId),
+      widgetResolutionBranches.isOwner(branchId as import('@agor/core/types').BranchID, userId),
     resolveBranchPermission: async (branch: import('@agor/core/types').Branch, userId: UUID) =>
-      branchRepository.resolveUserPermission(branch, userId),
+      widgetResolutionBranches.resolveUserPermission(branch, userId),
   };
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/submit',
     {
@@ -2802,7 +3171,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/dismiss',
     {
@@ -2829,28 +3198,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Tasks custom routes
   // ============================================================================
-
-  registerAuthenticatedRoute(
-    app,
-    '/tasks/bulk',
-    {
-      async create(data: unknown, params: RouteParams) {
-        if (!Array.isArray(data)) throw new BadRequest('Task import requires an array');
-        const createdBy = params.user?.user_id;
-        if (!createdBy) throw new NotAuthenticated('Authentication required to import tasks');
-        return tasksService.createMany(
-          (data as Partial<Task>[]).map((task) => ({
-            ...task,
-            created_by: createdBy as UUID,
-          }))
-        );
-      },
-    },
-    {
-      create: { role: ROLES.ADMIN, action: 'import tasks' },
-    },
-    requireAuth
-  );
 
   registerAuthenticatedRoute(
     app,
@@ -3260,10 +3607,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     async create(data: unknown, params: RouteParams) {
       const id = params.route?.id;
       if (!id) throw new Error('Branch ID required');
-      const options = data as {
-        metadataAction: 'archive' | 'delete';
-        filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-      };
+      if (!isBranchArchiveOrDeleteOptions(data)) {
+        throw new BadRequest('Invalid branch archive/delete options');
+      }
+      const options: BranchArchiveOrDeleteOptions = data;
       return branchesService.archiveOrDelete(
         id as import('@agor/core/types').BranchID,
         options,
@@ -3278,32 +3625,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        inTenantDatabaseScope(async (context: HookContext) => {
-          const id = context.params.route?.id;
-          if (!id) throw new Error('Branch ID required');
-
-          const branch = await branchRepository.findById(id);
-          if (!branch) {
-            throw new Forbidden(`Branch not found: ${id}`);
-          }
-
-          await cacheBranchAccess(context.params, branchRepository, branch);
-
-          return context;
-        }),
-        branchRbacEnabled
-          ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
-          : (context: HookContext) => {
-              const isOwner = context.params.isBranchOwner;
-              const userRole = context.params.user?.role;
-
-              if (!isOwner && !hasMinimumRole(userRole, ROLES.ADMIN)) {
-                throw new Forbidden(
-                  'You must be the branch owner or a global admin to archive/delete branches'
-                );
-              }
-              return context;
-            },
+        inTenantDatabaseScope((context: HookContext) =>
+          authorizeBranchArchiveDelete(context, {
+            branchRepository,
+            branchRbacEnabled,
+            superadminOpts,
+          })
+        ),
       ],
     },
   });
@@ -3603,6 +3931,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     checkSessionOwnerOrAdmin(user, session, superadminOpts);
   };
 
+  // Same authorization, but returns the session. MCP routes need its
+  // `created_by`: that identity, not the caller's, decides which private
+  // servers the session may see, so it has to be loaded for service-account
+  // callers too rather than short-circuited.
+  const authorizeAndLoadSessionForMcpConfig = async (
+    sessionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
+    params: any
+  ): Promise<Session> => {
+    const user = params?.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    const session = (await sessionsService.get(sessionId, { provider: undefined })) as
+      | Session
+      | undefined;
+    if (!session) throw new NotFound(`Session not found: ${sessionId}`);
+    if (!user._isServiceAccount) checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    return session;
+  };
+
   // ============================================================================
   // Session MCP servers routes
   // ============================================================================
@@ -3614,7 +3961,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
         const includeGlobal =
@@ -3670,9 +4017,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               }
             })
           );
-          const entries = withMetadata.filter(
-            (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
-          );
+          const entries = withMetadata
+            .filter(
+              (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
+            )
+            .filter((entry) => isMCPServerUsableInSession(entry.server, session));
           return shouldExposeMCPServerSecrets(params, {
             allowSessionToken: true,
             sessionId: id,
@@ -3701,6 +4050,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           scope: 'global',
           ...(enabledOnly ? { enabled: true } : {}),
           ...(userId ? { forUserId: userId } : {}),
+          // Global scope means "every session of everyone who may use it", not
+          // "every session in the tenant": a private server belongs to its
+          // owner's sessions only. Keyed on the session's creator rather than
+          // the caller or the query's `forUserId`, neither of which is the
+          // identity the session runs as.
+          usableByUserId: session.created_by,
           $limit: 1000,
         };
         const globalResult = includeGlobal
@@ -3711,16 +4066,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             })
           : [];
         const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = includeGlobal
-          ? [
-              ...new Map(
-                [...globalServers, ...sessionServers].map((server) => [
-                  server.mcp_server_id,
-                  server,
-                ])
-              ).values(),
-            ]
-          : sessionServers;
+        const servers = filterMCPServersForSession(
+          includeGlobal
+            ? [
+                ...new Map(
+                  [...globalServers, ...sessionServers].map((server) => [
+                    server.mcp_server_id,
+                    server,
+                  ])
+                ).values(),
+              ]
+            : sessionServers,
+          session
+        );
         return shouldExposeMCPServerSecrets(params, {
           allowSessionToken: true,
           sessionId: id,
@@ -3732,13 +4090,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!data.mcpServerId) throw new Error('MCP Server ID required');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await authorizeAndLoadSessionForMcpConfig(id, params);
 
-        await sessionMCPServersService.addServer(
-          id as import('@agor/core/types').SessionID,
-          data.mcpServerId as import('@agor/core/types').MCPServerID,
-          params
-        );
+        try {
+          await sessionMCPServersService.addServer(
+            id as import('@agor/core/types').SessionID,
+            data.mcpServerId as import('@agor/core/types').MCPServerID,
+            params
+          );
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          throw error;
+        }
 
         const relationship = {
           session_id: id,
@@ -3754,6 +4119,47 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         });
 
         return relationship;
+      },
+      async update(_id: string | null, data: { mcpServerIds?: unknown }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!Array.isArray(data?.mcpServerIds)) {
+          throw new BadRequest('mcpServerIds (array) required');
+        }
+        if (
+          !data.mcpServerIds.every((serverId): serverId is string => typeof serverId === 'string')
+        ) {
+          throw new BadRequest('mcpServerIds must contain strings');
+        }
+
+        await authorizeAndLoadSessionForMcpConfig(id, params);
+        const serverIds = [...new Set(data.mcpServerIds)] as Array<
+          import('@agor/core/types').MCPServerID
+        >;
+        try {
+          await sessionMCPServersService.setServers(
+            id as import('@agor/core/types').SessionID,
+            serverIds,
+            params
+          );
+        } catch (error) {
+          if (error instanceof MCPServerNotUsableError) {
+            throw new Forbidden('That MCP server is private to another user');
+          }
+          throw error;
+        }
+
+        const replacement = {
+          session_id: id,
+          mcp_server_ids: serverIds,
+        };
+        emitServiceEvent(app, {
+          path: 'session-mcp-servers',
+          event: 'patched',
+          data: replacement,
+          params,
+        });
+        return replacement;
       },
       async remove(mcpId: string, params: RouteParams) {
         const id = params.route?.id;
@@ -3798,9 +4204,78 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       find: { role: ROLES.MEMBER, action: 'view session MCP servers' },
       create: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+      update: { role: ROLES.MEMBER, action: 'replace session MCP servers' },
       remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
       patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
     },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP member policy
+  //
+  // Routes:
+  //   GET   /mcp-member-policy   — the policy in force for the caller
+  //   PATCH /mcp-member-policy   — set the tenant-wide value (admin)
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-member-policy',
+    {
+      async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
+        const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
+        // The policy alone does not answer "may I add one?" — the role floor
+        // beneath it does too. Answering here keeps a client from rebuilding
+        // the rule out of `isAdmin` and a policy value, which is the shape that
+        // loses the floor. Advisory: the write path still decides.
+        return {
+          policy,
+          can_configure: canConfigureMcpServers(params.user?.role, policy),
+        };
+      },
+      async patch(
+        _id: unknown,
+        data: { policy: MCPMemberPolicy },
+        params: RouteParams
+      ): Promise<MCPMemberPolicySetting> {
+        if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
+          throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
+        }
+        await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+        return {
+          policy: data.policy,
+          can_configure: canConfigureMcpServers(params.user?.role, data.policy),
+        };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      // Readable by any authenticated caller, because what it answers is
+      // partly about the caller: `can_configure` is their own capability, and
+      // the role floor means the interesting answer is the one a below-member
+      // caller gets. Gating this at member would leave that answer unreachable
+      // by the only people it refuses, who would then be shown a control that
+      // fails instead of a reason it is off.
+      find: { role: ROLES.VIEWER, action: 'read the MCP member policy' },
+      patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // MCP marketplace connect
+  // ============================================================================
+
+  // A "long" route: it probes a remote endpoint before writing anything, so it
+  // carries tenant identity without holding a transaction open across the
+  // network call. Every write it makes goes through a service that opens its
+  // own unit of work.
+  registerLongAuthenticatedRoute(
+    app,
+    '/mcp-catalog/connect',
+    createMCPCatalogConnectService(app),
+    { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );
 
@@ -3946,7 +4421,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
       const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: healthStatus(dbProbe),
+        service: 'agor-daemon',
+        deploymentId: requireDeploymentId(config),
+        // Present only for daemons detached by `agor daemon start`. The CLI
+        // compares this opaque ID with its local ownership record before it
+        // sends a signal, preventing a stale/recycled PID from being killed.
+        managedInstanceId: process.env.AGOR_MANAGED_DAEMON_INSTANCE_ID,
+        status:
+          healthStatus(dbProbe) === 'ok' && (!realtimeRuntime || realtimeRuntime.isReady())
+            ? 'ok'
+            : 'degraded',
         db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
@@ -3964,20 +4448,24 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
         },
+        realtime: realtimeRuntime
+          ? { required: true, ready: realtimeRuntime.isReady() }
+          : { required: false, ready: true },
         features: {
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this
           // flag exists so the UI can skip rendering buttons that would fail.
           // Defaults to true when the config key is unset.
-          webTerminal: config.execution?.allow_web_terminal !== false,
+          webTerminal: resolveWebTerminalCapability({ config, deployment }).enabled,
+          webTerminalCapability: resolveWebTerminalCapability({ config, deployment }),
           // How managed environment lifecycle fields execute. In
           // webhook-only mode the UI/MCP may still show env controls, but
           // non-URL rendered commands are rejected server-side.
           managedEnvsExecutionMode:
             config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           // True when the daemon runs in a multi-user Unix isolation mode
-          // (insulated/strict). UI hides "trust everyone on this instance"
+          // (sandbox). UI hides "trust everyone on this instance"
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
@@ -4039,6 +4527,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           },
+          deployment: {
+            mode: deployment.mode,
+            ...(deployment.mode === 'ha'
+              ? {
+                  // @agor/core's source owns these fields. The daemon package's
+                  // no-build typecheck can temporarily see the previous core
+                  // dist declaration while watch mode catches up.
+                  supportProfile: (deployment as typeof deployment & { supportProfile: string })
+                    .supportProfile,
+                  capabilities: (
+                    deployment as typeof deployment & {
+                      capabilities: Record<string, boolean>;
+                    }
+                  ).capabilities,
+                }
+              : {}),
+            instanceId: distributedWorkIdentity.instanceId,
+            bootId: distributedWorkIdentity.bootId,
+            realtime: realtimeRuntime?.health() ?? { required: false, ready: true },
+          },
           // Resolved security posture — admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs
           // or reading response headers by hand. Keep the shape tight: the
@@ -4073,7 +4581,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(app, db);
+  registerHealthProbeRoutes(app, db, [
+    ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
+    ...(deployment.mode === 'ha'
+      ? [
+          {
+            name: 'environment-health-monitor',
+            isReady: () => {
+              const monitor = app.get('environmentHealthMonitor') as
+                | { isReady?: () => boolean }
+                | undefined;
+              return monitor?.isReady?.() === true;
+            },
+          },
+        ]
+      : []),
+  ]);
 
   // ============================================================================
   // MCP routes
@@ -4082,7 +4605,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, config);
+    setupMCPRoutes(app, db, toolSearchEnabled, config, { serverVersion: AGOR_VERSION });
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );
@@ -4095,6 +4618,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   app.hooks({
+    around: {
+      all: [
+        createFeathersMetricsHook(getDaemonMetrics(app), {
+          // Health probes already have HTTP metrics; avoid doubling their
+          // high-frequency signal at the Feathers boundary.
+          excludedServicePaths: ['health'],
+          // JWT/local strategies preserve provider for the serialized entity
+          // lookup even though it is authentication framework work.
+          isInternalCall: (context) => isAuthenticationUserLookup(context.params),
+        }),
+      ],
+    },
     before: {
       all: [enforcePasswordChange],
     },

@@ -88,6 +88,19 @@ describe('GlobalSearch', () => {
     expect(goToBoard).not.toHaveBeenCalled();
   });
 
+  it('does not render legacy board emojis in board result rows', async () => {
+    recentsState.board = [
+      { type: 'board', item: { board_id: 'board-1', name: 'Recent Board', icon: '🦊' } },
+    ];
+    renderSearch();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open search' }));
+    await vi.advanceTimersByTimeAsync(16);
+
+    expect(screen.getByRole('option', { name: 'Recent Board' })).toBeInTheDocument();
+    expect(screen.queryByText('🦊')).not.toBeInTheDocument();
+  });
+
   it('renders the search icon button', () => {
     renderSearch();
 

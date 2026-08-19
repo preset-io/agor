@@ -73,20 +73,27 @@ export function EnvironmentPill({
   if (!hasConfig) {
     return (
       <Tooltip title="Click to configure environment (optional)">
-        <Tag
-          color="default"
-          style={{ cursor: 'pointer', userSelect: 'none', opacity: 0.6 }}
-          onClick={(e) => {
-            e.stopPropagation();
+        <Button
+          size="small"
+          aria-label="Configure environment"
+          icon={<GlobalOutlined style={{ fontSize: 12 }} />}
+          disabled={!onEdit}
+          onClick={(event) => {
+            event.stopPropagation();
             onEdit?.();
+          }}
+          style={{
+            height: 22,
+            paddingInline: 7,
+            fontSize: 12,
+            opacity: 0.6,
           }}
         >
           <Space size={4}>
-            <GlobalOutlined style={{ fontSize: 12 }} />
             <span style={{ fontFamily: token.fontFamilyCode }}>env</span>
             <EditOutlined style={{ fontSize: 12 }} />
           </Space>
-        </Tag>
+        </Button>
       </Tooltip>
     );
   }
@@ -373,14 +380,17 @@ export function EnvironmentPill({
           <Button
             type="text"
             size="small"
+            aria-label="Configure environment"
             icon={<EditOutlined />}
             onClick={handleEdit}
+            disabled={!onEdit}
             style={{
               padding: 0,
               height: 22,
               width: 22,
               minWidth: 22,
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
+              ...(onEdit ? { cursor: 'pointer' } : {}),
             }}
           />
         </Tooltip>

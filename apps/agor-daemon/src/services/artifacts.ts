@@ -14,12 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import {
-  getDaemonBaseUrl,
-  loadConfig,
-  PAGINATION,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
   ArtifactRepository,
   ArtifactTrustGrantRepository,
@@ -29,7 +24,7 @@ import {
   generateId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgorGrants,
   AgorRuntimeConfig,
@@ -62,11 +57,11 @@ import { DrizzleService, type Query } from '../adapters/drizzle.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   detectLegacyFormat,
-  effectiveTemplateForArtifact,
   envVarPrefixForTemplate,
+  normalizeSandpackConfigForRender,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
 import {
@@ -148,6 +143,21 @@ interface ArtifactValidationResult {
   diagnostics: ArtifactValidationDiagnostic[];
 }
 
+/**
+ * Public Artifact transport surface. `update` is deliberately absent: the
+ * service's own `update()` strips provenance, but leaving the verb off the wire
+ * is what keeps `PUT /artifacts/:id` unreachable rather than merely gated.
+ */
+export const ARTIFACTS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'get',
+  'create',
+  'patch',
+  'remove',
+  'publishFromExecutor',
+  'validateFromExecutor',
+] as const;
+
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
@@ -171,6 +181,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private app: Application;
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
   private dbRef: TenantScopeAwareDatabase;
+  private runtimeIntrospectionEnabled: boolean;
 
   /**
    * In-memory ring buffer for console logs.
@@ -228,7 +239,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     }
   > = new Map();
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    options: { runtimeIntrospectionEnabled?: boolean } = {}
+  ) {
     const artifactRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactRepository(db));
     super(artifactRepo, {
       id: 'artifact_id',
@@ -244,6 +259,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     this.boardRepo = bindRepositoryToTenantUnitOfWork(db, new BoardRepository(db));
     this.app = app;
     this.dbRef = db;
+    this.runtimeIntrospectionEnabled = options.runtimeIntrospectionEnabled !== false;
+  }
+
+  private assertRuntimeIntrospectionEnabled(): void {
+    if (!this.runtimeIntrospectionEnabled) {
+      throw new Unavailable(
+        'Synchronous artifact runtime introspection is unavailable in HA support profile constrained-active-active',
+        { code: 'HA_FEATURE_UNSUPPORTED', feature: 'artifactRuntime' }
+      );
+    }
   }
 
   /**
@@ -478,7 +503,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {
@@ -543,12 +572,23 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const resolvedSandpackConfig = sanitizeSandpackConfig(
       data.sandpack_config ?? sidecar?.sandpack_config ?? existing?.sandpack_config
     );
-    const template = (data.template ??
+    const requestedTemplate = (data.template ??
       resolvedSandpackConfig.template ??
       sidecar?.template ??
       existing?.template ??
       'react') as SandpackTemplate;
-    if (!resolvedSandpackConfig.template) resolvedSandpackConfig.template = template;
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: requestedTemplate,
+      sandpack_config: resolvedSandpackConfig,
+      files,
+      entry: existing?.entry,
+    });
+    const template = renderConfig.template;
+    if (renderConfig.sandpack_config) {
+      Object.assign(resolvedSandpackConfig, renderConfig.sandpack_config);
+    } else if (!resolvedSandpackConfig.template) {
+      resolvedSandpackConfig.template = template;
+    }
     const requiredEnvVars = sanitizeEnvVarNames(
       data.required_env_vars ?? sidecar?.required_env_vars ?? existing?.required_env_vars
     );
@@ -779,7 +819,21 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dbUpdates.agor_runtime = updates.agor_runtime;
     }
     if (updates.sandpack_config !== undefined) {
-      dbUpdates.sandpack_config = sanitizeSandpackConfig(updates.sandpack_config);
+      const sanitizedConfig = sanitizeSandpackConfig(updates.sandpack_config);
+      const normalizedConfig = normalizeSandpackConfigForRender({
+        template: existing.template,
+        sandpack_config: sanitizedConfig,
+        files: existing.files,
+        entry: existing.entry,
+      });
+      dbUpdates.sandpack_config = normalizedConfig.sandpack_config;
+      if (normalizedConfig.template !== existing.template) {
+        dbUpdates.template = normalizedConfig.template;
+      }
+      const normalizedEntry = normalizedConfig.sandpack_config?.customSetup?.entry;
+      if (normalizedEntry !== undefined && normalizedEntry !== existing.entry) {
+        dbUpdates.entry = normalizedEntry;
+      }
     }
 
     let updated = existing;
@@ -822,6 +876,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
             if (updates.archived !== undefined) {
               rollback.archived = existing.archived;
               rollback.archived_at = existing.archived_at;
+            }
+            if (updates.sandpack_config !== undefined) {
+              rollback.sandpack_config = existing.sandpack_config;
+              rollback.template = existing.template;
+              // The repository accepts null to restore a legacy row without
+              // a denormalized entry; undefined would leave the normalized
+              // value in place.
+              rollback.entry = existing.entry ?? (null as unknown as string);
             }
             if (Object.keys(rollback).length > 0) {
               await this.artifactRepo.update(fullArtifactId, rollback);
@@ -914,7 +976,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.land ${branchId}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {
@@ -957,6 +1023,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw new Error(`Artifact ${artifactId} has no files in DB — cannot serve payload`);
     }
 
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files: artifact.files,
+      entry: artifact.entry,
+    });
     const filesOut: Record<string, string> = { ...artifact.files };
     const requiredEnvVars = artifact.required_env_vars ?? [];
     const grants = canonicalizeAgorGrants(artifact.agor_grants);
@@ -992,11 +1064,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // so .env synthesis must follow the same effective template — otherwise
       // the daemon prefixes for one bundler while the bundler that actually
       // runs is something else.
-      const effectiveTemplate = effectiveTemplateForArtifact(artifact);
+      const effectiveTemplate = renderConfig.template;
       // If the artifact explicitly overrides the sandpack environment we
       // can't reliably guess the prefix — operator's responsibility to make
       // the override match the template's prefix convention.
-      const envOverride = artifact.sandpack_config?.customSetup?.environment;
+      const envOverride = renderConfig.sandpack_config?.customSetup?.environment;
       if (envOverride) {
         console.warn(
           `[artifacts] Artifact ${artifact.artifact_id} sets customSetup.environment=${envOverride}; .env prefix still derived from template=${effectiveTemplate}. If the override changes the bundler family the injected vars may not be picked up.`
@@ -1027,8 +1099,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // never touches user files.
     const runtimeEnabled = artifact.agor_runtime?.enabled !== false;
     const servedSandpackConfig = runtimeEnabled
-      ? withInjectedAgorRuntime(artifact.sandpack_config)
-      : artifact.sandpack_config;
+      ? withInjectedAgorRuntime(renderConfig.sandpack_config)
+      : renderConfig.sandpack_config;
 
     const contentHash = this.computeHashFromFiles({
       ...filesOut,
@@ -1041,11 +1113,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       source_session_id: artifact.source_session_id ?? null,
       name: artifact.name,
       description: artifact.description,
-      template: artifact.template,
+      template: renderConfig.template,
       files: filesOut,
       sandpack_config: servedSandpackConfig,
       dependencies: artifact.dependencies,
-      entry: artifact.entry,
+      entry:
+        renderConfig.template === 'static'
+          ? (renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry)
+          : artifact.entry,
       content_hash: contentHash,
       runtime_report_hash: this.computeRuntimeReportHash(artifact),
       required_env_vars: requiredEnvVars.length > 0 ? requiredEnvVars : undefined,
@@ -1300,7 +1375,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // Instance-wide trust is meaningful only on single-user instances. On
       // multi-user setups it would mean "trust any artifact published by any
       // user on this server with my secrets" — too broad. Reject.
-      const config = await loadConfig();
+      const config = this.app.get('config');
       const unixMode = config.execution?.unix_user_mode ?? 'simple';
       if (unixMode !== 'simple') {
         throw new Error(
@@ -1362,6 +1437,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!artifact.files || Object.keys(artifact.files).length === 0) {
       throw new Error(`Artifact ${artifactId} has no files to export`);
     }
+    const exportRenderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files: artifact.files,
+      entry: artifact.entry,
+    });
 
     // Strip Agor-only sidecars + the synthesized .env. CodeSandbox expects
     // `src/index.js` keys, not `/src/index.js` (no leading slash). Hold the
@@ -1399,18 +1480,27 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         // dependency cache rather than failing the whole export.
       }
     }
-    const customSetupDeps = artifact.sandpack_config?.customSetup?.dependencies ?? {};
+    const customSetupDeps = exportRenderConfig.sandpack_config?.customSetup?.dependencies ?? {};
     const cachedDeps = artifact.dependencies ?? {};
     const mergedDeps: Record<string, string> = {
       ...customSetupDeps,
       ...cachedDeps,
       ...((userPkg.dependencies as Record<string, string> | undefined) ?? {}),
     };
+    const exportEntry =
+      exportRenderConfig.sandpack_config?.customSetup?.entry ??
+      artifact.entry ??
+      userPkg.main ??
+      (exportRenderConfig.template === 'static' ? '/index.html' : 'src/index.js');
+    const packageEntry =
+      typeof exportEntry === 'string' && exportEntry.startsWith('/')
+        ? exportEntry.slice(1)
+        : exportEntry;
     const finalPkg: Record<string, unknown> = {
       name: 'artifact-export',
       version: '0.0.0',
-      main: artifact.entry ?? userPkg.main ?? 'src/index.js',
       ...userPkg,
+      main: packageEntry,
       dependencies: mergedDeps,
     };
     filesPayload['package.json'] = { content: JSON.stringify(finalPkg, null, 2) };
@@ -1465,7 +1555,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     const url = `https://codesandbox.io/s/${sandboxId}`;
     const requiredVars = artifact.required_env_vars ?? [];
-    const exportTemplate = effectiveTemplateForArtifact(artifact);
+    const exportTemplate = exportRenderConfig.template;
     const exportPrefix = envVarPrefixForTemplate(exportTemplate);
     let note: string;
     if (requiredVars.length === 0) {
@@ -1507,6 +1597,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     args: Record<string, unknown>;
     timeoutMs?: number;
   }): Promise<unknown> {
+    this.assertRuntimeIntrospectionEnabled();
     const artifact = await this.artifactRepo.findById(input.artifactId);
     if (!artifact) throw new Error(`Artifact ${input.artifactId} not found`);
     if (!this.isVisibleTo(artifact, input.userId)) {
@@ -1612,7 +1703,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
       {
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
-        asUser: await resolveExecutorReadAsUser(this.dbRef, params.user?.user_id),
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+          this.dbRef,
+          params.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!result.success) {
@@ -1766,14 +1861,20 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     >
   ): string {
     const files = artifact.files ?? {};
+    const renderConfig = normalizeSandpackConfigForRender({
+      template: artifact.template,
+      sandpack_config: artifact.sandpack_config,
+      files,
+      entry: artifact.entry,
+    });
     return this.computeHashFromFiles({
       ...files,
       '/.agor/runtime-report-inputs.json': JSON.stringify({
         artifact_id: artifact.artifact_id,
         board_id: artifact.board_id,
-        template: artifact.template,
-        entry: artifact.entry ?? null,
-        sandpack_config: artifact.sandpack_config ?? null,
+        template: renderConfig.template,
+        entry: renderConfig.sandpack_config?.customSetup?.entry ?? artifact.entry ?? null,
+        sandpack_config: renderConfig.sandpack_config ?? null,
         required_env_vars: artifact.required_env_vars ?? [],
         agor_grants: canonicalizeAgorGrants(artifact.agor_grants),
         agor_runtime_enabled: artifact.agor_runtime?.enabled !== false,
@@ -1793,6 +1894,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * (see `viewerKey`); other viewers' captured output is never returned.
    */
   async getStatus(artifactId: string, userId?: UserID): Promise<ArtifactStatus> {
+    this.assertRuntimeIntrospectionEnabled();
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
     if (!this.isVisibleTo(artifact, userId)) {
@@ -1902,6 +2004,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<
     ArtifactStatus & { ok: boolean; observed: boolean; timed_out: boolean; note?: string }
   > {
+    this.assertRuntimeIntrospectionEnabled();
     if (!userId) {
       const status = await this.getStatus(artifactId, userId);
       return {
@@ -2378,7 +2481,8 @@ function escapeEnvValue(value: string): string {
 
 export function createArtifactsService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  options: { runtimeIntrospectionEnabled?: boolean } = {}
 ): ArtifactsService {
-  return new ArtifactsService(db, app);
+  return new ArtifactsService(db, app, options);
 }

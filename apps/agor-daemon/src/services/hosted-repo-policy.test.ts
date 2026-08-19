@@ -20,7 +20,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
   it('rejects worktree rows through the exposed branches.create boundary', async () => {
     const service = new BranchesService(
       {} as never,
-      { service: vi.fn() } as unknown as Application
+      { get: () => ({}), service: vi.fn() } as unknown as Application
     );
 
     await expect(
@@ -32,7 +32,10 @@ describe('hosted repository storage policy canonical boundaries', () => {
   });
 
   it('rejects bulk conversion to local repositories', async () => {
-    const service = new ReposService({} as never, { service: vi.fn() } as unknown as Application);
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
 
     await expect(service.patch(null, { repo_type: 'local' })).rejects.toThrow(
       /Bulk conversion to local repositories is unavailable/
@@ -42,7 +45,10 @@ describe('hosted repository storage policy canonical boundaries', () => {
   it('allows unrelated updates to historical local repository rows', async () => {
     const patched = { repo_id: 'repo-1', repo_type: 'local', slug: 'renamed' } as Repo;
     const adapterPatch = vi.spyOn(DrizzleService.prototype, 'patch').mockResolvedValue(patched);
-    const service = new ReposService({} as never, { service: vi.fn() } as unknown as Application);
+    const service = new ReposService(
+      {} as never,
+      { get: () => ({}), service: vi.fn() } as unknown as Application
+    );
 
     await expect(service.patch('repo-1', { slug: 'renamed' })).resolves.toBe(patched);
     expect(adapterPatch).toHaveBeenCalledWith('repo-1', { slug: 'renamed' }, undefined);

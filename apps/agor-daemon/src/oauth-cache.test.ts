@@ -15,6 +15,14 @@ vi.mock('@agor/core/db', () => ({
   },
 }));
 
+// The subject-entitlement precondition is enforced inside `persistOAuthToken`
+// and is driven for real, against a real database and a real demotion, in
+// `services/mcp-capability-role.test.ts`. Stubbed here so this file stays about
+// what it is about: which columns a completed flow lands.
+vi.mock('@agor/core/tools/mcp/grant-entitlement', () => ({
+  assertMcpGrantSubjectEntitled: vi.fn(async () => undefined),
+}));
+
 vi.mock('@agor/core/tools/mcp/oauth-token-expiry', () => ({
   resolveTokenExpiry: () => ({
     expiresAt: new Date(Date.now() + 3_600_000),
@@ -37,7 +45,7 @@ describe('persistOAuthToken', () => {
     vi.restoreAllMocks();
   });
 
-  it('backfills a discovered token endpoint so OAuth grants can be refreshed later', async () => {
+  it('persists the grant binding without mutating server configuration', async () => {
     mockFindById.mockResolvedValue({
       mcp_server_id: 'srv-1',
       auth: { type: 'oauth', oauth_mode: 'per_user' },
@@ -46,13 +54,23 @@ describe('persistOAuthToken', () => {
     await persistOAuthToken(
       {} as never,
       { access_token: 'access', expires_in: 3600, refresh_token: 'refresh' },
-      'https://mcp.example.com/mcp',
       {
         mcpServerId: 'srv-1',
         userId: 'user-1',
         oauthMode: 'per_user',
         clientId: 'client-1',
         tokenEndpoint: 'https://auth.example.com/oauth/token',
+        grantBinding: {
+          generation: 7,
+          version: 1,
+          fingerprint: 'a'.repeat(64),
+          metadataUri: 'https://mcp.example.com/.well-known/oauth-protected-resource',
+          resourceUri: 'https://mcp.example.com/api',
+          issuer: 'https://auth.example.com',
+          authorizationEndpoint: 'https://auth.example.com/oauth/authorize',
+          tokenEndpoint: 'https://auth.example.com/oauth/token',
+          redirectUri: 'https://agor.example.com/mcp-servers/oauth-callback',
+        },
       },
       'Test'
     );
@@ -64,18 +82,16 @@ describe('persistOAuthToken', () => {
         accessToken: 'access',
         refreshToken: 'refresh',
         clientId: 'client-1',
+        grantBinding: expect.objectContaining({
+          generation: 7,
+          fingerprint: 'a'.repeat(64),
+        }),
       })
     );
-    expect(mockUpdate).toHaveBeenCalledWith('srv-1', {
-      auth: {
-        type: 'oauth',
-        oauth_mode: 'per_user',
-        oauth_token_url: 'https://auth.example.com/oauth/token',
-      },
-    });
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it('does not overwrite an explicitly configured token endpoint', async () => {
+  it('never overwrites an explicitly configured token endpoint', async () => {
     mockFindById.mockResolvedValue({
       mcp_server_id: 'srv-1',
       auth: {
@@ -88,7 +104,6 @@ describe('persistOAuthToken', () => {
     await persistOAuthToken(
       {} as never,
       { access_token: 'access', expires_in: 3600, refresh_token: 'refresh' },
-      'https://mcp.example.com/mcp',
       {
         mcpServerId: 'srv-1',
         userId: 'user-1',
@@ -100,5 +115,35 @@ describe('persistOAuthToken', () => {
     );
 
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not log bearer, refresh, or client-secret material', async () => {
+    mockFindById.mockResolvedValue({
+      mcp_server_id: 'srv-1',
+      auth: { type: 'oauth', oauth_mode: 'per_user', oauth_token_url: 'https://auth.test/token' },
+    });
+    const log = vi.mocked(console.log);
+    const warn = vi.mocked(console.warn);
+
+    await persistOAuthToken(
+      {} as never,
+      {
+        access_token: 'ACCESS-DO-NOT-LOG',
+        refresh_token: 'REFRESH-DO-NOT-LOG',
+        expires_in: 3600,
+      },
+      {
+        mcpServerId: 'srv-1',
+        userId: 'user-1',
+        oauthMode: 'per_user',
+        clientSecret: 'CLIENT-SECRET-DO-NOT-LOG',
+      },
+      'Test'
+    );
+
+    const rendered = [...log.mock.calls, ...warn.mock.calls].flat().map(String).join('\n');
+    expect(rendered).not.toContain('ACCESS-DO-NOT-LOG');
+    expect(rendered).not.toContain('REFRESH-DO-NOT-LOG');
+    expect(rendered).not.toContain('CLIENT-SECRET-DO-NOT-LOG');
   });
 });

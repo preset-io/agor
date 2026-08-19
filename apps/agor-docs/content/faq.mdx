@@ -616,18 +616,18 @@ When ongoing telemetry is enabled, Agor sends lightweight install and aggregate 
 
 - Agor version and install channel
 - OS family, Node major version, deployment kind, and database backend
-- broad configuration modes such as RBAC / Unix isolation mode
+- broad configuration modes such as RBAC and execution mode
 - daemon start events and daily active-install heartbeats
 - aggregate usage counts such as prompt count, session count, branch count, active user count, and counts by agentic tool / provider / normalized model family
 
 Agor does **not** send prompts, messages, repo names or remotes, file paths, user emails or names, branch/session/task IDs, code, tool output, secrets, tokens, or raw custom model names.
 
-You can change the setting later:
+You can inspect the setting with `agor telemetry`. Change it in deployment-owned
+`config.yaml`, or use an environment override:
 
 ```bash
-agor telemetry on
-agor telemetry off
 agor telemetry
+AGOR_TELEMETRY=1 agor daemon start
 ```
 
 `DO_NOT_TRACK=1` and `AGOR_TELEMETRY=0` disable telemetry regardless of config.

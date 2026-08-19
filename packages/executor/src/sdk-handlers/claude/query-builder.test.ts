@@ -2,9 +2,6 @@ import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock minimal dependencies
-vi.mock('node:child_process', () => ({
-  execSync: vi.fn().mockReturnValue('/usr/bin/claude\n'),
-}));
 vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
 }));
@@ -12,7 +9,7 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@agor/core/sdk', () => ({ Claude: { query: vi.fn() } }));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
@@ -24,29 +21,23 @@ vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
 }));
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
-  resolveUserEnvironment: vi.fn().mockReturnValue({ env: {} }),
 }));
-vi.mock('../base/mcp-scoping.js', () => ({
-  getMcpServersForSession: vi.fn().mockResolvedValue([]),
-}));
+vi.mock('@agor/core/mcp', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
+  return { ...actual, getMcpServersForSession: vi.fn().mockResolvedValue([]) };
+});
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
 }));
-vi.mock('./model-utils.js', () => ({
-  parseModelWithBetas: vi.fn((model: string) => ({
-    model: model.replace('[1m]', ''),
-    betas: model.includes('[1m]') ? ['context-1m-2025-08-07'] : [],
-  })),
-}));
-vi.mock('./permissions/permission-hooks.js', () => ({
+vi.mock('../base/permission-hooks.js', () => ({
   createCanUseToolCallback: vi.fn(
     () => () => Promise.resolve({ behavior: 'allow', updatedInput: {} })
   ),
 }));
 
-import { Claude } from '@agor/core/sdk';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -96,6 +87,44 @@ describe('setupQuery - Local Settings Support', () => {
     expect(callArgs.options.settingSources).toEqual(
       expect.arrayContaining(['user', 'project', 'local'])
     );
+  });
+
+  it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
+    const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
+    const deps = createMockDeps();
+    const now = new Date().toISOString();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+      sdk_session_id: 'sdk-session-secret',
+      created_at: now,
+      last_updated: now,
+      permission_config: { mode: 'default' },
+      model_config: {
+        mode: 'alias',
+        model: 'claude-sonnet-4-6',
+        updated_at: now,
+        effort: 'high',
+        advisorModel: 'opus',
+      },
+    } as any);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await setupQuery('test-session' as SessionID, prompt, deps);
+
+      expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
+
+      const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      expect(callArgs.options).not.toHaveProperty('debug');
+      expect(callArgs.options.resume).toBe('sdk-session-secret');
+      const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
+      const firstMessage = await promptIterator.next();
+      expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   // Pin the literal disallow list so a stray edit to the constant
@@ -290,7 +319,7 @@ describe('setupQuery - Local Settings Support', () => {
       branch_id: 'test-branch' as BranchID,
       model_config: {
         mode: 'alias',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-4-6[1m]',
         updated_at: '2026-06-11T00:00:00.000Z',
         advisorModel: 'opus',
       },
@@ -299,6 +328,7 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options.model).toBe('claude-sonnet-4-6[1m]');
     // The advisor goes through the SDK's extraArgs → `--advisor opus`.
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'opus' });
     // EACCES regression guard: we must NOT pass `settings` as an object, which
@@ -307,7 +337,7 @@ describe('setupQuery - Local Settings Support', () => {
     expect(callArgs.options.settings).toBeUndefined();
   });
 
-  it('strips advisorModel [1m] suffix, passes base model via --advisor, adds the SDK beta', async () => {
+  it('passes advisorModel [1m] through to Claude Code without translating it to a beta', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
       session_id: 'test-session' as SessionID,
@@ -323,9 +353,9 @@ describe('setupQuery - Local Settings Support', () => {
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
-    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7' });
+    expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7[1m]' });
     expect(callArgs.options.settings).toBeUndefined();
-    expect(callArgs.options.betas).toEqual(['context-1m-2025-08-07']);
+    expect(callArgs.options.betas).toBeUndefined();
   });
 
   it('omits --advisor (and settings) entirely when no advisorModel is set', async () => {
@@ -445,5 +475,157 @@ describe('setupQuery - canUseTool registration', () => {
 
     const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
     expect(callArgs.options.canUseTool).toBeUndefined();
+  });
+});
+
+/**
+ * `bypassPermissions` removes the approval channel, which leaves an `ask` tool
+ * unanswerable. It resolves to a refusal rather than to `allow`, so the mode is
+ * "stop asking me" for everything except the tools an operator explicitly asked
+ * to be prompted about.
+ */
+describe('setupQuery - ask under bypassPermissions', () => {
+  const GATED_SERVER = 'files';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'files-server',
+          name: GATED_SERVER,
+          transport: 'stdio',
+          command: 'noop',
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+          tool_permissions: { write_file: 'ask', read_file: 'allow' },
+        },
+        source: 'global',
+      },
+    ] as any);
+  });
+
+  function createDepsWithGatedServer(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
+      } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('hard-denies an "ask" tool when there is nowhere to ask', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createDepsWithGatedServer(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    // `disallowedTools` is mode-independent, so this holds even though bypass
+    // skips canUseTool and could skip hooks.
+    expect(options.disallowedTools).toContain(`mcp__${GATED_SERVER}__write_file`);
+    // An "allow" tool is untouched: the mode is not a blanket refusal.
+    expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__read_file`);
+  });
+
+  it('leaves an "ask" tool promptable when an approval channel exists', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', createDepsWithGatedServer(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'default',
+    });
+
+    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__write_file`);
+    // Positive control: the server really was processed, so the absence above
+    // is the promptable path and not a fixture that produced no servers.
+    expect(Object.keys(options.mcpServers ?? {})).toContain(GATED_SERVER);
+    expect(options.canUseTool).toBeTypeOf('function');
+  });
+});
+
+/**
+ * The CLI rewrites both halves of a namespaced name into `[a-zA-Z0-9_-]`, and
+ * matches rules against the rewritten form. A rule carrying the raw tool name
+ * binds to nothing, which reads as unconfigured — allow.
+ */
+describe('setupQuery - tool names the CLI has to rewrite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Claude.query).mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+    } as any);
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'gh-server',
+          name: 'My.Server',
+          transport: 'stdio',
+          command: 'noop',
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+          tool_permissions: { 'repo.create': 'deny', repo_read: 'allow' },
+        },
+        source: 'global',
+      },
+    ] as any);
+  });
+
+  function deps(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: { findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }) } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('denies under the rewritten tool name, not only the raw one', async () => {
+    await setupQuery('test-session' as SessionID, 'test prompt', deps(), {
+      taskId: 'test-task' as TaskID,
+      permissionMode: 'default',
+    });
+
+    const disallowed = vi.mocked(Claude.query).mock.calls[0][0].options.disallowedTools as string[];
+
+    // What the CLI actually offers the model, and therefore the only form that
+    // can bind: both halves rewritten.
+    expect(disallowed).toContain('mcp__My_Server__repo_create');
+    // The raw form stays listed too — a rule that matches nothing is inert.
+    expect(disallowed).toContain('mcp__My.Server__repo.create');
+    // An "allow" tool is not swept in by the rewrite.
+    expect(disallowed).not.toContain('mcp__My_Server__repo_read');
   });
 });

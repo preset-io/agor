@@ -1,8 +1,16 @@
 import { extractSlugFromUrl, isValidGitUrl, isValidSlug } from '@agor/core/config';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Repo } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ReposServiceImpl } from '../../declarations.js';
-import { mcpLimit, mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
+import {
+  mcpListLimit,
+  mcpOffset,
+  mcpOptionalString,
+  mcpPageResult,
+  mcpRequiredId,
+  mcpRequiredString,
+} from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
 
@@ -11,19 +19,42 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_repos_list',
     {
-      description: 'List all repositories accessible to the current user',
+      description:
+        'List a lean page of repositories accessible to the current user. Environment definitions and local paths are omitted by default; use agor_repos_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         slug: mcpOptionalString('slug', 'Filter by repository slug'),
-        limit: mcpLimit(50),
+        limit: mcpListLimit(10),
+        offset: mcpOffset(),
+        lean: z.boolean().optional().describe('Return compact records (default: true).'),
       }),
     },
     async (args) => {
+      const limit = args.limit ?? 10;
+      const offset = args.offset ?? 0;
       const query: Record<string, unknown> = {};
       if (args.slug) query.slug = args.slug;
-      if (args.limit) query.$limit = args.limit;
+      query.$limit = limit;
+      query.$skip = offset;
+      query.$sort = { created_at: -1, repo_id: 1 };
       const repos = await ctx.app.service('repos').find({ query, ...ctx.baseServiceParams });
-      return textResult(repos);
+      const page = mcpPageResult<Repo>(repos, limit, offset);
+      if (args.lean === false) return textResult(page);
+      return textResult({
+        ...page,
+        data: page.data.map((repo: Repo) => ({
+          repo_id: repo.repo_id,
+          slug: repo.slug,
+          name: repo.name,
+          repo_type: repo.repo_type,
+          remote_url: repo.remote_url,
+          default_branch: repo.default_branch,
+          clone_status: repo.clone_status,
+          clone_error: repo.clone_error,
+          created_at: repo.created_at,
+          last_updated: repo.last_updated,
+        })),
+      });
     }
   );
 
@@ -35,9 +66,11 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'Get detailed information about a specific repository, including async clone state. ' +
         'For repos created via agor_repos_create_remote, check `clone_status` ' +
         '(`cloning` | `ready` | `failed`). On `failed`, `clone_error.category` ' +
-        '(`auth_failed` | `not_found` | `network` | `unknown`) tells you what went wrong; ' +
+        '(`auth_failed` | `not_found` | `network` | `git_unavailable` | `unknown`) tells you what went wrong; ' +
         '`auth_failed` usually means the calling user has not configured a `GITHUB_TOKEN` ' +
-        'in Settings → API Keys (or it has expired/lost access).',
+        '(or it has expired/lost access). PREFER remediating by calling ' +
+        "`agor_widgets_request_env_vars({ names: ['GITHUB_TOKEN'], reason: ... })` to collect it " +
+        'inline, rather than telling the user to open Settings → Env Vars.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpRequiredId('repoId', 'Repository'),
@@ -57,10 +90,11 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'Clone a remote repository into Agor. Returns immediately with `{ status: "pending", ' +
         'slug, repo_id }` while the clone runs in the background. Poll `agor_repos_get(repo_id)` ' +
         'until `clone_status` is `ready` (success) or `failed` (see `clone_error` for details). ' +
-        'Private repos require the calling user to have `GITHUB_TOKEN` configured in ' +
-        'Settings → API Keys; without it, the clone will fail with `clone_error.category: ' +
-        '"auth_failed"`. Retrying after a failed clone is supported — the previous failed row ' +
-        'is replaced.',
+        'Private repos require the calling user to have `GITHUB_TOKEN` configured; without it, the ' +
+        'clone will fail with `clone_error.category: "auth_failed"`. If it is missing, PREFER calling ' +
+        "`agor_widgets_request_env_vars({ names: ['GITHUB_TOKEN'], reason: ... })` to collect it inline " +
+        'over pointing the user at Settings → Env Vars, then retry. Retrying after a failed clone is ' +
+        'supported — the previous failed row is replaced.',
       inputSchema: z.object({
         url: mcpRequiredString(
           'url',

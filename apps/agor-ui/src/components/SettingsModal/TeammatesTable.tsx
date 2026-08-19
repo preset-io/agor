@@ -2,6 +2,7 @@ import type {
   AgorClient,
   Board,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateRepoRequest,
   MCPServer,
   Repo,
@@ -47,13 +48,7 @@ interface TeammatesTableProps {
   boardById: Map<string, Board>;
   sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onRowClick?: (branch: Branch) => void;
   /** Creates the teammate from the drill-in form; must NOT close Settings. */
   onCreateTeammate?: (
@@ -378,7 +373,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           dataSource={teammates}
           columns={columns}
           rowKey="branch_id"
-          pagination={{ pageSize: 10 }}
+          pagination={{ defaultPageSize: 10 }}
           size="small"
         />
       )}

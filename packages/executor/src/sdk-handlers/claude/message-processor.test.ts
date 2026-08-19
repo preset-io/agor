@@ -1,5 +1,8 @@
-import type { SessionID } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { generateId } from '@agor/core';
+import type { Message, MessageID, SessionID } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+import type { MessagesService } from '../base/index.js';
+import { createAssistantMessage } from './message-builder.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 
 function createProcessor() {
@@ -16,7 +19,162 @@ function systemMsg(payload: Record<string, unknown>) {
   return { type: 'system', ...payload } as never;
 }
 
+describe('SDKMessageProcessor result logging', () => {
+  it('is silent by default while preserving synthesized and raw result events', async () => {
+    const resultMessage = {
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 321,
+      is_error: false,
+      result: 'final response',
+      total_cost_usd: 0.25,
+      usage: {
+        input_tokens: 123,
+        output_tokens: 45,
+      },
+      modelUsage: {
+        'claude-sonnet': {
+          inputTokens: 100,
+          outputTokens: 40,
+          contextWindow: 200_000,
+        },
+      },
+      permission_denials: [],
+      uuid: 'result-uuid',
+      session_id: 'sdk-session',
+    };
+    const processor = new SDKMessageProcessor({
+      sessionId: 'test-session-id' as SessionID,
+      existingSdkSessionId: 'sdk-session',
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(resultMessage as never);
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        {
+          type: 'complete',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'final response' }],
+          toolUses: undefined,
+          parent_tool_use_id: null,
+          agentSessionId: undefined,
+          resolvedModel: undefined,
+          isSynthesizedResult: true,
+        },
+        {
+          type: 'result',
+          raw_sdk_message: resultMessage,
+          agentSessionId: undefined,
+        },
+        { type: 'end', reason: 'result' },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('carries the exact #2288 zero-turn result into executor-owned message metadata', async () => {
+    const processor = createProcessor();
+    const events = await processor.process({
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 0,
+      duration_api_ms: 0,
+      is_error: false,
+      num_turns: 0,
+      result: 'Credit balance is too low',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [],
+      uuid: 'result-uuid',
+      session_id: 'sdk-session',
+    } as never);
+    const complete = events.find(
+      (event): event is Extract<ProcessedEvent, { type: 'complete' }> => event.type === 'complete'
+    );
+    expect(complete?.isSynthesizedResult).toBe(true);
+
+    const messagesService = {
+      create: vi.fn(async (data: Partial<Message>) => data as Message),
+    } as unknown as MessagesService;
+    const message = await createAssistantMessage(
+      'test-session-id' as SessionID,
+      generateId() as MessageID,
+      complete?.content ?? [],
+      complete?.toolUses,
+      undefined,
+      0,
+      complete?.resolvedModel,
+      messagesService,
+      undefined,
+      complete?.parent_tool_use_id,
+      undefined,
+      complete?.isSynthesizedResult
+    );
+
+    expect(message.content).toEqual([{ type: 'text', text: 'Credit balance is too low' }]);
+    expect(message.metadata?.is_zero_turn_result).toBe(true);
+  });
+});
+
 describe('SDKMessageProcessor system event suppression', () => {
+  it('keeps command discovery silent while preserving the init event', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'init',
+          model: 'claude-sonnet-4-6',
+          slash_commands: ['/compact'],
+          skills: ['example-skill'],
+        })
+      );
+
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        {
+          type: 'slash_commands_discovered',
+          slashCommands: ['/compact'],
+          skills: ['example-skill'],
+          agentSessionId: undefined,
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('logs only the bounded compaction lifecycle event while preserving metadata', async () => {
+    const processor = createProcessor();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: 123_456 },
+        })
+      );
+
+      expect(logSpy.mock.calls).toEqual([['📦 SDK compact_boundary (compaction finished)']]);
+      expect(events).toEqual([
+        {
+          type: 'system_complete',
+          systemType: 'compaction',
+          agentSessionId: undefined,
+          metadata: { trigger: 'auto', pre_tokens: 123_456 },
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('suppresses status=requesting (PR #1116)', async () => {
     const processor = createProcessor();
     const events = await processor.process(
@@ -110,10 +268,17 @@ describe('SDKMessageProcessor system event suppression', () => {
 describe('SDKMessageProcessor rate_limit_event handling', () => {
   it('suppresses allowed status with no overage concern', async () => {
     const processor = createProcessor();
-    const events = await processor.process(
-      rateLimitMsg({ status: 'allowed', rateLimitType: 'five_hour' })
-    );
-    expect(events.filter((e) => e.type === 'rate_limit')).toHaveLength(0);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      const events = await processor.process(
+        rateLimitMsg({ status: 'allowed', rateLimitType: 'five_hour' })
+      );
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(events.filter((e) => e.type === 'rate_limit')).toHaveLength(0);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('suppresses allowed status even when overageStatus is rejected', async () => {

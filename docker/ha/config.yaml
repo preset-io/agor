@@ -1,0 +1,56 @@
+agentic_tools:
+  # Headless/container deployments must declare their managed integrations.
+  # The Compose preparation job reconciles this exact list before either
+  # daemon starts, into the shared /home/agor/.agor volume.
+  installed:
+    - claude-code
+    - codex
+    - copilot
+    - gemini
+    - opencode
+    - cursor
+deployment:
+  mode: ha
+  ha:
+    # Explicit constrained active-active profile. Durable PostgreSQL workers,
+    # noninteractive Tasks, and audited gateway providers are enabled; the
+    # process-affine surfaces documented in the HA guide still fail closed.
+    support_profile: constrained-active-active
+    # This one-host smoke stack runs executors beside either daemon. Cloud
+    # should select `external` and configure executor_command_template instead.
+    execution_topology: shared-local
+    shared_filesystem: true
+    ingress_affinity: true
+execution:
+  # These are assertions about the named shared home and nested Agor workspace
+  # volumes mounted at the same paths on both daemons. They do not configure mounts.
+  executor_storage:
+    # One shared execution home for this static smoke profile. This makes
+    # auth-file import/logout and Tasks replica-consistent, but is not Cloud's
+    # per-user isolation contract. The device-code poller remains gated.
+    user_home: shared
+    branch_workspace: shared
+    base_repository: shared
+  # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
+  # create/control connection on its owner; owner loss is a visible disconnect
+  # and reconnect creates a new attachment (possibly reattaching local Zellij).
+  allow_web_terminal: true
+  # Local managed-environment commands are process/host-affine. HA accepts
+  # only an external webhook execution substrate in this first topology. The
+  # legacy unfenced environment HealthMonitor is also disabled in HA.
+  managed_envs_execution_mode: webhook-only
+database:
+  dialect: postgresql
+multi_tenancy:
+  # First runnable HA topology. Publication code remains tenant-scoped and is
+  # adversarially tested, but auth-resolved multi-tenant operations are not yet
+  # claimed by this Compose example.
+  mode: static
+  static_tenant_id: default
+daemon:
+  # Stable identity shared by both replicas in the checked-in disposable
+  # Compose deployment. Production deployments must supply their own UUID.
+  deployment_id: 019c83b2-1f53-7e51-8e04-1f2df20d25de
+  host: 0.0.0.0
+  port: 3030
+  trust_proxy_hops: 1

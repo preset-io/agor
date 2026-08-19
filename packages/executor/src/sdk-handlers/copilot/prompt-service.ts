@@ -11,12 +11,14 @@
  * - Events stream back through the session's event emitter
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
-import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -32,8 +34,12 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
+import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
-import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import {
+  collectWithheldMcpServers,
+  reportWithheldMcpServers,
+} from '../base/withheld-mcp-report.js';
 import type { CopilotSessionEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';
@@ -106,7 +112,7 @@ export interface CopilotRawResponse {
 }
 
 export class CopilotPromptService {
-  private client: InstanceType<typeof CopilotClient> | null = null;
+  private client: InstanceType<typeof CopilotSdk.CopilotClient> | null = null;
   private stopRequested = new Map<SessionID, boolean>();
   private apiKey: string | undefined;
 
@@ -149,15 +155,48 @@ export class CopilotPromptService {
    */
   private async buildMcpServers(
     sessionId: SessionID,
+    taskId: TaskID,
     mcpToken?: string
   ): Promise<Record<string, unknown>> {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
-    const serversWithSource = await getMcpServersForSession(sessionId, {
-      sessionMCPRepo: this.sessionMCPServerRepo,
-      mcpServerRepo: this.mcpServerRepo,
-      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+    const session = await this.sessionsRepo.findById(sessionId);
+    if (!session) {
+      console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
+      return copilotMcpServers;
+    }
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: this.tasksService,
+    });
+    const reporter = collectWithheldMcpServers();
+    const serversWithSource = await getMcpServersForSession(
+      sessionId,
+      {
+        sessionMCPRepo: this.sessionMCPServerRepo,
+        mcpServerRepo: this.mcpServerRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+        forUserId: contextUserId,
+        sessionOwnerId: session.created_by,
+        onServerWithheld: reporter.onServerWithheld,
+      },
+      // The per-server `tools` field below is an include-list, which cannot
+      // express "all but these" without enumerating a tool set that changes
+      // under us. `SessionConfig.excludedTools` is a true exclude-list, but the
+      // SDK forwards it verbatim to the Copilot CLI, which resolves it in
+      // native code against a name it mints itself (`namespacedName`) — a name
+      // Agor cannot construct, and a miss here reads as "allow". The CLI does
+      // document a `<mcp-server-name>(tool-name?)` permission pattern built
+      // from names Agor holds verbatim, but only for its `--deny-tool` flag,
+      // which `SessionConfig` does not expose.
+      { toolFiltering: 'none' }
+    );
+    await reportWithheldMcpServers(this.messagesRepo, {
+      sessionId,
+      taskId,
+      withheld: reporter.withheld,
     });
 
     const mcpServers = serversWithSource.map((s) => s.server);
@@ -257,7 +296,8 @@ export class CopilotPromptService {
     console.log(`   Working directory: ${branch.path}`);
 
     // Create CopilotClient (spawns CLI process)
-    this.client = new CopilotClient({
+    const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
+    this.client = new Copilot.CopilotClient({
       useStdio: true,
       githubToken: this.apiKey || undefined,
       env: {
@@ -291,7 +331,11 @@ export class CopilotPromptService {
         permissionMode,
         permissionDeps
       );
-      const mcpServers = await this.buildMcpServers(sessionId, session.mcp_token);
+      const mcpServers = await this.buildMcpServers(
+        sessionId,
+        taskId || ('' as TaskID),
+        session.mcp_token
+      );
       const systemMessage = await this.buildSystemMessage(sessionId);
 
       // configuredModel for recording, invocationModel for the SDK.

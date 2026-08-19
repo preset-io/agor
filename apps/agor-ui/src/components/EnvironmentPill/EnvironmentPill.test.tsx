@@ -76,6 +76,17 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  it('uses an Ant Design button for the unconfigured environment action', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        repo={{ repo_id: 'repo-unconfigured', slug: 'preset-io/unconfigured' } as Repo}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Configure environment' })).toHaveTextContent('env');
+  });
+
   it('shows a pointer only when the environment label links to a running app', () => {
     const { rerender } = render(
       <EnvironmentPill
@@ -96,6 +107,20 @@ describe('EnvironmentPill', () => {
 
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
+  });
+
+  it('shows a pointer only for an enabled configure control', () => {
+    const { rerender } = render(<EnvironmentPill {...defaultProps} />);
+
+    expect(screen.getByRole('button', { name: 'Configure environment' })).toHaveStyle({
+      cursor: 'pointer',
+    });
+
+    rerender(<EnvironmentPill {...defaultProps} onEdit={undefined} />);
+
+    const configureButton = screen.getByRole('button', { name: 'Configure environment' });
+    expect(configureButton).toBeDisabled();
+    expect(configureButton).not.toHaveStyle({ cursor: 'pointer' });
   });
 
   it('can hide only the destructive nuke action while preserving other controls', () => {

@@ -1,3 +1,7 @@
+import {
+  type DeploymentAgenticToolPolicy,
+  isDeploymentAgenticToolAvailable,
+} from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { AgenticToolPresetRepository, TenantAgenticToolSettingsRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -15,6 +19,7 @@ import {
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '@agor/core/types';
+import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployment.js';
 
 function parseTool(id: string): TenantAgenticToolName {
   if ((TENANT_AGENTIC_TOOL_NAMES as readonly string[]).includes(id)) {
@@ -27,13 +32,17 @@ export class TenantAgenticToolSettingsService {
   private repository: TenantAgenticToolSettingsRepository;
   private presets: AgenticToolPresetRepository;
 
-  constructor(db: TenantScopeAwareDatabase) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    private deploymentAvailable: (tool: TenantAgenticToolName) => boolean = () => true
+  ) {
     this.repository = new TenantAgenticToolSettingsRepository(db);
     this.presets = new AgenticToolPresetRepository(db);
   }
 
   private async publicSettings(tool: TenantAgenticToolName): Promise<TenantAgenticToolSettings> {
     const stored = await this.repository.find(tool);
+    const deploymentEnabled = this.deploymentAvailable(tool);
     const connection: TenantAgenticToolSettings['connection'] = {};
     if (isProviderConnectionTool(tool)) {
       for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
@@ -42,7 +51,8 @@ export class TenantAgenticToolSettingsService {
     }
     return {
       tool,
-      enabled: stored.enabled !== false,
+      deployment_available: deploymentEnabled,
+      enabled: deploymentEnabled && stored.enabled !== false,
       resolution_policy: stored.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY,
       inline_configuration_allowed: stored.inline_configuration_allowed !== false,
       connection,
@@ -63,6 +73,9 @@ export class TenantAgenticToolSettingsService {
     params?: Params
   ): Promise<TenantAgenticToolSettings> {
     const tool = parseTool(id);
+    if (data.enabled === true && !this.deploymentAvailable(tool)) {
+      throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    }
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
       throw new BadRequest('enabled must be a boolean');
     }
@@ -109,6 +122,11 @@ export class TenantAgenticToolSettingsService {
   }
 }
 
-export function createTenantAgenticToolSettingsService(db: TenantScopeAwareDatabase) {
-  return new TenantAgenticToolSettingsService(db);
+export function createTenantAgenticToolSettingsService(
+  db: TenantScopeAwareDatabase,
+  policy: DeploymentAgenticToolPolicy
+) {
+  return new TenantAgenticToolSettingsService(db, (tool) =>
+    isDeploymentAgenticToolAvailable(tool, policy)
+  );
 }

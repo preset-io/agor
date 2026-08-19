@@ -43,6 +43,19 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
     [sessionMcpServerIds, mcpServerById]
   );
 
+  const unauthedServers = React.useMemo(
+    () =>
+      attachedServers.filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
+    [attachedServers, userAuthenticatedMcpServerIds]
+  );
+
+  const badgeTitle =
+    unauthedServers.length === 1
+      ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Open to connect.`
+      : unauthedServers.length > 1
+        ? `${unauthedServers.length} MCP servers aren’t connected. Open to connect.`
+        : `${summary.tooltip}. Click to add or change MCP servers.`;
+
   const handleChange = async (nextIds: string[]) => {
     if (!client) return;
     setSaving(true);
@@ -105,28 +118,39 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
       <Tag
         icon={<ApiOutlined />}
         color="default"
-        title={`${summary.tooltip}. Click to add or change MCP servers.`}
+        title={badgeTitle}
         style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+        // antd nests children in a content span, so the root's align-items never reaches the chip.
+        styles={{ content: { display: 'inline-flex', alignItems: 'center' } }}
       >
         <span>MCP</span>
         <AntTag
-          color={
-            summary.tone === 'error' ? 'error' : summary.tone === 'warning' ? 'warning' : undefined
-          }
           style={{
             marginInlineStart: token.sizeUnit,
             marginInlineEnd: 0,
+            // Round notification counter: a 16px circle at one digit
+            // (minWidth === height), growing into a pill for 2+ digits. The
+            // large radius fully rounds the ends (clamped to height/2) in both.
+            boxSizing: 'border-box',
             minWidth: 16,
-            height: 14,
+            height: 16,
             paddingInline: 4,
+            borderRadius: 999,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            lineHeight: '12px',
+            lineHeight: 1,
             fontSize: 10,
             textAlign: 'center',
             fontVariantNumeric: 'tabular-nums',
-            verticalAlign: 'middle',
+            // Recolor the count red via semantic tokens only — the neutral chip's
+            // geometry (size, radius, shape) is untouched, so the unauthorized
+            // state differs from the healthy state purely in color, theme-aware
+            // in light and dark. Avoids AntD's `color="error"` preset, whose own
+            // fill/border/radius would shift the box vs. the neutral chip.
+            ...(summary.tone === 'error'
+              ? { backgroundColor: token.colorErrorBg, color: token.colorError }
+              : {}),
           }}
         >
           {summary.attachedCount}

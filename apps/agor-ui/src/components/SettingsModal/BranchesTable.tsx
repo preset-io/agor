@@ -1,4 +1,11 @@
-import type { AgorClient, Board, Branch, Repo, Session } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  Session,
+} from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import {
   AimOutlined,
@@ -43,10 +50,7 @@ interface BranchesTableProps {
   sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   onArchiveOrDelete?: (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => void | Promise<void>;
   onUnarchive?: (branchId: string, options?: { boardId?: string }) => void | Promise<void>;
   onCreate?: (
@@ -236,13 +240,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     form.setFieldValue('sourceBranch', defaultBranch);
   };
 
-  const handleArchiveOrDelete = async (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => {
+  const handleArchiveOrDelete = async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
     try {
       await onArchiveOrDelete?.(branchId, options);
     } catch {
@@ -620,7 +618,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           dataSource={filteredBranches}
           columns={columns}
           rowKey="branch_id"
-          pagination={{ pageSize: 10 }}
+          pagination={{ defaultPageSize: 10 }}
           size="small"
         />
       )}

@@ -1,6 +1,11 @@
 import type { AgorClient, User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const terminalMock = vi.hoisted(() => ({
+  lines: [] as string[],
+  clearCalls: 0,
+}));
 
 // xterm touches canvas/DOM internals jsdom can't render; the modal's
 // reconnect/ready plumbing doesn't depend on real terminal output.
@@ -12,9 +17,16 @@ vi.mock('@xterm/xterm', () => ({
     loadAddon() {}
     onData() {}
     onResize() {}
-    write() {}
-    writeln() {}
-    clear() {}
+    write(value: string) {
+      terminalMock.lines.push(value);
+    }
+    writeln(value: string) {
+      terminalMock.lines.push(value);
+    }
+    clear() {
+      terminalMock.clearCalls += 1;
+      terminalMock.lines.length = 0;
+    }
     dispose() {}
   },
 }));
@@ -25,6 +37,9 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 import { TerminalModal } from './TerminalModal';
 
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
+const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
+const BRANCH = '44444444-dddd-dddd-dddd-444444444444';
+const CHANNEL = `tenant/default/user/${ALICE}/terminal/${TERMINAL}`;
 
 interface FakeSocket {
   connected: boolean;
@@ -57,9 +72,10 @@ function makeFakeSocket(): FakeSocket {
 }
 
 function makeClient(socket: FakeSocket, create: ReturnType<typeof vi.fn>) {
+  const remove = vi.fn().mockResolvedValue({ closed: true });
   return {
     io: socket,
-    service: vi.fn(() => ({ create })),
+    service: vi.fn(() => ({ create, remove })),
   } as unknown as AgorClient;
 }
 
@@ -68,20 +84,24 @@ const memberUser = { user_id: ALICE, role: 'member' } as unknown as User;
 // array each render would thrash the effect (tear down + re-attach) and reset
 // transient state under test.
 const NO_COMMANDS: string[] = [];
+const FAILURE_TEST_COMMANDS = ['echo should-not-run'];
 
 describe('TerminalModal reconnect + readiness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    terminalMock.lines.length = 0;
+    terminalMock.clearCalls = 0;
   });
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('connects on the ready ack and re-attaches on reconnect', async () => {
+  it('requires explicit reconnect after transport loss', async () => {
     const socket = makeFakeSocket();
     const create = vi.fn().mockResolvedValue({
       userId: ALICE,
-      channel: `user/${ALICE}/terminal`,
+      terminalId: TERMINAL,
+      channel: CHANNEL,
       sessionName: 'agor-x',
       isNew: true,
       ready: false,
@@ -100,15 +120,23 @@ describe('TerminalModal reconnect + readiness', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
     // Cold path: not connected until the executor acks readiness.
-    socket.trigger('terminal:ready', { userId: ALICE });
+    await act(async () => {
+      socket.trigger('terminal:ready', { userId: ALICE, terminalId: TERMINAL });
+    });
 
     // A blip drops the socket → reconnecting; reconnect re-issues create.
-    socket.connected = false;
-    socket.trigger('disconnect', 'transport close');
-    expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
+    await act(async () => {
+      socket.connected = false;
+      socket.trigger('disconnect', 'transport close');
+    });
+    expect(await screen.findByText(/Disconnected/)).toBeInTheDocument();
 
-    socket.connected = true;
-    socket.trigger('connect');
+    await act(async () => {
+      socket.connected = true;
+      socket.trigger('connect');
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
   });
 
@@ -132,22 +160,84 @@ describe('TerminalModal reconnect + readiness', () => {
     );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
-    socket.connected = false;
-    socket.trigger('disconnect', 'transport close');
-    socket.connected = true;
-    socket.trigger('connect');
+    await act(async () => {
+      socket.connected = false;
+      socket.trigger('disconnect', 'transport close');
+      socket.connected = true;
+      socket.trigger('connect');
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
 
     // Stale first attach resolves late → must be dropped (superseded generation).
     deferreds[0]?.({
       userId: ALICE,
-      channel: `user/${ALICE}/terminal`,
+      terminalId: TERMINAL,
+      channel: CHANNEL,
       sessionName: 'agor-x',
       isNew: true,
       ready: true,
     });
     await Promise.resolve();
     expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
+  });
+
+  it('handles an executor failure before terminal creation returns', async () => {
+    const socket = makeFakeSocket();
+    let resolveCreate!: (value: unknown) => void;
+    const create = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    render(
+      <TerminalModal
+        open
+        onClose={() => {}}
+        client={makeClient(socket, create)}
+        user={memberUser}
+        branchId={BRANCH}
+        initialCommands={FAILURE_TEST_COMMANDS}
+      />
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+
+    // The daemon subscribes this socket and assigns the trusted terminal ID
+    // before starting the executor, so an immediate optional-runtime failure
+    // is actionable even while the create response is still delayed.
+    await act(async () => {
+      socket.trigger('terminal:allocated', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        branchId: BRANCH,
+      });
+      socket.trigger('terminal:error', {
+        userId: ALICE,
+        terminalId: TERMINAL,
+        message:
+          'Web terminal PTY support is unavailable. See https://agor.live/guide/extended-install#optional-web-terminal-runtime',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+    expect(terminalMock.lines.join('\n')).toContain('Web terminal PTY support is unavailable');
+
+    await act(async () => {
+      resolveCreate({
+        userId: ALICE,
+        terminalId: TERMINAL,
+        channel: CHANNEL,
+        sessionName: 'agor-x',
+        isNew: true,
+        ready: false,
+      });
+      await Promise.resolve();
+    });
+    expect(terminalMock.clearCalls).toBe(0);
+    expect(terminalMock.lines.join('\n')).toContain('Web terminal PTY support is unavailable');
+    expect(socket.emitted.some(({ event }) => event === 'terminal:resize')).toBe(false);
+    expect(socket.emitted.some(({ event }) => event === 'terminal:input')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
   });
 });

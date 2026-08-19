@@ -1,6 +1,6 @@
 import type { Branch, Repo, User } from '@agor-live/client';
 import { Flex, theme } from 'antd';
-import { CreatedByTag } from '../metadata';
+import { OwnersTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 interface BranchMetadataRowProps {
@@ -8,23 +8,23 @@ interface BranchMetadataRowProps {
   repo?: Repo | null;
   /** Leading branch pill; renders first so the metadata links flow after it. */
   children: React.ReactNode;
-  /** Users map enabling the "Created by" tag when the branch has a creator. */
-  userById?: Map<string, User>;
-  /** Suppresses the "Created by" tag for the viewer's own branches. */
+  /** Current branch owners (from the owners API). */
+  owners?: User[];
+  /** Suppresses the owner tag when the sole owner is the current viewer. */
   currentUserId?: string;
   style?: React.CSSProperties;
 }
 
 /**
  * Single wrapping row for a branch pill and its metadata links: the pill owns
- * the leading slot, and created-by/issue/PR links sit on the same line when
+ * the leading slot, and owner/issue/PR links sit on the same line when
  * there is room, wrapping to the next line when there is not.
  */
 export function BranchMetadataRow({
   branch,
   repo,
   children,
-  userById,
+  owners,
   currentUserId,
   style,
 }: BranchMetadataRowProps) {
@@ -33,14 +33,7 @@ export function BranchMetadataRow({
   return (
     <Flex wrap gap={token.sizeUnit} align="center" style={style}>
       {children}
-      {branch.created_by && userById && (
-        <CreatedByTag
-          createdBy={branch.created_by}
-          currentUserId={currentUserId}
-          userById={userById}
-          prefix="Created by"
-        />
-      )}
+      {owners && owners.length > 0 && <OwnersTag owners={owners} currentUserId={currentUserId} />}
       {branch.issue_url && (
         <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
       )}

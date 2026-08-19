@@ -110,8 +110,8 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 /**
  * Base payload - common fields for all commands
  *
- * NOTE: Impersonation (asUser) is NOT in the payload. It's handled at spawn time
- * by the daemon using buildSpawnArgs(). The executor runs directly as the target user.
+ * NOTE: Delegated launcher identity is not in the payload. It is handled at
+ * spawn time by the daemon and external launcher.
  */
 export const BasePayloadSchema = z.object({
   /** Executor command identifier */
@@ -123,8 +123,8 @@ export const BasePayloadSchema = z.object({
   /** Environment variables to inject */
   env: z.record(z.string(), z.string()).optional(),
 
-  /** Data home directory override */
-  dataHome: z.string().optional(),
+  /** Opaque, daemon-authorized context interpreted by the selected adapter. */
+  agenticToolContext: z.record(z.string(), z.unknown()).optional(),
 
   /**
    * Daemon-resolved config slice. See {@link ResolvedConfigSliceSchema}.
@@ -161,16 +161,30 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
 export type PromptPayload = z.infer<typeof PromptPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// Agentic-tool Auxiliary Invocation Payload
+// ═══════════════════════════════════════════════════════════
+
+export const AgenticToolInvokePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('agentic-tool.invoke'),
+  params: z.object({
+    tool: ToolTypeSchema,
+    /** Adapter-owned request validated by the selected integration. */
+    request: z.record(z.string(), z.unknown()),
+  }),
+});
+
+export type AgenticToolInvokePayload = z.infer<typeof AgenticToolInvokePayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Git Clone Payload
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git clone payload - clone repository with full Unix setup
+ * Git clone payload.
  *
  * When createDbRecord is true (default), the executor will:
  * 1. Clone the repository to outputPath
  * 2. Create a repo record in the database via Feathers
- * 3. Initialize Unix group (if initUnixGroup is true)
  */
 export const GitClonePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.clone'),
@@ -217,12 +231,6 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
 
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
-
-    /** Initialize Unix group for repo isolation (default: false, requires RBAC enabled) */
-    initUnixGroup: z.boolean().optional().default(false),
-
-    /** Daemon Unix identity that must retain explicit ACL access. */
-    daemonUser: z.string().optional(),
   }),
 });
 
@@ -238,8 +246,7 @@ export type GitClonePayload = z.infer<typeof GitClonePayloadSchema>;
  * The daemon creates the DB record BEFORE calling this (with filesystem_status: 'creating').
  * The executor:
  * 1. Creates the git branch at branchPath
- * 2. Sets up Unix group/ACLs (if initUnixGroup is true)
- * 3. Patches the branch record to filesystem_status: 'ready' (or 'failed')
+ * 2. Patches the branch record to filesystem_status: 'ready' (or 'failed')
  */
 /**
  * Cross-field invariants for the `git.branch.add` params:
@@ -270,15 +277,6 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
     restoreMode: z.boolean().optional(),
 
-    /** Initialize Unix group for branch isolation (default: false, requires RBAC enabled) */
-    initUnixGroup: z.boolean().optional().default(false),
-
-    /** Daemon Unix identity that must retain explicit ACL access. */
-    daemonUser: z.string().optional(),
-
-    /** Legacy open-access self-hosted chmod; false for RBAC/simple Cloud mounts. */
-    fixBasicPermissions: z.boolean().optional().default(false),
-
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
 
@@ -294,12 +292,11 @@ export type GitBranchAddPayload = z.infer<typeof GitBranchAddPayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git branch remove payload - remove branch and cleanup Unix resources
+ * Git branch remove payload - remove branch filesystem and database resources
  *
  * When deleteDbRecord is true (default), the executor will:
  * 1. Remove the git branch from filesystem
  * 2. Delete the branch record from database via Feathers
- * 3. Clean up Unix group/ACLs (if RBAC enabled)
  */
 export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.remove'),
@@ -722,139 +719,6 @@ export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
 export type GitRepoDeletePayload = z.infer<typeof GitRepoDeletePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Unix Sync Payloads - High-Level Sync Operations
-// ═══════════════════════════════════════════════════════════
-
-/**
- * Unix sync-branch payload - Sync all Unix state for a branch
- *
- * This is a high-level "sync" operation that handles everything:
- * - Ensure branch Unix group exists
- * - Set correct permissions based on others_fs_access
- * - Add all current owners to the branch group
- * - Add owners to repo group (for .git/ access)
- * - Fix .git/worktrees/<name>/ permissions
- * - Create symlinks in user home directories
- *
- * Idempotent: Safe to call multiple times. Executor figures out the delta.
- * Fire-and-forget: Daemon calls this and returns immediately.
- */
-export const UnixSyncBranchPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('unix.sync-branch'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** Branch ID to sync */
-    branchId: z.string().uuid(),
-
-    /** Daemon Unix user (added to all groups for daemon access) */
-    daemonUser: z.string().optional(),
-
-    /** If true, delete the group instead of syncing (for branch removal) */
-    delete: z.boolean().optional(),
-  }),
-});
-
-export type UnixSyncBranchPayload = z.infer<typeof UnixSyncBranchPayloadSchema>;
-
-/**
- * Unix sync-board payload - Sync Unix state for every branch aligned with a board.
- *
- * The executor resolves board-aligned branches through the daemon, then reuses
- * unix.sync-branch semantics for each branch in the same executor process.
- */
-export const UnixSyncBoardPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('unix.sync-board'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** Board ID whose aligned branches should be synced */
-    boardId: z.string().uuid(),
-
-    /** Daemon Unix user (added to all groups for daemon access) */
-    daemonUser: z.string().optional(),
-  }),
-});
-
-export type UnixSyncBoardPayload = z.infer<typeof UnixSyncBoardPayloadSchema>;
-
-/**
- * Unix sync-repo payload - Sync all Unix state for a repo
- *
- * This handles:
- * - Ensure repo Unix group exists
- * - Set correct permissions on .git/ directory
- * - Add all branch owners to repo group
- *
- * Idempotent: Safe to call multiple times.
- */
-export const UnixSyncRepoPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('unix.sync-repo'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** Repo ID to sync */
-    repoId: z.string().uuid(),
-
-    /** Daemon Unix user (added to repo group for daemon access) */
-    daemonUser: z.string().optional(),
-
-    /** Post-clone initialization applies permissions to the whole repo root. */
-    initialize: z.boolean().optional(),
-
-    /** Trusted clone creator ID whose Unix identity receives initial access. */
-    creatorUserId: z.string().uuid().optional(),
-
-    /** If true, delete the group instead of syncing (for repo removal) */
-    delete: z.boolean().optional(),
-  }),
-});
-
-export type UnixSyncRepoPayload = z.infer<typeof UnixSyncRepoPayloadSchema>;
-
-/**
- * Unix sync-user payload - Sync all Unix state for a user
- *
- * This handles:
- * - Ensure Unix user exists with correct shell
- * - Add to agor_users group
- * - Sync password (if provided)
- * - Setup home directory (~/.config/zellij, etc.)
- * - Sync symlinks for all owned branches
- */
-export const UnixSyncUserPayloadSchema = BasePayloadSchema.extend({
-  command: z.literal('unix.sync-user'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
-  params: z.object({
-    /** User ID to sync */
-    userId: z.string().uuid(),
-
-    /** Password to sync (optional, passed securely via stdin) */
-    password: z.string().optional(),
-
-    /** If true, delete the Unix user (for user removal) */
-    delete: z.boolean().optional(),
-
-    /** Also delete home directory when deleting user */
-    deleteHome: z.boolean().optional(),
-
-    /** If true, configure git safe.directory for this user (needed when unix impersonation is enabled) */
-    configureGitSafeDirectory: z.boolean().optional(),
-  }),
-});
-
-export type UnixSyncUserPayload = z.infer<typeof UnixSyncUserPayloadSchema>;
-
-// ═══════════════════════════════════════════════════════════
 // Zellij Payloads
 // ═══════════════════════════════════════════════════════════
 
@@ -862,7 +726,7 @@ export type UnixSyncUserPayload = z.infer<typeof UnixSyncUserPayloadSchema>;
  * Zellij attach payload - attach to or create Zellij session
  *
  * This spawns a PTY, runs zellij attach, and streams I/O over Feathers channels.
- * One executor per user - handles all tabs for that user.
+ * One executor per process-local, branch-scoped terminal attachment.
  */
 export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('zellij.attach'),
@@ -873,6 +737,12 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     /** User ID (for channel: user/${userId}/terminal) */
     userId: z.string().uuid(),
+
+    /** Opaque process-local attachment id returned to the browser. */
+    terminalId: z.string().uuid(),
+
+    /** Tenant/user/terminal-qualified owner-local Socket.IO room. */
+    channel: z.string().min(1),
 
     /** Zellij session name (e.g., "agor-max") */
     sessionName: z.string(),
@@ -918,8 +788,8 @@ export type ZellijTabPayload = z.infer<typeof ZellijTabPayloadSchema>;
 
 /**
  * Narrow user-runtime credential filesystem operation. The daemon resolves the
- * Unix identity and spawns this command as that identity; no username or path
- * is accepted in the payload.
+ * credential route before launch; no username or path is accepted in the
+ * payload.
  */
 export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('codex.auth-file'),
@@ -941,6 +811,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
  */
 export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
+  AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
@@ -964,10 +835,6 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitRepoInspectPayloadSchema,
   GitManagedCredentialsReconcilePayloadSchema,
   GitRepoDeletePayloadSchema,
-  UnixSyncBranchPayloadSchema,
-  UnixSyncBoardPayloadSchema,
-  UnixSyncRepoPayloadSchema,
-  UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
   ZellijTabPayloadSchema,
   CodexAuthFilePayloadSchema,
@@ -1018,6 +885,7 @@ export function parseExecutorPayload(json: string): ExecutorPayload {
 export function getSupportedCommands(): string[] {
   return [
     'prompt',
+    'agentic-tool.invoke',
     'git.clone',
     'git.branch.add',
     'git.branch.remove',
@@ -1041,10 +909,6 @@ export function getSupportedCommands(): string[] {
     'environment.logs',
     'git.repo.realign-origin',
     'git.repo.delete',
-    'unix.sync-branch',
-    'unix.sync-board',
-    'unix.sync-repo',
-    'unix.sync-user',
     'zellij.attach',
     'zellij.tab',
     'codex.auth-file',
@@ -1088,36 +952,6 @@ export function isGitBranchCleanPayload(
   payload: ExecutorPayload
 ): payload is GitBranchCleanPayload {
   return payload.command === 'git.branch.clean';
-}
-
-/**
- * Type guard for UnixSyncBranchPayload
- */
-export function isUnixSyncBranchPayload(
-  payload: ExecutorPayload
-): payload is UnixSyncBranchPayload {
-  return payload.command === 'unix.sync-branch';
-}
-
-/**
- * Type guard for UnixSyncBoardPayload
- */
-export function isUnixSyncBoardPayload(payload: ExecutorPayload): payload is UnixSyncBoardPayload {
-  return payload.command === 'unix.sync-board';
-}
-
-/**
- * Type guard for UnixSyncRepoPayload
- */
-export function isUnixSyncRepoPayload(payload: ExecutorPayload): payload is UnixSyncRepoPayload {
-  return payload.command === 'unix.sync-repo';
-}
-
-/**
- * Type guard for UnixSyncUserPayload
- */
-export function isUnixSyncUserPayload(payload: ExecutorPayload): payload is UnixSyncUserPayload {
-  return payload.command === 'unix.sync-user';
 }
 
 /**

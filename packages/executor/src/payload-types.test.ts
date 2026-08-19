@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AgenticToolInvokePayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
@@ -42,13 +43,13 @@ describe('PromptPayloadSchema', () => {
   });
 
   it('should parse prompt payload with optional fields', () => {
-    // Note: asUser is now handled at spawn time, not in payload
+    // Delegated launcher identity is handled at spawn time, not in payload
     const payload = {
       command: 'prompt',
       sessionToken: 'jwt-token-here',
       daemonUrl: 'http://localhost:4000',
       env: { ANTHROPIC_API_KEY: 'key' },
-      dataHome: '/data/agor',
+      agenticToolContext: { nativeHome: '/data/agor' },
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
@@ -62,7 +63,7 @@ describe('PromptPayloadSchema', () => {
     const result = PromptPayloadSchema.parse(payload);
     expect(result.daemonUrl).toBe('http://localhost:4000');
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
-    expect(result.dataHome).toBe('/data/agor');
+    expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
   });
 
@@ -93,6 +94,41 @@ describe('PromptPayloadSchema', () => {
     };
 
     expect(() => PromptPayloadSchema.parse(payload)).toThrow();
+  });
+});
+
+describe('AgenticToolInvokePayloadSchema', () => {
+  it('accepts an opaque adapter-owned request and context', () => {
+    expect(
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        agenticToolContext: { dataHome: '/opaque/data-home' },
+        params: {
+          tool: 'opencode',
+          request: { operation: 'discover', directory: '/authorized/branch' },
+        },
+      })
+    ).toMatchObject({
+      params: {
+        tool: 'opencode',
+        request: { operation: 'discover', directory: '/authorized/branch' },
+      },
+    });
+  });
+
+  it('rejects an unknown agentic tool but leaves request policy to the adapter', () => {
+    expect(() =>
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'unknown', request: { operation: 'anything' } },
+      })
+    ).toThrow();
+    expect(() =>
+      AgenticToolInvokePayloadSchema.parse({
+        command: 'agentic-tool.invoke',
+        params: { tool: 'opencode', request: { operation: 'future-operation' } },
+      })
+    ).not.toThrow();
   });
 });
 
@@ -358,6 +394,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
       },
@@ -375,6 +414,9 @@ describe('ZellijAttachPayloadSchema', () => {
       sessionToken: 'jwt-token-here',
       params: {
         userId: '550e8400-e29b-41d4-a716-446655440000',
+        terminalId: '550e8400-e29b-41d4-a716-446655440001',
+        channel:
+          'tenant/default/user/550e8400-e29b-41d4-a716-446655440000/terminal/550e8400-e29b-41d4-a716-446655440001',
         sessionName: 'agor-session-123',
         cwd: '/data/agor/worktrees/user/repo/feature-x',
         tabName: 'feature-x',
@@ -566,12 +608,10 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('environment.logs');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
-    expect(commands).toContain('unix.sync-branch');
-    expect(commands).toContain('unix.sync-board');
-    expect(commands).toContain('unix.sync-repo');
-    expect(commands).toContain('unix.sync-user');
     expect(commands).toContain('zellij.attach');
     expect(commands).toContain('zellij.tab');
-    expect(commands.length).toBe(31);
+    expect(commands).toContain('agentic-tool.invoke');
+    expect(commands).toContain('codex.auth-file');
+    expect(commands.length).toBe(28);
   });
 });

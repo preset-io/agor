@@ -1,10 +1,18 @@
-import type { AgorClient, BoardEntityObject, Branch, Repo, Session, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  BoardEntityObject,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  Session,
+  User,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById, selectMcpServerById } from '../../store/selectors';
+import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
@@ -41,13 +49,7 @@ export interface BranchModalProps {
   // it calls `client.service('branches').patch()` directly so errors bubble.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenSettings?: () => void; // Navigate to Settings → Repositories
   onSessionClick?: (sessionId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
@@ -83,6 +85,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // the App shell doesn't have to forward them into every modal.
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
+  const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
@@ -93,10 +96,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
-  const userById = useMemo(
-    () => new Map(form.allUsers.map((user) => [user.user_id, user])),
-    [form.allUsers]
-  );
   const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general

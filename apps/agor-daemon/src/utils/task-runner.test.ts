@@ -114,20 +114,20 @@ describe('runExistingTask', () => {
 });
 
 describe('normalizeMessageSource', () => {
-  it('passes through valid values', () => {
+  it('derives agor provenance for every external request', () => {
     expect(normalizeMessageSource('agor', { provider: 'rest' })).toBe('agor');
-    expect(normalizeMessageSource('gateway', { provider: 'rest' })).toBe('gateway');
-  });
-
-  it('returns undefined for undefined input', () => {
-    expect(normalizeMessageSource(undefined, { provider: 'rest' })).toBeUndefined();
-  });
-
-  it('falls back to "agor" for invalid values from external callers', () => {
+    expect(normalizeMessageSource('gateway', { provider: 'rest' })).toBe('agor');
+    expect(normalizeMessageSource(undefined, { provider: 'socketio' })).toBe('agor');
     expect(normalizeMessageSource('bogus' as unknown as 'agor', { provider: 'rest' })).toBe('agor');
   });
 
-  it('falls back to undefined for invalid values from internal calls', () => {
+  it('preserves valid provenance only for trusted internal requests', () => {
+    expect(normalizeMessageSource('agor', {})).toBe('agor');
+    expect(normalizeMessageSource('gateway', {})).toBe('gateway');
+  });
+
+  it('omits absent or invalid provenance for internal requests', () => {
+    expect(normalizeMessageSource(undefined, {})).toBeUndefined();
     expect(normalizeMessageSource('bogus' as unknown as 'agor', {})).toBeUndefined();
   });
 });

@@ -11,17 +11,25 @@ coverage/
 build/
 dist/
 storybook-static/
+*.tgz
 
 # Misc
 .DS_Store
+Desktop.ini
+Thumbs.db
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.bak
+*.backup
+*.orig
+*.rej
 
 # IDE
 .idea/
-.vscode/
+**/.vscode/*
+!**/.vscode/extensions.json
 *.swp
 *.swo
 *~
@@ -35,11 +43,13 @@ yarn-error.log*
 .env.prod
 
 # Claude Code
-.claude/
+.claude/.local/
+.claude/settings.local.json
 
 # Monorepo
 .turbo/
 .pnpm-store/
+*.tsbuildinfo
 
 # Agor specific
 .agor/

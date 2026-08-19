@@ -204,7 +204,6 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   const stableBack = useCallback(() => backRef.current(), []);
   const hasOnSave = onSave != null;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: title read via ref on purpose (footer doesn't display it)
   useEffect(() => {
     registerController({
       title: titleRef.current,

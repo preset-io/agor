@@ -29,11 +29,10 @@ The daemon owns orchestration and delegates all git **mutations** to the executo
 | Command               | Purpose                                        |
 | --------------------- | ---------------------------------------------- |
 | `prompt`              | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
-| `git.clone`           | Clone repository with Unix group setup         |
-| `git.branch.add`    | Create git branch with permissions           |
+| `git.clone`           | Clone a repository in the selected substrate   |
+| `git.branch.add`    | Materialize a branch workspace               |
 | `git.branch.remove` | Remove branch and cleanup                    |
 | `zellij.attach`       | Attach to terminal session                     |
-| `unix.sync-*`         | Synchronize Unix users/groups                  |
 
 ---
 
@@ -50,7 +49,10 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 | Scale out replicas   | User-specific sessions  |
 | Ephemeral storage    | Persistent filesystem   |
 
-**Key insight**: Agor executors need access to a **shared filesystem** where git branches live. This is similar to how traditional development servers work, not like microservice deployments.
+**Key insight**: every executor command for a branch must see the same durable branch working copy
+at the absolute path recorded in PostgreSQL. That can be one shared filesystem, or an external
+launcher can attach one persistent per-branch volume to each short-lived executor. Daemon pods do
+not themselves need the branch mount in the external topology.
 
 ---
 
@@ -58,111 +60,11 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 
 Containerized Agor requires infrastructure that most organizations already have for multi-server environments. **Agor assumes this infrastructure exists - it does not provide it.**
 
-### Two Requirements
+### Storage and identity requirements
 
-| Requirement           | What It Provides                        | Common Solutions                           |
-| --------------------- | --------------------------------------- | ------------------------------------------ |
-| **Shared Filesystem** | Same files accessible from all nodes    | EFS, NFS, GlusterFS, Ceph                  |
-| **Shared Identity**   | UID/GID → username/groupname resolution | LDAP, Active Directory, sssd, synced files |
+A delegated executor must receive trusted `{tenant_id}` and `{user_id}` values and bind them to isolated runtime storage. The launcher—not a host uid chosen by Agor—owns the mapping to container identities, persistent homes, credentials, and branch mounts.
 
-These are standard requirements for any multi-server development environment. If your organization runs shared `/home` directories across servers, you likely already have both.
-
-### Why Shared Identity Matters
-
-A shared filesystem only stores numeric UIDs and GIDs. Without shared identity:
-
-```bash
-# What you see without identity resolution
-$ ls -la /data/agor/worktrees/myproject
-drwxrwxr-x 1001 2001 4096 Dec 18 10:00 .
-$ whoami
-1001
-
-# What you see WITH identity resolution
-$ ls -la /data/agor/worktrees/myproject
-drwxrwxr-x alice developers 4096 Dec 18 10:00 .
-$ whoami
-alice
-```
-
-Agor's Unix isolation features (per-user UIDs, per-branch GIDs) require that containers can resolve these IDs to names.
-
-### How Identity Resolution Works
-
-Unix systems use **NSS (Name Service Switch)** to resolve identities. The `/etc/nsswitch.conf` file controls where lookups go:
-
-```bash
-# Simple setup (local files only)
-passwd:     files
-group:      files
-
-# Enterprise setup (LDAP via sssd)
-passwd:     files sss
-group:      files sss
-```
-
-When you run `ls -la` or `whoami`, the system queries NSS, which queries the configured backend (files, LDAP, etc.).
-
-### Container Identity Options
-
-For executor containers to resolve UIDs/GIDs, choose one:
-
-**Option 1: Mount host's identity files (simplest)**
-
-If your host already has identity configured, containers can use it:
-
-```yaml
-volumeMounts:
-  - name: passwd
-    mountPath: /etc/passwd
-    readOnly: true
-  - name: group
-    mountPath: /etc/group
-    readOnly: true
-volumes:
-  - name: passwd
-    hostPath:
-      path: /etc/passwd
-  - name: group
-    hostPath:
-      path: /etc/group
-```
-
-**Option 2: Mount sssd socket (if host uses LDAP/AD)**
-
-If your host runs `sssd` for LDAP/AD integration, containers can share it:
-
-```yaml
-volumeMounts:
-  - name: sssd-pipes
-    mountPath: /var/lib/sss/pipes
-  - name: nsswitch
-    mountPath: /etc/nsswitch.conf
-    subPath: nsswitch.conf
-volumes:
-  - name: sssd-pipes
-    hostPath:
-      path: /var/lib/sss/pipes
-  - name: nsswitch
-    configMap:
-      name: nsswitch-sss
-```
-
-**Option 3: Run sssd in container (most complex)**
-
-Install and configure `sssd` in executor containers to query LDAP directly.
-
-### Recommended: Dedicated Cluster
-
-For production Agor deployments with containerized execution, we recommend:
-
-- **Dedicated Kubernetes cluster** or namespace with specialized configuration
-- **Shared filesystem** (EFS, NFS, GlusterFS) for branch storage
-- **Shared identity** already configured at the node level
-- **Pod security policies** tuned for development workloads
-- **Longer timeouts** than typical production workloads
-
----
+The daemon validates its declared storage contract but cannot prove the external substrate's claims. Use an immutable image, least-privilege service identity, tenant-separated storage, and explicit Stop/orphan cleanup.
 
 ## Shared Filesystem Setup
 
@@ -171,10 +73,10 @@ For production Agor deployments with containerized execution, we recommend:
 This is the single most common deployment foot-gun and worth calling out
 before the rest of the storage discussion.
 
-**If the Agor database is persistent, then `$HOME` (or whichever directory
-holds `repos/` and `branches/`) MUST also be persistent.** The database
-stores absolute paths to every repository clone and every branch on
-disk. If the database survives a pod restart but the filesystem does not
+**If the Agor database is persistent, every branch workspace it references must also be
+persistent.** A global `$HOME` mount is one implementation, not a requirement. The database stores
+absolute paths to every repository clone and branch. If the database survives a pod restart but
+the corresponding branch volume does not
 (for example, the database is backed by a `PersistentVolumeClaim` while
 `$HOME` is an `emptyDir`), then on redeploy the daemon will reference
 paths that no longer exist. Opening a terminal or running a session will
@@ -187,10 +89,12 @@ real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
 `agor branch remove` / `agor repo remove` before re-cloning.
 
-Safe configurations:
+Safe configurations include:
 
-- **Both persistent**: Database on PVC, `$HOME` (or `data_home`) on
-  PVC/EFS/NFS. Recommended for production.
+- **Shared-local**: database plus `data_home` on shared persistent storage mounted at the same path
+  on each daemon.
+- **External executors**: database plus durable per-branch volumes mounted at each recorded branch
+  path. A persistent per-user home is additionally required for CLI-native credentials.
 - **Both ephemeral**: Database on `emptyDir`, `$HOME` on `emptyDir`. Fine
   for short-lived test pods. Everything resets together.
 - **Avoid mixing**: Persistent database + ephemeral filesystem is the
@@ -323,13 +227,9 @@ execution:
     kubectl run executor-{task_id} \
       --image=ghcr.io/preset-io/agor-executor:latest \
       --rm -i --restart=Never \
+      --labels="agor-tenant={tenant_id},agor-user={user_id}" \
       --overrides='{
         "spec": {
-          "securityContext": {
-            "runAsUser": {unix_user_uid},
-            "runAsGroup": {unix_user_gid},
-            "fsGroup": {unix_user_gid}
-          },
           "containers": [{
             "name": "executor",
             "stdin": true,
@@ -356,11 +256,10 @@ execution:
 | ----------------- | --------------------------------------- | --------------------- |
 | `{task_id}`       | Unique task identifier (auto-generated) | `a1b2c3d4`            |
 | `{command}`       | Executor command                        | `prompt`, `git.clone` |
-| `{unix_user}`     | Target Unix username                    | `agor_alice`          |
-| `{unix_user_uid}` | Target Unix UID                         | `1001`                |
-| `{unix_user_gid}` | Target Unix GID                         | `1001`                |
+| `{unix_user}`     | Compatibility delegated home key        | `agor_alice`          |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
 | `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
+| `{user_id}`       | Trusted authenticated Agor user UUID    | `01user789...`        |
 | `{tenant_id}`     | Trusted ambient tenant ID                | `tenant-abc`          |
 
 `{tenant_id}` comes from the authenticated operation's ambient tenant context
@@ -372,20 +271,19 @@ template instead of passing a literal or empty tenant value. In
 `required_from_auth` mode, every executor launch requires an active tenant
 context, whether or not its template uses the placeholder.
 
-`{unix_user}` is validated against the Unix-username format and Agor refuses
+`{unix_user}` is validated against the delegated home-key format and Agor refuses
 to execute the template when the value is malformed — it is rendered into a
 `sh -c` command and commonly used as a path segment for per-user home mounts.
 In `unix_user_mode: delegated` it carries the session user's `unix_username`;
-in `insulated`/`strict` it carries the resolved impersonation identity.
+in delegated mode it carries the compatibility home key.
 
-> **Codex subscription credentials caveat:** daemon-side Codex login flows
-> (paste-import, device sign-in, logout) write `~/.codex/auth.json` on the
-> **daemon host**. When executors run through a command template, their home
-> directory is typically provided by the container/orchestration layer, so a
-> daemon-managed credential file may never reach the executor. In
-> `unix_user_mode: delegated` these flows are rejected with a clear message;
-> in `simple` with a template they still write the daemon-host file — sign in
-> to Codex from a branch terminal or inside a session instead.
+> **Codex subscription credentials caveat:** Codex auth-file operations already run through an
+> executor, but correctness requires every auth helper and Task for one trusted tenant/user identity
+> to receive the same persistent home. Declare that guarantee as
+> `execution.executor_storage.user_home: persistent-per-user`; the launcher must actually implement
+> it. The constrained HA profile admits auth-file check/import/logout only with a consistent
+> declared home. Declaring storage does not make the process-affine device-code poller durable, so
+> device sign-in remains gated.
 
 ### How It Works
 
@@ -446,20 +344,13 @@ spec:
             - ALL
 ```
 
-### User Mapping Considerations
+### Delegated identity and storage
 
-In containerized environments, Unix users map differently:
-
-| Local Execution         | Container Execution |
-| ----------------------- | ------------------- |
-| `sudo su - agor_alice`  | `runAsUser: 1001`   |
-| Fresh group memberships | `fsGroup: 1001`     |
-| Full Unix user exists   | UID mapping only    |
-
-For full Unix isolation in containers, consider:
-
-- **User namespace mapping** in the container runtime
-- **LDAP/SSSD** for consistent user/group resolution
+Agor does not create or select container users. A delegated launcher receives
+trusted tenant and user identifiers plus the transitional execution-home key,
+then owns runtime identity, persistent credential storage, workspace mounts,
+containment, cancellation, and cleanup. Document and test that contract for the
+chosen orchestrator; a `runAsUser` value alone is not proof of tenant isolation.
 - **Init container** to set up user environment
 
 ---
@@ -621,9 +512,11 @@ At startup, the daemon calls `configureDaemonUrl()` which sets this URL globally
 
 ## High Availability
 
-### Current Status
+### Current status
 
-Agor's daemon currently runs as a **single instance**. For high availability with multiple daemon replicas, additional configuration is required.
+Agor has an explicit constrained active-active daemon mode using PostgreSQL, Redis realtime fanout,
+and sticky Engine.IO ingress. See [Daemon high availability](/guide/daemon-ha) for the supported
+surface and runnable Compose smoke topology.
 
 ### Shared Filesystem Simplifies HA
 
@@ -657,13 +550,9 @@ FeathersJS uses Socket.io for real-time UI updates. With multiple daemon replica
               └─────────────┘
 ```
 
-### Configuration (Future)
-
-HA support is not built into Agor configuration today. To implement HA:
-
-1. Mount `/home` and `AGOR_DATA_HOME` on shared storage (EFS/NFS)
-2. Configure Socket.io Redis adapter for event broadcasting
-3. Use a load balancer (sticky sessions optional with Redis)
+The external Cloud shape does not mount tenant workspaces into daemon pods. It declares
+`persistent-per-user` home and `persistent-per-branch` workspace guarantees, uses clone-only branch
+storage when the base repository is unavailable, and keeps Engine.IO affinity at ingress.
 
 **References:**
 
@@ -674,73 +563,11 @@ For most deployments, a single daemon replica is sufficient. Scale horizontally 
 
 ---
 
-## Unix Groups and Filesystem Permissions
+## Filesystem permissions and runtime identity
 
-### How Agor Uses Unix Permissions
+Agor no longer creates Unix users/groups or sends UID/GID template variables. Configure pod/container `securityContext` in the launcher or workload definition. Prefer stable `{tenant_id}` and `{user_id}` inputs and resolve them through trusted deployment configuration rather than mutable usernames.
 
-Agor's isolation model assigns:
-
-- **One UID per user** - your Unix identity
-- **One GID per repository** - shared access for all repo collaborators
-- **One GID per branch** - scoped access for branch owners
-
-A user working on multiple branches will be a member of multiple groups.
-
-### Running as Users (Not Just UIDs)
-
-In local mode, executors run via `sudo su - {username}`, which:
-
-- Switches to the user's UID
-- Loads ALL their group memberships from `/etc/group`
-- Sets up their home directory and shell environment
-
-In containerized mode, we want the same behavior. The key insight: **run as the user, and their groups come with them**.
-
-### Container Security Context
-
-Kubernetes provides `supplementalGroups` for this:
-
-```yaml
-spec:
-  securityContext:
-    runAsUser: 1001 # User's UID
-    runAsGroup: 1001 # User's primary GID
-    supplementalGroups: # All groups user belongs to
-      - 2001 # repo-myproject GID
-      - 3001 # branch-feature-x GID
-      - 3002 # branch-bugfix-y GID
-```
-
-The daemon knows the user's group memberships (from branch ownership records) and can pass them to the executor template.
-
-### With Shared Identity (Recommended)
-
-If your infrastructure has shared identity (LDAP/sssd), containers can look up group memberships dynamically - just like local mode. The executor runs as the user, and NSS resolves their groups.
-
-This is the cleanest approach: containers behave like any other server in your environment.
-
-### Without Shared Identity (Explicit GIDs)
-
-If you can't set up shared identity, the daemon must explicitly pass all required GIDs via `supplementalGroups`. This works but:
-
-- Requires daemon to enumerate all user's group memberships
-- Can result in long lists of GIDs for active users
-- Less flexible than dynamic resolution
-
-### Template Variables for Security Context
-
-The executor command template supports these variables:
-
-| Variable                  | Description                        |
-| ------------------------- | ---------------------------------- |
-| `{unix_user}`             | Username                           |
-| `{unix_user_uid}`         | User's UID                         |
-| `{unix_user_primary_gid}` | User's primary GID                 |
-| `{supplemental_gids}`     | JSON array of all GIDs user needs  |
-| `{repo_gid}`              | Current repo's GID (if scoped)     |
-| `{branch_gid}`          | Current branch's GID (if scoped) |
-
----
+The compatibility `{unix_user}` variable is an opaque delegated home key. It is validated for safe path/template use but is not evidence of a host account or isolation boundary.
 
 ## Dev Environments in Containerized Mode
 
@@ -1033,7 +860,7 @@ execution:
     kubectl run executor-{task_id} \
       --image=ghcr.io/preset-io/agor-executor:latest \
       --rm -i --restart=Never \
-      --overrides='{"spec":{"securityContext":{"runAsUser":{unix_user_uid},"fsGroup":{unix_user_gid}}}}' \
+      --labels="agor-tenant={tenant_id},agor-user={user_id}" \
       -- agor-executor --stdin
 ```
 
@@ -1106,6 +933,6 @@ Create a branch and run an agent session through the UI.
 
 ## Related Documentation
 
-- [Full Multiplayer Mode](/guide/multiplayer-unix-isolation) - Unix isolation and RBAC
+- [Multiplayer Execution Isolation](/guide/multiplayer-unix-isolation) - RBAC, local sandboxing, and delegated execution
 - [Environments](/guide/environment-configuration) - Branch environment templates
 - [Architecture](/guide/architecture) - System design overview

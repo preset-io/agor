@@ -1,5 +1,10 @@
 # Daemon startup/runtime log analysis (2026-06-11)
 
+> [!IMPORTANT]
+> Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
+> projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
+> sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+
 Scope: inspected `journalctl -u agor-daemon --no-pager -n 2000` and `--since '2 hours ago'` on the production-ish host. I did not copy secrets into this note. The current shell cannot see all system journal entries (`journalctl` reports that this user is not in `adm` / `systemd-journal`), so the captured logs are mostly executor child-process output under the `agor-daemon` unit, not the main daemon boot banner. `systemctl status agor-daemon` showed the main daemon was active since `2026-06-11 00:51:13 UTC`, but `journalctl` returned no visible main-process startup entries for that window.
 
 ## High-signal findings
@@ -45,7 +50,7 @@ In the last 2h sample there were 42 occurrences of each of these, with stack tra
 Sources:
 
 - `packages/executor/src/handlers/sdk/base-executor.ts` calls `/config/resolve-api-key`.
-- `packages/executor/src/sdk-handlers/base/mcp-scoping.ts` resolves MCP servers.
+- `packages/core/src/mcp/scoping.ts` resolves MCP servers.
 - `packages/executor/src/handlers/sdk/git-safe-directory.ts` tries to read the repo for `safe.directory` setup.
 - `apps/agor-daemon/src/auth/executor-runtime-scope.ts` currently rejects endpoints outside its allowlist; `config/resolve-api-key` is explicitly covered by a test asserting rejection.
 
@@ -83,7 +88,7 @@ No fix applied. Recommended follow-up: run one executor with `node --trace-depre
   - Applies the shared console log-level patch in executor processes.
 - `packages/executor/src/sdk-handlers/codex/prompt-service.ts`
   - Summarizes stale instructions sweep results; demotes verbose Codex setup/MCP/event logs to debug.
-- `packages/executor/src/sdk-handlers/base/mcp-scoping.ts`
+- `packages/core/src/mcp/scoping.ts`
   - Demotes normal MCP-resolution trace to debug; logs concise warning on resolution failure.
 - `packages/executor/src/handlers/sdk/base-executor.ts`
   - Demotes API-key resolution success/fallback chatter to debug; concise warning for daemon-service failure.

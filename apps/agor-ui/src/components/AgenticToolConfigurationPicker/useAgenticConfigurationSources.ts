@@ -1,3 +1,8 @@
+import {
+  agenticToolRequiresModelSelection,
+  getAgenticToolModelConfiguration,
+  isAgenticToolModelSelectionComplete,
+} from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgenticToolPreset,
@@ -49,7 +54,13 @@ export function summarizeAgenticConfiguration(
 ): string {
   if (!config) return '';
   const parts: string[] = [];
-  if (config.modelConfig?.model) parts.push(getModelDisplayName(tool, config.modelConfig.model));
+  if (config.modelConfig?.model) {
+    parts.push(
+      config.modelConfig.provider
+        ? `${config.modelConfig.provider}/${config.modelConfig.model}`
+        : getModelDisplayName(tool, config.modelConfig.model)
+    );
+  }
   if (config.permissionMode) parts.push(getPermissionModeLabel(tool, config.permissionMode));
   return parts.join(' · ');
 }
@@ -58,6 +69,8 @@ interface Options {
   tool: AgenticToolName;
   client: AgorClient | null;
   currentUser?: User | null;
+  allowInlineSelection?: boolean;
+  preserveInlineSelection?: boolean;
 }
 
 interface AgenticConfigurationSourceOption {
@@ -67,14 +80,48 @@ interface AgenticConfigurationSourceOption {
   disabled?: boolean;
 }
 
+function preferredConfigurationSource(
+  tool: AgenticToolName,
+  hasUserDefault: boolean,
+  inlineAllowed: boolean,
+  workspacePreset: AgenticToolPreset | undefined,
+  presets: AgenticToolPreset[]
+): string | undefined {
+  if (hasUserDefault) return USER_DEFAULT_AGENTIC_CONFIGURATION;
+  if (agenticToolRequiresModelSelection(tool)) {
+    if (
+      workspacePreset &&
+      isAgenticToolModelSelectionComplete(tool, workspacePreset.configuration.modelConfig)
+    ) {
+      return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+    }
+    if (inlineAllowed) return INLINE_AGENTIC_CONFIGURATION;
+    return presets.find((preset) =>
+      isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig)
+    )?.preset_id;
+  }
+  if (inlineAllowed) return INLINE_AGENTIC_CONFIGURATION;
+  if (workspacePreset) return WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION;
+  return presets[0]?.preset_id;
+}
+
 /**
  * Owns preset loading and default-source resolution for every configuration
  * picker. Consumers keep their own rendering and inline form state.
  */
-export function useAgenticConfigurationSources({ tool, client, currentUser }: Options) {
+export function useAgenticConfigurationSources({
+  tool,
+  client,
+  currentUser,
+  allowInlineSelection = true,
+  preserveInlineSelection = false,
+}: Options) {
   const canonicalTool = canonicalTenantAgenticTool(tool);
   const settings = useAgorStore((state) => state.agenticToolSettingsByName?.get(canonicalTool));
-  const inlineAllowed = settings?.inline_configuration_allowed !== false;
+  const inlineAllowedByPolicy = settings?.inline_configuration_allowed !== false;
+  const inlineAllowed = inlineAllowedByPolicy && allowInlineSelection;
+  const inlineSelectionAllowed =
+    inlineAllowed || (inlineAllowedByPolicy && preserveInlineSelection);
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -123,15 +170,15 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
 
     retryRef.current = onPresetChange;
     void refresh();
-    service.on('created', onPresetChange);
-    service.on('patched', onPresetChange);
-    service.on('removed', onPresetChange);
+    service.on?.('created', onPresetChange);
+    service.on?.('patched', onPresetChange);
+    service.on?.('removed', onPresetChange);
     return () => {
       active = false;
       retryRef.current = () => {};
-      service.off('created', onPresetChange);
-      service.off('patched', onPresetChange);
-      service.off('removed', onPresetChange);
+      service.off?.('created', onPresetChange);
+      service.off?.('patched', onPresetChange);
+      service.off?.('removed', onPresetChange);
     };
   }, [canonicalTool, client]);
 
@@ -141,29 +188,41 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
     currentUser,
     tool
   );
-  const hasConfiguredUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
+  const hasConfiguredUserDefault = Boolean(currentUser && (userSelection ?? userConfigBlob));
   const userDefaultUsesInline = Boolean(
     currentUser &&
       hasConfiguredUserDefault &&
       userSelection?.source !== 'preset' &&
       userSelection?.source !== 'workspace_default'
   );
+  const userDefaultConfiguration =
+    userSelection?.source === 'preset'
+      ? presets.find((preset) => preset.preset_id === userSelection.preset_id)?.configuration
+      : userSelection?.source === 'workspace_default'
+        ? workspacePreset?.configuration
+        : userConfigBlob;
+  const userDefaultModelComplete =
+    !agenticToolRequiresModelSelection(tool) ||
+    isAgenticToolModelSelectionComplete(tool, userDefaultConfiguration?.modelConfig);
   const isSourceAllowedByPolicy = useCallback(
-    (source: string | undefined) =>
-      inlineAllowed ||
-      (source !== INLINE_AGENTIC_CONFIGURATION &&
-        (source !== USER_DEFAULT_AGENTIC_CONFIGURATION || !userDefaultUsesInline)),
-    [inlineAllowed, userDefaultUsesInline]
+    (source: string | undefined) => {
+      if (source === INLINE_AGENTIC_CONFIGURATION) return inlineSelectionAllowed;
+      if (source === USER_DEFAULT_AGENTIC_CONFIGURATION && userDefaultUsesInline) {
+        return inlineAllowed;
+      }
+      return true;
+    },
+    [inlineAllowed, inlineSelectionAllowed, userDefaultUsesInline]
   );
   const hasUserDefault =
     hasConfiguredUserDefault &&
     isSourceAllowedByPolicy(USER_DEFAULT_AGENTIC_CONFIGURATION) &&
-    (!currentUser ||
-      (userSelection?.source === 'preset'
-        ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
-        : userSelection?.source === 'workspace_default'
-          ? inlineAllowed || Boolean(workspacePreset)
-          : true));
+    userDefaultModelComplete &&
+    (userSelection?.source === 'preset'
+      ? presets.some((preset) => preset.preset_id === userSelection.preset_id)
+      : userSelection?.source === 'workspace_default'
+        ? inlineAllowed || Boolean(workspacePreset)
+        : true);
 
   const resolveConfiguration = useCallback(
     (source: string | undefined, inlineConfig: DefaultAgenticToolConfig = {}) => {
@@ -200,23 +259,38 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
   }, [canonicalTool, presets, userConfigBlob, userSelection, workspacePreset]);
 
   const isValidSource = useCallback(
-    (source: string | undefined) =>
-      isSourceAllowedByPolicy(source) &&
-      (presets.some((preset) => preset.preset_id === source) ||
+    (source: string | undefined) => {
+      const sourceExists =
+        presets.some((preset) => preset.preset_id === source) ||
         (source === USER_DEFAULT_AGENTIC_CONFIGURATION && hasUserDefault) ||
         (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION &&
           (inlineAllowed || Boolean(workspacePreset))) ||
-        source === INLINE_AGENTIC_CONFIGURATION),
-    [hasUserDefault, inlineAllowed, isSourceAllowedByPolicy, presets, workspacePreset]
+        source === INLINE_AGENTIC_CONFIGURATION;
+      if (!isSourceAllowedByPolicy(source) || !sourceExists) return false;
+      return (
+        source === INLINE_AGENTIC_CONFIGURATION ||
+        !agenticToolRequiresModelSelection(tool) ||
+        isAgenticToolModelSelectionComplete(tool, resolveConfiguration(source).modelConfig)
+      );
+    },
+    [
+      hasUserDefault,
+      inlineAllowed,
+      isSourceAllowedByPolicy,
+      presets,
+      resolveConfiguration,
+      tool,
+      workspacePreset,
+    ]
   );
 
-  const preferredSource = hasUserDefault
-    ? USER_DEFAULT_AGENTIC_CONFIGURATION
-    : inlineAllowed
-      ? INLINE_AGENTIC_CONFIGURATION
-      : workspacePreset
-        ? WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
-        : presets[0]?.preset_id;
+  const preferredSource = preferredConfigurationSource(
+    tool,
+    hasUserDefault,
+    inlineAllowed,
+    workspacePreset,
+    presets
+  );
 
   const sourceOptions = useMemo<AgenticConfigurationSourceOption[]>(
     () => [
@@ -237,12 +311,18 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
         summary: workspacePreset
           ? summarizeAgenticConfiguration(canonicalTool, workspacePreset.configuration)
           : 'not configured',
-        disabled: !workspacePreset,
+        disabled:
+          !workspacePreset ||
+          (agenticToolRequiresModelSelection(tool) &&
+            !isAgenticToolModelSelectionComplete(tool, workspacePreset.configuration.modelConfig)),
       },
       ...presets.map((preset) => ({
         value: preset.preset_id as string,
         title: preset.name,
         summary: summarizeAgenticConfiguration(canonicalTool, preset.configuration),
+        disabled:
+          agenticToolRequiresModelSelection(tool) &&
+          !isAgenticToolModelSelectionComplete(tool, preset.configuration.modelConfig),
       })),
       ...(inlineAllowed
         ? [
@@ -252,9 +332,28 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
               summary: '',
             },
           ]
-        : []),
+        : preserveInlineSelection && inlineSelectionAllowed
+          ? [
+              {
+                value: INLINE_AGENTIC_CONFIGURATION,
+                title: 'Stored configuration',
+                summary: 'read-only',
+                disabled: true,
+              },
+            ]
+          : []),
     ],
-    [canonicalTool, hasUserDefault, inlineAllowed, myDefaultSummary, presets, workspacePreset]
+    [
+      canonicalTool,
+      hasUserDefault,
+      inlineAllowed,
+      inlineSelectionAllowed,
+      myDefaultSummary,
+      preserveInlineSelection,
+      presets,
+      tool,
+      workspacePreset,
+    ]
   );
 
   const getSourceError = useCallback(
@@ -269,13 +368,17 @@ export function useAgenticConfigurationSources({ tool, client, currentUser }: Op
       // A transient request failure cannot prove that an existing preset
       // disappeared. Preserve it until a successful retry.
       if (loadError) return undefined;
-      return isValidSource(source) ? undefined : 'This configuration is no longer available';
+      if (isValidSource(source)) return undefined;
+      return agenticToolRequiresModelSelection(tool)
+        ? getAgenticToolModelConfiguration(tool)?.missingSelectionError
+        : 'This configuration is no longer available';
     },
-    [isSourceAllowedByPolicy, isValidSource, loadError, loading]
+    [isSourceAllowedByPolicy, isValidSource, loadError, loading, tool]
   );
 
   return {
     inlineAllowed,
+    inlineSelectionAllowed,
     presets,
     loading,
     loaded,

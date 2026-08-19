@@ -14,14 +14,17 @@ import type {
   MCPServerFilters,
   MCPServerID,
   Message,
+  MessageCreate,
   MessageID,
   Repo,
   Session,
   SessionID,
   SessionMCPServer,
   SessionUpdate,
+  TaskID,
   User,
 } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 
 /**
  * Messages Repository - proxies to 'messages' Feathers service
@@ -29,16 +32,34 @@ import type {
 export class FeathersMessagesRepository {
   constructor(private client: AgorClient) {}
 
-  async findBySessionId(sessionId: SessionID): Promise<Message[]> {
-    const service = this.client.service('messages');
-    const result = await service.find({
+  /** The daemon may have pre-written the Task's prompt; fetch only that guard row. */
+  async findInitialUserMessagesByTaskId(taskId: TaskID): Promise<Message[]> {
+    const result = await this.client.service('messages').find({
       query: {
-        session_id: sessionId,
+        task_id: taskId,
+        role: MessageRole.USER,
         $sort: { index: 1 },
-        $limit: 10000,
+        $limit: 1,
       },
     });
     return Array.isArray(result) ? result : result.data;
+  }
+
+  /**
+   * Next append index without transferring the session transcript. Indexes can
+   * be sparse after deletes, so row count is not a safe replacement for max+1.
+   */
+  async getNextIndexBySessionId(sessionId: SessionID): Promise<number> {
+    const result = await this.client.service('messages').find({
+      query: {
+        session_id: sessionId,
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
+      },
+    });
+    const messages = Array.isArray(result) ? result : result.data;
+    return messages.length > 0 ? messages[0].index + 1 : 0;
   }
 
   async findById(messageId: MessageID): Promise<Message | null> {
@@ -50,9 +71,9 @@ export class FeathersMessagesRepository {
     }
   }
 
-  async create(message: Omit<Message, 'message_id'>): Promise<Message> {
+  async create(message: MessageCreate): Promise<Message> {
     const service = this.client.service('messages');
-    return await service.create(message as Partial<Message>);
+    return await service.create(message);
   }
 }
 
@@ -140,6 +161,15 @@ export class FeathersMCPServersRepository {
     }
     if (filters?.enabled !== undefined) {
       query.enabled = filters.enabled;
+    }
+    if (filters?.source) {
+      query.source = filters.source;
+    }
+    if (filters?.usableByUserId) {
+      query.usableByUserId = filters.usableByUserId;
+    }
+    if (filters?.ownerless !== undefined) {
+      query.ownerless = filters.ownerless;
     }
 
     // Pass user ID for per-user OAuth token injection

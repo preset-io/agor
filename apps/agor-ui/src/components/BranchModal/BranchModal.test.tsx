@@ -8,7 +8,9 @@
 
 import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { BranchModal } from './BranchModal';
 import { buildTeammateKnowledgePatch } from './tabs/KnowledgeTab';
 import {
@@ -19,6 +21,23 @@ import {
   makeUser,
   renderWithApp,
 } from './testUtils';
+
+const scheduleTabProps = vi.hoisted(() => vi.fn());
+vi.mock('./tabs/ScheduleTab', () => ({
+  ScheduleTab: (props: unknown) => {
+    scheduleTabProps(props);
+    return null;
+  },
+}));
+
+beforeEach(() => {
+  scheduleTabProps.mockClear();
+  agorStore.setState({ ...EMPTY_MAPS });
+});
+
+afterEach(() => {
+  agorStore.setState({ ...EMPTY_MAPS });
+});
 
 function renderBranchModal({
   branch = makeBranch(),
@@ -43,6 +62,35 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
+  it('supplies other schedule owners from the global store when RBAC is disabled', async () => {
+    const caller = makeUser({ user_id: 'caller', role: 'member' });
+    const owner = makeUser({ user_id: 'owner', role: 'member' });
+    const userById = new Map([
+      [caller.user_id, caller],
+      [owner.user_id, owner],
+    ]);
+    agorStore.setState({ userById });
+
+    renderWithApp(
+      <BranchModal
+        open={true}
+        onClose={() => {}}
+        branch={makeBranch()}
+        repo={makeRepo()}
+        sessions={[]}
+        client={makeStubClient({ rbac404: true, users: [] }).client}
+        currentUser={caller}
+        defaultTab="schedule"
+      />
+    );
+
+    await waitFor(() => expect(scheduleTabProps).toHaveBeenCalled());
+    expect(scheduleTabProps.mock.lastCall?.[0]).toMatchObject({
+      currentUser: caller,
+      userById,
+    });
+  });
+
   it('shows Permissions for an admin user who is a branch owner', async () => {
     const seb = makeUser({ user_id: 'seb', role: 'admin' });
 

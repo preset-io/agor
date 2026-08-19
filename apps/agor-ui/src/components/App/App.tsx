@@ -5,6 +5,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -69,9 +70,10 @@ import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
-  buildTeammateOnboardingSessionTitle,
+  buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
@@ -186,13 +188,7 @@ export interface AppProps {
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
-  onArchiveOrDeleteBranch?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onCreateBranch?: (
@@ -883,7 +879,12 @@ export const App: React.FC<AppProps> = ({
       const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
 
       const sessionId = await onCreateSession?.(
-        { branch_id: branchId, agent: tool, mcpServerIds },
+        {
+          branch_id: branchId,
+          agent: tool,
+          agenticToolPresetId: getUserDefaultConfigurationSource(user, tool),
+          mcpServerIds,
+        },
         currentBoardId
       );
       if (!sessionId) return null;
@@ -1029,14 +1030,13 @@ export const App: React.FC<AppProps> = ({
       branch_id: branch.branch_id,
       agent: result.agent,
       agenticToolPresetId: result.agenticToolPresetId,
-      title: buildTeammateOnboardingSessionTitle(result),
+      title: buildTeammateFirstSessionTitle(result),
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
-        persona: user?.preferences?.onboarding?.persona,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,
@@ -1134,13 +1134,12 @@ export const App: React.FC<AppProps> = ({
           reason: allow ? 'Approved by user' : 'Denied by user',
           remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
           scope,
-          decidedBy: user?.user_id || 'unknown',
         });
       } catch (error) {
         console.error('❌ Failed to send permission decision:', error);
       }
     },
-    [client, user?.user_id]
+    [client]
   );
 
   // Narrow per-id subscriptions: only patches to the SELECTED session (and
@@ -1440,6 +1439,7 @@ export const App: React.FC<AppProps> = ({
           currentBoardId={headerBoardId}
           onBoardChange={navigation.goToBoard}
           onHomeClick={handleHomeClick}
+          onUpdateBoard={onUpdateBoard}
           onUserClick={handleHeaderUserClick}
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}

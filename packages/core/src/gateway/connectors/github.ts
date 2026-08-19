@@ -25,7 +25,13 @@
 
 import type { Octokit } from '@octokit/rest';
 import type { ChannelType } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage } from '../connector';
+import type {
+  GatewayConnector,
+  GatewayInboundCallback,
+  GatewayListenerOptions,
+  InboundMessage,
+} from '../connector';
+import { GatewayListenerError } from '../listener-error';
 import { addToRingBuffer, escapeRegex } from './shared';
 
 // ============================================================================
@@ -65,9 +71,51 @@ interface RepoPollState {
 
 /** Default poll interval */
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
+const DEFAULT_STARTUP_LOOKBACK_MS = 5 * 60_000;
 
 /** Default mention keyword */
 const DEFAULT_MENTION_NAME = 'agor';
+
+/** Classify GitHub installation validation without exposing its response payload. */
+export function classifyGitHubInstallationError(error: unknown): GatewayListenerError {
+  const candidate =
+    typeof error === 'object' && error !== null
+      ? (error as {
+          status?: unknown;
+          message?: unknown;
+          response?: { headers?: Record<string, unknown>; data?: { message?: unknown } };
+        })
+      : {};
+  const status = Number(candidate.status);
+  const headers = candidate.response?.headers ?? {};
+  const header = (name: string): string => {
+    const value = headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+    return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  };
+  const providerMessage = `${String(candidate.message ?? '')} ${String(
+    candidate.response?.data?.message ?? ''
+  )}`.toLowerCase();
+  const rateLimited =
+    status === 429 ||
+    (status === 403 &&
+      (header('retry-after') !== '' ||
+        header('x-ratelimit-remaining') === '0' ||
+        providerMessage.includes('secondary rate limit') ||
+        providerMessage.includes('rate limit exceeded')));
+
+  if (!rateLimited && (status === 401 || status === 403 || status === 404)) {
+    return new GatewayListenerError(
+      'github_credentials_invalid',
+      'permanent',
+      'Verify the GitHub App id, private key, installation id, and installation access.'
+    );
+  }
+  return new GatewayListenerError(
+    'github_api_unavailable',
+    'transient',
+    'GitHub is unavailable; Agor will retry automatically.'
+  );
+}
 
 // ============================================================================
 // Helpers
@@ -91,6 +139,15 @@ export function parseThreadId(threadId: string): { owner: string; repo: string; 
     repo: match[2],
     number: parseInt(match[3], 10),
   };
+}
+
+/** Stable across repository renames and configured owner/repo casing changes. */
+export function githubIssueCommentProviderEventId(comment: {
+  id: number;
+  node_id?: string | null;
+}): string {
+  const stableCommentId = comment.node_id?.trim() || String(comment.id);
+  return `github:issue_comment:${stableCommentId}`;
 }
 
 /**
@@ -127,6 +184,7 @@ export class GitHubConnector implements GatewayConnector {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private pollStates = new Map<string, RepoPollState>();
   private polling = false;
+  private startupLookbackMs = 0;
 
   constructor(config: Record<string, unknown>) {
     this.config = config as unknown as GitHubChannelConfig;
@@ -189,13 +247,51 @@ export class GitHubConnector implements GatewayConnector {
     if (!state) {
       state = {
         repo,
-        lastPollAt: new Date().toISOString(),
+        // Distributed mode overlaps before its first durable checkpoint;
+        // standalone mode preserves the historical start-at-now behavior.
+        lastPollAt: new Date(Date.now() - this.startupLookbackMs).toISOString(),
         lastEtag: null,
         processedCommentIds: new Set(),
       };
       this.pollStates.set(repo, state);
     }
     return state;
+  }
+
+  private serializeCheckpoint(): Record<string, unknown> {
+    return {
+      version: 1,
+      repos: Object.fromEntries(
+        [...this.pollStates].map(([repo, state]) => [
+          repo,
+          {
+            lastPollAt: state.lastPollAt,
+            lastEtag: state.lastEtag,
+            processedCommentIds: [...state.processedCommentIds],
+          },
+        ])
+      ),
+    };
+  }
+
+  private restoreCheckpoint(checkpoint: Record<string, unknown> | null | undefined): void {
+    const repos = checkpoint?.repos;
+    if (!repos || typeof repos !== 'object' || Array.isArray(repos)) return;
+    for (const [repo, raw] of Object.entries(repos as Record<string, unknown>)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const value = raw as Record<string, unknown>;
+      if (typeof value.lastPollAt !== 'string') continue;
+      this.pollStates.set(repo, {
+        repo,
+        lastPollAt: value.lastPollAt,
+        lastEtag: typeof value.lastEtag === 'string' ? value.lastEtag : null,
+        processedCommentIds: new Set(
+          Array.isArray(value.processedCommentIds)
+            ? value.processedCommentIds.filter((id): id is number => Number.isSafeInteger(id))
+            : []
+        ),
+      });
+    }
   }
 
   /**
@@ -269,35 +365,6 @@ export class GitHubConnector implements GatewayConnector {
         // Build thread ID
         const threadId = `${owner}/${repoName}#${issueNumber}`;
 
-        // ── Instant Feedback ──────────────────────────────────
-        // React with 👀 so the user knows the bot saw their mention
-        try {
-          await octokit.reactions.createForIssueComment({
-            owner,
-            repo: repoName,
-            comment_id: comment.id,
-            content: 'eyes',
-          });
-        } catch (err) {
-          console.warn(`[github] Failed to add 👀 reaction to comment ${comment.id}:`, err);
-        }
-
-        // Post a "Processing..." comment that will be edited with the final response
-        let processingCommentId: number | undefined;
-        try {
-          const { data: processingComment } = await octokit.issues.createComment({
-            owner,
-            repo: repoName,
-            issue_number: issueNumber,
-            body: '⏳ Processing...',
-          });
-          processingCommentId = processingComment.id;
-          // Mark our own processing comment as processed so we don't re-ingest it
-          addToRingBuffer(state.processedCommentIds, processingComment.id);
-        } catch (err) {
-          console.warn(`[github] Failed to post processing comment on ${threadId}:`, err);
-        }
-
         // Strip mention from body
         const text = requireMention ? stripMention(body, mentionName) : body;
 
@@ -323,6 +390,7 @@ export class GitHubConnector implements GatewayConnector {
         }
 
         messages.push({
+          providerEventId: githubIssueCommentProviderEventId(comment),
           threadId,
           text,
           userId: githubLogin ?? 'unknown',
@@ -334,9 +402,36 @@ export class GitHubConnector implements GatewayConnector {
             issue_number: issueNumber,
             repo_full_name: repo,
             comment_url: comment.html_url,
-            ...(processingCommentId ? { processing_comment_id: processingCommentId } : {}),
             ...(this.config.align_github_users ? { align_github_users: true } : {}),
             ...(githubUserEmail ? { github_user_email: githubUserEmail } : {}),
+          },
+          // Side effects run only after the gateway has won the durable event
+          // identity. GitHub has no idempotency key for createComment, so a
+          // crash after the API accepts the comment but before Agor records
+          // completion remains an explicitly documented at-least-once window.
+          prepareDelivery: async () => {
+            try {
+              await octokit.reactions.createForIssueComment({
+                owner,
+                repo: repoName,
+                comment_id: comment.id,
+                content: 'eyes',
+              });
+            } catch (err) {
+              console.warn(`[github] Failed to add 👀 reaction to comment ${comment.id}:`, err);
+            }
+            try {
+              const { data: processingComment } = await octokit.issues.createComment({
+                owner,
+                repo: repoName,
+                issue_number: issueNumber,
+                body: '⏳ Processing...',
+              });
+              addToRingBuffer(state.processedCommentIds, processingComment.id);
+              return { processing_comment_id: processingComment.id };
+            } catch (err) {
+              console.warn(`[github] Failed to post processing comment on ${threadId}:`, err);
+            }
           },
         });
 
@@ -363,7 +458,10 @@ export class GitHubConnector implements GatewayConnector {
    *
    * Each tick polls all watched repos for new @mention comments.
    */
-  async startListening(callback: (msg: InboundMessage) => void): Promise<void> {
+  async startListening(
+    callback: GatewayInboundCallback,
+    options: GatewayListenerOptions = {}
+  ): Promise<void> {
     console.log('[github] startListening called');
 
     // Validate we can authenticate
@@ -376,17 +474,16 @@ export class GitHubConnector implements GatewayConnector {
         `[github] Authenticated as installation ${this.config.installation_id} on ${(installation.account && 'login' in installation.account ? installation.account.login : undefined) ?? 'unknown'}`
       );
     } catch (error) {
-      console.error('[github] Failed to validate installation:', error);
-      throw new Error(
-        'GitHub App authentication failed — check app_id, private_key, and installation_id'
-      );
+      throw classifyGitHubInstallationError(error);
     }
 
     // Resolve repos to watch
     const repos = this.resolveRepos();
     console.log(`[github] Watching ${repos.length} repos:`, repos);
 
-    // Initialize poll state for each repo
+    this.startupLookbackMs = options.durableEventIdempotency ? DEFAULT_STARTUP_LOOKBACK_MS : 0;
+    this.restoreCheckpoint(options.checkpoint);
+    // Initialize poll state for each repo not present in the checkpoint.
     for (const repo of repos) {
       this.getRepoPollState(repo);
     }
@@ -395,11 +492,11 @@ export class GitHubConnector implements GatewayConnector {
     console.log(`[github] Starting poll loop (interval: ${intervalMs}ms)`);
 
     // Run one poll immediately
-    await this.pollTick(repos, callback);
+    await this.pollTick(repos, callback, options.saveCheckpoint);
 
     // Then start the interval
     this.pollTimer = setInterval(() => {
-      void this.pollTick(repos, callback);
+      void this.pollTick(repos, callback, options.saveCheckpoint);
     }, intervalMs);
   }
 
@@ -407,21 +504,36 @@ export class GitHubConnector implements GatewayConnector {
    * Single poll tick — polls all repos and emits messages.
    * Guarded against overlapping ticks.
    */
-  private async pollTick(repos: string[], callback: (msg: InboundMessage) => void): Promise<void> {
+  private async pollTick(
+    repos: string[],
+    callback: GatewayInboundCallback,
+    saveCheckpoint?: GatewayListenerOptions['saveCheckpoint']
+  ): Promise<void> {
     if (this.polling) {
       console.warn('[github] Poll tick skipped (previous tick still running)');
       return;
     }
 
     this.polling = true;
+    const before = this.serializeCheckpoint();
     try {
       for (const repo of repos) {
         const messages = await this.pollRepo(repo);
         for (const msg of messages) {
-          callback(msg);
+          await callback(msg);
         }
       }
+      if (saveCheckpoint && !(await saveCheckpoint(this.serializeCheckpoint()))) {
+        this.restoreCheckpoint(before);
+        console.warn('[github] Listener ownership lost while checkpointing; stopping poll loop');
+        await this.stopListening();
+      }
     } catch (error) {
+      // Do not advance an in-memory cursor past an event the gateway did not
+      // durably accept. The same owner retries, or a replacement starts from
+      // the last fenced checkpoint.
+      this.pollStates.clear();
+      this.restoreCheckpoint(before);
       console.error('[github] Poll tick error:', error);
     } finally {
       this.polling = false;

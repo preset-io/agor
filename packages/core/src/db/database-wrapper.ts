@@ -22,6 +22,7 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { Database } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
+import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-context';
 
 /**
@@ -101,6 +102,11 @@ export function isSQLiteDatabase(db: Database): db is LibSQLDatabase<typeof sqli
 export function isPostgresDatabase(db: Database): db is PostgresJsDatabase<typeof postgresSchema> {
   // PostgreSQL doesn't have .run() method
   return !('run' in db);
+}
+
+/** Return the canonical dialect for an already-created database instance. */
+export function getDatabaseInstanceDialect(db: Database): DatabaseDialect {
+  return isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';
 }
 
 /**
@@ -225,69 +231,6 @@ export async function lockRowForUpdate(
     await (tx as any).execute(sql`SELECT 1 FROM ${table} WHERE ${where} FOR UPDATE`);
   }
   // SQLite: no-op — implicit locking via transaction
-}
-
-/**
- * Try to acquire a per-key Postgres transaction-scoped advisory lock.
- *
- * Used by the scheduler (and other multi-daemon work-distribution code)
- * to ensure that two daemons don't both spawn a session for the same
- * schedule on the same tick. The lock is automatically released at
- * transaction commit/rollback.
- *
- * - PostgreSQL: executes `SELECT pg_try_advisory_xact_lock($1)`. Returns
- *   `true` if this transaction won the lock, `false` otherwise (the
- *   caller should skip whatever it was about to do).
- * - SQLite: returns `true`. SQLite is single-node by definition — no
- *   cross-process coordination needed.
- *
- * Must be called from inside a transaction (`db.transaction(...)`) on
- * Postgres; on SQLite it's safe to call outside a transaction.
- *
- * @param tx - Transaction context (or db on SQLite)
- * @param db - Database instance (used for dialect detection only)
- * @param key - 64-bit signed integer key derived from the resource ID.
- *   See `advisoryLockKeyForUuid` for a stable UUID→bigint hash.
- */
-export async function tryAdvisoryXactLock(
-  tx: Database,
-  db: Database,
-  key: bigint
-): Promise<boolean> {
-  if (!isPostgresDatabase(db)) return true;
-  // biome-ignore lint/suspicious/noExplicitAny: Transaction context requires type assertion for raw SQL execution
-  const result = (await (tx as any).execute(
-    sql`SELECT pg_try_advisory_xact_lock(${key.toString()}::bigint) AS acquired`
-  )) as { rows?: Array<{ acquired: boolean }> } | Array<{ acquired: boolean }>;
-  // postgres.js returns an array; pg returns { rows: [...] }. Handle both.
-  const row = Array.isArray(result) ? result[0] : result.rows?.[0];
-  return row?.acquired === true;
-}
-
-/**
- * Stable 64-bit hash of a UUID string for use as a Postgres advisory
- * lock key. Postgres advisory keys are bigint (signed 64-bit), so we
- * fold the UUID's 128 bits down with a simple FNV-1a-style mix and
- * clamp into the signed range.
- *
- * Deterministic per UUID, so a schedule's lock key is stable across
- * processes and restarts. Hash quality is not load-bearing — we only
- * need "low collision rate across the modest number of schedules
- * actually due in the same tick"; any two-bigint cell of the hash
- * space is fine.
- */
-export function advisoryLockKeyForUuid(uuid: string): bigint {
-  // FNV-1a 64-bit
-  const FNV_OFFSET = 0xcbf29ce484222325n;
-  const FNV_PRIME = 0x100000001b3n;
-  const MASK_64 = 0xffffffffffffffffn;
-  let hash = FNV_OFFSET;
-  for (let i = 0; i < uuid.length; i++) {
-    hash ^= BigInt(uuid.charCodeAt(i));
-    hash = (hash * FNV_PRIME) & MASK_64;
-  }
-  // Convert unsigned 64-bit to signed (Postgres bigint is signed).
-  return hash > 0x7fffffffffffffffn ? hash - 0x10000000000000000n : hash;
 }
 
 /**

@@ -63,7 +63,7 @@ _Branch Environment tab, with variant YAML on top, picker in the middle, rendere
   style={{ maxWidth: '600px' }}
 />
 
-_Picking a variant. `sqlite` is the default for fastest boot; `full` mirrors production with PostgreSQL + RBAC + Unix isolation._
+_Picking a variant. This historical screenshot predates the rename from `full` to `rich`. `full` remains a deprecated compatibility alias; HA is still a separate variant._
 
 ---
 
@@ -80,7 +80,6 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
-| `{{branch.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
@@ -397,11 +396,19 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
+In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
+distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
+separate: every replica scans active environments, while PostgreSQL admits only
+one live observation claim per branch and fences the result against lease expiry
+and lifecycle changes. A remote/webhook environment without `health` remains
+explicitly unobservable (`unknown`); Agor never treats another daemon's local
+process map as evidence that it is healthy.
+
 ---
 
 ## See also
 
 - [Containerized execution](/guide/containerized-execution) runs the rendered commands inside isolated containers.
-- [Multiplayer and Unix isolation](/guide/multiplayer-unix-isolation) covers how RBAC and Unix user modes gate who can Start / Render / edit env config.
+- [Multiplayer and execution isolation](/guide/multiplayer-unix-isolation) covers how RBAC and execution modes gate who can Start / Render / edit env config.
 - Template helper source: `packages/core/src/templates/handlebars-helpers.ts`
 - `.agor.yml` parser source: `packages/core/src/config/agor-yml.ts`

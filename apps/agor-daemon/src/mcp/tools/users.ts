@@ -1,5 +1,5 @@
 import { ROLES, type User } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { mcpOptionalString, mcpRequiredId, mcpRequiredString } from '../schema.js';
 import type { McpContext } from '../server.js';
@@ -16,7 +16,8 @@ const USER_LIST_FIELDS = [
   'updated_at',
 ] as const;
 
-const USER_QUERY_LIMIT_MAX = 10000;
+const USER_QUERY_LIMIT_MAX = 100;
+const USER_FIELD_FILTER_SCAN_LIMIT = 10000;
 
 type UserListField = (typeof USER_LIST_FIELDS)[number];
 type UserListRow = Pick<User, UserListField>;
@@ -49,7 +50,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
     'agor_users_list',
     {
       description:
-        'List users in the system with pagination and optional case-insensitive search across name, email, and unix_username. Returns compact rows by default; pass lean:false for detailed user payloads.',
+        'List users in the system with pagination and optional case-insensitive search across name, email, and execution home key. Returns compact rows by default; pass lean:false for detailed user payloads.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         limit: z
@@ -68,7 +69,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           .describe('Number of results to skip'),
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and unix_username'
+          'Case-insensitive search across name, email, and execution home key'
         ),
         lean: z
           .boolean()
@@ -106,13 +107,13 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       inputSchema: z.strictObject({
         search: mcpOptionalString(
           'search',
-          'Case-insensitive search across name, email, and unix_username'
+          'Case-insensitive search across name, email, and execution home key'
         ),
         email: mcpOptionalString('email', 'Email to search for (case-insensitive substring)'),
         name: mcpOptionalString('name', 'Name to search for (case-insensitive substring)'),
         unix_username: mcpOptionalString(
           'unix_username',
-          'Unix username to search for (case-insensitive substring)'
+          'Execution home key to search for (case-insensitive substring)'
         ),
         limit: z
           .number({ error: 'limit must be a positive integer when provided.' })
@@ -148,7 +149,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
       const users = (await ctx.app.service('users').find({
         query: {
           search: searchTerm,
-          $limit: fieldFilters.length > 0 ? USER_QUERY_LIMIT_MAX : requestedLimit,
+          $limit: fieldFilters.length > 0 ? USER_FIELD_FILTER_SCAN_LIMIT : requestedLimit,
           $skip: 0,
         },
         ...ctx.baseServiceParams,
@@ -257,7 +258,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
           ),
         unix_username: mcpOptionalString(
           'unix_username',
-          'New Unix username for shell access (optional)'
+          'New opaque execution home key (optional)'
         ),
         must_change_password: z
           .boolean()
@@ -316,7 +317,7 @@ export function registerUserTools(server: McpServer, ctx: McpContext): void {
         avatar: mcpOptionalString('avatar', 'Legacy avatar URL alias (optional)'),
         unix_username: mcpOptionalString(
           'unix_username',
-          'Unix username for shell access (optional, defaults to email prefix if not specified)'
+          'Opaque execution home key (optional, defaults to email prefix)'
         ),
         must_change_password: z
           .boolean()

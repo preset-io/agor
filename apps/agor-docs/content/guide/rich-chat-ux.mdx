@@ -52,7 +52,7 @@ Combined with **per-user analytics** (Settings → Analytics), this gives you a 
 | `xhigh`  | Extra reasoning depth for supported runtimes |
 | `max`    | Critical decisions, architecture (Opus only) |
 
-Models with the `[1m]` suffix (e.g., `claude-sonnet-4-6[1m]`) enable Anthropic's 1M-token extended context window. They appear as separate dropdown entries.
+For Claude Code models that support both capacities, Agor lists explicit **200k** and **1M** choices. The 1M choice persists Claude Code's `[1m]` model suffix (for example, `claude-sonnet-4-6[1m]`), so the runtime can enforce account and provider availability. Models whose only supported capacity is 1M have one 1M-labeled choice.
 
 You don't have to start a new session to dial things up or down. Flip the selector, and the next prompt uses the new config.
 

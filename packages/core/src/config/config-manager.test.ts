@@ -9,6 +9,11 @@ import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
+  AtomicConfigPublicationUnsupportedError,
+  assertValidEffectiveExecutionConfig,
+  ConfigAlreadyExistsError,
+  createInitialConfig,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
   getAgorHome,
@@ -25,20 +30,18 @@ import {
   getTenantDataRoot,
   initConfig,
   isBranchRbacEnabled,
-  isUnixGroupRefreshNeeded,
-  isUnixImpersonationEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
-  requireDaemonUser,
+  RETIRED_CONFIG_KEYS,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
+  resolveEffectiveConfig,
   resolveExecutionSecurityMode,
   resolveTeammateFrameworkRepoUrl,
-  saveConfig,
-  setConfigValue,
-  unixUserModeRequiresUsername,
-  unsetConfigValue,
+  rewriteConfigForTests,
+  saveConfigForTests,
+  unixUserModeRequiresExecutionHomeKey,
 } from './config-manager';
 import type { AgorConfig } from './types';
 
@@ -92,6 +95,217 @@ describe('getDefaultConfig', () => {
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
     expect(defaults.analytics?.enabled).toBe(false);
+    expect(defaults.metrics?.statsd).toEqual({
+      enabled: false,
+      host: '127.0.0.1',
+      port: 8125,
+      prefix: 'agor.daemon.',
+      global_tags: {},
+    });
+  });
+});
+
+describe('resolveEffectiveConfig', () => {
+  it('materializes defaults and supported environment overrides without mutating input', () => {
+    const input: AgorConfig = { daemon: { host: 'yaml-host', port: 1234 } };
+    const resolved = resolveEffectiveConfig(input, {
+      PORT: '4321',
+      DAEMON_HOST: 'env-host',
+      AGOR_RBAC_ENABLED: 'true',
+      AGOR_UNIX_USER_MODE: 'delegated',
+      INSTANCE_LABEL: 'replica-a',
+    });
+    expect(resolved.daemon).toMatchObject({
+      host: 'env-host',
+      port: 4321,
+      mcpEnabled: true,
+      instanceLabel: 'replica-a',
+    });
+    expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
+    expect(resolved.multi_tenancy?.mode).toBe('static');
+    expect(input).toEqual({ daemon: { host: 'yaml-host', port: 1234 } });
+  });
+
+  it('projects AGOR_DATA_HOME into the effective config snapshot', () => {
+    const resolved = resolveEffectiveConfig(
+      { paths: { data_home: '/from-yaml' } },
+      { AGOR_DATA_HOME: '/from-environment' }
+    );
+    expect(resolved.paths?.data_home).toBe('/from-environment');
+  });
+
+  it('materializes StatsD YAML and strict environment overrides', () => {
+    const input: AgorConfig = {
+      metrics: {
+        statsd: {
+          enabled: false,
+          host: 'yaml-agent',
+          port: 18125,
+          prefix: 'custom.',
+          global_tags: { env: 'staging' },
+        },
+      },
+    };
+    const resolved = resolveEffectiveConfig(input, {
+      AGOR_STATSD_ENABLED: '1',
+      AGOR_STATSD_HOST: '127.0.0.2',
+      AGOR_STATSD_PORT: '28125',
+      AGOR_STATSD_PREFIX: 'company.agor.',
+    });
+    expect(resolved.metrics?.statsd).toEqual({
+      enabled: true,
+      host: '127.0.0.2',
+      port: 28125,
+      prefix: 'company.agor.',
+      global_tags: { env: 'staging' },
+    });
+    expect(input.metrics?.statsd?.enabled).toBe(false);
+  });
+
+  it('rejects invalid StatsD environment overrides', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_ENABLED: 'yes' })).toThrow(
+      /AGOR_STATSD_ENABLED/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PORT: '8125udp' })).toThrow(
+      /AGOR_STATSD_PORT/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PORT: '70000' })).toThrow(
+      /AGOR_STATSD_PORT/
+    );
+    expect(() => resolveEffectiveConfig({}, { AGOR_STATSD_PREFIX: 'missing-dot' })).toThrow(
+      /metrics\.statsd\.prefix/
+    );
+  });
+
+  it.each(['opportunistic', 'strict', 'insulated'])(
+    'rejects removed AGOR_UNIX_USER_MODE=%s overrides with migration guidance',
+    (mode) => {
+      expect(() => resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: mode })).toThrow(
+        new RegExp(`${mode}.*removed in Agor 0\\.25\\.0`, 's')
+      );
+    }
+  );
+
+  it('rejects an unknown AGOR_UNIX_USER_MODE override', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: 'root' })).toThrow(
+      /must be one of: simple, sandbox, delegated/
+    );
+  });
+
+  it('treats an empty AGOR_UNIX_USER_MODE from Compose as no override', () => {
+    expect(resolveEffectiveConfig({}, { AGOR_UNIX_USER_MODE: '' }).execution?.unix_user_mode).toBe(
+      resolveEffectiveConfig({}, {}).execution?.unix_user_mode
+    );
+    expect(
+      resolveEffectiveConfig(
+        { execution: { unix_user_mode: 'sandbox' } },
+        { AGOR_UNIX_USER_MODE: '' }
+      ).execution?.unix_user_mode
+    ).toBe('sandbox');
+  });
+
+  it('unix_user_mode: sandbox implies RBAC + enabled per-user sandbox that fails closed', () => {
+    const resolved = resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {});
+    expect(resolved.execution?.branch_rbac).toBe(true);
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode FORCES its security invariants — config/env cannot weaken them', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          // Every one of these attempts to weaken the mode and must be ignored.
+          sandbox: { enabled: false, home_mode: 'shared', fail_if_unavailable: false },
+        },
+      },
+      { AGOR_SANDBOX_HOME_MODE: 'shared' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({
+      enabled: true,
+      home_mode: 'per_user',
+      fail_if_unavailable: true,
+    });
+  });
+
+  it('sandbox mode preserves non-security tunables (include/extras/protect_secrets)', () => {
+    const resolved = resolveEffectiveConfig(
+      {
+        execution: {
+          unix_user_mode: 'sandbox',
+          sandbox: {
+            extra_allow_write: ['/opt/cache'],
+            include: { tmp: false },
+            preserve_canonical_home_alias: true,
+          },
+        },
+      },
+      {}
+    );
+    expect(resolved.execution?.sandbox?.extra_allow_write).toEqual(['/opt/cache']);
+    expect(resolved.execution?.sandbox?.include).toMatchObject({ tmp: false });
+    expect(resolved.execution?.sandbox?.preserve_canonical_home_alias).toBe(true);
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
+  });
+
+  it('AGOR_SANDBOX_HOME_MODE env still overrides home_mode without the sandbox isolation mode', () => {
+    const resolved = resolveEffectiveConfig(
+      { execution: { sandbox: { enabled: true } } },
+      { AGOR_SANDBOX_HOME_MODE: 'per_user' }
+    );
+    expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
+    expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
+  });
+});
+
+describe('assertValidEffectiveExecutionConfig', () => {
+  it('requires delegated mode to name an external execution substrate', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({ execution: { unix_user_mode: 'delegated' } })
+    ).toThrow(/requires execution\.executor_command_template/);
+  });
+
+  it.each(['{unix_user_uid}', '{unix_user_gid}'])(
+    'rejects removed delegated template placeholder %s at startup',
+    (placeholder) => {
+      expect(() =>
+        assertValidEffectiveExecutionConfig({
+          execution: {
+            unix_user_mode: 'delegated',
+            executor_command_template: `launcher --legacy ${placeholder} -- {command}`,
+          },
+        })
+      ).toThrow(/removed placeholder/);
+    }
+  );
+
+  it('rejects sandboxing combined with an external executor template', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'docker run {{command}}',
+          sandbox: { enabled: true },
+        },
+      })
+    ).toThrow(/executor_command_template/);
+  });
+
+  it('allows supported standalone and named sandbox configurations', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig(
+        resolveEffectiveConfig({ execution: { unix_user_mode: 'sandbox' } }, {})
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: { unix_user_mode: 'simple', sandbox: { enabled: true } },
+      })
+    ).not.toThrow();
   });
 });
 
@@ -164,11 +378,175 @@ describe('loadConfig', () => {
     expect(loaded).toMatchObject(configData);
   });
 
+  it('loads the documented canonical-home sandbox compatibility setting', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      'execution:\n  unix_user_mode: sandbox\n  sandbox:\n    preserve_canonical_home_alias: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { preserve_canonical_home_alias: true },
+      },
+    });
+  });
+
+  it('rejects unknown sandbox keys and a non-boolean canonical-home option', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: true\n    surprise: true\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/execution\.sandbox\.surprise/);
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  sandbox:\n    preserve_canonical_home_alias: "true"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('boots with a full mcp_catalog block from before the catalog moved into the repository', async () => {
+    // The catalog is a file in this repository and has nothing to configure,
+    // but an unrecognized top-level key throws — so removing the section
+    // outright would stop the daemon of every operator who has one in their
+    // config. Every key it ever accepted has to keep loading, and be ignored.
+    //
+    // AGENTS.md no longer documents the block, so this restates the keys rather
+    // than scraping them out of the docs the way the pre-retirement test did.
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        mcp_catalog: {
+          registry_sync_enabled: true,
+          sync_interval_hours: 12,
+          probe_budget: 40,
+          registry_url: 'https://registry.internal',
+        },
+      }),
+      'utf-8'
+    );
+
+    const loaded = await loadConfig();
+    // Loaded rather than rejected, and carrying no setting anything reads.
+    expect(loaded).toBeDefined();
+    expect(RETIRED_CONFIG_KEYS.mcp_catalog).toEqual([
+      'registry_sync_enabled',
+      'sync_interval_hours',
+      'probe_budget',
+      'registry_url',
+    ]);
+  });
+
+  it('rejects an unknown mcp_catalog subkey rather than silently accepting it', async () => {
+    // Retired is not the same as unvalidated: a key that never existed is a
+    // typo, and accepting it would teach an operator that a setting they
+    // invented is doing something.
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ mcp_catalog: { registry_sync_enabld: true } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/mcp_catalog\.registry_sync_enabld/);
+  });
+
   it('should return default config when file does not exist', async () => {
     const loaded = await loadConfig();
     const defaults = getDefaultConfig();
     expect(loaded).toEqual(defaults);
   });
+
+  // Manufacturing the mask's EACCES needs mode bits, which don't constrain
+  // root and aren't honored off POSIX — same reason as the unreadable-file
+  // test below.
+  it.skipIf(process.getuid === undefined || process.getuid() === 0)(
+    'should explain the sandbox rather than fabricate a config when masked',
+    async () => {
+      // The executor sandbox masks the daemon's config.yaml with a `--ro-bind
+      // /dev/null` mount, so reads from inside fail with EACCES rather than
+      // ENOENT. Falling back to defaults here would be worse than failing: the
+      // defaults carry no `paths` key and disable filesystem isolation, so a
+      // fabricated config resolves tenant data roots to the wrong directory.
+      // Mounting needs privileges tests don't have; an unreadable file
+      // produces the same EACCES the mask does.
+      const agorDir = path.join(tempDir, '.agor');
+      const configPath = path.join(agorDir, 'config.yaml');
+
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(configPath, yaml.dump(createConfigData()), 'utf-8');
+      await fs.chmod(configPath, 0o000);
+      vi.stubEnv('AGOR_OUTER_SANDBOX', '1');
+
+      try {
+        await expect(loadConfig()).rejects.toThrow(
+          /masked by Agor's executor sandbox.*payload\.resolvedConfig and DAEMON_URL/s
+        );
+
+        __resetConfigCacheForTests();
+        expect(() => loadConfigSync()).toThrow(/masked by Agor's executor sandbox/s);
+      } finally {
+        // restoreAllMocks() does not undo stubEnv, and the marker leaking into
+        // later tests would silently rewrite their expected errors.
+        vi.unstubAllEnvs();
+        await fs.chmod(configPath, 0o600);
+      }
+    }
+  );
+
+  // The masked-config diagnostic is a better message, never a different
+  // outcome: outside the sandbox the same failures stay loud and unchanged.
+  it('should fail loudly when the config path is a directory', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.mkdir(configPath);
+
+    await expect(loadConfig()).rejects.toThrow(/Failed to load config.*EISDIR/s);
+
+    __resetConfigCacheForTests();
+    expect(() => loadConfigSync()).toThrow(/Failed to load config.*EISDIR/s);
+  });
+
+  // Permission bits don't constrain root, and non-POSIX hosts don't honor
+  // mode 000 at all, so this can only assert anything as an unprivileged
+  // POSIX user.
+  it.skipIf(process.getuid === undefined || process.getuid() === 0)(
+    'should fail loudly when a regular config file is unreadable',
+    async () => {
+      const agorDir = path.join(tempDir, '.agor');
+      const configPath = path.join(agorDir, 'config.yaml');
+
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(configPath, yaml.dump(createConfigData()), 'utf-8');
+      await fs.chmod(configPath, 0o000);
+
+      try {
+        await expect(loadConfig()).rejects.toThrow(/Failed to load config.*EACCES/s);
+
+        __resetConfigCacheForTests();
+        expect(() => loadConfigSync()).toThrow(/Failed to load config.*EACCES/s);
+      } finally {
+        // Restore so the afterEach cleanup can remove it.
+        await fs.chmod(configPath, 0o600);
+      }
+    }
+  );
 
   it('should return empty config for empty YAML file', async () => {
     const agorDir = path.join(tempDir, '.agor');
@@ -249,6 +627,108 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('loads the StatsD surface and rejects unsafe or high-cardinality settings', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        metrics: {
+          statsd: {
+            enabled: true,
+            host: '127.0.0.1',
+            port: 8125,
+            prefix: 'agor.daemon.',
+            global_tags: { env: 'test', region: 'local' },
+          },
+        },
+      }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      metrics: { statsd: { enabled: true, global_tags: { env: 'test', region: 'local' } } },
+    });
+
+    for (const [field, value, message] of [
+      ['port', 0, 'port'],
+      ['prefix', 'agor', 'prefix'],
+      ['host', 'http://agent:8125', 'host'],
+    ] as const) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ metrics: { statsd: { [field]: value } } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).rejects.toThrow(new RegExp(`metrics\\.statsd\\.${message}`));
+    }
+
+    for (const reservedKey of ['session_id', 'deployment_id']) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ metrics: { statsd: { global_tags: { [reservedKey]: 'anything' } } } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).rejects.toThrow(/low-cardinality policy/);
+    }
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        metrics: {
+          statsd: { global_tags: { env: '0198d20e-7182-7000-8000-000000000000' } },
+        },
+      }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/low-cardinality string/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: { statsd: { surprise: true } } }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics\.statsd\.surprise/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: true }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics must be an object/);
+  });
+
+  it('accepts a deployment-owned agentic tool package list', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['claude-code', 'codex'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { installed: ['claude-code', 'codex'] },
+    });
+  });
+
+  it('rejects unsupported or duplicate configured agentic tools', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['codex', 'codex'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/duplicate tool.*codex/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { installed: ['future-tool'] } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/unsupported tool.*future-tool/);
   });
 
   it('rejects the removed proxies config surface as an unknown top-level key', async () => {
@@ -497,7 +977,7 @@ describe('loadConfig cache', () => {
     await writeConfigFile({ daemon: { port: 4000 } });
 
     const first = await loadConfig();
-    // Caller mutates the returned object (mimicking setConfigValue style).
+    // A caller mutates its private clone; the cached deployment input stays unchanged.
     first.daemon ??= {};
     first.daemon.port = 9999;
 
@@ -506,12 +986,12 @@ describe('loadConfig cache', () => {
     expect(second.daemon?.port).toBe(4000);
   });
 
-  it('saveConfig invalidates the cache so the next read returns the new value', async () => {
-    await saveConfig({ daemon: { port: 4000 } } as AgorConfig);
+  it('saveConfigForTests invalidates the cache so the next read returns the new value', async () => {
+    await saveConfigForTests({ daemon: { port: 4000 } } as AgorConfig);
     const before = await loadConfig();
     expect(before.daemon?.port).toBe(4000);
 
-    await saveConfig({ daemon: { port: 9999 } } as AgorConfig);
+    await saveConfigForTests({ daemon: { port: 9999 } } as AgorConfig);
     const after = await loadConfig();
     expect(after.daemon?.port).toBe(9999);
   });
@@ -553,7 +1033,7 @@ describe('loadConfig cache', () => {
     expect(recovered.daemon?.port).toBe(8888);
   });
 
-  it('validates on every load path: loadConfigSync rejects deprecated values too', async () => {
+  it('validates on every load path: loadConfigSync rejects removed values too', async () => {
     // Regression guard for the shared-cache bug: if loadConfigSync had a
     // separate (un-validated) code path, calling it first could populate
     // the cache with an invalid config that a later loadConfig() would
@@ -561,15 +1041,35 @@ describe('loadConfig cache', () => {
     //
     // YAML written as a raw string because `unix_user_mode: 'opportunistic'`
     // is intentionally not assignable to `AgorConfig.execution.unix_user_mode`
-    // (the value was deprecated and removed from the type) — that's what
+    // (the value was removed from the type) — that's what
     // validateConfig() catches at runtime for users who still have the value
     // in their config.yaml.
     await writeConfigFile('execution:\n  unix_user_mode: opportunistic\n');
 
-    expect(() => loadConfigSync()).toThrow(/opportunistic.*deprecated/s);
+    expect(() => loadConfigSync()).toThrow(/opportunistic.*removed in Agor 0\.25\.0/s);
     // And async path stays consistent.
-    await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
+    await expect(loadConfig()).rejects.toThrow(/opportunistic.*removed in Agor 0\.25\.0/s);
   });
+
+  it.each(['strict', 'insulated'])(
+    'rejects removed %s mode with migration guidance',
+    async (mode) => {
+      await writeConfigFile(`execution:\n  unix_user_mode: ${mode}\n`);
+      expect(() => loadConfigSync()).toThrow(
+        new RegExp(`${mode}.*removed in Agor 0\\.25\\.0`, 's')
+      );
+      await expect(loadConfig()).rejects.toThrow(/latest Agor 0\.24\.x release/s);
+    }
+  );
+
+  it.each(['executor_unix_user', 'sync_unix_passwords'])(
+    'rejects removed host execution key %s',
+    async (key) => {
+      await writeConfigFile(`execution:\n  ${key}: legacy-value\n`);
+      expect(() => loadConfigSync()).toThrow(new RegExp(`execution\\.${key}`));
+      await expect(loadConfig()).rejects.toThrow(/removed host Unix execution/);
+    }
+  );
 
   it('rejects removed analytics module plugins on every load path', async () => {
     await writeConfigFile(
@@ -590,22 +1090,6 @@ describe('loadConfig cache', () => {
     });
 
     expect(isBranchRbacEnabled()).toBe(true);
-    expect(isUnixImpersonationEnabled()).toBe(false);
-    expect(isUnixGroupRefreshNeeded()).toBe(false);
-    expect(() => requireDaemonUser(loadConfigSync())).not.toThrow();
-  });
-
-  it('requires daemon.unix_user only for non-simple Unix modes', async () => {
-    await writeConfigFile({
-      execution: { branch_rbac: false, unix_user_mode: 'insulated' },
-    });
-
-    expect(isBranchRbacEnabled()).toBe(false);
-    expect(isUnixImpersonationEnabled()).toBe(true);
-    expect(isUnixGroupRefreshNeeded()).toBe(true);
-    expect(() => requireDaemonUser(loadConfigSync())).toThrow(
-      /execution\.unix_user_mode is insulated or strict/
-    );
   });
 
   it.each([
@@ -615,12 +1099,7 @@ describe('loadConfig cache', () => {
       expected: {
         appRbacEnabled: false,
         unixUserMode: 'simple',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: false,
+        requiresExecutionHomeKey: false,
       },
     },
     {
@@ -629,56 +1108,18 @@ describe('loadConfig cache', () => {
       expected: {
         appRbacEnabled: true,
         unixUserMode: 'simple',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: false,
+        requiresExecutionHomeKey: false,
       },
     },
     {
       // Delegated requires per-user unix_username but performs no OS-level
-      // work on the daemon host: no sudo, no groups, no daemon.unix_user.
+      // work on the daemon host: no sudo and no host groups.
       name: 'delegated (identity enforced by execution substrate)',
       config: { execution: { branch_rbac: true, unix_user_mode: 'delegated' } } as AgorConfig,
       expected: {
         appRbacEnabled: true,
         unixUserMode: 'delegated',
-        unixImpersonationEnabled: false,
-        unixFsIsolationEnabled: false,
-        unixGroupRefreshNeeded: false,
-        requiresDaemonUnixUser: false,
-        shouldInitUnixGroups: false,
-        requiresUserUnixUsername: true,
-      },
-    },
-    {
-      name: 'Unix insulated without app RBAC',
-      config: { execution: { branch_rbac: false, unix_user_mode: 'insulated' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: false,
-        unixUserMode: 'insulated',
-        unixImpersonationEnabled: true,
-        unixFsIsolationEnabled: true,
-        unixGroupRefreshNeeded: true,
-        requiresDaemonUnixUser: true,
-        shouldInitUnixGroups: true,
-        requiresUserUnixUsername: false,
-      },
-    },
-    {
-      name: 'Unix strict with app RBAC',
-      config: { execution: { branch_rbac: true, unix_user_mode: 'strict' } } as AgorConfig,
-      expected: {
-        appRbacEnabled: true,
-        unixUserMode: 'strict',
-        unixImpersonationEnabled: true,
-        unixFsIsolationEnabled: true,
-        unixGroupRefreshNeeded: true,
-        requiresDaemonUnixUser: true,
-        shouldInitUnixGroups: true,
-        requiresUserUnixUsername: true,
+        requiresExecutionHomeKey: true,
       },
     },
   ])('resolves execution security mode: $name', ({ config, expected }) => {
@@ -686,12 +1127,11 @@ describe('loadConfig cache', () => {
   });
 });
 
-describe('unixUserModeRequiresUsername', () => {
-  it('requires a username only in strict and delegated', () => {
-    expect(unixUserModeRequiresUsername('simple')).toBe(false);
-    expect(unixUserModeRequiresUsername('insulated')).toBe(false);
-    expect(unixUserModeRequiresUsername('delegated')).toBe(true);
-    expect(unixUserModeRequiresUsername('strict')).toBe(true);
+describe('unixUserModeRequiresExecutionHomeKey', () => {
+  it('requires a username only in delegated mode', () => {
+    expect(unixUserModeRequiresExecutionHomeKey('simple')).toBe(false);
+    expect(unixUserModeRequiresExecutionHomeKey('sandbox')).toBe(false);
+    expect(unixUserModeRequiresExecutionHomeKey('delegated')).toBe(true);
   });
 });
 
@@ -801,7 +1241,7 @@ describe('base URL resolution', () => {
   });
 });
 
-describe('saveConfig', () => {
+describe('saveConfigForTests', () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -816,7 +1256,7 @@ describe('saveConfig', () => {
 
   it('should save config to file', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const configPath = path.join(tempDir, '.agor', 'config.yaml');
     const content = await fs.readFile(configPath, 'utf-8');
@@ -827,7 +1267,7 @@ describe('saveConfig', () => {
 
   it('should create .agor directory if it does not exist', async () => {
     const config = createMinimalConfig();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const agorDir = path.join(tempDir, '.agor');
     const stat = await fs.stat(agorDir);
@@ -838,15 +1278,15 @@ describe('saveConfig', () => {
     const config1 = createConfigData({ daemon: { port: 3030 } });
     const config2 = createConfigData({ daemon: { port: 4040 } });
 
-    await saveConfig(config1);
-    await saveConfig(config2);
+    await saveConfigForTests(config1);
+    await saveConfigForTests(config2);
 
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(4040);
   });
 
   it('should save empty config', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const loaded = await loadConfig();
     expect(loaded).toEqual({});
@@ -854,7 +1294,7 @@ describe('saveConfig', () => {
 
   it('validates external launch login redirect before saving', async () => {
     await expect(
-      saveConfig({
+      saveConfigForTests({
         external_launch: {
           enabled: true,
           login_redirect_url: 'javascript:alert(1)',
@@ -865,7 +1305,7 @@ describe('saveConfig', () => {
 
   it('should format YAML with proper indentation', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const configPath = path.join(tempDir, '.agor', 'config.yaml');
     const content = await fs.readFile(configPath, 'utf-8');
@@ -907,13 +1347,54 @@ describe('initConfig', () => {
 
   it('should not overwrite existing config file', async () => {
     const customConfig = createConfigData();
-    await saveConfig(customConfig);
+    await saveConfigForTests(customConfig);
 
     await initConfig();
 
     const loaded = await loadConfig();
     expect(loaded).toMatchObject(customConfig);
     expect(loaded.daemon?.port).toBe(4000); // Custom value preserved
+  });
+
+  it('uses exclusive creation so concurrent initializers cannot race to overwrite', async () => {
+    const results = await Promise.allSettled([
+      createInitialConfig({ daemon: { port: 3001 } }),
+      createInitialConfig({ daemon: { port: 3002 } }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected?.reason).toBeInstanceOf(ConfigAlreadyExistsError);
+    expect([3001, 3002]).toContain((await loadConfig()).daemon?.port);
+  });
+
+  it('explains the filesystem requirement when atomic publication is unsupported', async () => {
+    vi.spyOn(fs, 'link').mockRejectedValueOnce(
+      Object.assign(new Error('hard links are unsupported'), { code: 'EOPNOTSUPP' })
+    );
+
+    let thrown: unknown;
+    try {
+      await createInitialConfig({ daemon: { port: 3001 } });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AtomicConfigPublicationUnsupportedError);
+    expect(thrown).toMatchObject({
+      name: 'AtomicConfigPublicationUnsupportedError',
+      configPath: getConfigPath(),
+      filesystemErrorCode: 'EOPNOTSUPP',
+    });
+    await expect(fs.access(getConfigPath())).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readdir(path.dirname(getConfigPath()))).toEqual([]);
+  });
+
+  it('preserves existing permission bits during an explicit atomic rewrite', async () => {
+    await createInitialConfig({ daemon: { port: 3001 } });
+    const configPath = getConfigPath();
+    await fs.chmod(configPath, 0o640);
+    await rewriteConfigForTests({ daemon: { port: 3002 } });
+    expect((await fs.stat(configPath)).mode & 0o777).toBe(0o640);
+    expect((await loadConfig()).daemon?.port).toBe(3002);
   });
 });
 
@@ -932,14 +1413,14 @@ describe('getConfigValue', () => {
 
   it('should get nested config value', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const value = await getConfigValue('daemon.port');
     expect(value).toBe(4000);
   });
 
   it('should return default value when not set in user config', async () => {
-    await saveConfig({}); // Empty config
+    await saveConfigForTests({}); // Empty config
 
     const value = await getConfigValue('daemon.port');
     expect(value).toBe(3030); // Default value
@@ -950,7 +1431,7 @@ describe('getConfigValue', () => {
       daemon: { port: 9999 }, // Custom port
       // Other sections use defaults
     };
-    await saveConfig(partialConfig);
+    await saveConfigForTests(partialConfig);
 
     const customValue = await getConfigValue('daemon.port');
     expect(customValue).toBe(9999);
@@ -958,14 +1439,14 @@ describe('getConfigValue', () => {
   });
 
   it('should return undefined for non-existent keys', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const value = await getConfigValue('nonexistent.key');
     expect(value).toBeUndefined();
   });
 
   it('ignores retired settings from an existing config file', async () => {
-    await saveConfig({
+    await saveConfigForTests({
       daemon: { allowAnonymous: false, requireAuth: true },
       defaults: { board: 'legacy', agent: 'legacy-agent' },
       display: { tableStyle: 'ascii', colorOutput: false },
@@ -989,184 +1470,10 @@ describe('getConfigValue', () => {
     const config = createConfigData({
       ui: { port: 9090, host: 'localhost' },
     });
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const port = await getConfigValue('ui.port');
     expect(port).toBe(9090);
-  });
-});
-
-describe('setConfigValue', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  it.each([
-    'daemon.allowAnonymous',
-    'daemon.requireAuth',
-    'display.tableStyle',
-    'display.colorOutput',
-    'display.shortIdLength',
-    'execution.managed_envs_minimum_role',
-    'branches.others_can_default',
-    'branches.others_fs_access_default',
-  ])('rejects newly setting retired key %s', async (key) => {
-    await expect(setConfigValue(key, 'legacy')).rejects.toThrow(/has been retired/);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should set nested config value', async () => {
-    await saveConfig({});
-    await setConfigValue('daemon.port', 8888);
-
-    const value = await getConfigValue('daemon.port');
-    expect(value).toBe(8888);
-  });
-
-  it('rejects retired defaults and onboarding keys', async () => {
-    await expect(setConfigValue('onboarding.teammatePending', true)).rejects.toThrow(
-      /has been retired/
-    );
-    await expect(setConfigValue('defaults.board', 'custom-board')).rejects.toThrow(
-      /has been retired/
-    );
-  });
-
-  it('directs new framework repository writes to the canonical operator key', async () => {
-    await expect(
-      setConfigValue('onboarding.frameworkRepoUrl', 'https://example.test/framework.git')
-    ).rejects.toThrow(/set teammates\.framework_repo_url instead/);
-  });
-
-  it('should update existing value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await setConfigValue('daemon.port', 7777);
-
-    const value = await getConfigValue('daemon.port');
-    expect(value).toBe(7777);
-  });
-
-  it('should handle boolean values', async () => {
-    await saveConfig({});
-    await setConfigValue('daemon.mcpEnabled', false);
-
-    const value = await getConfigValue('daemon.mcpEnabled');
-    expect(value).toBe(false);
-  });
-
-  it('should handle number values', async () => {
-    await saveConfig({});
-    await setConfigValue('ui.port', 9090);
-
-    const value = await getConfigValue('ui.port');
-    expect(value).toBe(9090);
-  });
-
-  it('should throw error for top-level keys', async () => {
-    await saveConfig({});
-
-    await expect(setConfigValue('topLevel', 'value')).rejects.toThrow(
-      'Top-level config keys not supported'
-    );
-  });
-
-  it('should throw error for deeply nested keys', async () => {
-    await saveConfig({});
-
-    await expect(setConfigValue('section.subsection.deep', 'value')).rejects.toThrow(
-      'Nested keys beyond one level not supported'
-    );
-  });
-
-  it('should preserve other sections when setting value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await setConfigValue('daemon.port', 5555);
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBe(5555);
-  });
-});
-
-describe('unsetConfigValue', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it('should unset existing config value', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBeUndefined();
-  });
-
-  it('should not error when unsetting non-existent key', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('daemon.nonExistent')).resolves.not.toThrow();
-  });
-
-  it('should not error when unsetting from non-existent section', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('onboarding.someUnknownKey')).resolves.not.toThrow();
-  });
-
-  it('should preserve other keys in same section', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.daemon?.port).toBeUndefined();
-    expect(loaded.daemon?.host).toBe('0.0.0.0'); // Preserved
-  });
-
-  it('should preserve other sections', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    await unsetConfigValue('daemon.port');
-
-    const loaded = await loadConfig();
-    expect(loaded.ui).toEqual(config.ui);
-  });
-
-  it('should throw error for top-level keys', async () => {
-    await saveConfig({});
-
-    await expect(unsetConfigValue('topLevel')).rejects.toThrow(
-      'Top-level config keys not supported'
-    );
-  });
-
-  it('should handle unsetting deeply nested keys gracefully', async () => {
-    await saveConfig({});
-
-    // Should not throw, just no-op since only 2-level nesting is supported
-    await expect(unsetConfigValue('section.sub.deep')).resolves.not.toThrow();
   });
 });
 
@@ -1201,14 +1508,14 @@ describe('getDaemonUrl', () => {
 
   it('should construct URL from config', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://0.0.0.0:4000');
   });
 
   it('should use defaults when config is empty', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:3030');
@@ -1216,7 +1523,7 @@ describe('getDaemonUrl', () => {
 
   it('should prioritize PORT env var over config', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     process.env.PORT = '9999';
 
@@ -1225,7 +1532,7 @@ describe('getDaemonUrl', () => {
   });
 
   it('should parse PORT env var as number', async () => {
-    await saveConfig({});
+    await saveConfigForTests({});
     process.env.PORT = '8080';
 
     const url = await getDaemonUrl();
@@ -1234,7 +1541,7 @@ describe('getDaemonUrl', () => {
 
   it('should handle partial config with missing daemon section', async () => {
     const config: AgorConfig = {};
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:3030'); // Fallback to defaults
@@ -1245,7 +1552,7 @@ describe('getDaemonUrl', () => {
       daemon: { port: 5000 },
       // No host specified
     };
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://localhost:5000');
@@ -1256,7 +1563,7 @@ describe('getDaemonUrl', () => {
       daemon: { host: '192.168.1.1' },
       // No port specified
     };
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     const url = await getDaemonUrl();
     expect(url).toBe('http://192.168.1.1:3030');
@@ -1264,12 +1571,26 @@ describe('getDaemonUrl', () => {
 
   it('should prioritize DAEMON_URL env var over everything', async () => {
     const config = createConfigData();
-    await saveConfig(config);
+    await saveConfigForTests(config);
 
     process.env.DAEMON_URL = 'https://custom-daemon.example.com:8443';
 
     const url = await getDaemonUrl();
     expect(url).toBe('https://custom-daemon.example.com:8443');
+  });
+
+  it('normalizes DAEMON_URL before any config consumer receives it', async () => {
+    process.env.DAEMON_URL = ' HTTPS://Example.com:443/agor/// ';
+    await expect(getDaemonUrl()).resolves.toBe('https://example.com/agor');
+  });
+
+  it.each([
+    'https://user:secret@example.com',
+    'https://example.com/?target=other',
+    'https://example.com/#other',
+  ])('rejects an unsafe DAEMON_URL override: %s', async (value) => {
+    process.env.DAEMON_URL = value;
+    await expect(getDaemonUrl()).rejects.toThrow('DAEMON_URL must not include');
   });
 });
 
@@ -1593,6 +1914,7 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved).toEqual({
       defaultMode: 'worktree',
       allowedModes: ['worktree', 'clone'],
+      allowShallowClones: true,
     });
   });
 
@@ -1668,5 +1990,21 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     // v0.20+ default allows both — operators have to opt out to forbid clone.
     expect(() => ensureBranchStorageModeAllowed('worktree')).not.toThrow();
     expect(() => ensureBranchStorageModeAllowed('clone')).not.toThrow();
+  });
+
+  it('can require full clone-mode branches', async () => {
+    await writeConfig({
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    });
+
+    expect(resolveBranchStorageConfig().allowShallowClones).toBe(false);
+    expect(() => ensureBranchCloneDepthAllowed(undefined)).not.toThrow();
+    expect(() => ensureBranchCloneDepthAllowed(1)).toThrow(/full clone/);
   });
 });

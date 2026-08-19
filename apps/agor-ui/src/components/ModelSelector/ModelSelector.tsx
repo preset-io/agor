@@ -1,3 +1,4 @@
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import {
   type AgenticToolName,
   type AgorClient,
@@ -22,7 +23,6 @@ import {
   getModelSelectorFallbackModel,
   normalizeModelOption,
 } from './modelDefaults';
-import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
@@ -45,8 +45,11 @@ export interface ModelSelectorProps {
    * client, the picker only shows static models.
    */
   client?: AgorClient | null;
+  branchId?: string;
+  catalogEnabled?: boolean;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
+  getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
   /**
    * Render the Claude Code advisor model select inline. Surfaces that relocate
    * the advisor into an "Advanced" area (e.g. NewSessionModal) pass `false`.
@@ -132,7 +135,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agent,
   agentic_tool,
   client,
+  branchId,
+  catalogEnabled = true,
   compact = false,
+  getPopupContainer,
   showAdvisor = true,
 }) => {
   const { token } = theme.useToken();
@@ -140,6 +146,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
   const isClaude = effectiveTool === 'claude-code';
+  const ToolModelSelector = getAgenticToolUIIntegration(effectiveTool)?.ModelSelector;
 
   // Dynamic model lists — fetched once when the picker opens for a given tool
   // and a client is available.
@@ -252,18 +259,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
   }, [effectiveTool, client]);
 
-  const rawModelList =
-    effectiveTool === 'codex'
+  const rawModelList = ToolModelSelector
+    ? []
+    : effectiveTool === 'codex'
       ? CODEX_MODEL_OPTIONS
       : effectiveTool === 'gemini'
         ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // OpenCode doesn't use this list
-          : effectiveTool === 'copilot'
-            ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
-            : effectiveTool === 'cursor'
-              ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
-              : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
+        : effectiveTool === 'copilot'
+          ? (copilotServerOptions ?? COPILOT_STATIC_MODEL_OPTIONS)
+          : effectiveTool === 'cursor'
+            ? preferDefaultModel(cursorServerOptions ?? CURSOR_MODEL_OPTIONS, cursorDefaultModel)
+            : (claudeServerOptions ?? AVAILABLE_CLAUDE_MODEL_ALIASES);
 
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a discovered alias selection.
@@ -272,10 +278,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
 
-  // OpenCode uses a different UI (2 dropdowns: provider + model)
-  if (effectiveTool === 'opencode') {
+  if (ToolModelSelector) {
     return (
-      <OpenCodeModelSelector
+      <ToolModelSelector
+        client={client}
+        branchId={branchId}
+        catalogEnabled={catalogEnabled}
+        compact={compact}
+        getPopupContainer={getPopupContainer}
         value={
           value?.provider || value?.model
             ? {
@@ -284,14 +294,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               }
             : undefined
         }
-        onChange={(openCodeConfig: OpenCodeModelConfig) => {
-          if (onChange) {
-            onChange({
-              mode: 'exact', // OpenCode always uses exact provider+model IDs
-              model: openCodeConfig.model,
-              provider: openCodeConfig.provider,
-            });
-          }
+        onChange={(selection) => {
+          if (!selection) return;
+          onChange?.({
+            mode: 'exact',
+            model: selection.model,
+            provider: selection.provider,
+          });
         }}
       />
     );

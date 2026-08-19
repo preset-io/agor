@@ -43,9 +43,36 @@ function readHeaderValue(
 
 type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefined;
 
+export type TenantDatabaseRunner = <T>(work: () => Promise<T>) => Promise<T>;
+
 export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
   const scopedParams = params as TenantScopedParams;
   return scopedParams?.tenant?.tenant_id ?? getCurrentTenantId();
+}
+
+/**
+ * Build the mutation boundary used by long-lived tenant orchestration.
+ *
+ * Executor callbacks and termination coordinators can outlive the request
+ * transaction that created them. AsyncLocalStorage propagates that transaction
+ * object into callbacks, so merely calling runWithTenantDatabaseScope would
+ * rejoin a possibly committed scope. Always leave any inherited DB scope, open
+ * one new short tenant transaction, and enforce the write gate inside it.
+ */
+export function createFreshTenantWriteDatabaseRunner(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined
+): TenantDatabaseRunner {
+  if (!tenantId) {
+    throw new Error('Missing tenant context for tenant-scoped mutation');
+  }
+  return <T>(work: () => Promise<T>): Promise<T> =>
+    runWithoutTenantDatabaseScope(() =>
+      runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await assertTenantWritable(scoped, tenantId);
+        return work();
+      })
+    );
 }
 
 /**

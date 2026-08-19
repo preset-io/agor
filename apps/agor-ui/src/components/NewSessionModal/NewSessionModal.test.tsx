@@ -86,13 +86,21 @@ vi.mock('../AgenticToolConfigurationPicker', () => ({
 vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: ({
     onConfigValidityChange,
+    branchId,
+    validateModelSelection,
   }: {
     onConfigValidityChange?: (valid: boolean, reason?: string) => void;
+    branchId?: string;
+    validateModelSelection?: boolean;
   }) => {
     const form = Form.useFormInstance();
     const source = Form.useWatch('agenticToolPresetId', form);
     return (
-      <div data-testid="config-chip-row">
+      <div
+        data-testid="config-chip-row"
+        data-branch-id={branchId}
+        data-validates-model={String(Boolean(validateModelSelection))}
+      >
         <Form.Item name="agenticToolPresetId" hidden>
           <input />
         </Form.Item>
@@ -210,6 +218,8 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
     );
 
     expect(screen.getByRole('button', { name: 'Create Session' })).toBeEnabled();
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-branch-id', 'branch-1');
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-validates-model', 'true');
     const label = screen.getByText('Coding Agent').closest('label') as HTMLElement;
     expect(label.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/Coding Agent\s*\*$/);
   });

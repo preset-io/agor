@@ -1,18 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from './client';
 import { insert } from './database-wrapper';
+import { UserMCPOAuthTokenRepository } from './repositories';
 import {
   createTenantScopedDatabaseProxy,
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
 } from './tenant-scope';
 
 describe('tenant operation context', () => {
@@ -72,6 +75,30 @@ describe('tenant operation context', () => {
 });
 
 describe('tenant-scoped database proxy', () => {
+  it('inspects a guarded handle dialect without requiring tenant scope', () => {
+    const sqlite = createTenantScopedDatabaseProxy({ run: vi.fn() } as unknown as Database, {
+      requireScope: true,
+    });
+    const postgres = createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true }
+    );
+
+    expect(isPostgresDatabaseHandle(sqlite)).toBe(false);
+    expect(isPostgresDatabaseHandle(postgres)).toBe(true);
+  });
+
+  it('constructs the OAuth grant repository without touching a guarded database', () => {
+    const guardedPostgres = createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true, label: 'guarded OAuth repository test database' }
+    );
+
+    expect(
+      () => new UserMCPOAuthTokenRepository(guardedPostgres, 'test-master-secret')
+    ).not.toThrow();
+  });
+
   it('routes repository-style calls to the active tenant transaction', async () => {
     const tx = {
       execute: vi.fn(async () => []),
@@ -170,6 +197,66 @@ describe('tenant-scoped database proxy', () => {
     await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
       expect((db as unknown as { marker(): string }).marker()).toBe('base');
     });
+  });
+
+  it('opens a native SQLite transaction inside an identity-only scope and drains after commit', async () => {
+    const events: string[] = [];
+    const tx = { run: vi.fn(), marker: vi.fn(() => 'tx') };
+    const base = {
+      run: vi.fn(),
+      marker: vi.fn(() => 'base'),
+      transaction: vi.fn(
+        async (
+          callback: (transaction: unknown) => Promise<unknown>,
+          config?: { behavior: string }
+        ) => {
+          expect(config).toEqual({ behavior: 'immediate' });
+          events.push('begin');
+          const result = await callback(tx);
+          events.push('commit');
+          return result;
+        }
+      ),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      expect((db as unknown as { marker(): string }).marker()).toBe('base');
+      await runWithTenantDatabaseTransaction(db, undefined, async () => {
+        expect(getCurrentTenantId()).toBe('tenant-a');
+        expect((db as unknown as { marker(): string }).marker()).toBe('tx');
+        events.push('work');
+        expect(
+          enqueueAfterTenantDatabaseCommit(() => {
+            events.push('callback');
+          })
+        ).toBe(true);
+      });
+    });
+
+    expect(events).toEqual(['begin', 'work', 'commit', 'callback']);
+    expect(base.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops SQLite transaction callbacks when the native transaction rolls back', async () => {
+    const callback = vi.fn();
+    const tx = { run: vi.fn() };
+    const base = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+
+    await expect(
+      runWithTenantDatabaseScope(db, 'tenant-a', () =>
+        runWithTenantDatabaseTransaction(db, 'tenant-a', async () => {
+          expect(enqueueAfterTenantDatabaseCommit(callback)).toBe(true);
+          throw new Error('forced rollback');
+        })
+      )
+    ).rejects.toThrow('forced rollback');
+
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it('does not recursively route to itself for unscoped PostgreSQL calls', async () => {

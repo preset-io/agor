@@ -16,7 +16,9 @@
  * variables are not credential fallbacks.
  */
 
-import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -24,18 +26,18 @@ import {
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
-import { Claude } from '@agor/core/sdk';
 import type {
-  AgenticToolName,
   AuthCheckResult,
   AuthCheckStatus,
   AuthenticatedParams,
+  DeepReadonly,
   UserID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import { isAgenticToolName } from '@agor/core/types';
+import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
-import { resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -73,7 +75,7 @@ const unknown = (hint?: string): AuthCheckResult => ({
  */
 async function probeClaudeCodeAuth(
   env?: Record<string, string | undefined>
-): Promise<{ ok: boolean; account: Claude.AccountInfo | null }> {
+): Promise<{ ok: boolean; account: ClaudeSdk.AccountInfo | null }> {
   let releaseHeldInput!: () => void;
   const heldInputPromise = new Promise<void>((resolve) => {
     releaseHeldInput = resolve;
@@ -84,6 +86,7 @@ async function probeClaudeCodeAuth(
     await heldInputPromise;
   }
 
+  const Claude = await loadManagedAgenticToolSdk<typeof ClaudeSdk>('claude-code');
   const q = Claude.query({
     prompt: neverYields(),
     options: env ? { env } : {},
@@ -200,7 +203,7 @@ async function validateApiKey(
         // The Cursor SDK throws on any failure and does not expose a status code,
         // so a rejection cannot be told apart from a transport error — treat a
         // successful call as authenticated and any throw as unknown (fail safe).
-        const { Cursor } = await import('@cursor/sdk');
+        const { Cursor } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
         await Promise.race([
           Cursor.me({ apiKey: key }),
           new Promise<never>((_, reject) =>
@@ -232,9 +235,8 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
 }
 
 /**
- * Probe the Codex `auth.json` belonging to the Unix identity that will run
- * Codex for this user (daemon user in simple mode, shared executor user in
- * insulated, the caller's own account in strict). File contents stay on the
+ * Probe the Codex `auth.json` selected by this user's credential route (the
+ * local daemon home or a delegated execution-home key). File contents stay on the
  * daemon side; only shape/metadata drive the result.
  *
  * An embedded API key is verified against the provider; ChatGPT login tokens
@@ -243,9 +245,10 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
  */
 async function probeCodexAuthFile(
   userId: UserID | undefined,
-  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
+  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
+  config: DeepReadonly<AgorConfig>
 ): Promise<AuthCheckResult> {
-  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+  const identity = await resolveCodexCredentialRoute(userId, withTenantDatabase, config);
   if (!identity.ok) {
     // A missing unix_username is a real configuration gap (no credential can
     // exist for this user yet). An unsupported mode means the daemon cannot
@@ -254,18 +257,22 @@ async function probeCodexAuthFile(
     if (identity.reason === 'missing-username') {
       return unauthenticated(
         'none',
-        'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
+        'Codex subscription login needs an execution home — ask an admin to set your execution home key.'
       );
     }
     if (identity.reason === 'unsupported-mode') {
       return unknown(identity.message);
     }
-    return unknown('Could not resolve the Unix account that holds the Codex login.');
+    return unknown('Could not resolve the execution home that holds the Codex login.');
   }
 
-  const inspection = await inspectCodexAuthViaExecutor(identity.unixUser);
+  const inspection = await inspectCodexAuthViaExecutor({
+    delegatedHomeKey: identity.delegatedHomeKey,
+    userId: identity.userId,
+    codexHome: identity.codexHome,
+  });
   if (!inspection.ok) {
-    // Only a genuinely absent file proves "no login". Permission/sudo/
+    // Only a genuinely absent file proves "no login". Permission/launcher/
     // transport failures mean we could not LOOK, which must never surface as
     // the persistent "credentials aren't working" state.
     return inspection.reason === 'not-found'
@@ -304,33 +311,34 @@ async function probeCodexAuthFile(
   );
 }
 
-export function createCheckAuthService(db: TenantScopeAwareDatabase) {
+export function createCheckAuthService(
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
+) {
   return {
     async create(
       data: { tool: string; apiKey?: string; validateNative?: boolean },
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
+      if (!isAgenticToolName(tool)) return unknown('Unsupported tool');
+
       const userId = params?.user?.user_id as UserID | undefined;
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for agent authentication');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      if (
-        !(await withTenantDatabase((tenantDb) =>
-          isTenantAgenticToolEnabled(tool as AgenticToolName, tenantDb)
-        ))
-      ) {
+      if (!(await withTenantDatabase((tenantDb) => isTenantAgenticToolEnabled(tool, tenantDb)))) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
-      // opencode is server-based — no credentials concept, always ready.
-      if (tool === 'opencode') {
+      // Runtime-managed integrations authenticate inside their isolated native runtime.
+      if (getAgenticToolIntegration(tool).authentication === 'runtime-managed') {
         return authed('native');
       }
 
-      const keyName = TOOL_API_KEY_NAMES[tool as keyof typeof TOOL_API_KEY_NAMES];
+      const keyName = TOOL_API_KEY_NAMES[tool];
       if (!keyName) {
         return unknown('Unsupported tool');
       }
@@ -360,13 +368,12 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
-      const toolName = tool as AgenticToolName;
       const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
         (tenantDb) =>
           resolveApiKey(keyName, {
             userId,
             db: tenantDb,
-            tool: toolName,
+            tool,
           })
       );
 
@@ -389,7 +396,7 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         // Filesystem validation can require an ephemeral Cloud executor, so it
         // is reserved for an explicit user action.
         return data.validateNative
-          ? probeCodexAuthFile(userId, withTenantDatabase)
+          ? probeCodexAuthFile(userId, withTenantDatabase, config)
           : unknown('ChatGPT login is configured but has not been validated.');
       }
 

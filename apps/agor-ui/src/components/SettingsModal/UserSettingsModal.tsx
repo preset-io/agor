@@ -1,3 +1,6 @@
+import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
@@ -11,13 +14,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  AGENTIC_TOOL_DISPLAY_NAMES,
-  hasMinimumRole,
-  ROLE_OPTIONS,
-  ROLES,
-} from '@agor-live/client';
+import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
   BellOutlined,
@@ -61,6 +58,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
+import { copyToClipboard } from '../../utils/clipboard';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import { getSettingsSearchTokens, matchesSettingsSearchTokens } from '../../utils/settingsSearch';
 import {
@@ -71,7 +69,6 @@ import {
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from '../CodexAuth';
-import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -101,14 +98,7 @@ const MAIN_FORM_KEYS = ['profile', 'security', 'preferences', 'access'] as const
 
 const PROVIDER_KEY_PREFIX = 'provider:';
 
-type ProviderStatus = 'connected' | 'not_connected' | 'workspace_managed';
 type ProviderSubtab = 'auth' | 'defaults';
-
-const PROVIDER_STATUS_LABEL: Record<ProviderStatus, string> = {
-  connected: 'Connected',
-  not_connected: 'Not connected',
-  workspace_managed: 'Managed by workspace',
-};
 
 // Visually-hidden text so a provider's status is never conveyed by the dot
 // color alone: assistive tech reads the label while sighted users see the dot.
@@ -123,6 +113,41 @@ const SR_ONLY_STYLE: React.CSSProperties = {
   whiteSpace: 'nowrap',
   border: 0,
 };
+
+function AgenticToolReadinessSlot({
+  tool,
+  client,
+  canLoadReadiness,
+  fallback,
+  children,
+}: {
+  tool: AgenticToolName;
+  client: AgorClient | null;
+  canLoadReadiness: boolean;
+  fallback: AgenticToolReadiness;
+  children: (status: AgenticToolReadiness) => React.ReactNode;
+}) {
+  const Readiness = getAgenticToolUIIntegration(tool)?.Readiness;
+  return Readiness ? (
+    <Readiness client={client} canLoadReadiness={canLoadReadiness}>
+      {children}
+    </Readiness>
+  ) : (
+    children(fallback)
+  );
+}
+
+function agenticToolReadinessTag(status: AgenticToolReadiness): React.ReactNode {
+  if (status.tone === 'positive') {
+    return (
+      <Tag color="success" icon={<CheckCircleFilled />}>
+        {status.label}
+      </Tag>
+    );
+  }
+  if (status.tone === 'info') return <Tag color="processing">{status.label}</Tag>;
+  return <Tag icon={<MinusCircleOutlined />}>{status.label}</Tag>;
+}
 
 type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
   defaultSelectionSource?: 'workspace_default' | 'preset' | 'inline';
@@ -398,7 +423,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       form.setFieldsValue({
         email: userData.email,
         name: userData.name,
-        emoji: userData.emoji,
         role: userData.role,
         unix_username: userData.unix_username,
         groupIds: [],
@@ -461,8 +485,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     : null;
 
   // Reset (or force) the provider sub-tab whenever the active provider changes.
-  // Tools with no auth fields (e.g. OpenCode) only have Session Defaults, so
-  // they land there directly.
+  // Tools with neither host nor package-owned auth settings only have Session
+  // Defaults, so they land there directly.
   useEffect(() => {
     if (!activeTool) return;
     // A pending sub-tab from a search hit wins over the default, but only for
@@ -470,7 +494,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const pending = pendingProviderSubtabRef.current;
     pendingProviderSubtabRef.current = null;
     const requested = pending?.panelKey === providerKeyFor(activeTool) ? pending.subtab : undefined;
-    const hasAuth = (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0;
+    const hasAuth =
+      (TOOL_FIELD_CONFIGS[activeTool] ?? []).length > 0 ||
+      !!getAgenticToolUIIntegration(activeTool)?.ProviderSettings;
     setProviderSubtab(requested ?? (hasAuth ? 'auth' : 'defaults'));
   }, [activeTool]);
 
@@ -657,7 +683,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       const toValidate: string[] = [];
-      if (panels.has('profile')) toValidate.push('email', 'name', 'emoji', 'role');
+      if (panels.has('profile')) toValidate.push('email', 'name', 'role');
       if (panels.has('security')) toValidate.push('unix_username');
       if (toValidate.length) await form.validateFields(toValidate);
 
@@ -666,10 +692,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       let preferencesTouched = false;
 
       if (panels.has('profile')) {
-        const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+        const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
         updates.email = values.email;
         updates.name = values.name;
-        updates.emoji = values.emoji;
         updates.role = values.role;
         if (values.useSlackAvatar === false) {
           nextPreferences.use_slack_avatar = false;
@@ -852,6 +877,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user) return;
 
     try {
+      await agenticFormByTool[tool].validateFields();
       await saveAgenticConfigs(getAgenticConfigToolsToSave(tool));
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
@@ -924,12 +950,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       // workspace-managed policy — otherwise a tenant_required tool with no
       // workspace credential would show a "managed" dot while its own panel
       // says the effective source is Unavailable.
-      const status: ProviderStatus =
+      const status: AgenticToolReadiness =
         effectiveSource === 'Unavailable'
-          ? 'not_connected'
+          ? { tone: 'neutral', label: 'Not connected' }
           : managedByWorkspace
-            ? 'workspace_managed'
-            : 'connected';
+            ? { tone: 'info', label: 'Managed by workspace' }
+            : { tone: 'positive', label: 'Connected' };
       return {
         allToolFields,
         fieldStatus,
@@ -945,11 +971,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     [agenticAuthMethods, agenticToolStatus, tenantToolSettings]
   );
 
-  const statusDotColor = useMemo<Record<ProviderStatus, string>>(
+  const statusDotColor = useMemo<Record<AgenticToolReadiness['tone'], string>>(
     () => ({
-      connected: token.colorSuccess,
-      not_connected: token.colorTextQuaternary,
-      workspace_managed: token.colorPrimary,
+      positive: token.colorSuccess,
+      neutral: token.colorTextQuaternary,
+      info: token.colorPrimary,
     }),
     [token.colorSuccess, token.colorTextQuaternary, token.colorPrimary]
   );
@@ -978,7 +1004,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         key: string;
         title: string;
         icon?: React.ReactNode;
-        status?: ProviderStatus;
+        provider?: {
+          tool: AgenticToolName;
+          fallbackStatus: AgenticToolReadiness;
+        };
       }>;
     }> = [
       {
@@ -1005,7 +1034,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: visibleAgenticToolTabs.map((tool) => ({
           key: providerKeyFor(tool),
           title: AGENTIC_TOOL_DISPLAY_NAMES[tool],
-          status: resolveProvider(tool).status,
+          provider: { tool, fallbackStatus: resolveProvider(tool).status },
         })),
       },
       {
@@ -1034,18 +1063,27 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: group.children.map((child) => ({
           key: child.key,
           icon: child.icon,
-          label: child.status ? (
-            <Space size={8}>
-              <Badge color={statusDotColor[child.status]} />
-              <span>{child.title}</span>
-              <span style={SR_ONLY_STYLE}>{PROVIDER_STATUS_LABEL[child.status]}</span>
-            </Space>
+          label: child.provider ? (
+            <AgenticToolReadinessSlot
+              tool={child.provider.tool}
+              client={client}
+              canLoadReadiness={isSelf}
+              fallback={child.provider.fallbackStatus}
+            >
+              {(status) => (
+                <Space size={8}>
+                  <Badge color={statusDotColor[status.tone]} />
+                  <span>{child.title}</span>
+                  <span style={SR_ONLY_STYLE}>{status.label}</span>
+                </Space>
+              )}
+            </AgenticToolReadinessSlot>
           ) : (
             child.title
           ),
         })),
       })),
-    [navGroups, statusDotColor]
+    [client, isSelf, navGroups, statusDotColor]
   );
 
   const activeInNav = navGroups.some((group) =>
@@ -1081,7 +1119,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'security',
       },
       {
-        label: 'Unix username',
+        label: 'Execution home key',
         kind: 'setting',
         keywords: 'impersonation os process user',
         panelKey: 'security',
@@ -1415,13 +1453,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name">
-          <Space.Compact style={{ width: '100%' }}>
-            <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="👤" />
-            <Form.Item name="name" noStyle>
-              <Input placeholder="John Doe" />
-            </Form.Item>
-          </Space.Compact>
+        <FieldRow label="Name" name="name">
+          <Input placeholder="John Doe" />
         </FieldRow>
 
         <FieldRow
@@ -1440,7 +1473,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Use Slack avatar when available"
           name="useSlackAvatar"
           valuePropName="checked"
-          tooltip="Shows your Slack-synced profile image instead of the emoji tile above. Turns off automatically if Slack sync is removed."
+          tooltip="Shows your Slack-synced profile image instead of your initials tile. Turns off automatically if Slack sync is removed."
         >
           <Switch />
         </FieldRow>
@@ -1502,19 +1535,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
 
         <FieldRow
-          label="Unix username"
+          label="Execution home key"
           name="unix_username"
           help={
             isAdmin
-              ? 'Unix user for process impersonation (alphanumeric, hyphens, underscores only)'
+              ? 'Transitional home key used only by delegated execution'
               : 'Maintained by administrators'
           }
           rules={[
             {
-              pattern: /^[a-z0-9_-]+$/,
-              message: 'Only lowercase letters, numbers, hyphens, and underscores allowed',
+              pattern: EXECUTION_HOME_KEY_PATTERN,
+              message:
+                'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
             },
-            { max: 32, message: 'Unix username must be 32 characters or less' },
+            { max: 32, message: 'Execution home key must be 32 characters or less' },
           ]}
         >
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />
@@ -1615,6 +1649,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderProviderPanel = (tool: AgenticToolName) => {
     const currentForm = agenticFormByTool[tool];
     const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool];
+    const ProviderSettings = getAgenticToolUIIntegration(tool)?.ProviderSettings;
     const {
       allToolFields,
       fieldStatus,
@@ -1631,16 +1666,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       toolFields.map((c) => [c.field, !!savingToolField[`${tool}.${c.field}`]])
     );
 
-    const statusTag =
-      status === 'connected' ? (
-        <Tag color="success" icon={<CheckCircleFilled />}>
-          Connected
-        </Tag>
-      ) : status === 'workspace_managed' ? (
-        <Tag color="processing">Managed by workspace</Tag>
-      ) : (
-        <Tag icon={<MinusCircleOutlined />}>Not connected</Tag>
-      );
+    const statusTag = (
+      <AgenticToolReadinessSlot
+        tool={tool}
+        client={client}
+        canLoadReadiness={isSelf}
+        fallback={status}
+      >
+        {agenticToolReadinessTag}
+      </AgenticToolReadinessSlot>
+    );
 
     const header = (
       <PanelHeader
@@ -1667,7 +1702,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             if (changed && 'mcpServerIds' in changed) setMcpEditSourceTool(tool);
           }}
         >
-          <UserAgenticDefaultEditor tool={tool} client={client} isAdmin={isAdmin} />
+          <UserAgenticDefaultEditor
+            tool={tool}
+            client={client}
+            modelCatalogClient={
+              user?.user_id && user.user_id === currentUser?.user_id ? client : null
+            }
+            isAdmin={isAdmin}
+          />
           <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={false} />
         </Form>
         <Divider style={{ margin: '20px 0' }} />
@@ -1676,6 +1718,42 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Button>
       </>
     );
+
+    if (ProviderSettings) {
+      let providersPane = (
+        <Alert
+          type="info"
+          showIcon
+          title={`${displayName} connections can only be managed by that user.`}
+        />
+      );
+      if (isSelf && client) {
+        providersPane = (
+          <ProviderSettings key={currentUser?.user_id} client={client} copyText={copyToClipboard} />
+        );
+      } else if (isSelf) {
+        providersPane = <Alert type="warning" showIcon title="Not connected to Agor." />;
+      }
+
+      return (
+        <>
+          {header}
+          <Tabs
+            activeKey={providerSubtab}
+            onChange={(key) => setProviderSubtab(key as ProviderSubtab)}
+            items={[
+              { key: 'auth', label: 'Providers', children: providersPane },
+              {
+                key: 'defaults',
+                label: 'Session defaults',
+                children: defaultsPane,
+                forceRender: true,
+              },
+            ]}
+          />
+        </>
+      );
+    }
 
     // Tools with no auth/config fields (e.g. OpenCode) skip the tab strip entirely.
     if (allToolFields.length === 0) {
@@ -1987,12 +2065,26 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const embeddedTabItems = navGroups.flatMap((group) =>
     group.children.map((child) => ({
       key: child.key,
-      label: (
+      label: child.provider ? (
+        <AgenticToolReadinessSlot
+          tool={child.provider.tool}
+          client={client}
+          canLoadReadiness={isSelf}
+          fallback={child.provider.fallbackStatus}
+        >
+          {(status) => (
+            <Space size={6}>
+              {child.icon}
+              <Badge color={statusDotColor[status.tone]} />
+              <span>{child.title}</span>
+              <span style={SR_ONLY_STYLE}>{status.label}</span>
+            </Space>
+          )}
+        </AgenticToolReadinessSlot>
+      ) : (
         <Space size={6}>
           {child.icon}
-          {child.status && <Badge color={statusDotColor[child.status]} />}
           <span>{child.title}</span>
-          {child.status && <span style={SR_ONLY_STYLE}>{PROVIDER_STATUS_LABEL[child.status]}</span>}
         </Space>
       ),
     }))

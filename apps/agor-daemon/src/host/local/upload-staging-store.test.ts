@@ -141,12 +141,12 @@ describe('LocalUploadStagingStore boundary B', () => {
   });
 
   it('does not scan tenant storage while staging a new upload', async () => {
-    const store = await setup({ ttlMs: 10 });
+    const store = await setup({ ttlMs: 1_000 });
     const bucket = join(root, tenantA, 'objects', '00');
     await mkdir(bucket, { recursive: true });
     const stale = join(bucket, 'stale.partial');
     await writeFile(stale, 'x');
-    const old = new Date(Date.now() - 1000);
+    const old = new Date(Date.now() - 10_000);
     await utimes(stale, old, old);
 
     await stage(store);

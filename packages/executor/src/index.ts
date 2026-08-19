@@ -29,9 +29,11 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
+import { reportExecutorQuiescence } from './termination-report.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
@@ -39,11 +41,22 @@ patchConsole();
 const DEBUG_EXECUTOR =
   process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
 
+const PROVIDER_CLEANUP_SLOW_MS = 15_000;
+
 function executorDebug(...args: unknown[]): void {
   if (DEBUG_EXECUTOR) {
     console.debug(...args);
   }
 }
+
+type TerminationObservationSource =
+  | 'connect_claim'
+  | 'heartbeat'
+  | 'reconnect'
+  | 'startup_recovery'
+  | 'task_patch'
+  | 'task_stop_event'
+  | 'unknown';
 
 export interface ExecutorConfig {
   sessionToken: string;
@@ -54,6 +67,8 @@ export interface ExecutorConfig {
   permissionMode?: PermissionMode;
   daemonUrl: string;
   messageSource?: MessageSource;
+  /** Opaque, daemon-authorized context interpreted by the selected integration. */
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
 }
@@ -66,6 +81,8 @@ export class AgorExecutor {
   private watchdog: SdkWatchdog | null = null;
   private terminationRequest: Task['termination_request'];
   private terminationReport: Promise<void> | null = null;
+  private terminationObservedAtMs: number | null = null;
+  private providerCleanupSlowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -98,7 +115,7 @@ export class AgorExecutor {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken, {
-        onReauthenticated: () => this.refreshTerminationState(),
+        onReauthenticated: () => this.refreshTerminationState('reconnect'),
       });
       executorDebug('[executor] Connected to daemon');
 
@@ -114,25 +131,32 @@ export class AgorExecutor {
       const connectedTask = await this.client
         .service('tasks')
         .connectExecutor({ task_id: this.config.taskId });
-      this.handleTaskLifecycleUpdate(connectedTask);
+      this.handleTaskLifecycleUpdate(connectedTask, 'connect_claim');
 
       // Execute the task
       if (!this.terminationRequest) await this.executeTask();
       await this.reportTerminationComplete();
 
       // Exit successfully
-      console.log('[executor] Task completed, exiting');
+      console.log(
+        `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
+          `code=0 reason=${this.terminationRequest ? 'termination_complete' : 'task_complete'}`
+      );
       process.exit(0);
     } catch (error) {
-      if (await this.recoverTerminationBeforeStart()) {
+      const terminationRecovered = await this.recoverTerminationAfterExecutionError();
+      if (terminationRecovered) {
+        console.log(
+          `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
+            'code=0 reason=termination_recovered'
+        );
         process.exit(0);
         return;
       }
-      console.error('[executor] Fatal error:', error);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        error instanceof Error ? error.message : String(error)
+      console.error(
+        `[executor] fatal error category=${this.terminationRequest ? 'termination_report' : 'task_startup'}`
       );
+      await this.tryMarkTaskTerminal(TaskStatus.FAILED, formatExecutorFailure(error));
       process.exit(1);
     }
   }
@@ -147,10 +171,10 @@ export class AgorExecutor {
     if (!this.client) return;
 
     this.client.service('tasks').on('patched', (data: unknown) => {
-      this.handleTaskLifecycleUpdate(data as Task);
+      this.handleTaskLifecycleUpdate(data as Task, 'task_patch');
     });
     this.client.service('tasks').on('termination_requested', (data: unknown) => {
-      this.handleTaskLifecycleUpdate(data as Task);
+      this.handleTaskLifecycleUpdate(data as Task, 'task_stop_event');
     });
 
     // Listen for permission_resolved events
@@ -158,6 +182,7 @@ export class AgorExecutor {
       const event = data as {
         requestId: string;
         taskId: string;
+        sessionId: string;
         allow: boolean;
         reason?: string;
         remember: boolean;
@@ -166,7 +191,7 @@ export class AgorExecutor {
       };
       console.log('[executor] Received permission_resolved event:', event);
 
-      if (event.taskId === this.config.taskId) {
+      if (event.taskId === this.config.taskId && event.sessionId === this.config.sessionId) {
         this.recordPulse('sdk_started', 'permission.resolved');
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
@@ -184,7 +209,10 @@ export class AgorExecutor {
     executorDebug('[executor] Event listeners registered');
   }
 
-  private handleTaskLifecycleUpdate(task: Task): void {
+  private handleTaskLifecycleUpdate(
+    task: Task,
+    source: TerminationObservationSource = 'unknown'
+  ): void {
     if (
       task.task_id !== this.config.taskId ||
       task.status !== TaskStatus.STOPPING ||
@@ -195,48 +223,86 @@ export class AgorExecutor {
     if (this.terminationRequest?.requested_at === task.termination_request.requested_at) return;
 
     this.terminationRequest = task.termination_request;
+    this.terminationObservedAtMs = Date.now();
     console.log(
-      `[executor] Received ${task.termination_request.cause} termination request; stopping SDK`
+      `[executor.stop] event=request_observed task_id=${shortId(this.config.taskId)} ` +
+        `cause=${task.termination_request.cause} source=${source}`
     );
     markCoordinatorTerminationAbort(this.abortController);
-    this.heartbeat?.stop();
-    this.heartbeat = null;
-    this.watchdog?.stop();
+    // Keep task-scoped heartbeat/pulse reporting alive until ToolRegistry.execute
+    // and provider cleanup actually return. STOPPING is still live work; hiding
+    // its liveness here makes a slow or ignored cancellation indistinguishable
+    // from a dead executor. executeTask's finally stops telemetry immediately
+    // before the quiescence acknowledgement.
+    if (this.watchdog) {
+      this.watchdog.stop();
+      console.log(`[executor.stop] event=watchdog_stopped task_id=${shortId(this.config.taskId)}`);
+    }
     this.watchdog = null;
     this.abortController.abort();
+    console.log(
+      `[executor.stop] event=provider_abort_requested task_id=${shortId(this.config.taskId)}`
+    );
+    if (this.isRunning && !this.providerCleanupSlowTimer) {
+      this.providerCleanupSlowTimer = setTimeout(() => {
+        this.providerCleanupSlowTimer = null;
+        if (!this.isRunning || !this.terminationRequest) return;
+        console.warn(
+          `[executor.stop] event=provider_cleanup_slow task_id=${shortId(this.config.taskId)} ` +
+            `elapsed_ms=${PROVIDER_CLEANUP_SLOW_MS}`
+        );
+      }, PROVIDER_CLEANUP_SLOW_MS);
+      this.providerCleanupSlowTimer.unref?.();
+    }
   }
 
-  private async refreshTerminationState(): Promise<void> {
+  private async refreshTerminationState(source: TerminationObservationSource): Promise<void> {
     if (!this.client) return;
     const task = (await this.client.service('tasks').get(this.config.taskId)) as Task;
-    this.handleTaskLifecycleUpdate(task);
+    this.handleTaskLifecycleUpdate(task, source);
   }
 
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
     if (!this.terminationReport) {
-      const report = this.client
-        .service('tasks')
-        .reportTerminationComplete({
-          task_id: this.config.taskId,
-          requested_at: this.terminationRequest.requested_at,
-        })
-        .then(() => {
-          console.log('[executor] Cooperative termination complete');
-        });
-      this.terminationReport = report;
-      void report.catch(() => {
-        if (this.terminationReport === report) this.terminationReport = null;
+      const client = this.client;
+      const requestedAt = this.terminationRequest.requested_at;
+      const report = reportExecutorQuiescence({
+        taskId: this.config.taskId,
+        requestedAt,
+        report: () =>
+          client.service('tasks').reportTerminationComplete({
+            task_id: this.config.taskId,
+            requested_at: requestedAt,
+          }),
+        readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
       });
+      this.terminationReport = report;
     }
     await this.terminationReport;
+  }
+
+  /**
+   * A provider commonly rejects when its AbortSignal fires. Treat that as a
+   * successful cooperative Stop only after the exact request is durably
+   * acknowledged. The startup refresh covers the connect/Stop race where the
+   * socket event arrived before this process claimed the Task.
+   */
+  private async recoverTerminationAfterExecutionError(): Promise<boolean> {
+    if (!this.terminationRequest) return this.recoverTerminationBeforeStart();
+    try {
+      await this.reportTerminationComplete();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Handle Stop that atomically beat connectExecutor() without starting SDK work. */
   private async recoverTerminationBeforeStart(): Promise<boolean> {
     if (!this.client) return false;
     try {
-      await this.refreshTerminationState();
+      await this.refreshTerminationState('startup_recovery');
       if (!this.terminationRequest) return false;
       await this.reportTerminationComplete();
       return true;
@@ -262,6 +328,7 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
+      onTask: (task) => this.handleTaskLifecycleUpdate(task, 'heartbeat'),
     });
     const watchdogConfig =
       this.config.resolvedConfig?.execution?.sdk_watchdog ?? resolveSdkWatchdogConfig();
@@ -295,13 +362,32 @@ export class AgorExecutor {
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,
+        agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
       });
     } finally {
+      if (this.providerCleanupSlowTimer) {
+        clearTimeout(this.providerCleanupSlowTimer);
+        this.providerCleanupSlowTimer = null;
+      }
+      if (this.terminationRequest) {
+        const elapsedMs = Math.max(0, Date.now() - (this.terminationObservedAtMs ?? Date.now()));
+        console.log(
+          `[executor.stop] event=provider_cleanup_settled task_id=${shortId(this.config.taskId)} ` +
+            `elapsed_ms=${elapsedMs}`
+        );
+      }
       this.watchdog?.stop();
       this.watchdog = null;
-      this.heartbeat?.stop();
+      if (this.heartbeat) {
+        this.heartbeat.stop();
+        if (this.terminationRequest) {
+          console.log(
+            `[executor.stop] event=runtime_telemetry_stopped task_id=${shortId(this.config.taskId)}`
+          );
+        }
+      }
       this.heartbeat = null;
       this.isRunning = false;
     }
@@ -364,6 +450,12 @@ export class AgorExecutor {
    * Setup graceful shutdown handlers
    */
   private setupShutdownHandlers(): void {
+    process.once('exit', (code) => {
+      console.log(
+        `[executor.lifecycle] event=process_exit task_id=${shortId(this.config.taskId)} code=${code}`
+      );
+    });
+
     const shutdown = async (signal: string) => {
       console.log(`[executor] Received ${signal}, shutting down...`);
 
@@ -380,6 +472,10 @@ export class AgorExecutor {
       // fallback only fires for an out-of-band signal while the task is active.
       await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
 
+      console.log(
+        `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
+          `code=0 reason=signal_${signal.toLowerCase()}`
+      );
       process.exit(0);
     };
 

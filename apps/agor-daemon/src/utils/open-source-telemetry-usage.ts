@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig } from '@agor/core/config';
+import type { AgorConfig } from '@agor/core/config';
 import {
   and,
   branches,
@@ -17,12 +17,12 @@ import {
   normalizeTelemetryModelFamily,
   normalizeTelemetryProvider,
   openSourceTelemetryLogger,
-  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
-import type { Session, TenantID } from '@agor/core/types';
+import type { DeepReadonly, Session, TenantID } from '@agor/core/types';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+let lastUsageSummaryDayInProcess: string | undefined;
 
 interface TaskUsageRow {
   taskData: {
@@ -92,13 +92,14 @@ async function getTaskUsageRows(
 }
 
 export async function flushOpenSourceTelemetryUsageSummary(
-  db: TenantScopeAwareDatabase
+  db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>
 ): Promise<void> {
   if (!openSourceTelemetryLogger.isEnabled()) return;
 
   const { day, start, end } = previousUtcDayRange();
-  const config = await loadConfig();
-  if (config.telemetry?.last_usage_summary_day === day) return;
+  if (config.telemetry?.last_usage_summary_day === day || lastUsageSummaryDayInProcess === day)
+    return;
 
   const { activeUsers, branchCreatedCount, promptCount, sessionCreatedCount, taskRows } =
     await runWithTenantDatabaseScope(db, undefined, async () => {
@@ -151,9 +152,7 @@ export async function flushOpenSourceTelemetryUsageSummary(
     });
     await openSourceTelemetryLogger.flush();
   }
-
-  config.telemetry = { ...config.telemetry, last_usage_summary_day: day };
-  await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+  lastUsageSummaryDayInProcess = day;
 }
 
 export interface OpenSourceTelemetryUsageSummaryIntervalOptions {
@@ -163,20 +162,21 @@ export interface OpenSourceTelemetryUsageSummaryIntervalOptions {
 
 export function startOpenSourceTelemetryUsageSummaryInterval(
   db: TenantScopeAwareDatabase,
+  config: DeepReadonly<AgorConfig>,
   options: OpenSourceTelemetryUsageSummaryIntervalOptions
 ): NodeJS.Timeout {
   // Check hourly, but emit at most once per UTC day. The DB query only runs
   // when the previous day has not yet been reported, keeping steady-state
   // overhead to one config read per hour.
   const run = (): void => {
-    runWithTenantContext(options.tenantId, () => flushOpenSourceTelemetryUsageSummary(db)).catch(
-      (error) => {
-        console.warn(
-          '[telemetry] failed to emit usage summary:',
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    );
+    runWithTenantContext(options.tenantId, () =>
+      flushOpenSourceTelemetryUsageSummary(db, config)
+    ).catch((error) => {
+      console.warn(
+        '[telemetry] failed to emit usage summary:',
+        error instanceof Error ? error.message : String(error)
+      );
+    });
   };
 
   const startupTimer = setTimeout(run, 30_000);

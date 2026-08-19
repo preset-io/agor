@@ -31,6 +31,7 @@ export type CardParams = QueryParams<{
   card_type_id?: CardTypeID;
   archived?: boolean;
   search?: string;
+  zone_id?: string;
 }> &
   AuthenticatedParams;
 
@@ -72,7 +73,23 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
     if (typeof query.archived === 'boolean') filter.archived = query.archived;
 
-    return this.cardRepo.findAll(filter);
+    const search = typeof query.search === 'string' ? query.search.toLowerCase() : undefined;
+    delete query.search;
+
+    const zoneId = typeof query.zone_id === 'string' ? query.zone_id : undefined;
+    delete query.zone_id;
+
+    if (zoneId && filter.board_id) {
+      return this.cardRepo.findByZoneId(filter.board_id, zoneId);
+    }
+
+    const rows = await this.cardRepo.findAll(filter);
+    if (!search) return rows;
+    return rows.filter(
+      (card) =>
+        card.title.toLowerCase().includes(search) ||
+        (card.description?.toLowerCase().includes(search) ?? false)
+    );
   }
 
   /**

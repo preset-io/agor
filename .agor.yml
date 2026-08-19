@@ -1,6 +1,45 @@
 environment:
   default: sqlite
   variants:
+    ha:
+      start: >-
+        env HA_PORT={{add 3000 branch.unique_id}} HA_DAEMON_A_PORT={{add 13000 branch.unique_id}} HA_DAEMON_B_PORT={{add 14000 branch.unique_id}}
+        AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
+        AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
+        AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
+        AGOR_ADMIN_PASSWORD=admin
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} up -d --build
+      stop: >-
+        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
+        AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
+        AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
+        AGOR_ADMIN_PASSWORD=admin
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down
+      nuke: >-
+        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
+        AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
+        AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
+        AGOR_ADMIN_PASSWORD=admin
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down -v --remove-orphans
+      logs: >-
+        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
+        AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
+        AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
+        AGOR_ADMIN_PASSWORD=admin
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} logs --tail=150
+      description: >-
+        HA smoke test: PostgreSQL, ephemeral Redis, two daemons, and nginx affinity. Static tenant,
+        shared storage, RBAC off, and development-only credentials.
+      health: http://localhost:{{add 3000 branch.unique_id}}/readyz
+      app: http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
     docs:
       start: >-
         INSTANCE_LABEL={{branch.name}} PORT={{add 7000 branch.unique_id}} NEXT_PUBLIC_SITE_URL=http://{{host.ip_address}}:{{add
@@ -8,10 +47,8 @@ environment:
         agor-docs-{{branch.name}} up -d --build
       stop: docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} down
       description: >-
-        Nextra docs site (apps/agor-docs) for previewing documentation edits. Runs `next dev` in a
-        self-contained Docker container — no daemon, no database, no host-side `pnpm install`
-        needed. Port = {{add 7000 branch.unique_id}}; app URL uses {{host.ip_address}} so it's
-        reachable from outside the daemon host.
+        Docs preview: Nextra dev server in Docker, with no daemon or database. Port
+        {{add 7000 branch.unique_id}} on {{host.ip_address}}.
       nuke: >-
         docker compose -f apps/agor-docs/docker-compose.yml -p agor-docs-{{branch.name}} down -v
         --rmi local
@@ -20,36 +57,55 @@ environment:
         --tail=100
       health: http://localhost:{{add 7000 branch.unique_id}}
       app: http://{{host.ip_address}}:{{add 7000 branch.unique_id}}
-    full:
+    rich:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=strict docker compose -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=sandbox docker compose -f
         docker-compose.yml -f docker-compose.postgres.yml -p agor-{{branch.name}}
         --profile postgres up -d --build postgres agor-dev
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        Production-like: PostgreSQL + branch RBAC + strict Unix user impersonation (each Agor user
-        runs sessions as their own Unix identity). Requires the sudoers config shipped under
-        docker/sudoers/.
-      extends: sqlite
+        PostgreSQL + branch RBAC + fail-closed per-user sandbox, with Alice/Bob fixtures. Standalone
+        development only; HA remains a separate variant.
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v
       logs: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres logs --tail=100
+      health: http://localhost:{{add 3000 branch.unique_id}}/health
+      app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
+    full:
+      description: Deprecated compatibility alias for `rich`; use `rich` for new branches.
+      extends: rich
     sqlite:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
         branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true docker compose -p agor-{{branch.name}} up -d --build
       stop: docker compose -p agor-{{branch.name}} down
-      description: Single-user dev with SQLite. No RBAC. Fastest to boot.
+      description: SQLite standalone dev; RBAC and executor sandbox off. Fastest to boot.
       nuke: docker compose -p agor-{{branch.name}} down -v
       logs: docker compose -p agor-{{branch.name}} logs --tail=100
       health: http://localhost:{{add 3000 branch.unique_id}}/health
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
+    sandbox:
+      start: >-
+        env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_SANDBOX_ENABLED=true docker compose -p agor-{{branch.name}} up -d --build
+      description: >-
+        SQLite + tunable shared-home bubblewrap sandbox. RBAC off; falls back to unsandboxed
+        execution if bubblewrap is unavailable.
+      extends: sqlite
+    sandbox-peruser:
+      start: >-
+        env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_UNIX_USER_MODE=sandbox docker compose -p agor-{{branch.name}} up -d --build
+      description: >-
+        SQLite + fail-closed per-user bubblewrap sandbox. Forces branch RBAC and uses RBAC-derived
+        branch mounts; no host-user impersonation.
+      extends: sqlite
     postgres:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
@@ -59,7 +115,8 @@ environment:
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
-      description: Dev with PostgreSQL. RBAC off. Closer to multi-user prod layout.
+      description: >-
+        PostgreSQL standalone dev for schema and RLS parity; RBAC and executor sandbox off.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
@@ -72,9 +129,7 @@ environment:
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
         branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true LOAD_FIXTURES=true docker compose -p agor-{{branch.name}} up -d --build
       description: >-
-        SQLite dev + demo fixtures (SEED + LOAD_FIXTURES): boots a populated demo board with 4
-        loginable demo users (demo.alice@agor.live / demo-password-alice, …) for instant E2E
-        testing. Dev-only.
+        SQLite + development seed + four-user demo fixtures. Development only.
       extends: sqlite
     postgres-demo:
       start: >-
@@ -86,9 +141,8 @@ environment:
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        PostgreSQL dev + demo fixtures (SEED + LOAD_FIXTURES): boots a populated demo board with 4
-        loginable demo users (demo.alice@agor.live / demo-password-alice, …) on a Postgres backend
-        for instant E2E testing. Dev-only.
+        PostgreSQL + development seed + four-user demo fixtures; RBAC and sandbox off. Development
+        only.
       extends: sqlite
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml -p

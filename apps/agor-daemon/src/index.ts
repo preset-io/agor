@@ -14,7 +14,8 @@
  */
 
 import 'dotenv/config';
-import { platform } from 'node:os';
+import { homedir, platform } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
 
 // Patch console methods to respect LOG_LEVEL env var
 import { configureAnalyticsLogger } from '@agor/core/analytics';
@@ -22,24 +23,33 @@ import {
   configureOpenSourceTelemetryLogger,
   loadOpenSourceTelemetryAgorVersion,
   openSourceTelemetryLogger,
-  pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
+import { extractDbFilePath } from '@agor/core/utils/path';
 import { UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
 
+import {
+  assertConfiguredAgenticToolsReady,
+  getAgenticToolsRoot,
+} from '@agor/core/agentic-integrations';
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
+  assertValidEffectiveExecutionConfig,
+  getConfigPath,
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
+  requireDeploymentId,
+  resolveDataHomeFromConfig,
+  resolveDeploymentConfig,
+  resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
-  saveConfig,
 } from '@agor/core/config';
-import { getDatabaseUrl } from '@agor/core/db';
+import { generateId, resolveDatabaseUrl } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -56,6 +66,11 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
+import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
+import { createHttpMetricsMiddleware } from './metrics/http.js';
+import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
+import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -63,26 +78,29 @@ import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
+import { initializeDistributedWorkIdentity } from './setup/distributed-work-identity.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
+import { resolveMasterSecretIntoEnv } from './setup/master-secret.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
 import { loadDaemonVersion } from './setup/version.js';
 import { startup } from './startup.js';
+import { resolveWebTerminalCapability } from './terminal-capability.js';
+import { configureResolvedConfigSlice } from './utils/build-resolved-config-slice.js';
+import { deepFreezeClone } from './utils/deep-freeze.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
+import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
 const DAEMON_VERSION = await loadDaemonVersion(import.meta.url);
-const TELEMETRY_AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(
-  DAEMON_VERSION,
-  import.meta.url
-);
+const AGOR_VERSION = await loadOpenSourceTelemetryAgorVersion(DAEMON_VERSION, import.meta.url);
 
 // Resolve build SHA (env > .build-info file > git > 'dev'). UI tabs capture
 // this on first connect and prompt a refresh if a later handshake disagrees.
@@ -92,9 +110,6 @@ console.log(
     `builtAt=${DAEMON_BUILD_INFO.builtAt ?? 'unknown'} ` +
     `(source=${DAEMON_BUILD_INFO.source})`
 );
-
-// Database URL (env vars > config.yaml > defaults)
-const DB_PATH = getDatabaseUrl();
 
 // ============================================================================
 // GLOBAL ERROR HANDLERS
@@ -139,6 +154,15 @@ export interface DaemonStartOptions {
  * or from main.ts with no args for direct execution.
  */
 export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
+  await runWithStartupMetricsOwner((ownMetrics) =>
+    startDaemonWithOwnedMetrics(options, ownMetrics)
+  );
+}
+
+async function startDaemonWithOwnedMetrics(
+  options: DaemonStartOptions | undefined,
+  ownMetrics: OwnStartupMetrics
+): Promise<void> {
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
@@ -161,6 +185,32 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  // Deployment environment overrides are resolved in memory. Container and
+  // Kubernetes entrypoints must never materialize them back into config.yaml.
+  config = resolveEffectiveConfig(config);
+  const deploymentId = requireDeploymentId(config);
+  assertValidEffectiveExecutionConfig(config);
+  const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
+
+  // Deployment package availability is instance-global. Validate it before
+  // database or tenant initialization so no tenant can expand the daemon's
+  // installed-code surface and a broken upgrade never starts listening.
+  const resolvedAgenticTools = await assertConfiguredAgenticToolsReady(config);
+  if (resolvedAgenticTools) {
+    // In-memory projection only: config.yaml remains immutable while every
+    // service consumes the same deployment policy resolved at startup.
+    config = {
+      ...config,
+      agentic_tools: { ...config.agentic_tools, installed: [...resolvedAgenticTools] },
+    };
+  }
+
+  // HA is an explicit, validated topology boundary. REDIS_URL alone never
+  // changes standalone behavior. Resolve this after immutable environment
+  // projection so every startup consumer observes one effective snapshot.
+  const deployment = resolveDeploymentConfig(config, process.env, databaseUrl);
+  console.log(`🌐 Deployment mode: ${deployment.mode}`);
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   console.log(
@@ -188,20 +238,21 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // plugins are optional dynamic imports and must never prevent daemon startup.
   await configureAnalyticsLogger(config);
   const envTelemetryConfig = ensureOpenSourceTelemetryEnvEnabledConfig(config);
-  if (envTelemetryConfig.changed) {
-    config = envTelemetryConfig.config;
-    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
-  }
-  configureOpenSourceTelemetryLogger(config);
-  if (config.telemetry?.enabled === undefined) {
+  if (envTelemetryConfig.changed) config = envTelemetryConfig.config;
+  // Detach the snapshot before freezing so callers that supplied
+  // DaemonStartOptions.config retain ownership of their object graph.
+  const effectiveConfig = deepFreezeClone(config);
+  configureResolvedConfigSlice(effectiveConfig);
+  configureOpenSourceTelemetryLogger(effectiveConfig);
+  if (effectiveConfig.telemetry?.enabled === undefined) {
     console.warn(
       'ℹ  Community telemetry is not configured; no telemetry will be sent. ' +
-        'Run `agor telemetry on` to enable or `agor telemetry off` to dismiss.'
+        'Set AGOR_TELEMETRY=1/0 or edit telemetry.enabled in operator-managed config.yaml.'
     );
   }
 
   // Surface a clear migration note for accepted-but-ignored upgrade keys.
-  warnDeprecatedConfig(config);
+  warnDeprecatedConfig(effectiveConfig);
 
   // --------------------------------------------------------------------------
   // Auth configuration
@@ -209,7 +260,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const authenticatedHook = scopeExecutorRuntimeAuth(
     authenticate({ strategies: ['api-key', 'jwt'] })
   );
-  const requireAuth = createRequireAuthHook(authenticatedHook, multiTenancy);
+  const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -244,38 +295,112 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     });
   };
 
+  /**
+   * `enforcePasswordChange` is also registered as a global app hook, but Feathers
+   * runs app-level hooks *before* service-level ones — so over REST it fired while
+   * `params.user` was still unset by the service's own `requireAuth`, hit its
+   * `if (!user) return context` guard, and silently passed the request through. A
+   * user flagged for a password change could do anything the CLI offered. On
+   * Socket.IO the connection already carries `params.user`, which is why the gate
+   * worked there and the gap only ever showed up over REST.
+   *
+   * Running it here, immediately after authentication resolves, means the check
+   * happens once at the auth chokepoint with the user actually populated.
+   */
+  const requireAuth = async (context: HookContext): Promise<HookContext> =>
+    enforcePasswordChange(await requireAuthOnly(context));
+
   // --------------------------------------------------------------------------
   // Ports, daemon URL, credentials
   // --------------------------------------------------------------------------
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const DAEMON_PORT = envPort ?? config.daemon?.port ?? 3030;
-  const DAEMON_HOST = config.daemon?.host ?? 'localhost';
+  const DAEMON_PORT = envPort ?? effectiveConfig.daemon?.port ?? 3030;
+  const DAEMON_HOST = process.env.DAEMON_HOST ?? effectiveConfig.daemon?.host ?? 'localhost';
 
   const envUiPort = process.env.UI_PORT ? Number.parseInt(process.env.UI_PORT, 10) : undefined;
-  const UI_PORT = envUiPort || config.ui?.port || 5173;
+  const UI_PORT = envUiPort || effectiveConfig.ui?.port || 5173;
 
-  // Handle INSTANCE_LABEL env var override (for Docker deployments)
-  if (process.env.INSTANCE_LABEL) {
-    config.daemon = config.daemon || {};
-    config.daemon.instanceLabel = process.env.INSTANCE_LABEL;
-  }
-
-  const daemonUrl = config.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
+  const daemonUrl = effectiveConfig.daemon?.public_url || `http://localhost:${DAEMON_PORT}`;
   configureDaemonUrl(daemonUrl);
 
-  // Wire the configured executor command template + impersonation user so the
+  const dataHome = resolveDataHomeFromConfig(effectiveConfig);
+  if (effectiveConfig.execution?.sandbox?.enabled === true && !isAbsolute(dataHome)) {
+    throw new Error(
+      `execution.sandbox.enabled requires an absolute effective paths.data_home; received ${dataHome}`
+    );
+  }
+  const configuredPath = resolve(
+    options?.configPath ?? process.env.AGOR_CONFIG_PATH ?? getConfigPath()
+  );
+  const localDatabasePath =
+    databaseUrl.startsWith('file:') || isAbsolute(databaseUrl) || databaseUrl.startsWith('~/')
+      ? extractDbFilePath(databaseUrl)
+      : undefined;
+
+  // Wire the configured executor command template and delegated home key so the
   // ~10 spawnExecutorFireAndForget() call sites pick them up without needing
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
-  configureExecutor(config.execution, {
+  configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
+    sandboxRuntimePaths: {
+      homeDir: homedir(),
+      dataHome,
+      protectedDataRoots: resolveSandboxProtectedDataRoots(effectiveConfig),
+      worktreesRoot: join(dataHome, 'worktrees'),
+      agenticToolsPath: getAgenticToolsRoot(),
+      agorConfigPath: configuredPath,
+      agorDbPath: localDatabasePath,
+    },
   });
 
   // --------------------------------------------------------------------------
   // Create Feathers app + Express middleware
   // --------------------------------------------------------------------------
   const app = feathersExpress(feathers());
+  // One application-owned identity spans every background worker in this
+  // daemon process. A dedicated YAML deployment.instance_id may be added with
+  // the HA config contract later; unrelated auth configuration is not reused.
+  const distributedWorkIdentity = initializeDistributedWorkIdentity(app, {
+    environment: {
+      AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
+      HOSTNAME: process.env.HOSTNAME,
+    },
+    generateBootId: generateId,
+  });
+  const explicitMetricsInstanceId = process.env.AGOR_DAEMON_INSTANCE_ID?.trim();
+  const metricsWorkIdentity = resolveMetricsWorkIdentity(
+    deployment.mode,
+    distributedWorkIdentity,
+    explicitMetricsInstanceId
+  );
+  const unsafeHaMetricsIdentity =
+    effectiveConfig.metrics?.statsd?.enabled === true && !metricsWorkIdentity;
+  const metrics = unsafeHaMetricsIdentity
+    ? NOOP_METRICS
+    : createDaemonMetrics(effectiveConfig.metrics?.statsd, {
+        workIdentity: metricsWorkIdentity ?? distributedWorkIdentity,
+        deploymentMode: deployment.mode,
+        deploymentId,
+      });
+  ownMetrics(metrics);
+  app.set('metrics', metrics);
+  reconcileTrackedExecutorGauge(app);
+  if (unsafeHaMetricsIdentity) {
+    console.warn(
+      '[metrics.statsd] Metrics disabled: HA requires a stable, unique AGOR_DAEMON_INSTANCE_ID per replica (letters, digits, dot, underscore, or hyphen; max 100 characters) so gauges cannot collapse into a last-writer-wins series.'
+    );
+  }
+  if (metrics.enabled) {
+    console.log(
+      `📈 DogStatsD metrics enabled (${effectiveConfig.metrics?.statsd?.host}:${effectiveConfig.metrics?.statsd?.port}, prefix=${effectiveConfig.metrics?.statsd?.prefix})`
+    );
+  }
+  const realtimeRuntime =
+    deployment.mode === 'ha'
+      ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity)
+      : undefined;
 
   // Configure how many reverse proxies we trust in front of the daemon.
   // Default 0 = ignore X-Forwarded-* entirely (so a client cannot spoof their
@@ -285,7 +410,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // Infinity (truthy), and Express interprets `trust proxy = Infinity` as
   // "trust everything" — which is the exact spoofing posture we are
   // defending against. Reject non-finite values (Infinity, NaN) to 0.
-  const rawHops = Number(config.daemon?.trust_proxy_hops ?? 0);
+  const rawHops = Number(effectiveConfig.daemon?.trust_proxy_hops ?? 0);
   const trustProxyHops = Number.isFinite(rawHops) ? Math.max(0, Math.floor(rawHops)) : 0;
   app.set('trust proxy', trustProxyHops);
   if (trustProxyHops > 0) {
@@ -311,13 +436,13 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   //   - CORS mode/origins (plus legacy daemon.cors_* backcompat)
   //   - CORS_ORIGIN env var precedence
   //   - credentials:true + wildcard/reflect rejection at load time
-  const resolvedSecurity: ResolvedSecurity = resolveSecurity(config, {
+  const resolvedSecurity: ResolvedSecurity = resolveSecurity(effectiveConfig, {
     daemonUrl,
     corsOriginEnv: process.env.CORS_ORIGIN,
-    legacyCorsOrigins: config.daemon?.cors_origins,
+    legacyCorsOrigins: effectiveConfig.daemon?.cors_origins,
     legacyAllowSandpack:
-      config.daemon?.cors_allow_sandpack !== undefined
-        ? config.daemon.cors_allow_sandpack
+      effectiveConfig.daemon?.cors_allow_sandpack !== undefined
+        ? effectiveConfig.daemon.cors_allow_sandpack
         : undefined,
   });
 
@@ -339,7 +464,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // and let the cors helper drop credentials so the daemon stays usable.
   // `execution.deployment_mode` is intentionally read defensively — the key
   // may not yet be defined in older configs.
-  const deploymentMode = (config.execution as { deployment_mode?: string } | undefined)
+  const deploymentMode = (effectiveConfig.execution as { deployment_mode?: string } | undefined)
     ?.deployment_mode;
   if (isWildcard) {
     const banner =
@@ -427,12 +552,20 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     );
   }
 
+  // Start API transport timing before body parsing so malformed/oversized
+  // payload responses are visible too. Static/UI and the OAuth callback are
+  // excluded by code-defined prefixes rather than becoming route tags.
+  app.use(
+    createHttpMetricsMiddleware(app, metrics, {
+      excludedPathPrefixes: [UI_MOUNT_PATH, '/static', '/mcp-servers/oauth-callback'],
+    }) as never
+  );
+
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
-  // turned out to break legitimate flows (large prompts, /messages/bulk
-  // batches, oversized template payloads). 10MB is the balance: tight enough
-  // to bound a single attacker request, loose enough that real bulk-message
-  // payloads pass without per-route overrides. Multipart uploads bypass this
+  // turned out to break legitimate flows (large prompts and oversized
+  // template payloads). 10MB is the balance: tight enough to bound a single
+  // attacker request while allowing real prompts and templates. Multipart uploads bypass this
   // limit (multer parses the body itself) and are capped separately.
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -528,20 +661,17 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   app.configure(rest());
 
-  // JWT secret: env > existing config value > generate-and-persist >
-  // fail-fast with operator-actionable remediation. See setup/persisted-secret.ts
+  // JWT secret: env > existing config value > fail-fast with operator-actionable remediation.
   // and context/explorations/daemon-fs-decoupling.md §1.5 (H3).
   //
   // Failing-fast is critical: a fresh JWT secret on every restart invalidates
   // every issued token, which silently breaks every active session.
-  const crypto = await import('node:crypto');
   const { resolvePersistedSecret } = await import('./setup/persisted-secret.js');
   const jwtResolution = await resolvePersistedSecret({
     name: 'JWT secret',
     envVar: 'AGOR_JWT_SECRET',
-    existing: config.daemon?.jwtSecret,
+    existing: effectiveConfig.daemon?.jwtSecret,
     configKey: 'daemon.jwtSecret',
-    generate: () => crypto.randomBytes(32).toString('hex'),
   });
   const jwtSecret = jwtResolution.value;
   // SECURITY: never log any prefix/substring of the secret. Length only.
@@ -552,12 +682,24 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     case 'config':
       console.log(`🔑 Loaded JWT secret from config (length=${jwtSecret.length})`);
       break;
-    case 'generated':
-      console.log(
-        `🔑 Generated and saved persistent JWT secret to config (length=${jwtSecret.length})`
-      );
-      break;
   }
+
+  // AGOR_MASTER_SECRET: resolve BEFORE Phase 1 (registerServices). Several
+  // services — notably MCPOAuthPendingFlowAuthority on the PostgreSQL path —
+  // are constructed eagerly during registration and read the secret off
+  // process.env in their constructor. Resolving it here (rather than later in
+  // startup()) is what lets deployments that keep the secret in config.yaml
+  // (daemon.masterSecret), not an env var, boot on Postgres.
+  const masterSecretSource = await resolveMasterSecretIntoEnv(effectiveConfig);
+  console.log(
+    masterSecretSource === 'env'
+      ? '🔐 API key encryption enabled (AGOR_MASTER_SECRET set)'
+      : '🔐 Using saved AGOR_MASTER_SECRET from config'
+  );
+
+  // HA is unavailable without Redis. Establish both adapter clients before
+  // constructing Socket.IO or accepting any HTTP traffic.
+  await realtimeRuntime?.connect();
 
   const socketIOConfig = createSocketIOConfig(app, {
     corsOrigin,
@@ -567,40 +709,54 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
     // transport too. Without this the terminal:* relay events would still
     // accept traffic when the HTTP modal is disabled.
-    webTerminalEnabled: config.execution?.allow_web_terminal !== false,
+    webTerminalEnabled: resolveWebTerminalCapability({
+      config: effectiveConfig,
+      deployment,
+    }).enabled,
     // Build info for the version-sync banner. Emitted as the `server-info`
     // welcome event on every connect (and reconnect), so UI tabs can detect
     // FE/BE drift after a deploy without waiting for the next /health poll.
     buildInfo: DAEMON_BUILD_INFO,
+    workIdentity: distributedWorkIdentity,
     multiTenancy,
+    ...(realtimeRuntime
+      ? { adapter: realtimeRuntime.adapter, onServerCreated: (io) => realtimeRuntime.attach(io) }
+      : {}),
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app, { multiTenancy });
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
-  const { db } = await initializeDatabase(DB_PATH, {
+  const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
-    skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
+    skipFirstRunAdminBootstrap: effectiveConfig.external_launch?.enabled === true,
+    // The URL may come from DATABASE_URL, but operators still need to size the
+    // per-replica pool from config.yaml. Keep this deliberately limited to max:
+    // the public idleTimeout setting is documented in milliseconds while the
+    // postgres.js client boundary uses seconds, and `min` is not implemented.
+    pool: effectiveConfig.database?.postgresql?.pool?.max
+      ? { max: effectiveConfig.database.postgresql.pool.max }
+      : undefined,
   });
-  configureUploadStagingStoreFromConfig(config, undefined, db);
+  configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 
   // --------------------------------------------------------------------------
   // RBAC flags
   // --------------------------------------------------------------------------
-  const branchRbacEnabled = config.execution?.branch_rbac === true;
-  const allowSuperadmin = config.execution?.allow_superadmin === true;
+  const branchRbacEnabled = effectiveConfig.execution?.branch_rbac === true;
+  const allowSuperadmin = effectiveConfig.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
   // Stash the shared Drizzle handle on the Feathers app so lifecycle
   // utilities that are not constructed with a database argument can resolve
   // it via `getDb(app)`. Services using constructor injection are unaffected.
   app.set('database', db);
-  app.set('config', config);
+  app.set('config', effectiveConfig);
 
   if (openSourceTelemetryLogger.isEnabled()) {
     const startupTelemetryProperties = {
-      agor_version: TELEMETRY_AGOR_VERSION,
+      agor_version: AGOR_VERSION,
       deployment_kind: process.env.KUBERNETES_SERVICE_HOST
         ? 'k8s'
         : process.env.container || process.env.AGOR_DOCKER
@@ -610,7 +766,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       os_family: platform(),
       node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
       branch_rbac: branchRbacEnabled,
-      unix_user_mode: config.execution?.unix_user_mode ?? 'simple',
+      unix_user_mode: effectiveConfig.execution?.unix_user_mode ?? 'simple',
     };
 
     openSourceTelemetryLogger.track({
@@ -618,7 +774,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       properties: startupTelemetryProperties,
     });
 
-    const daemonActive = shouldEmitOpenSourceTelemetryDaemonActive(config);
+    const daemonActive = shouldEmitOpenSourceTelemetryDaemonActive(effectiveConfig);
     if (daemonActive.shouldEmit) {
       openSourceTelemetryLogger.track({
         event: 'daemon.active',
@@ -630,28 +786,19 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     }
 
     if (
-      config.telemetry?.last_reported_version &&
-      config.telemetry.last_reported_version !== TELEMETRY_AGOR_VERSION
+      effectiveConfig.telemetry?.last_reported_version &&
+      effectiveConfig.telemetry.last_reported_version !== AGOR_VERSION
     ) {
       openSourceTelemetryLogger.track({
         event: 'daemon.upgraded',
         properties: {
-          from_version: config.telemetry.last_reported_version,
-          to_version: TELEMETRY_AGOR_VERSION,
+          from_version: effectiveConfig.telemetry.last_reported_version,
+          to_version: AGOR_VERSION,
         },
       });
     }
-    startOpenSourceTelemetryUsageSummaryInterval(db, { tenantId: multiTenancy.static_tenant_id });
-    config.telemetry = {
-      ...config.telemetry,
-      last_reported_version: TELEMETRY_AGOR_VERSION,
-      ...(daemonActive.shouldEmit ? { last_daemon_active_day: daemonActive.day } : {}),
-    };
-    saveConfig(pruneDefaultOpenSourceTelemetryDestination(config)).catch((error) => {
-      console.warn(
-        '[telemetry] failed to persist daemon telemetry state:',
-        error instanceof Error ? error.message : String(error)
-      );
+    startOpenSourceTelemetryUsageSummaryInterval(db, effectiveConfig, {
+      tenantId: multiTenancy.static_tenant_id,
     });
   }
 
@@ -661,7 +808,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const services = await registerServices({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
     daemonUrl,
     bundledUiAvailable,
@@ -670,6 +817,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -678,9 +826,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   registerHooks({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     superadminOpts,
     sessionsService: services.sessionsService,
@@ -689,6 +836,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
     sessionsRepository: services.sessionsRepository,
+    realtimeRelay: realtimeRuntime,
+    deployment,
   });
 
   // --------------------------------------------------------------------------
@@ -697,19 +846,22 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   await registerRoutes({
     db,
     app,
-    config,
+    config: effectiveConfig,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
-    DB_PATH,
+    DB_PATH: databaseUrl,
     DAEMON_PORT,
     DAEMON_VERSION,
+    AGOR_VERSION,
     DAEMON_BUILD_INFO,
     resolvedSecurity,
+    realtimeRuntime,
+    distributedWorkIdentity,
+    deployment,
     sessionsService: services.sessionsService,
-    messagesService: services.messagesService,
     boardsService: services.boardsService,
     branchRepository: services.branchRepository,
     usersRepository: services.usersRepository,
@@ -725,12 +877,22 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   await startup({
     app,
     db,
-    config,
+    config: effectiveConfig,
     DAEMON_PORT,
     DAEMON_HOST,
     safeService,
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
+    distributedWorkIdentity,
+    // PostgreSQL leases/claims and executor-token authority make the merged
+    // runtime workers replica-independent. Agor-managed permission callbacks
+    // use the transient task-private realtime control path; unsupported
+    // provider-native confirmation modes remain separately fail-closed.
+    taskRuntimePolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorPolicy: deployment.mode === 'ha' ? 'shared_postgres' : 'standalone',
+    environmentHealthMonitorSettings:
+      deployment.mode === 'ha' ? deployment.environmentHealthMonitor : undefined,
+    realtimeRuntime,
   });
 }

@@ -25,7 +25,7 @@ Things that still warrant caution:
 - **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings), narrow GitHub `watch_repos`, and use Shortcut's search scope to constrain which stories can summon the assistant.
 - **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
-- **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
+- **Mind the [execution isolation mode](/guide/multiplayer-unix-isolation).** `simple` shares the daemon account, `sandbox` applies fail-closed branch mounts, and `delegated` relies on a reviewed external substrate. Gateway attribution alone is not a filesystem boundary.
 - **Rotate tokens.** Bot tokens, app tokens, API tokens, private keys, and webhook secrets should be rotated like any other secret.
 
 > **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as, and the rest is normal Agor surface area.
@@ -104,26 +104,57 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 
 ### Multi-tenant listener lifecycle
 
-Static and single-tenant installations require no new configuration. Listener
-startup uses the configured static tenant exactly as before.
+Standalone SQLite installations require no new configuration and keep the
+historical process-local listener lifecycle.
 
-With `multi_tenancy.mode: required_from_auth`, the daemon restarts enabled
-gateway channels for every tenant after a daemon restart. Startup performs one
-narrow PostgreSQL discovery query that can return only enabled channel and
-tenant IDs. It then leaves system scope, reloads the full channel (including
-credentials) under that tenant's normal RLS scope, and starts the connector
-with an immutable tenant binding. Provider callbacks re-enter that captured
-tenant before reading mappings or creating sessions.
+> **Provider limit in PostgreSQL mode:** Slack, GitHub, and Shortcut listeners
+> support distributed ownership. Microsoft Teams currently depends on a local
+> Bot Framework port and in-memory conversation references, so Agor fails its
+> listener closed on PostgreSQL. Teams remains available only in standalone
+> SQLite until its ingress and reply-routing contract is redesigned.
 
-Listener instances and the outbound fast path are also tenant-qualified. A
-channel refresh in a tenant with no enabled channels cannot stop or suppress
-delivery for another tenant. Missing, stale, or inconsistent discovery
-metadata is skipped rather than falling back to the static tenant.
+On PostgreSQL, every daemon performs bounded recurring discovery. A durable,
+database-time lease on each gateway channel chooses one listener owner; daemon
+presence and Redis are not ownership signals. The owner renews a 30-second
+lease. A hard-dead owner becomes claimable after 30 seconds; discovery adds at
+most a 6-second jittered idle wait plus a bounded keyset pass (25 candidates per
+page, at most 250 ms between full pages) and provider connection time.
+Credential/config updates, disable, and delete revoke the old owner
+immediately. Provider callbacks, durable occurrence completion, and polling
+checkpoints are fenced by an opaque claim token. Graceful shutdown stops intake,
+waits up to five seconds for admitted callbacks, and releases only after both
+the transport and callbacks are drained; otherwise the lease expires normally.
 
-PostgreSQL migration `0066_gateway_listener_discovery` installs the narrowly
-named read policy used by this startup phase. Apply normal Agor migrations
-before serving traffic with the upgraded daemon; no database role with
-`BYPASSRLS` and no superuser daemon connection is required.
+Discovery returns only enabled channel and tenant IDs. The daemon then leaves
+system scope, reloads the full channel (including credentials) under that
+tenant's normal RLS scope, and starts the connector with an immutable tenant
+binding. Provider callbacks re-enter that captured tenant before reading
+mappings or creating sessions.
+
+Listener instances are tenant-qualified. PostgreSQL outbound routing does not
+use listener presence or a process-local channel cache as authority: any daemon
+that handles a durable Message reloads its mapping and fresh channel credentials
+inside the Message's tenant. A channel refresh in a tenant with no enabled
+channels cannot stop or suppress another tenant. Missing, stale, or inconsistent
+discovery metadata is skipped rather than falling back to the static tenant.
+
+Stable provider event IDs suppress duplicate Slack, GitHub, and Shortcut
+deliveries. Slack keys the logical message by workspace, conversation, and
+message timestamp so alternate Slack envelopes for the same message converge.
+GitHub and Shortcut polling watermarks are persisted behind the same owner
+fence, with a short overlap during takeover. Their create-comment APIs do not
+accept an idempotency key, so a crash after the provider accepts an
+acknowledgement but before Agor records it can still produce a duplicate
+acknowledgement; the Agor Session and Task remain deduplicated.
+
+The legacy generic channel-key inbound endpoint has no provider-event identity,
+so it is available only on standalone SQLite and fails closed on PostgreSQL.
+
+Migrations `0066_gateway_listener_discovery` and
+`0076_gateway_listener_ha` install the narrow discovery policy, lease columns,
+and tenant-RLS provider-event table. Apply normal Agor migrations before
+serving traffic with the upgraded daemon; no database role with `BYPASSRLS`
+and no superuser daemon connection is required.
 
 ### Outbound branch binding
 
@@ -146,7 +177,7 @@ Slack setup is **manifest-based**. Instead of clicking through OAuth scopes, eve
 
 There are two ways to get the manifest:
 
-- **The Add Channel wizard (UI).** When you create a Slack channel in Agor, a guided wizard builds the manifest from your choices and shows it (with a live scope/event preview) ready to copy.
+- **The Add Channel wizard (UI).** When you create a Slack channel in Agor, a guided wizard turns your choices into a live scope/event summary, then hands you the finished manifest ready to copy on the next step.
 - **The `agor_gateway_slack_manifest_generate` MCP tool (agent-driven).** Ask an agent to generate the manifest for you. The tool is the programmatic equivalent of the wizard, backed by the same generator: from a set of capability toggles it returns the manifest JSON, the derived bot scopes and events, ordered setup steps, and the channel config to pass to `agor_gateway_channels_create`. It is pure. It creates no Slack app, no Agor channel, and validates no tokens. When an agent completes setup, it creates the channel disabled and without tokens via `agor_gateway_channels_create` (`enabled: false`), then calls `agor_widgets_request_gateway_token` so you enter the `xoxb-`/`xapp-` tokens in a secure inline form. The agent never asks you to paste tokens into the chat or passes them as `agor_gateway_channels_create` arguments, because raw secrets in tool arguments would leak into the MCP transcript.
 
 Once a channel exists, its edit form also has an **App Manifest** panel showing the recommended manifest for the channel's current options. Re-paste it into Slack whenever you change surfaces or capabilities so the app's scopes stay aligned.
@@ -163,7 +194,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
    - **Surfaces.** Where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
    - **Align Slack users.** Match each Slack profile's email to an Agor user (unmatched senders are rejected). When off, pick a single Agor user to run every session as.
    - **Enable outbound sends.** Allow authorized agents to post proactive Slack messages through this channel.
-5. As you toggle options, the wizard updates a **live manifest preview** and the derived **bot scopes** and **event subscriptions**. You never add a scope by hand. Click **Continue**.
+5. As you toggle options, the wizard updates **Required Slack Scopes & Events** with the derived bot scopes and event subscriptions. You never add a scope by hand — the manifest itself is assembled for the **Create app** step, where you copy it. Click **Continue**.
 
 ### 2. Create the Slack app from the manifest
 
@@ -337,6 +368,13 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ## Setting Up Microsoft Teams Integration
 
+> **PostgreSQL multi-daemon limitation:** Teams listener startup currently
+> fails closed on PostgreSQL. Its webhook server and proactive-reply
+> `ConversationReference` are process-local, so the connector cannot safely
+> support load-balanced replica ingress yet. Teams remains available in the
+> standalone SQLite deployment path. Use Slack, GitHub, or Shortcut for a
+> shared PostgreSQL daemon fleet until durable Teams ingress/routing lands.
+
 ### How It Works
 
 When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
@@ -425,7 +463,10 @@ interface OutboundPayload {
 interface GatewayConnector {
   readonly channelType: ChannelType;
   sendMessage(req: { threadId: string; text: string; blocks?: unknown[] }): Promise<string>;
-  startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
+  startListening?(
+    callback: (msg: InboundMessage) => void | Promise<void>,
+    options?: GatewayListenerOptions
+  ): Promise<void>;
   stopListening?(): Promise<void>;
   formatMessage?(markdown: string): string | OutboundPayload;
 }

@@ -11,6 +11,8 @@ import {
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
+import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
 import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
@@ -46,6 +48,7 @@ function createRenderEnvHarness(opts: {
     },
   }));
   const app = {
+    get: () => ({}),
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
     },
@@ -92,6 +95,7 @@ function createPatchHarness(opts: {
     find: vi.fn(async () => []),
   };
   const app = {
+    get: () => ({}),
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
     },
@@ -161,17 +165,23 @@ function createServiceHarness() {
   };
 
   const reposService = {
-    get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo', unix_group: null })),
+    get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo' })),
   };
 
   // The `branches` self-reference is used by updateEnvironment to manually
   // emit the `patched` event (this.patch bypasses Feathers auto-dispatch).
-  const branchesService = { find: vi.fn(async () => []), emit: vi.fn() };
+  const branchesService = {
+    find: vi.fn(async () => []),
+    remove: vi.fn(async () => ({})),
+    emit: vi.fn(),
+  };
 
+  const sessionTokenService = {
+    generateToken: vi.fn(async () => 'executor-token'),
+  };
   const app = {
-    sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
-    },
+    get: () => ({}),
+    sessionTokenService,
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'sessions') return sessionsService;
@@ -183,7 +193,19 @@ function createServiceHarness() {
   } as unknown as Application;
 
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
-  return { service, boardObjectsService, sessionsService, branchesService };
+  const branchRepo = (
+    service as unknown as {
+      branchRepo: BranchRepository;
+    }
+  ).branchRepo;
+  return {
+    service,
+    branchRepo,
+    boardObjectsService,
+    sessionsService,
+    branchesService,
+    sessionTokenService,
+  };
 }
 
 async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
@@ -211,6 +233,7 @@ function createFindHarness(opts: {
   branchIdsInZone: BranchID[];
 }) {
   const app = {
+    get: () => ({}),
     service(path: string) {
       throw new Error(`Unknown service: ${path}`);
     },
@@ -290,27 +313,31 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
 
     const environmentUpdates: Array<Record<string, unknown>> = [];
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
-      environmentUpdates.push(update as Record<string, unknown>);
-      currentEnvironment = {
-        ...currentEnvironment,
-        ...update,
-      };
-      return {
-        ...branch,
-        environment_instance: currentEnvironment,
-      } as never;
-    });
+    const lifecycleOptions: Array<unknown> = [];
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, internalOptions) => {
+        environmentUpdates.push(update as Record<string, unknown>);
+        lifecycleOptions.push(internalOptions);
+        currentEnvironment = {
+          ...currentEnvironment,
+          ...update,
+        };
+        return {
+          ...branch,
+          environment_instance: currentEnvironment,
+        } as never;
+      }
+    );
 
-    return { service, branch, environmentUpdates };
+    return { service, branch, environmentUpdates, lifecycleOptions };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates } = createStartHarness();
+    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
 
     const result = await Promise.race([
       runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
@@ -350,6 +377,19 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
+    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+  });
+
+  it('marks a repeated starting request as a fresh lifecycle boundary', async () => {
+    const { service, branch, lifecycleOptions } = createStartHarness();
+    vi.spyOn(service, 'get').mockResolvedValue({
+      ...branch,
+      environment_instance: { status: 'starting' },
+    } as never);
+
+    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+
+    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -378,7 +418,7 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
       currentEnvironment = {
@@ -446,7 +486,7 @@ describe('BranchesService environment start async behavior', () => {
     );
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     const executeWebhookSpy = vi
       .spyOn(service as never, 'executeEnvironmentWebhook')
@@ -512,7 +552,7 @@ describe('BranchesService environment start async behavior', () => {
     } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
-      asUser: undefined,
+      delegatedHomeKey: undefined,
     } as never);
     mockedRunExecutorCommand.mockResolvedValue({
       success: true,
@@ -996,6 +1036,7 @@ describe('BranchesService one-shot teammate creation wiring', () => {
   function createTeammateWiringHarness() {
     const boardsEmit = vi.fn();
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'boards') return { emit: boardsEmit };
         throw new Error(`Unknown service: ${path}`);
@@ -1197,13 +1238,16 @@ describe('BranchesService.archiveOrDelete', () => {
       zone_id: 'zone-review',
     });
 
+    const params = {
+      user: { user_id: userId },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'archive', filesystemAction: 'preserved' },
-      {
-        user: { user_id: userId },
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-      } as never
+      params
     );
 
     expect(sessionsService.find).toHaveBeenCalledWith({
@@ -1226,6 +1270,125 @@ describe('BranchesService.archiveOrDelete', () => {
         }),
       })
     );
+  });
+
+  it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
+    const { service, branchRepo, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-op' as BranchID;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    const removedBranch = {
+      branch_id: branchId,
+      name: 'WT Delete Op',
+      path: '/tmp/wt-delete-op',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    const wrappedRemove = vi.spyOn(service, 'remove');
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue({
+      branch_id: branchId,
+      others_can: 'none',
+    } as never);
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockResolvedValue(['user-1' as UUID]);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      params
+    );
+
+    expect(branchesService.remove).not.toHaveBeenCalled();
+    expect(wrappedRemove).not.toHaveBeenCalled();
+    expect(repositoryDelete).toHaveBeenCalledOnce();
+    expect(repositoryDelete).toHaveBeenCalledWith(branchId);
+    expect(branchesService.emit).toHaveBeenCalledOnce();
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'removed',
+      removedBranch,
+      expect.objectContaining({
+        path: 'branches',
+        method: 'remove',
+        event: 'removed',
+        id: branchId,
+        params,
+      })
+    );
+  });
+
+  it('captures hard-delete visibility after authorization, inside the metadata transaction', async () => {
+    const { service, branchRepo, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-acl-race' as BranchID;
+    const oldViewer = '00000000-0000-7000-8000-000000000001' as UUID;
+    const newViewer = '00000000-0000-7000-8000-000000000002' as UUID;
+    const removedBranch = {
+      branch_id: branchId,
+      name: 'WT Delete ACL Race',
+      path: '/tmp/wt-delete-acl-race',
+      archived: false,
+      others_can: 'none',
+      environment_instance: { status: 'stopped' },
+    } as never;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
+    let currentViewers = [oldViewer];
+    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockImplementation(async () => currentViewers);
+    vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+    // Simulate an ACL update after the route granted control but before the
+    // long-running archive/delete operation reaches its metadata transaction.
+    currentViewers = [newViewer];
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      params
+    );
+
+    const eventHook = branchesService.emit.mock.calls[0][2] as {
+      params: Record<string, unknown>;
+    };
+    expect(eventHook.params[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
+      branchId,
+      mode: 'explicitUsers',
+      userIds: [newViewer],
+    });
+  });
+
+  it('rejects direct callers before any environment, token, executor, or metadata work', async () => {
+    const { service, sessionTokenService } = createServiceHarness();
+    const get = vi.spyOn(service, 'get');
+    const stopEnvironment = vi.spyOn(service, 'stopEnvironment');
+    const remove = vi.spyOn(service, 'remove');
+
+    await expect(
+      service.archiveOrDelete(
+        'wt-view-only' as BranchID,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        {
+          provider: 'mcp',
+          user: { user_id: 'view-only' as UUID, role: 'member' },
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        } as never
+      )
+    ).rejects.toThrow('authorized archive-or-delete service');
+
+    expect(get).not.toHaveBeenCalled();
+    expect(stopEnvironment).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 });
 
@@ -1719,6 +1882,7 @@ describe('BranchesService teammate home Knowledge namespace guard', () => {
     });
 
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'branches') return { find: vi.fn(async () => []) };
         throw new Error(`Unknown service: ${path}`);
@@ -1871,7 +2035,7 @@ describe('BranchesService.create permission defaults', () => {
         default_dangerously_allow_session_sharing: true,
       });
 
-      const app = { service: vi.fn() } as unknown as Application;
+      const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
       const service = new BranchesService(db, app);
       const branch = (await service.create({
         repo_id: repo.repo_id,
@@ -1915,7 +2079,7 @@ describe('BranchesService.create permission defaults', () => {
         default_others_fs_access: 'write',
       });
 
-      const app = { service: vi.fn() } as unknown as Application;
+      const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
       const service = new BranchesService(db, app);
       const branch = (await service.create({
         repo_id: repo.repo_id,
@@ -1962,6 +2126,7 @@ describe('BranchesService environment health recovery', () => {
       },
     };
     const app = {
+      get: () => ({}),
       service(path: string) {
         if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
         throw new Error(`Unknown service: ${path}`);

@@ -140,6 +140,38 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/missing task scope/);
   });
 
+  /**
+   * The custom prompt/run routes admit their Task through the repository, so
+   * neither `protectExternalTaskCreate` nor the `tasks.create` chain ever sees
+   * them, and their own gate is role-only. What keeps a live executor token off
+   * them is this guard: `registerAuthenticatedRoute` splices it into every
+   * method named in a route's authConfig (`utils/authorization.ts`), and an
+   * endpoint the allowlist does not name fails closed.
+   *
+   * That containment is what the executor exemption in
+   * `validateSessionUnixUsername` rests on, and nothing else pinned it.
+   */
+  it.each(['sessions/:id/prompt', 'sessions/:id/spawn-prompt', 'tasks/:id/run'])(
+    'refuses an executor-session token on the custom route %s',
+    async (path) => {
+      const context = ctx({
+        path,
+        method: 'create',
+        data: { prompt: 'queue me' },
+        params: {
+          authentication: { payload },
+          query: {},
+          provider: 'rest',
+          route: { id: 'session-1' },
+        },
+      });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
   it('narrows branch find queries to branch scope', async () => {
     const context = ctx({ path: 'branches', method: 'find' });
 
@@ -235,10 +267,73 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
   });
 
+  it('allows get only for the repo resolved from the token-scoped branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'repo-1',
+      app: {
+        service: (path: string) => {
+          expect(path).toBe('branches');
+          return {
+            get: async (branchId: string, params: HookContext['params']) => {
+              expect(branchId).toBe('branch-1');
+              expect(params.provider).toBeUndefined();
+              return { branch_id: branchId, repo_id: 'repo-1' };
+            },
+          };
+        },
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('preserves tenant context and rejects a repo outside the token branch', async () => {
+    const context = ctx({
+      path: 'repos',
+      method: 'get',
+      id: 'tenant-b-repo',
+      params: {
+        authentication: { payload },
+        query: {},
+        provider: 'socketio',
+        tenant: { tenant_id: 'tenant-a' },
+      },
+      app: {
+        service: () => ({
+          get: async (_branchId: string, params: HookContext['params']) => {
+            expect(params.tenant?.tenant_id).toBe('tenant-a');
+            return { branch_id: 'branch-1', repo_id: 'tenant-a-repo' };
+          },
+        }),
+      } as HookContext['app'],
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/repo scope/);
+  });
+
+  it.each(['find', 'create', 'patch', 'remove'])(
+    'rejects executor tokens for repos.%s',
+    async (method) => {
+      const context = ctx({ path: 'repos', method, id: method === 'find' ? undefined : 'repo-1' });
+
+      await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+        /not valid for this endpoint/
+      );
+    }
+  );
+
   it('rejects executor tokens on unrecognized endpoints', async () => {
-    const context = ctx({ path: 'repos', method: 'find' });
+    const context = ctx({ path: 'unknown', method: 'find' });
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
+      /not valid for this endpoint/
+    );
+  });
+
+  it.each(['opencode-auth', 'opencode-models'])('rejects executor tokens on %s', async (path) => {
+    await expect(executorRuntimeScopeGuard()(ctx({ path, method: 'find' }))).rejects.toThrow(
       /not valid for this endpoint/
     );
   });
@@ -284,34 +379,6 @@ describe('executorRuntimeScopeGuard', () => {
     });
 
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
-  });
-
-  it('validates every bulk message payload item against task scope', async () => {
-    const context = ctx({
-      path: 'messages/bulk',
-      method: 'create',
-      data: [
-        { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
-        { message_id: 'message-2' },
-      ],
-    });
-
-    await executorRuntimeScopeGuard()(context);
-
-    expect(context.data).toEqual([
-      { message_id: 'message-1', task_id: 'task-1', session_id: 'session-1' },
-      { message_id: 'message-2', task_id: 'task-1', session_id: 'session-1' },
-    ]);
-  });
-
-  it('rejects bulk message payloads for another task', async () => {
-    const context = ctx({
-      path: 'messages/bulk',
-      method: 'create',
-      data: [{ message_id: 'message-1', task_id: 'task-2', session_id: 'session-1' }],
-    });
-
-    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task scope/);
   });
 
   it('validates streaming event payload scope', async () => {

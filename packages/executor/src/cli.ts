@@ -8,16 +8,21 @@
  * The executor is ephemeral and task-scoped. Each subprocess executes exactly
  * one command and then exits. Communication with daemon is via Feathers/WebSocket.
  *
- * IMPERSONATION:
- * Impersonation is handled at spawn time by the daemon using buildSpawnArgs().
- * When the daemon spawns the executor with asUser, it uses `sudo su -` to run
- * the executor directly as the target user. The executor itself doesn't handle
- * impersonation - it's already running as the correct user.
+ * The executor contains no host-user impersonation logic. An external
+ * delegated launcher may select its own execution identity before startup.
  */
 
+import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { INTERACTIVE_EXECUTOR_EVENT_PREFIX } from '@agor/core/executor-protocol';
 
-import { executeCommand, getRegisteredCommands } from './commands/index.js';
+import {
+  executeCommand,
+  executeInteractiveCommand,
+  getRegisteredCommands,
+} from './commands/index.js';
+import { completeExecutorResult, emitExecutorResult } from './executor-output.js';
+import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -46,8 +51,8 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-function emitExecutorResult(result: unknown): void {
-  console.log(`AGOR_EXECUTOR_RESULT ${JSON.stringify(result)}`);
+function emitInteractiveEvent(event: unknown): void {
+  console.log(`${INTERACTIVE_EXECUTOR_EVENT_PREFIX}${JSON.stringify(event)}`);
 }
 
 /**
@@ -95,12 +100,13 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   if (payload.command === 'zellij.attach') {
     const result = await executeCommand(payload, { dryRun: options.dryRun });
 
+    if (!result.success) {
+      completeExecutorResult(result);
+      return;
+    }
+
     // Output result on a sentinel line so daemon parsers can suppress it from logs.
     emitExecutorResult(result);
-
-    if (!result.success) {
-      process.exit(1);
-    }
 
     // DON'T exit - stay alive to stream PTY I/O
     // The PTY onExit handler will call process.exit() when done
@@ -112,9 +118,44 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   const result = await executeCommand(payload, { dryRun: options.dryRun });
 
   // Output result on a sentinel line so daemon parsers can suppress it from logs.
-  emitExecutorResult(result);
+  completeExecutorResult(result);
+}
 
-  process.exit(result.success ? 0 : 1);
+/**
+ * Bounded JSON-lines transport for commands that require intermediate events
+ * or one or more command-owned control frames.
+ */
+async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promise<void> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  const iterator = lines[Symbol.asyncIterator]();
+  try {
+    const first = await iterator.next();
+    if (first.done || !first.value.trim()) throw new Error('missing payload');
+    const payload = ExecutorPayloadSchema.parse(JSON.parse(first.value));
+    const result = await executeInteractiveCommand(
+      payload,
+      { dryRun: options.dryRun },
+      {
+        emit: emitInteractiveEvent,
+        async read() {
+          const next = await iterator.next();
+          if (next.done) throw new Error('Interactive command input closed');
+          return JSON.parse(next.value) as unknown;
+        },
+      }
+    );
+    completeExecutorResult(result);
+  } catch {
+    completeExecutorResult({
+      success: false,
+      error: {
+        code: 'INTERACTIVE_COMMAND_PROTOCOL_INVALID',
+        message: 'Interactive executor input was invalid.',
+      },
+    });
+  } finally {
+    lines.close();
+  }
 }
 
 /**
@@ -139,15 +180,15 @@ async function handlePromptPayload(
         },
       })
     );
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   // =========================================================================
   // APPLY ENVIRONMENT VARIABLES FROM PAYLOAD
   //
-  // When executor is spawned via impersonation (sudo su -), the parent
-  // process environment is lost. The daemon passes env vars in the payload,
-  // and we apply them here before starting the SDK.
+  // External launchers may intentionally replace the parent environment. The
+  // daemon passes approved env vars in the payload and we apply them here.
   // =========================================================================
   if (payload.env && Object.keys(payload.env).length > 0) {
     // Filter out process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
@@ -167,7 +208,6 @@ async function handlePromptPayload(
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
 
   if (!ToolRegistry.has(payload.params.tool)) {
@@ -195,6 +235,7 @@ async function handlePromptPayload(
     permissionMode: payload.params.permissionMode,
     daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
+    agenticToolContext: payload.agenticToolContext,
     resolvedConfig: payload.resolvedConfig,
   });
 
@@ -226,11 +267,11 @@ async function handleLegacyMode(values: {
   }
 
   // Validate tool using registry
-  const { ToolRegistry, initializeToolRegistry } = await import('./handlers/sdk/tool-registry.js');
   await initializeToolRegistry();
+  const tool = values.tool as string;
 
-  if (!ToolRegistry.has(values.tool as string)) {
-    console.error(`Invalid tool: ${values.tool}`);
+  if (!ToolRegistry.has(tool)) {
+    console.error(`Invalid tool: ${tool}`);
     console.error(`Valid tools: ${ToolRegistry.getAll().join(', ')}`);
     process.exit(1);
   }
@@ -246,7 +287,7 @@ async function handleLegacyMode(values: {
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
     prompt: values.prompt as string,
-    tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
+    tool,
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
     daemonUrl: resolvedDaemonUrl,
   });
@@ -273,9 +314,7 @@ function printUsage(): void {
   console.error('  --session-id <id>        Session ID to execute prompt for');
   console.error('  --task-id <id>           Task ID created by daemon');
   console.error('  --prompt <text>          User prompt to execute');
-  console.error(
-    '  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)'
-  );
+  console.error(`  --tool <name>            SDK tool (${ToolRegistry.getAll().join(', ')})`);
   console.error('  --permission-mode <mode> Permission mode (ask, auto, allow-all)');
   console.error('  --daemon-url <url>       Daemon WebSocket URL (default: http://localhost:3030)');
   console.error('');
@@ -294,11 +333,16 @@ async function main() {
   // Register Handlebars helpers ONCE at startup (needed for template rendering)
   const { registerHandlebarsHelpers } = await import('@agor/core/templates/handlebars-helpers');
   registerHandlebarsHelpers();
+  await initializeToolRegistry();
 
   // Parse command-line arguments
   const { values } = parseArgs({
     options: {
       stdin: {
+        type: 'boolean',
+        default: false,
+      },
+      'interactive-command': {
         type: 'boolean',
         default: false,
       },
@@ -333,7 +377,9 @@ async function main() {
   });
 
   // Route to appropriate mode
-  if (values.stdin) {
+  if (values['interactive-command']) {
+    await handleInteractiveCommandMode({ dryRun: values['dry-run'] || false });
+  } else if (values.stdin) {
     await handleStdinMode({ dryRun: values['dry-run'] || false });
   } else if (values['session-token']) {
     // Legacy mode - use CLI arguments

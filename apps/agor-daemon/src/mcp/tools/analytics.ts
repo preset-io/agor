@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveBranchId, resolveRepoId, resolveUserId } from '../resolve-ids.js';
 import { mcpLimit, mcpOffset, mcpOptionalString } from '../schema.js';
@@ -82,7 +82,7 @@ export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void
           .enum(['asc', 'desc'])
           .optional()
           .describe('Sort order ascending or descending (default: desc)'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
         offset: mcpOffset(0).describe('Number of results to skip for pagination (default: 0)'),
       }),
     },

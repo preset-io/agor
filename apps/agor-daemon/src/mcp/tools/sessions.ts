@@ -1,3 +1,4 @@
+import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import {
   BranchRepository,
   type BranchWithZoneAndSessions,
@@ -18,7 +19,6 @@ import {
 } from '@agor/core/models';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
-  AGENTIC_TOOL_CAPABILITIES,
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
   type Board,
@@ -27,7 +27,7 @@ import {
   type SessionType,
   type ZoneBoardObject,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
@@ -41,11 +41,13 @@ import {
   resolveSessionId,
 } from '../resolve-ids.js';
 import {
-  mcpLimit,
+  mcpListLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonEmptyString,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -162,6 +164,25 @@ function redactSessionForMcp<T extends { mcp_token?: unknown }>(session: T): Omi
   return safeSession;
 }
 
+function compactSessionForMcp(session: Session) {
+  return {
+    session_id: session.session_id,
+    title: session.title,
+    description: session.description,
+    status: session.status,
+    agentic_tool: session.agentic_tool,
+    branch_id: session.branch_id,
+    branch_board_id: session.branch_board_id,
+    url: session.url,
+    created_by: session.created_by,
+    created_at: session.created_at,
+    last_updated: session.last_updated,
+    genealogy: session.genealogy,
+    task_count: session.tasks?.length ?? 0,
+    schedule_id: session.schedule_id,
+  };
+}
+
 function redactSessionFindResult<T extends { mcp_token?: unknown }>(
   result: T[] | { data: T[]; [key: string]: unknown }
 ): Array<Omit<T, 'mcp_token'>> | { data: Array<Omit<T, 'mcp_token'>>; [key: string]: unknown } {
@@ -178,10 +199,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_list',
     {
       description:
-        'List all sessions accessible to the current user. Each session includes a `url` field with a clickable link to view the session in the UI.',
+        'List a lean page of sessions accessible to the current user. Runtime configuration, context files, task ID arrays, and SDK state are omitted by default; use agor_sessions_get for details or lean:false when required. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        limit: mcpLimit(50),
+        limit: mcpListLimit(),
+        offset: mcpOffset(),
+        lean: z.boolean().optional().describe('Return compact session records (default: true).'),
         status: z
           .enum(['idle', 'running', 'completed', 'failed'])
           .optional()
@@ -217,10 +240,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // When sessionType or boardId is set, skip service-level pagination
       // (it runs before our post-query filters) and apply the requested limit
       // ourselves after filtering.
-      const requestedLimit = args.limit;
+      // Keep handler defaults explicit because unit/in-process callers may
+      // invoke captured handlers without going through Zod defaulting.
+      const requestedLimit = args.limit ?? 25;
+      const requestedOffset = args.offset ?? 0;
       const boardId = args.boardId ? await resolveBoardId(ctx, args.boardId) : undefined;
       const needsPostQueryLimit = Boolean(args.sessionType || boardId);
-      if (!needsPostQueryLimit && requestedLimit) query.$limit = requestedLimit;
+      if (!needsPostQueryLimit) {
+        query.$limit = requestedLimit;
+        query.$skip = requestedOffset;
+      }
+      query.$sort = { created_at: -1, session_id: 1 };
       if (args.status) query.status = args.status;
       const branchId = args.branchId ? await resolveBranchId(ctx, args.branchId) : undefined;
       if (branchId) query.branch_id = branchId;
@@ -230,7 +260,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         query.archived = false;
       }
       const result = await ctx.app.service('sessions').find({
-        query: needsPostQueryLimit ? { ...query, $limit: 10000 } : query,
+        query: needsPostQueryLimit ? { ...query, $limit: 10000, $skip: 0 } : query,
         ...ctx.baseServiceParams,
       });
 
@@ -254,19 +284,44 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const filtered = args.sessionType
           ? allData.filter((s) => getSessionType(s) === (args.sessionType as SessionType))
           : allData;
-        const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
+        const limited = filtered.slice(requestedOffset, requestedOffset + requestedLimit);
 
         if (Array.isArray(boardScopedResult)) {
-          return textResult(limited.map(redactSessionForMcp));
+          const data = limited.map((session) =>
+            args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
+          );
+          return textResult(mcpPageResult(data, requestedLimit, requestedOffset));
         }
-        return textResult({
-          ...boardScopedResult,
-          data: limited.map(redactSessionForMcp),
-          total: filtered.length,
-        });
+        return textResult(
+          mcpPageResult(
+            {
+              ...boardScopedResult,
+              data: limited.map((session) =>
+                args.lean === false ? redactSessionForMcp(session) : compactSessionForMcp(session)
+              ),
+              total: filtered.length,
+            },
+            requestedLimit,
+            requestedOffset
+          )
+        );
       }
 
-      return textResult(redactSessionFindResult(boardScopedResult));
+      const page = mcpPageResult(
+        redactSessionFindResult(boardScopedResult) as {
+          data: Array<Omit<Session, 'mcp_token'>>;
+          total?: number;
+          limit?: number;
+          skip?: number;
+        },
+        requestedLimit,
+        requestedOffset
+      );
+      return textResult(
+        args.lean === false
+          ? page
+          : { ...page, data: page.data.map((session) => compactSessionForMcp(session as Session)) }
+      );
     }
   );
 
@@ -696,11 +751,38 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
           ),
         modelConfig: modelConfigInputSchema,
+        callback: z
+          .boolean()
+          .optional()
+          .describe(
+            'Send a one-shot completion report for the exact prompted task back to the current calling Agor session.'
+          ),
       }),
     },
     async (args) => {
       const mode = args.mode;
       const sessionId = await resolveSessionId(ctx, args.sessionId);
+      if (args.callback && !ctx.sessionId) return sessionContextRequiredResult();
+      if (args.callback) {
+        await runWithMcpTenantDatabaseScope(ctx, (db) =>
+          ensureCanPromptTargetSession(
+            ctx.sessionId!,
+            ctx.userId,
+            ctx.app,
+            new BranchRepository(db)
+          )
+        );
+      }
+      const callbackParams = args.callback
+        ? {
+            ...ctx.baseServiceParams,
+            _taskCompletionCallback: {
+              target_session_id: ctx.sessionId!,
+              requested_from_session_id: ctx.sessionId!,
+              requested_by_user_id: ctx.userId,
+            },
+          }
+        : ctx.baseServiceParams;
 
       if (mode === 'continue') {
         // The prompt route returns the Task entity directly. Whether it ran
@@ -710,7 +792,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .service('/sessions/:id/prompt')
           .create(
             { prompt: args.prompt, stream: true },
-            { ...ctx.baseServiceParams, route: { id: sessionId } }
+            { ...callbackParams, route: { id: sessionId } }
           );
 
         if (task.status === 'queued') {
@@ -784,7 +866,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             permissionMode: updatedSession.permission_config?.mode,
             stream: true,
           },
-          { ...ctx.baseServiceParams, route: { id: forkedSession.session_id } }
+          { ...callbackParams, route: { id: forkedSession.session_id } }
         );
 
         const note =
@@ -818,7 +900,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             permissionMode: childSession.permission_config?.mode,
             stream: true,
           },
-          { ...ctx.baseServiceParams, route: { id: childSession.session_id } }
+          { ...callbackParams, route: { id: childSession.session_id } }
         );
 
         return textResult({
@@ -972,7 +1054,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback firing mode: "once" (default) fires on first completion then auto-disables, "persistent" fires on every completion'
+            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, "once" fires on the first completion then auto-disables'
           ),
         parentSessionId: z
           .string()
@@ -999,31 +1081,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Resolve permission_config / model_config / inherited mcp_server_ids
-      // from the explicit MCP args (highest priority) > user defaults > system
-      // fallback. Single source of truth for this dance lives in
-      // `@agor/core/sessions` so MCP tools, the gateway, and the
-      // `before:create` hook can't drift apart.
-      //
-      // For the explicit MCP args we resolve short IDs first; branch/user
-      // defaults are already full UUIDs, so the helper passes them through.
+      // Session creation materializes permission/model defaults centrally so
+      // selected presets retain their provenance. MCP attachment remains here
+      // because explicit attach failures are part of this tool's response.
       const explicitMcpServerIds =
         args.mcpServerIds !== undefined
           ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
           : undefined;
-      const resolvedDefaults = resolveSessionDefaults({
+      const modelConfig = coerceModelConfig(args.modelConfig);
+      const mcpServerIds = resolveSessionDefaults({
         agenticTool,
         user,
         branch,
-        overrides: {
-          modelConfig: coerceModelConfig(args.modelConfig),
-          mcpServerIds: explicitMcpServerIds,
-        },
-      });
-      const permissionConfig = resolvedDefaults.permission_config;
-      const modelConfig = resolvedDefaults.model_config;
-      const mcpServerIds = resolvedDefaults.mcp_server_ids;
-      const permissionMode = permissionConfig.mode;
+        overrides: { mcpServerIds: explicitMcpServerIds },
+      }).mcp_server_ids;
       // Track whether the caller explicitly requested these servers. When they
       // did, we surface attach failures in the response instead of silently
       // dropping them (the "mcpServerId doesn't stick" bug). For inherited
@@ -1040,10 +1111,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       if (wantsCallback && !effectiveCallbackSessionId) return sessionContextRequiredResult();
 
       // Validate user has prompt permission on the callback target session's branch
-      if (wantsCallback && args.callbackSessionId) {
+      if (wantsCallback && effectiveCallbackSessionId) {
         await runWithMcpTenantDatabaseScope(ctx, (db) =>
           ensureCanPromptTargetSession(
-            args.callbackSessionId!,
+            effectiveCallbackSessionId,
             ctx.userId,
             ctx.app,
             new BranchRepository(db)
@@ -1066,47 +1137,72 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.include_original_prompt = args.includeOriginalPrompt;
       }
       if (wantsCallback) {
-        callbackConfig.callback_mode = args.callbackMode ?? 'once';
+        callbackConfig.callback_mode = args.callbackMode ?? 'persistent';
       }
 
-      // Determine the parent session to link to in the genealogy.
+      // Determine the parent session to link to in the genealogy, and — for a
+      // cross-branch create — the source of the durable `remote_create`
+      // provenance edge.
       //
       // `parent_session_id` is the canonical branch-local session tree used by
-      // fork/spawn UI and recursive delete semantics. A session created in a
-      // different target branch is remote provenance/callback state, not a
-      // tree child of the caller. Keep the implicit convenience branch-local:
-      // - explicit string: resolve (supports short IDs), require same branch, and use
-      // - explicit null: opt out — create a root session with no parent
-      // - undefined (omitted): auto-link to the calling session only when the
-      //   calling session lives in the same branch as the new session
+      // fork/spawn UI and recursive delete semantics. `remote_create` is a
+      // separate, cross-branch *provenance* edge (rendered as a surrogate under
+      // the creator in the SessionTree). Provenance answers "which session
+      // created this child" — it is ALWAYS the calling session, never the
+      // callback target (that only answers "where should completion be
+      // delivered", i.e. routing). Keep the two concerns distinct:
+      // - explicit string: resolve (supports short IDs), require same branch,
+      //   use as the genealogy parent.
+      // - explicit null: opt out of *genealogy* only. This is orthogonal to
+      //   provenance: a cross-branch calling session is still recorded as the
+      //   remote creator below, so an "unlinked root session" that a remote
+      //   orchestrator spun up still surfaces under that orchestrator.
+      // - undefined (omitted): auto-link to the calling session as the
+      //   genealogy parent only when it shares the new session's branch.
+      // In every case, a calling session in a *different* branch is the remote
+      // creator and gets a `remote_create` edge. With no calling session there
+      // is no creator to attribute, so no provenance edge is written (the child
+      // still carries callback_config, so completion is still delivered).
       let resolvedParentSessionId: string | undefined;
       let parentSessionForPatch: Session | undefined;
       let skippedAutoParentDueToBranchMismatch = false;
       let remoteRelationshipSourceSessionId: string | undefined;
       let remoteRelationshipSourceBranchId: string | undefined;
 
-      if (args.parentSessionId !== undefined) {
-        if (args.parentSessionId !== null) {
-          resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
-          parentSessionForPatch = (await ctx.app
-            .service('sessions')
-            .get(resolvedParentSessionId, ctx.baseServiceParams)) as Session;
+      // Decision 1 — genealogy: resolve an EXPLICIT parent (same-branch only).
+      // Implicit same-branch genealogy is handled in decision 2.
+      if (args.parentSessionId !== undefined && args.parentSessionId !== null) {
+        resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
+        parentSessionForPatch = (await ctx.app
+          .service('sessions')
+          .get(resolvedParentSessionId, ctx.baseServiceParams)) as Session;
 
-          if (parentSessionForPatch.branch_id !== branch.branch_id) {
-            throw new Error(
-              `parentSessionId must reference a session in the target branch (${shortId(branch.branch_id)}). ` +
-                'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
-            );
-          }
+        if (parentSessionForPatch.branch_id !== branch.branch_id) {
+          throw new Error(
+            `parentSessionId must reference a session in the target branch (${shortId(branch.branch_id)}). ` +
+              'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
+          );
         }
-      } else if (ctx.sessionId) {
+      }
+
+      // Decision 2 — inspect the calling session, independently of genealogy.
+      // A cross-branch caller is the remote creator and ALWAYS gets a
+      // `remote_create` edge (it can coexist with an explicit same-branch
+      // genealogy parent). A same-branch caller becomes the implicit genealogy
+      // parent only when `parentSessionId` was omitted (an explicit parent
+      // wins; `null` opts out).
+      if (ctx.sessionId) {
         const callingSession = (await ctx.app
           .service('sessions')
           .get(ctx.sessionId, ctx.baseServiceParams)) as Session;
 
         if (callingSession.branch_id === branch.branch_id) {
-          resolvedParentSessionId = callingSession.session_id;
-          parentSessionForPatch = callingSession;
+          if (args.parentSessionId === undefined && !resolvedParentSessionId) {
+            resolvedParentSessionId = callingSession.session_id;
+            parentSessionForPatch = callingSession;
+          }
+          // parentSessionId: null in the same branch → intentionally unlinked;
+          // no genealogy parent and no cross-branch provenance.
         } else {
           skippedAutoParentDueToBranchMismatch = true;
           remoteRelationshipSourceSessionId = callingSession.session_id;
@@ -1132,7 +1228,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         description: args.description,
         created_by: ctx.userId,
         unix_username: user.unix_username,
-        permission_config: permissionConfig,
         ...(modelConfig && { model_config: modelConfig }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
@@ -1229,12 +1324,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Execute initial prompt if provided
       let initialTask = null;
       if (args.initialPrompt) {
-        initialTask = await ctx.app
-          .service('/sessions/:id/prompt')
-          .create(
-            { prompt: args.initialPrompt, permissionMode, stream: true },
-            { ...ctx.baseServiceParams, route: { id: session.session_id } }
-          );
+        initialTask = await ctx.app.service('/sessions/:id/prompt').create(
+          {
+            prompt: args.initialPrompt,
+            permissionMode: session.permission_config?.mode,
+            stream: true,
+          },
+          { ...ctx.baseServiceParams, route: { id: session.session_id } }
+        );
       }
 
       const callbackNote = callbackConfig.callback_session_id
@@ -1540,7 +1637,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
+        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence; otherwise it remains guarded in stopping. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),

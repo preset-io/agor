@@ -22,7 +22,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
@@ -30,10 +30,12 @@ import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNumber,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredString,
 } from '../schema.js';
@@ -42,6 +44,7 @@ import { coerceString, textResult } from '../server.js';
 import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const SANDPACK_TEMPLATES = [
+  'static',
   'react',
   'react-ts',
   'vanilla',
@@ -111,9 +114,15 @@ If artifactId is provided, updates the existing artifact (must be owned by you).
 The folder should contain ordinary source files (no \`sandpack.json\`, no \`agor.config.js\`). \`branchId + subpath\` identifies the branch-relative folder. The executor verifies the caller has access, reads it, and registers the artifact through the daemon API. After publishing, the artifact lives in the database.
 
 Recommended: create the folder inside your branch so files can be version-controlled.
+For a new HTML/CSS-first artifact, use template=\`static\` (or
+\`sandpackConfig.template="static"\`) and keep the HTML entry at
+\`/index.html\`; place any browser JavaScript in linked or inline scripts rather
+than an executable vanilla \`/index.js\`. Existing vanilla artifacts with a
+present empty/comment-only conventional entry are repaired to the static
+runtime automatically.
 
 DECLARATIVE CONFIG:
-- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/pages/guide/artifacts.mdx tracks status. \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing).
+- \`requiredEnvVars\`: array of env var NAMES the artifact needs (e.g. ["OPENAI_KEY", "STRIPE_KEY"]). The daemon synthesizes a per-viewer \`.env\` at render time using values from the viewer's stored env vars (Settings → Environment Variables). Names are stored without prefix; the daemon prefixes per template at render time. Currently only the \`react\` / \`react-ts\` mapping is verified end-to-end: those are CRA-backed (sandpack-react v2), so use \`process.env.REACT_APP_X\`. Other templates are best-effort and may need to be audited the first time an artifact publishes against them — the table in apps/agor-docs/content/guide/artifacts.mdx tracks status. \`static\`, \`vanilla\` / \`vanilla-ts\` have no dotenv path (daemon warns and injects nothing). HTML-first vanilla artifacts with an empty entry are served through the \`static\` template automatically.
 - \`agorGrants\`: declarative daemon capabilities. Each grant maps to a fixed env var:
     \`agor_api_url: true\`   → injects the daemon URL as \`AGOR_API_URL\`.
     \`agor_user_email: true\` → injects viewer's email as \`AGOR_USER_EMAIL\`.
@@ -690,33 +699,35 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
     'agor_artifacts_list',
     {
       description:
-        'List artifacts, optionally filtered by board. Respects visibility: shows public artifacts plus private artifacts owned by you.',
+        'List a page of artifacts, optionally filtered by board. File maps are omitted. Respects visibility and branch RBAC. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         boardId: mcpOptionalId('boardId', 'Board', 'Filter by board ID'),
-        limit: mcpLimit(50),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
-      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
       const boardIdRaw = coerceString(args.boardId);
       const boardId = boardIdRaw ? await resolveBoardId(ctx, boardIdRaw) : undefined;
-      const limit = typeof args.limit === 'number' ? args.limit : 50;
-
-      let artifactsList: unknown[];
-      if (boardId) {
-        artifactsList = await service.findByBoardId(boardId as never, ctx.userId);
-      } else {
-        artifactsList = await service.findVisible(ctx.userId, { limit });
-      }
-
-      const stripped = (artifactsList as Record<string, unknown>[]).map(
+      const limit = typeof args.limit === 'number' ? args.limit : 25;
+      const offset = typeof args.offset === 'number' ? args.offset : 0;
+      // Use the normal service path so tenant/RBAC/visibility hooks run before
+      // the adapter computes total and applies pagination.
+      const result = await ctx.app.service('artifacts').find({
+        query: {
+          ...(boardId ? { board_id: boardId } : {}),
+          $limit: limit,
+          $skip: offset,
+          $sort: { created_at: -1, artifact_id: 1 },
+        },
+        ...ctx.baseServiceParams,
+      });
+      const page = mcpPageResult(result, limit, offset);
+      const stripped = (page.data as Record<string, unknown>[]).map(
         ({ files: _f, ...rest }) => rest
       );
-      return textResult({
-        total: stripped.length,
-        data: stripped,
-      });
+      return textResult({ ...page, data: stripped });
     }
   );
 

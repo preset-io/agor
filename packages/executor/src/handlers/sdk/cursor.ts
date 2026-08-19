@@ -8,7 +8,9 @@
  * Cursor run when Agor stops the executor.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
@@ -23,16 +25,21 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
+import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
-import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
+import { resolveContextUserId } from '../../sdk-handlers/base/context-user.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
+import {
+  collectWithheldMcpServers,
+  reportWithheldMcpServers,
+} from '../../sdk-handlers/base/withheld-mcp-report.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
+  settleTaskFailure,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
@@ -188,9 +195,11 @@ async function resolveCursorApiKey(client: AgorClient, taskId: TaskID): Promise<
 
 async function buildCursorMcpServers(args: {
   sessionId: SessionID;
+  taskId: TaskID;
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
+  sessionOwnerId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -207,11 +216,25 @@ async function buildCursorMcpServers(args: {
     };
   }
 
-  const serversWithSource = await getMcpServersForSession(args.sessionId, {
-    sessionMCPRepo: args.repos.sessionMCP,
-    mcpServerRepo: args.repos.mcpServers,
-    mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
-    forUserId: args.forUserId,
+  const reporter = collectWithheldMcpServers();
+  const serversWithSource = await getMcpServersForSession(
+    args.sessionId,
+    {
+      sessionMCPRepo: args.repos.sessionMCP,
+      mcpServerRepo: args.repos.mcpServers,
+      mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
+      forUserId: args.forUserId,
+      sessionOwnerId: args.sessionOwnerId,
+      onServerWithheld: reporter.onServerWithheld,
+    },
+    // Cursor's MCP config carries no per-tool filter, so a server with gated
+    // tools cannot be honoured and is withheld whole.
+    { toolFiltering: 'none' }
+  );
+  await reportWithheldMcpServers(args.repos.messages, {
+    sessionId: args.sessionId,
+    taskId: args.taskId,
+    withheld: reporter.withheld,
   });
 
   for (const { server } of serversWithSource) {
@@ -246,22 +269,24 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
-async function getSessionMessages(client: AgorClient, sessionId: SessionID): Promise<Message[]> {
-  const existingMessages = await client.service('messages').find({
-    query: {
-      session_id: sessionId,
-      $sort: { index: 1 },
-    },
+async function getInitialUserMessages(client: AgorClient, taskId: TaskID): Promise<Message[]> {
+  const result = await client.service('messages').find({
+    query: { task_id: taskId, role: MessageRole.USER, $sort: { index: 1 }, $limit: 1 },
   });
-  return Array.isArray(existingMessages) ? existingMessages : existingMessages.data;
-}
-
-function getNextMessageIndexFrom(messages: ReadonlyArray<Message>): number {
-  return messages.length;
+  return Array.isArray(result) ? result : result.data;
 }
 
 async function getNextMessageIndex(client: AgorClient, sessionId: SessionID): Promise<number> {
-  return getNextMessageIndexFrom(await getSessionMessages(client, sessionId));
+  const result = await client.service('messages').find({
+    query: {
+      session_id: sessionId,
+      $sort: { index: -1 },
+      $limit: 1,
+      $select: ['index'],
+    },
+  });
+  const messages = Array.isArray(result) ? result : result.data;
+  return messages.length > 0 ? messages[0].index + 1 : 0;
 }
 
 async function createUserMessage(args: {
@@ -402,26 +427,6 @@ async function updateToolMessage(args: {
   });
 }
 
-async function createSystemErrorMessage(args: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  message: string;
-}): Promise<void> {
-  const index = await getNextMessageIndex(args.client, args.sessionId);
-  await args.client.service('messages').create({
-    message_id: generateId() as MessageID,
-    session_id: args.sessionId,
-    task_id: args.taskId,
-    type: 'system',
-    role: MessageRole.SYSTEM,
-    index,
-    timestamp: new Date().toISOString(),
-    content: args.message,
-    content_preview: args.message.substring(0, 200),
-  });
-}
-
 /**
  * Execute Cursor task (Feathers/WebSocket architecture).
  */
@@ -444,6 +449,7 @@ export async function executeCursorTask(params: {
     );
   }
 
+  const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
   let currentRun: Run | undefined;
   const abortHandler = () => {
     if (!currentRun) return;
@@ -474,11 +480,18 @@ export async function executeCursorTask(params: {
     // configuredModel for recording, `model` (id form) for the SDK.
     const configuredModel = session.model_config?.model;
     const model = toCursorModel(configuredModel);
+    const contextUserId = await resolveContextUserId({
+      session,
+      taskId,
+      tasksService: repos.tasksService,
+    });
     const mcpServers = await buildCursorMcpServers({
       sessionId,
+      taskId,
       mcpToken: session.mcp_token,
       repos,
-      forUserId: session.created_by,
+      forUserId: contextUserId,
+      sessionOwnerId: session.created_by,
     });
 
     const agent = session.sdk_session_id
@@ -501,19 +514,22 @@ export async function executeCursorTask(params: {
         await client.service('sessions').patch(sessionId, { sdk_session_id: agent.agentId });
       }
 
-      const existingMessages = await getSessionMessages(client, sessionId);
+      const [existingMessages, sessionNextIndex] = await Promise.all([
+        getInitialUserMessages(client, taskId),
+        getNextMessageIndex(client, sessionId),
+      ]);
       const userMessage = await createUserMessage({
         client,
         sessionId,
         taskId,
         prompt,
-        index: getNextMessageIndexFrom(existingMessages),
+        index: sessionNextIndex,
         messageSource: params.messageSource,
         existingMessages,
       });
 
       const assistantMessageId = generateId() as MessageID;
-      let nextIndex = Math.max(getNextMessageIndexFrom(existingMessages), userMessage.index + 1);
+      let nextIndex = Math.max(sessionNextIndex, userMessage.index + 1);
       let assistantMessageIndex: number | undefined;
       const ensureAssistantMessageIndex = () => {
         assistantMessageIndex ??= nextIndex++;
@@ -627,7 +643,7 @@ export async function executeCursorTask(params: {
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error('[cursor] Execution failed:', err);
+    console.error('[cursor] execution failed category=task_execution');
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
@@ -641,8 +657,7 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
-    await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
+    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);

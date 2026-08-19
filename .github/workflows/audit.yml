@@ -5,14 +5,15 @@
 #     touch deps and re-running audit against an unchanged lockfile
 #     returns the same result as the previous run, so we path-filter to
 #     skip the no-op case.
-#   * Nightly via `workflow_call` from `heavy-checks.yml` — catches
-#     ambient CVEs: a new advisory published against a dep that's been in
-#     the tree for weeks would otherwise stay silent until the next
-#     incidental lockfile change.
+#   * Nightly on its own schedule — catches ambient CVEs: a new advisory
+#     published against a dependency already in the lockfile would otherwise
+#     stay silent until the next incidental dependency change.
 #   * `workflow_dispatch` for ad-hoc runs.
 name: Security Audit
 
 on:
+  schedule:
+    - cron: '0 4 * * *'
   push:
     branches: [main]
     paths:

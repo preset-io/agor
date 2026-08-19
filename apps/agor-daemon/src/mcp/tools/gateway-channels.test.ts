@@ -15,7 +15,7 @@ import {
   requiredBotScopes,
 } from '@agor/core/gateway';
 import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runExecutorCommand } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
@@ -56,8 +56,8 @@ vi.mock('../../utils/upload.js', async (importOriginal) => {
     getUploadDirectory: vi.fn(actual.getUploadDirectory),
   };
 });
-vi.mock('../../utils/executor-read-impersonation.js', () => ({
-  resolveExecutorReadAsUser: vi.fn(async () => undefined),
+vi.mock('../../utils/executor-delegated-home.js', () => ({
+  resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
@@ -71,6 +71,7 @@ vi.mock('../../utils/upload-staging.js', () => ({
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
   return {
+    get: () => ({}),
     service: (name: string) => {
       const svc = services[name];
       if (!svc) throw new Error(`Unexpected service call: ${name}`);

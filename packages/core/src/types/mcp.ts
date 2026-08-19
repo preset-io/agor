@@ -14,21 +14,209 @@ import type { SessionID, UserID, UUID } from './id';
 export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
 
 /**
+ * Durable identity for one browser-based MCP OAuth authorization attempt.
+ *
+ * This identifier is safe to expose to the initiating user for status reads.
+ * It is not the OAuth `state` capability: PostgreSQL stores only a SHA-256
+ * fingerprint of that high-entropy, one-time value.
+ */
+export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
+
+/** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
+export type MCPOAuthPendingFlowStatus =
+  | 'pending'
+  | 'exchanging'
+  | 'succeeded'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired';
+
+/** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
+export type MCPOAuthAttemptStatus = MCPOAuthPendingFlowStatus | 'not_found';
+
+export interface MCPOAuthAttemptResult {
+  status: MCPOAuthAttemptStatus;
+  mcp_server_id?: MCPServerID;
+  oauth_mode?: MCPOAuthMode;
+  failure_code?: string;
+}
+
+export interface MCPOAuthStatusResult {
+  authenticated_server_ids: MCPServerID[];
+}
+
+export interface MCPOAuthRefreshResult {
+  success: boolean;
+  expires_at?: number;
+  error?: string;
+}
+
+/** Credential subject selected for the resulting MCP OAuth grant. */
+export type MCPOAuthMode = 'per_user' | 'shared';
+
+/**
+ * Dynamic Client Registration policy.
+ *
+ * A value array rather than a bare union because the catalog loader validates
+ * this field out of a YAML file, and a `z.enum` built from the type is the only
+ * arrangement in which the accepted strings cannot drift from the ones
+ * {@link MCPAuth.oauth_dcr_mode} is declared to hold.
+ */
+export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as const;
+
+export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
+
+/** Strictness of OAuth authorization-metadata discovery. See {@link MCP_OAUTH_DCR_MODES}. */
+export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
+
+export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
+
+/**
+ * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
+ *
+ * This closed shape classifies recovery without carrying provider response
+ * text, credentials, or OAuth protocol secrets across the process boundary.
+ */
+export interface MCPOAuthDCRDiagnostic {
+  stage: 'dcr_endpoint_discovery' | 'dcr_registration';
+  http_status?: number;
+  registration_endpoint_source?: 'metadata' | 'legacy_fallback';
+}
+
+export interface MCPOAuthStartFailure {
+  success: false;
+  error: string;
+  diagnostic?: MCPOAuthDCRDiagnostic;
+  redirect_uri?: string;
+}
+
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
+
+export function isMCPOAuthGrantBindingVersion(
+  value: unknown
+): value is MCPOAuthGrantBindingVersion {
+  return (
+    typeof value === 'number' &&
+    MCP_OAUTH_GRANT_BINDING_VERSIONS.includes(value as MCPOAuthGrantBindingVersion)
+  );
+}
+
+/**
+ * Secret-bearing material required to exchange an authorization code.
+ * PostgreSQL stores this structure only inside an authenticated encrypted
+ * envelope derived from AGOR_MASTER_SECRET. Binding fields are duplicated in
+ * the row and verified after decryption so ciphertext cannot be moved between
+ * attempts, users, tenants, or MCP servers.
+ */
+export interface MCPOAuthPendingFlowSealedMaterial {
+  version: 2;
+  attemptId: MCPOAuthAttemptID;
+  tenantId: string;
+  userId: UserID;
+  mcpServerId: MCPServerID;
+  oauthMode: MCPOAuthMode;
+  grantGeneration: number;
+  configFingerprintVersion: MCPOAuthGrantBindingVersion;
+  configFingerprint: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  metadataUrl: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  pkceVerifier: string;
+  clientId: string;
+  clientSecret?: string;
+  compatibilityMode: 'strict' | 'legacy';
+  allowLocalhostHttp: boolean;
+}
+
+/**
+ * What a non-admin member may do with MCP server configuration, tenant-wide.
+ *
+ * "Configuration" is the caller-supplied surface — the fields somebody submits
+ * to create, update, or delete a server. Capability refresh is not on it:
+ * `mcp-servers/discover` opens the server's own transport and writes back the
+ * `tools` / `resources` / `prompts` that endpoint reported, which is nobody's
+ * submission. It answers to its own owner-or-admin rule
+ * (`denyDiscoverOfAnotherUsersServer`) instead, so that a member who may no
+ * longer configure servers can still refresh one that is already running in
+ * their sessions — revoking refresh would leave the stale tool list the agent
+ * actually sees, not stop the server being used.
+ *
+ * - `use_existing_only` — members attach servers an admin already configured;
+ *   they create nothing. The default, and the only behaviour that existed
+ *   before private servers.
+ * - `allow_private_only` — members create servers owned by themselves. A
+ *   private server is usable only in its owner's sessions.
+ * - `allow_crud` — members additionally create, update, and delete shared
+ *   (unowned) servers, the way an admin does. Another member's private server
+ *   stays out of reach under every value.
+ *
+ * Under both permissive values members are restricted to remote transports:
+ * a `stdio` server is a command line the executor runs on its host, which is a
+ * different grant from "may point Agor at an HTTP endpoint".
+ */
+export const MCP_MEMBER_POLICIES = [
+  'use_existing_only',
+  'allow_private_only',
+  'allow_crud',
+] as const;
+
+export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
+
+export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
+
+/**
+ * The payload of the `mcp-member-policy` endpoint, read and written.
+ *
+ * A wrapper rather than the bare value so the setting can gain a field — who
+ * last changed it, whether a per-user override applies — without every caller
+ * changing shape.
+ */
+export interface MCPMemberPolicySetting {
+  policy: MCPMemberPolicy;
+  /**
+   * Whether this caller may configure servers at all — role floor and policy
+   * together, answered by the daemon so a client greys out its control instead
+   * of rebuilding the rule. Advisory: the write path is what authorizes.
+   */
+  can_configure: boolean;
+}
+
+/**
  * MCP transport types
  */
-export type MCPTransport = 'stdio' | 'http' | 'sse';
+export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
+
+export type MCPTransport = (typeof MCP_TRANSPORTS)[number];
 
 /**
- * MCP server scope levels
- * - global: User's personal MCP servers (available to all sessions)
- * - session: MCP servers assigned to specific sessions via junction table
+ * MCP server scope levels. Orthogonal to ownership: `scope` says how a server
+ * reaches a session, `owner_user_id` says whose sessions it may reach.
+ * - global: in every session's effective set without being attached
+ * - session: only in the sessions it is attached to, via the junction table
+ *
+ * `mcp_member_policy` is the one place the two are not free of each other: see
+ * `mayMemberUseMCPScope` in `@agor/core/mcp/member-policy`.
  */
-export type MCPScope = 'global' | 'session';
+export const MCP_SCOPES = ['global', 'session'] as const;
+
+export type MCPScope = (typeof MCP_SCOPES)[number];
 
 /**
- * MCP server source types
+ * Where a server's configuration came from.
+ *
+ * - `user`: somebody typed it, through the UI or `POST /mcp-servers`
+ * - `imported`: read out of a file on disk; `import_path` records which
+ * - `agor`: Agor's own built-in server
+ * - `catalog`: installed from the marketplace; `catalog_entry_name` records
+ *   which entry, the way `import_path` records which file
+ *
+ * This is provenance, not authorization — nothing reads it to decide access.
  */
-export type MCPSource = 'user' | 'imported' | 'agor';
+export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 
 /**
  * MCP server authentication configuration
@@ -48,6 +236,14 @@ export interface MCPAuth {
   oauth_client_secret?: string;
   oauth_scope?: string;
   oauth_grant_type?: string;
+  /** Strict current MCP Authorization behavior is the default. */
+  oauth_compatibility_mode?: MCPOAuthCompatibilityMode;
+  /**
+   * Dynamic Client Registration policy. Missing values use `advertised` for
+   * compatibility with servers that publish an RFC 7591 endpoint. The
+   * `fallback` mode additionally permits the legacy guessed `/register` URL.
+   */
+  oauth_dcr_mode?: MCPOAuthDCRMode;
   // OAuth 2.1 runtime tokens (obtained via browser flow)
   oauth_access_token?: string;
   oauth_token_expires_at?: number; // Unix timestamp in milliseconds
@@ -150,11 +346,27 @@ export interface MCPServer {
 
   // Scope
   scope: MCPScope;
-  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
+  /**
+   * Owner of a private server, or undefined for a shared one.
+   *
+   * A private server is reachable only from sessions its owner created — see
+   * `isMCPServerUsableInSession`. Immutable after creation: transferring one
+   * would move a configured credential to another identity.
+   */
+  owner_user_id?: UserID;
 
   // Metadata
   source: MCPSource;
   import_path?: string; // e.g., "/Users/me/project/.mcp.json"
+  /**
+   * The catalog entry this server was installed from, if any.
+   *
+   * Stamped as the entry's reverse-DNS catalog name, which is what the entry is
+   * unique on. Every other field of an entry can be rewritten without the
+   * install ceasing to be an install of it, so the name is the only thing worth
+   * recording here — and renaming an entry is what orphans one.
+   */
+  catalog_entry_name?: string;
   enabled: boolean;
 
   // Capabilities (discovered from server)
@@ -190,6 +402,10 @@ export interface MCPServerFilters {
   transport?: MCPTransport;
   enabled?: boolean;
   source?: MCPSource;
+  /** Shared servers plus private servers owned by this user. */
+  usableByUserId?: string;
+  /** Restrict to system-owned rows, used for the official catalog. */
+  ownerless?: boolean;
 }
 
 /**
@@ -207,9 +423,10 @@ export interface CreateMCPServerInput {
   env?: Record<string, string>;
   auth?: MCPAuth;
   scope: MCPScope;
-  owner_user_id?: UserID; // For 'global' scope (which user owns this server)
+  owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
   import_path?: string;
+  catalog_entry_name?: string;
   enabled?: boolean;
 }
 

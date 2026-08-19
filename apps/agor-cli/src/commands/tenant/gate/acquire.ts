@@ -29,6 +29,7 @@ import {
 const EXIT_ALREADY_HELD = 3;
 
 export default class TenantGateAcquire extends Command {
+  static override summary = 'Freeze writes for one tenant';
   static override description =
     "Acquire the per-tenant write gate, freezing the tenant's writes and returning a generation-bound " +
     'proof. Refuses if a gate is already held unless --force replaces it (minting a new generation). ' +

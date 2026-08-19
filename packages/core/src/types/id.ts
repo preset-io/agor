@@ -28,6 +28,14 @@
  */
 export type UUID = string & { readonly __brand: 'UUID' };
 
+/** Full lowercase UUID storage form accepted by query and persistence boundaries. */
+export function isCanonicalFullUuid(value: unknown): value is UUID {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
 export type GroupID = UUID & { readonly __entity: 'Group' };
 
 /**
@@ -143,7 +151,7 @@ export function toShortId(id: AnyShortId, length: number = SHORT_ID_LENGTH): Sho
  * browser-safe `@agor/core/client` surface for the React UI.
  *
  * @example
- * shortId("01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f") // => "01933e4a7b897c35a8f3"
+ * shortId("01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f") // => "01933e4a7b897c35a8f39d2e"
  */
 export function shortId(id: AnyShortId): ShortID {
   return toShortId(id, SHORT_ID_LENGTH);

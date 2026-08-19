@@ -28,19 +28,11 @@ RUN apt-get update && apt-get install -y \
   jq \
   less \
   tree \
-  openssh-server \
-  acl \
+  openssh-client \
   ripgrep \
+  bubblewrap \
   && rm -rf /var/lib/apt/lists/*
-
-# Configure SSH server for multi-user testing (used in postgres profile)
-RUN mkdir -p /run/sshd && \
-  # Enable password authentication
-  sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-  # Disable root login
-  sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
-  # Allow all users to login
-  echo 'AllowUsers agor alice bob' >> /etc/ssh/sshd_config
+# bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility
@@ -56,15 +48,9 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
   mv /tmp/gh_*/bin/gh /usr/local/bin/ && \
   rm -rf /tmp/gh_*
 
-# Install pnpm and AI coding agent CLIs
-# Pinned versions for reproducibility across dev and prod
-# NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
-RUN npm install -g \
-  pnpm@11.17.0 \
-  @anthropic-ai/claude-code@2.1.197 \
-  @google/gemini-cli@0.31.0 \
-  @openai/codex@0.141.0 \
-  opencode-ai@1.2.15
+# Install only the workspace package manager in the shared image. Agentic-tool
+# runtimes are not part of production unless explicitly installed through Agor.
+RUN npm install -g pnpm@11.17.0
 
 # Arguments for matching host user UID/GID (default to 1000)
 ARG UID=1000
@@ -85,28 +71,18 @@ RUN set -eux; \
       groupmod -n agor -g "${GID}" node; \
     fi; \
     usermod -g agor agor; \
-    # Grant passwordless sudo for fixing volume permissions and executor spawning
+    # Development image only: allow the entrypoint to repair bind-mount ownership.
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
     chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
     mkdir -p /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
-# Create 'agor_executor' user (unprivileged user for isolated SDK execution)
-# This user has no sudo privileges and limited permissions
-RUN useradd -m -s /bin/bash agor_executor && \
-    # Create home directory with restricted permissions
-    mkdir -p /home/agor_executor/.agor && \
-    chown -R agor_executor:agor_executor /home/agor_executor
-
-# Copy Zellij config for both users
+# Copy Zellij config for the daemon user.
 COPY docker/zellij-config.kdl /tmp/zellij-config.kdl
 RUN mkdir -p /home/agor/.config/zellij && \
-    mkdir -p /home/agor_executor/.config/zellij && \
     cp /tmp/zellij-config.kdl /home/agor/.config/zellij/config.kdl && \
-    cp /tmp/zellij-config.kdl /home/agor_executor/.config/zellij/config.kdl && \
     chown -R agor:agor /home/agor/.config && \
-    chown -R agor_executor:agor_executor /home/agor_executor/.config && \
     rm /tmp/zellij-config.kdl
 
 # Set working directory
@@ -120,6 +96,10 @@ USER agor
 # ============================================================================
 FROM base AS development
 
+# Source mode resolves OpenCode from PATH; keep its exact development runtime
+# out of the shared production base.
+RUN sudo npm install -g opencode-ai@1.14.33
+
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/agor-daemon/package.json ./apps/agor-daemon/
@@ -127,6 +107,8 @@ COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
 COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
+COPY packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencode/
+COPY packages/agentic-tools/package.json ./packages/agentic-tools/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
 COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
@@ -159,7 +141,7 @@ FROM base AS production
 # Switch back to root to install global npm packages
 USER root
 
-# Install agor-live globally from npm
+# Install agor-live globally from npm.
 # This installs both the CLI and daemon binaries
 RUN npm install -g agor-live@latest
 
@@ -183,18 +165,13 @@ ENTRYPOINT ["docker-entrypoint-prod.sh"]
 # Builds agor-live from THIS checkout via packages/agor-live/build.sh (turbo
 # build → copies each package's dist/ into agor-live/dist/{core,git,cli,daemon,
 # executor,ui} — the exact layout the npm package ships), then produces a
-# self-contained prod deployment with `pnpm deploy`: agor-live's bin/ + dist/ +
-# prod-only node_modules, with no monorepo source, dev deps, or pnpm store.
+# immutable release tarballs, then installs those tarballs into an isolated
+# global prefix with lifecycle scripts disabled. The runtime therefore uses the
+# same scriptless artifact that npm users and release CI exercise.
 FROM base AS source-builder
 
 USER root
 WORKDIR /app
-
-# Native-module toolchain (node-pty etc.) for the deploy step's install
-# lifecycle. Confined to this throwaway builder — never in the runtime image.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential python3 \
-  && rm -rf /var/lib/apt/lists/*
 
 # Full monorepo source. .dockerignore keeps node_modules/, dist/ and .git out.
 COPY . .
@@ -207,33 +184,23 @@ COPY . .
 ARG AGOR_BUILD_SHA=""
 ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
 
-# Install workspace deps (dev deps needed for the turbo build), build agor-live
-# from source, then deploy a prod-only, self-contained tree to /opt/agor-live.
-# build.sh --skip-install avoids a redundant install; it also runs
-# check:agor-live-deps and check:pack, which gate the build. dist/ is in the
-# package's `files` allowlist, so `pnpm deploy` carries it into the output, and
-# agor-live's postinstall re-creates the @agor/{core,git} → dist symlinks there.
-# pnpm 11's explicit legacy deploy mode preserves that established packaged layout;
-# injected workspace packages would replace it with copies of workspace projects.
+# Install workspace deps (dev deps needed for the turbo build), build the exact
+# release artifacts, then perform a script-disabled install. Supplying the
+# locally packed client alongside agor-live keeps this pre-publication build
+# independent of registry publication order.
 RUN pnpm install --frozen-lockfile \
   && bash packages/agor-live/build.sh --skip-install \
-  && pnpm --filter=agor-live deploy --prod --legacy /opt/agor-live
-
-# `pnpm deploy` runs agor-live's postinstall against the workspace copy, not the
-# deploy output — so the @agor/{core,git} → dist symlinks it creates never land
-# in /opt/agor-live. Re-run the packaged postinstall (shipped via the package's
-# `files` allowlist) against the deployed tree so the symlink layout stays
-# defined in exactly one place. The script warns instead of failing, so assert
-# the links resolve — a broken image must fail the build, not the smoke test.
-RUN node /opt/agor-live/scripts/postinstall.js \
-  && test -e /opt/agor-live/node_modules/@agor/core \
-  && test -e /opt/agor-live/node_modules/@agor/git
+  && npm install -g --prefix /opt/agor-runtime --ignore-scripts --no-audit --no-fund \
+       packages/agor-live/release/agor-live-client-*.tgz \
+       packages/agor-live/release/agor-live-[0-9]*.tgz \
+  && test -d /opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core \
+  && test -d /opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/git
 
 # ============================================================================
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
 # ============================================================================
-# Same runtime shape as `production` (inherits base: Zellij, gh, and the
-# Claude/Codex/Gemini/OpenCode CLIs), but ships agor-live built from source
+# Same runtime shape as `production` (inherits the shared base with Zellij and
+# gh, but no agentic-tool runtimes), while shipping agor-live built from source
 # instead of `npm install -g agor-live@latest`. Only the deployed artifact is
 # copied in — the multi-GB builder (source + dev deps + store) is left behind.
 #
@@ -242,15 +209,16 @@ FROM base AS production-source
 
 USER root
 
-# The one thing we keep from the builder: the self-contained agor-live tree.
-# Copied to the SAME path so its internal (relative) symlinks stay valid.
-COPY --from=source-builder /opt/agor-live /opt/agor-live
+# The one thing we keep from the builder: the isolated global npm prefix.
+COPY --chown=agor:agor --from=source-builder /opt/agor-runtime /opt/agor-runtime
 
-# Put the bins on PATH (shebang: #!/usr/bin/env node); they resolve deps + dist
-# entirely within /opt/agor-live.
-RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
-  && ln -sf /opt/agor-live/bin/agor-daemon.js /usr/local/bin/agor-daemon \
-  && chmod +x /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
+# Put the npm-generated global bins on PATH. They resolve dependencies and the
+# bundled internal modules entirely within /opt/agor-runtime.
+RUN ln -sf /opt/agor-runtime/bin/agor /usr/local/bin/agor \
+  && ln -sf /opt/agor-runtime/bin/agor-daemon /usr/local/bin/agor-daemon \
+  && chmod a+rx \
+       /opt/agor-runtime/lib/node_modules/agor-live/bin/agor.js \
+       /opt/agor-runtime/lib/node_modules/agor-live/bin/agor-daemon.js
 
 # Reuse the production entrypoint (agor init → db migrate → exec agor-daemon).
 COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
@@ -261,3 +229,25 @@ USER agor
 
 EXPOSE ${DAEMON_PORT:-3030}
 ENTRYPOINT ["docker-entrypoint-prod.sh"]
+
+# ============================================================================
+# Stage 4c: Production-from-source HA smoke runtime
+# ============================================================================
+# Branch worktrees can be protected by host ACLs that the container's `agor`
+# user cannot read through a bind mount. Bake the non-secret HA configuration
+# into the image instead, then materialize it atomically into the shared Agor
+# home at container startup. Secrets remain runtime environment variables.
+FROM production-source AS production-source-ha
+
+USER root
+COPY docker/ha/config.yaml /tmp/agor-ha-config.yaml
+COPY docker/ha/docker-entrypoint.sh /tmp/agor-ha-entrypoint
+# COPY can preserve restrictive worktree ACLs, including on an implicitly
+# created parent directory. `install` creates clean files and permissions.
+RUN install -d -o root -g root -m 0755 /etc/agor \
+  && install -o root -g root -m 0444 /tmp/agor-ha-config.yaml /etc/agor/ha-config.yaml \
+  && install -o root -g root -m 0555 /tmp/agor-ha-entrypoint /usr/local/bin/agor-ha-entrypoint \
+  && rm /tmp/agor-ha-config.yaml /tmp/agor-ha-entrypoint
+USER agor
+
+ENTRYPOINT ["/usr/local/bin/agor-ha-entrypoint"]

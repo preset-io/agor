@@ -25,6 +25,7 @@ import { deleteTenantData, TenantDeletionCatalogError } from './tenant-deletion'
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
+const postgresAdminUrl = process.env.AGOR_TEST_POSTGRES_ADMIN_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 
 // int4 column; keep values small and monotonically unique across seeds.
@@ -593,10 +594,23 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     }
   });
 
-  it('fails closed when live-catalog discovery is empty', async () => {
+  it('plans a deletion covering every table in the live catalogue', async () => {
+    // Nothing is declared global, so the audit has to reach the end with every
+    // discovered tenant-contract table in the plan. The guards for a table that
+    // is declared global are driven directly in
+    // `tenant-deletion-global-fk.test.ts`, which is the only place that shape
+    // can be built while GLOBAL_TABLES is empty.
+    const plan = await deleteTenantData(db, `td-global-${generateId()}`, { dryRun: true });
+
+    expect(plan.rowCounts.sessions).toBe(0);
+    expect(Object.keys(plan.rowCounts).length).toBeGreaterThan(0);
+  });
+
+  it.skipIf(!postgresAdminUrl)('fails closed when live-catalog discovery is empty', async () => {
     const databaseName = `tdel_empty_${generateId().replaceAll('-', '').slice(0, 20)}`;
     const databaseUrl = new URL(postgresUrl!);
     databaseUrl.pathname = `/${databaseName}`;
+    const adminDb = createDatabase({ dialect: 'postgresql', url: postgresAdminUrl! });
     let emptyDb: Database | undefined;
 
     try {
@@ -609,7 +623,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
         throw new Error('Expected an applied migration watermark');
       }
 
-      await executeRaw(db, sql`CREATE DATABASE ${sql.identifier(databaseName)}`);
+      await executeRaw(
+        adminDb,
+        sql`CREATE DATABASE ${sql.identifier(databaseName)} OWNER agor_app`
+      );
       emptyDb = createDatabase({ dialect: 'postgresql', url: databaseUrl.toString() });
       await executeRaw(emptyDb, sql`CREATE SCHEMA drizzle`);
       await executeRaw(
@@ -636,10 +653,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     } finally {
       if (emptyDb) await closePostgresDatabase(emptyDb);
       await executeRaw(
-        db,
+        adminDb,
         sql`SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = ${databaseName}`
       );
-      await executeRaw(db, sql`DROP DATABASE IF EXISTS ${sql.identifier(databaseName)}`);
+      await executeRaw(adminDb, sql`DROP DATABASE IF EXISTS ${sql.identifier(databaseName)}`);
+      await closePostgresDatabase(adminDb);
     }
   });
 

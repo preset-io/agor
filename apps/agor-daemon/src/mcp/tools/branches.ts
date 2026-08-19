@@ -1,9 +1,9 @@
-import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
   Board,
   BoardID,
   Branch,
+  BranchFilesystemAction,
   BranchID,
   Repo,
   Session,
@@ -14,7 +14,7 @@ import type {
 import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
   BoardsServiceImpl,
@@ -23,7 +23,7 @@ import type {
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -126,10 +126,10 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
 }
 
 async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
-  if (!isBranchRbacEnabled()) return false;
+  if (ctx.app.get('config').execution?.branch_rbac !== true) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
-  const config = await loadConfig();
+  const config = ctx.app.get('config');
   const allowSuperadmin = config.execution?.allow_superadmin === true;
   return !isSuperAdmin(ctx.authenticatedUser?.role, allowSuperadmin);
 }
@@ -305,7 +305,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem.'
           ),
-        limit: mcpLimit(50),
+        limit: mcpLimit(50, 100),
         skip: mcpOptionalNonNegativeInt(
           'skip',
           'Number of filtered candidates to skip (default: 0)'
@@ -365,8 +365,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         },
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',
-          asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-            resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+          delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            resolveDelegatedExecutionHomeKey(
+              db,
+              ctx.authenticatedUser.user_id,
+              ctx.app.get('config')
+            )
           ),
         }
       );
@@ -1084,7 +1088,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Handle owner additions/removals via the owners service (includes unix sync hooks)
       const ownerErrors: string[] = [];
       if (hasOwnerChanges) {
-        if (!isBranchRbacEnabled()) {
+        if (ctx.app.get('config').execution?.branch_rbac !== true) {
           ownerErrors.push(
             'Owner changes ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
           );
@@ -1454,14 +1458,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction =
-        (args.filesystemAction as 'preserved' | 'cleaned' | 'deleted') || 'cleaned';
-      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      const result = await branchesService.archiveOrDelete(
-        branchId as BranchID,
-        { metadataAction: 'archive', filesystemAction },
-        ctx.baseServiceParams
-      );
+      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
+      const result = await ctx.app
+        .service('/branches/:id/archive-or-delete')
+        .create(
+          { metadataAction: 'archive', filesystemAction },
+          { ...ctx.baseServiceParams, route: { id: branchId } }
+        );
       return textResult({
         success: true,
         branch: result,
@@ -1526,13 +1529,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as 'preserved' | 'deleted') || 'deleted';
-      const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      await branchesService.archiveOrDelete(
-        branchId as BranchID,
-        { metadataAction: 'delete', filesystemAction },
-        ctx.baseServiceParams
-      );
+      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'deleted';
+      await ctx.app
+        .service('/branches/:id/archive-or-delete')
+        .create(
+          { metadataAction: 'delete', filesystemAction },
+          { ...ctx.baseServiceParams, route: { id: branchId } }
+        );
       return textResult({
         success: true,
         branch_id: branchId,
@@ -1541,8 +1544,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  const listTeammatesHandler = async (args: { repoId?: string; limit?: number }) => {
-    const limit = args.limit || 200;
+  const listTeammatesHandler = async (args: {
+    repoId?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const limit = args.limit ?? 25;
+    const offset = args.offset ?? 0;
     const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
 
     const userScoped = await shouldScopeTeammateDiscoveryToUser(ctx);
@@ -1551,7 +1559,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         archived: false,
         ...(repoId ? { repo_id: repoId as UUID } : {}),
         ...(userScoped ? { userId: ctx.userId as UUID } : {}),
-        limit,
+        // One-row look-ahead supplies hasMore without loading the full set.
+        // Tenant/RBAC predicates are applied by the repository before paging.
+        limit: limit + 1,
+        offset,
       })
     );
 
@@ -1569,9 +1580,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
     });
 
+    const hasMore = shaped.length > limit;
+    const page = shaped.slice(0, limit);
     return textResult({
-      total: shaped.length,
-      teammates: shaped,
+      total: hasMore ? null : offset + page.length,
+      limit,
+      offset,
+      hasMore,
+      nextOffset: hasMore ? offset + page.length : null,
+      teammates: page,
     });
   };
 
@@ -1580,11 +1597,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_teammates_list',
     {
       description:
-        "List all teammates (long-lived AI teammates with schedules). Returns each teammate's name, description, schedule status, and last activity timestamp. Use this to discover other teammates on the platform.",
+        'List a page of teammates (long-lived AI teammates with schedules). Authorization is applied before paging. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),
-        limit: mcpLimit(200),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
       }),
     },
     listTeammatesHandler

@@ -72,6 +72,14 @@ export function redactMCPCustomHeaders(
   );
 }
 
+/**
+ * INVARIANT: the sentinel is never persisted. See the long-form rationale on
+ * `restoreRedactedMCPEnvSecrets` — a submitted sentinel is a claim of
+ * "unchanged", never a value, so when there is nothing stored to restore (a
+ * stale form whose header a concurrent edit removed) the key is dropped
+ * rather than written. Storing it would send `••••••••` upstream as a literal
+ * header value.
+ */
 export function restoreRedactedMCPCustomHeaders(options: {
   current?: Record<string, string>;
   next?: Record<string, string>;
@@ -80,10 +88,12 @@ export function restoreRedactedMCPCustomHeaders(options: {
 
   const restored: Record<string, string> = {};
   for (const [key, value] of Object.entries(options.next)) {
-    restored[key] =
-      value === MCP_HEADER_REDACTED_SENTINEL && options.current?.[key] !== undefined
-        ? options.current[key]
-        : value;
+    if (value === MCP_HEADER_REDACTED_SENTINEL) {
+      const stored = options.current?.[key];
+      if (stored !== undefined) restored[key] = stored;
+      continue;
+    }
+    restored[key] = value;
   }
 
   return normalizeMCPCustomHeaders(restored);

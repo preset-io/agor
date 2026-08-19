@@ -359,6 +359,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client}
+          branchId={branchId}
+          validateModelSelection
           enableSaveAsDefault
           onConfigValidityChange={handleConfigValidity}
         />

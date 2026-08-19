@@ -13,6 +13,7 @@ import type {
   KnowledgeGraphNodeType,
   KnowledgeNamespace,
   KnowledgeVisibility,
+  KnowledgeWriteAttribution,
   TeammateKnowledgeGrantAccess,
   User,
   UserRole,
@@ -32,7 +33,7 @@ import {
   normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { createTwoFilesPatch } from 'diff';
 import { z } from 'zod';
 import {
@@ -50,7 +51,7 @@ import {
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
-import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -59,10 +60,12 @@ import {
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
+  mcpOffset,
   mcpOptionalId,
   mcpOptionalNonBlankString,
   mcpOptionalPositiveInt,
   mcpOptionalString,
+  mcpPageResult,
   mcpRequiredId,
   mcpRequiredPositiveInt,
   mcpRequiredString,
@@ -290,7 +293,31 @@ function knowledgeNotImplementedResult(toolName: string, servicePaths: string[])
 }
 
 function mcpParams(ctx: McpContext, query?: Record<string, unknown>): Record<string, unknown> {
-  return query ? { ...ctx.baseServiceParams, query } : { ...ctx.baseServiceParams };
+  return {
+    ...ctx.baseServiceParams,
+    ...(query ? { query } : {}),
+  };
+}
+
+async function knowledgeWriteParams(ctx: McpContext): Promise<Record<string, unknown>> {
+  const session = ctx.authenticatedSession;
+  if (!session) return mcpParams(ctx);
+
+  let teammateName: string | undefined;
+  try {
+    const branch = await ctx.app.service('branches').get(session.branch_id, ctx.baseServiceParams);
+    teammateName = getTeammateConfig(branch)?.displayName.trim() || undefined;
+  } catch (error) {
+    // A deleted branch must not erase the already-authorized Session/tool forensic trail.
+    if (!(error instanceof NotFound)) throw error;
+  }
+
+  const knowledgeWriteAttribution: KnowledgeWriteAttribution = {
+    sessionId: session.session_id,
+    agenticTool: session.agentic_tool,
+    ...(teammateName ? { teammateName } : {}),
+  };
+  return { ...ctx.baseServiceParams, knowledgeWriteAttribution };
 }
 
 /**
@@ -728,8 +755,8 @@ async function runBranchKnowledgeCommand(
     },
     {
       logPrefix: `[Knowledge ${command}]`,
-      asUser: await runWithMcpTenantDatabaseScope(ctx, (db) =>
-        resolveExecutorReadAsUser(db, ctx.authenticatedUser.user_id)
+      delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        resolveDelegatedExecutionHomeKey(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
       ),
     }
   );
@@ -1101,7 +1128,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
   server.registerTool(
     'agor_kb_namespaces_list',
     {
-      description: 'List Knowledge namespaces/spaces available to the current user.',
+      description:
+        'List a lean page of Knowledge namespaces available to the current user. Metadata is omitted by default; pass lean:false for full records. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         slug: mcpOptionalNonBlankString('slug', 'Filter by namespace/space slug'),
@@ -1110,6 +1138,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .optional()
           .describe('Filter by namespace kind'),
         includeArchived: z.boolean().optional().describe('Include archived namespaces'),
+        limit: mcpLimit(10, 100),
+        offset: mcpOffset(0),
+        lean: z.boolean().optional().describe('Return compact records (default: true).'),
       }),
     },
     async (args) => {
@@ -1121,7 +1152,43 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (args.slug) query.slug = coerceString(args.slug);
       if (args.kind) query.kind = args.kind;
 
-      if (service.find) return textResult(await service.find(mcpParams(ctx, query)));
+      if (service.find) {
+        const limit = args.limit ?? 10;
+        const offset = args.offset ?? 0;
+        // This authorization-aware service intentionally returns an array after
+        // resolving per-namespace permissions. Page only after that filtering.
+        const authorized = (await service.find(mcpParams(ctx, query))) as KnowledgeNamespace[];
+        const page = mcpPageResult<KnowledgeNamespace>(
+          {
+            data: authorized.slice(offset, offset + limit),
+            total: authorized.length,
+            limit,
+            skip: offset,
+          },
+          limit,
+          offset
+        );
+        if (args.lean === false) return textResult(page);
+        return textResult({
+          ...page,
+          data: page.data.map((namespace: KnowledgeNamespace) => ({
+            namespace_id: namespace.namespace_id,
+            slug: namespace.slug,
+            display_name: namespace.display_name,
+            description: namespace.description,
+            kind: namespace.kind,
+            owner_user_id: namespace.owner_user_id,
+            repo_id: namespace.repo_id,
+            branch_id: namespace.branch_id,
+            visibility_default: namespace.visibility_default,
+            others_can: namespace.others_can,
+            effective_permission: namespace.effective_permission,
+            archived: namespace.archived,
+            created_at: namespace.created_at,
+            updated_at: namespace.updated_at,
+          })),
+        });
+      }
       return knowledgeNotImplementedResult('agor_kb_namespaces_list', ['kb/namespaces.find']);
     }
   );
@@ -1194,7 +1261,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_tree',
     {
       description:
-        'Browse a Knowledge namespace as a compact folder/document tree. Use this for “show me what is in this namespace” before calling agor_kb_get, agor_kb_outline, or agor_kb_get_range. Returns icon/title/kind/path/URI/reference_uri/status only; no version metadata or content. Uses the same readable namespace and draft visibility rules as agor_kb_search.',
+        'Browse a page of a Knowledge namespace as a compact folder/document tree. Use this for “show me what is in this namespace” before calling agor_kb_get, agor_kb_outline, or agor_kb_get_range. Returns no content. Advance with offset=pagination.nextOffset while pagination.hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         namespace: z
@@ -1242,7 +1309,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .positive('limit must be greater than 0.')
           .max(100, 'limit must be less than or equal to 100.')
           .optional()
-          .describe('Maximum number of documents to include (default: 100, max: 100).'),
+          .describe('Maximum number of documents to include (default: 25, max: 100).'),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
@@ -1256,7 +1324,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         include_archived: args.includeArchived === true,
         include_my_drafts: args.includeMyDrafts !== false,
         include_other_user_drafts: args.includeOtherUserDrafts === true,
-        limit: args.limit ?? 100,
+        limit: (args.limit ?? 25) + 1,
+        offset: args.offset ?? 0,
       };
       if (normalizedPathPrefix) query.path_prefix = normalizedPathPrefix;
       if (args.kind) query.kind = args.kind as KnowledgeDocumentKind;
@@ -1264,7 +1333,24 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
 
       if (service.find) {
         const result = await service.find(mcpParams(ctx, query));
-        return textResult(shapeKnowledgeTreeResponse(result, { ...args, normalizedPathPrefix }));
+        const rows = knowledgeSearchRows(result);
+        const limit = args.limit ?? 25;
+        const offset = args.offset ?? 0;
+        const hasMore = rows.length > limit;
+        const shaped = shapeKnowledgeTreeResponse(rows.slice(0, limit), {
+          ...args,
+          limit,
+          normalizedPathPrefix,
+        }) as Record<string, unknown>;
+        return textResult({
+          ...shaped,
+          pagination: {
+            limit,
+            offset,
+            hasMore,
+            nextOffset: hasMore ? offset + limit : null,
+          },
+        });
       }
       return knowledgeNotImplementedResult('agor_kb_tree', ['kb/search.find']);
     }
@@ -1314,7 +1400,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Include archived documents (default: false)'),
-        limit: mcpLimit(20),
+        limit: mcpLimit(20, 100),
         mode: z
           .enum(['text', 'semantic', 'hybrid'])
           .optional()
@@ -1772,14 +1858,15 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         );
       }
 
-      const customResult = await callCustomMethod(service, 'putDocument', data, mcpParams(ctx));
+      const writeParams = await knowledgeWriteParams(ctx);
+      const customResult = await callCustomMethod(service, 'putDocument', data, writeParams);
       if (customResult !== undefined) return textResult(customResult);
 
       if (documentId && service.patch) {
-        return textResult(await service.patch(documentId, data, mcpParams(ctx)));
+        return textResult(await service.patch(documentId, data, writeParams));
       }
 
-      if (service.create) return textResult(await service.create(data, mcpParams(ctx)));
+      if (service.create) return textResult(await service.create(data, writeParams));
       return knowledgeNotImplementedResult('agor_kb_put', [
         'kb/documents.putDocument',
         'kb/documents.patch',
@@ -1816,7 +1903,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       } as Record<string, unknown>;
 
       if (service.create) {
-        return textResult(await service.create(data, mcpParams(ctx)));
+        return textResult(await service.create(data, await knowledgeWriteParams(ctx)));
       }
       return knowledgeNotImplementedResult('agor_kb_edit', ['kb/document-edits.create']);
     }
@@ -2026,7 +2113,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
             ],
             returnContent: dryRun ? 'full' : 'none',
           },
-          mcpParams(ctx)
+          await knowledgeWriteParams(ctx)
         )) as Record<string, unknown>;
         const newVersion = editResult.newVersion as Record<string, unknown> | undefined;
         const editedDocument = editResult.document as Record<string, unknown> | undefined;
@@ -2095,7 +2182,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           edit_policy: args.editPolicy as KnowledgeEditPolicy | undefined,
           change_summary: coerceString(args.changeSummary) ?? `Publish from ${workspace.relative}`,
         },
-        mcpParams(ctx)
+        await knowledgeWriteParams(ctx)
       );
       if (customResult !== undefined) {
         const hydrated = await fetchKnowledgeDocument(ctx, {
@@ -2144,7 +2231,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
   server.registerTool(
     'agor_kb_history',
     {
-      description: 'List version history for a Knowledge document.',
+      description:
+        'List a page of version history for a Knowledge document. Advance with offset=nextOffset while hasMore is true.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Knowledge document'),
@@ -2158,7 +2246,8 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .boolean()
           .optional()
           .describe('Include content text for each version (default: false)'),
-        limit: mcpLimit(20).describe('Maximum number of versions (default: 20)'),
+        limit: mcpLimit(20, 100).describe('Maximum number of versions (default: 20)'),
+        offset: mcpOffset(0),
       }),
     },
     async (args) => {
@@ -2184,14 +2273,32 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const path = coerceString(args.path) ?? parsedUri?.path;
       if (namespace) query.namespace_slug = namespace;
       if (path) query.path = path;
-      if (args.limit) query.$limit = args.limit;
       if (!query.document_id && (!query.namespace_slug || !query.path)) {
         throw new Error(
           'Provide documentId, a valid agor://kb/<namespace>/<path> uri, or namespace + path.'
         );
       }
 
-      if (service.find) return textResult(await service.find(mcpParams(ctx, query)));
+      if (service.find) {
+        const limit = args.limit ?? 20;
+        const offset = args.offset ?? 0;
+        // Versions are filtered for document/namespace visibility by the
+        // service before this array is returned. Slice afterward so offset and
+        // totals cannot drift from the authorized set.
+        const authorized = (await service.find(mcpParams(ctx, query))) as unknown[];
+        return textResult(
+          mcpPageResult(
+            {
+              data: authorized.slice(offset, offset + limit),
+              total: authorized.length,
+              limit,
+              skip: offset,
+            },
+            limit,
+            offset
+          )
+        );
+      }
       return knowledgeNotImplementedResult('agor_kb_history', ['kb/versions.find']);
     }
   );
@@ -2261,7 +2368,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           .optional()
           .describe('Optional neighbor node types to include'),
         depth: mcpOptionalPositiveInt('depth', 'Traversal depth (default: 1; V1 may cap at 2)'),
-        limit: mcpLimit(50).describe('Maximum neighbors/edges to return (default: 50)'),
+        limit: mcpLimit(50, 100).describe('Maximum neighbors/edges to return (default: 50)'),
         includeArchived: z
           .boolean()
           .optional()

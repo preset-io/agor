@@ -74,6 +74,12 @@ export interface WidgetRegistryEntry<TParams, TSubmit, TResultMeta> {
    * `params` is the original agent-provided params stored on the widget row —
    * available so the handler can cross-check the submit body against what was
    * originally requested (e.g. env_vars validates names match exactly).
+   *
+   * The durable resolver releases a live claim after this method reports an
+   * error so the user can correct and retry the widget. Implementations must
+   * make that deliberate retry safe (normally by writing desired state
+   * idempotently). Daemon death after an unknown outcome is different: the
+   * claim stays `resolving` and is not replayed.
    */
   applySubmit: (ctx: WidgetSubmitCtx, submit: TSubmit, params: TParams) => Promise<void>;
   /**

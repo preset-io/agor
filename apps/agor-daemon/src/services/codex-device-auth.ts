@@ -30,7 +30,7 @@
  * to any agent/LLM context. Callers act only on their own credentials.
  */
 
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -48,7 +48,7 @@ import { codexIdTokenClaims } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
-  resolveCodexUnixIdentity,
+  resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
 const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
@@ -227,7 +227,8 @@ interface DeviceAuthAttempt {
   userId: UserID;
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
-  targetUnixUser: string | null;
+  delegatedHomeKey: string | null;
+  codexHome?: string;
   phase: CodexDeviceAuthStatus['phase'];
   deviceAuthId: string;
   userCode: string;
@@ -331,9 +332,10 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         persistVerifiedCodexAuth({
           app,
           normalized: buildDeviceAuthJson(tokens),
-          targetUnixUser: attempt.targetUnixUser,
+          delegatedHomeKey: attempt.delegatedHomeKey,
           userId: attempt.userId,
           authUser: attempt.authUser,
+          codexHome: attempt.codexHome,
         })
       );
       attempt.planType = summary.planType;
@@ -393,12 +395,6 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
 
-      const config = loadConfigSync();
-      if (config.multi_tenancy?.mode === 'required_from_auth') {
-        throw new BadRequest(
-          'Codex subscription login is unavailable in hosted multi-tenant mode — use an OpenAI API key instead.'
-        );
-      }
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
       if (
@@ -407,12 +403,15 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         throw new BadRequest('Codex is disabled for this workspace.');
       }
 
-      // Resolve the destination identity up front so a strict-mode user with
-      // no unix_username fails fast instead of after approving the code.
-      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      // Resolve the credential destination before the user approves the code.
+      const identity = await resolveCodexCredentialRoute(
+        userId,
+        withTenantDatabase,
+        app.get('config')
+      );
       if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
+          `Cannot determine which execution home should hold this Codex login: ${identity.message}`
         );
       }
 
@@ -427,7 +426,8 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         userId,
         tenantId,
         authUser,
-        targetUnixUser: identity.unixUser,
+        delegatedHomeKey: identity.delegatedHomeKey,
+        codexHome: identity.codexHome,
         phase: 'pending',
         deviceAuthId: '',
         userCode: '',

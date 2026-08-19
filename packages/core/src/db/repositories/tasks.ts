@@ -10,25 +10,49 @@ import type {
   SdkFailure,
   SessionID,
   Task,
+  TaskID,
   TaskMetadata,
+  TaskPendingDispatchStatus,
   TerminationCause,
+  TerminationCoordinationClaim,
   UUID,
 } from '@agor/core/types';
-import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
-import { and, eq, inArray, like, sql } from 'drizzle-orm';
+import {
+  EXECUTING_TASK_STATUSES,
+  isTerminalTaskStatus,
+  SessionStatus,
+  sessionCanStartTask,
+  TaskStatus,
+} from '@agor/core/types';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  isPostgresDatabase,
   isSQLiteDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
-  txAsDb,
   update,
 } from '../database-wrapper';
-import { type TaskInsert, type TaskRow, tasks } from '../schema';
+import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -47,6 +71,16 @@ function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>
       row.status === TaskStatus.AWAITING_PERMISSION ||
       row.status === TaskStatus.AWAITING_INPUT)
   );
+}
+
+function executorMayReportTelemetry(
+  row: Pick<TaskRow, 'status' | 'executor_connected_at' | 'data'>
+): boolean {
+  if (executorOwnsTask(row)) return true;
+  if (!row.executor_connected_at || row.status !== TaskStatus.STOPPING) {
+    return false;
+  }
+  return !!row.data.termination_request && !row.data.termination_request.executor_quiesced_at;
 }
 
 function isExecutorResultStatus(status: Task['status']): boolean {
@@ -111,17 +145,103 @@ export interface TerminationClaimResult {
   task: Task;
 }
 
-export interface TerminationSettlementInput {
+interface TerminationSettlementInputBase {
   taskId: string;
-  outcome: 'verified_absent' | 'unverified' | 'forced_unverified' | 'restart_unverified';
   errorMessage?: string;
   sdkFailure?: SdkFailure;
   now?: Date;
 }
 
+export type TerminationSettlementInput =
+  | (TerminationSettlementInputBase & {
+      outcome: 'verified_absent' | 'unverified';
+      /** Exact, currently persisted containment-coordination fence. */
+      coordinationToken: string;
+    })
+  | (TerminationSettlementInputBase & {
+      outcome: 'forced_unverified';
+      /** Exact termination request confirmed by the authorized operator. */
+      expectedTerminationRequestedAt: string;
+      coordinationToken?: never;
+    })
+  | (TerminationSettlementInputBase & {
+      outcome: 'restart_unverified';
+      coordinationToken?: never;
+    });
+
 export interface TerminationSettlementResult {
   outcome: 'transitioned' | 'unverified' | 'condition_changed' | 'terminal';
   task: Task;
+}
+
+export interface TaskDispatchClaimResult {
+  outcome: 'claimed' | 'already_claimed' | 'condition_changed';
+  task: Task;
+}
+
+/** Routing-only row returned to the all-daemon queue recovery scanner. */
+export interface QueuedSessionRef {
+  session_id: SessionID;
+  first_queued_at: number;
+  tenant_id?: string;
+}
+
+export type QueuedSessionCursor = Pick<QueuedSessionRef, 'session_id' | 'tenant_id'>;
+
+export interface TaskTerminationCoordinationClaimInput {
+  taskId: string;
+  claimToken: string;
+  leaseDurationMs: number;
+  instanceId: string;
+  bootId: string;
+  /** Refuse the claim until the durable request reaches this DB-authored age. */
+  minimumRequestAgeMs?: number;
+  /** Deterministic SQLite/test clock. PostgreSQL uses database time when omitted. */
+  now?: Date;
+}
+
+export interface TaskTerminationCoordinationClaimResult {
+  outcome: 'claimed' | 'unchanged' | 'condition_changed' | 'terminal';
+  task: Task;
+}
+
+export interface TaskRuntimeDiscoveryRef {
+  task_id: TaskID;
+  tenant_id?: string;
+  /** Exact liveness fact observed by a stale-heartbeat scan. */
+  executor_heartbeat_at?: string;
+  /** Stable keyset position in this discovery category's ordered result set. */
+  cursor: TaskRuntimeDiscoveryCursor;
+}
+
+export interface TaskRuntimeDiscoveryCursor {
+  task_id: TaskID;
+  /** Absent only for the NULL coordination-expiry group, ordered last. */
+  order_at?: string;
+}
+
+export interface TaskRuntimeDiscoveryOptions {
+  limit?: number;
+  /** Continue after this keyset position; an empty page lets the caller wrap. */
+  after?: TaskRuntimeDiscoveryCursor;
+  /** Deterministic test clock. PostgreSQL uses database time when omitted. */
+  now?: Date;
+}
+
+export interface TaskFindPageOptions {
+  taskId?: TaskID;
+  afterTaskId?: TaskID;
+  throughTaskId?: TaskID;
+  sessionId?: SessionID;
+  sessionIds?: SessionID[];
+  status?: Task['status'];
+  createdAt?: Date;
+  createdBy?: UUID;
+  visibleToUserId?: UUID;
+  sort?: Record<string, 1 | -1>;
+  selectTaskIdOnly?: boolean;
+  limit?: number;
+  skip?: number;
 }
 
 /**
@@ -165,9 +285,92 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Lock a Task together with its owning Session, always Session first.
+   *
+   * Session-first ordering is the cross-daemon turn mutex. It serializes
+   * claims for different Tasks in the same Session, whereas a Task-only lock
+   * can prevent duplicate launch of one Task but cannot prevent two distinct
+   * Tasks from launching concurrently.
+   */
+  private async mutateLockedSessionTask<T>(
+    id: string,
+    mutation: (
+      txDb: Database,
+      taskRow: TaskRow,
+      sessionRow: SessionRow,
+      fullId: string
+    ) => Promise<T>
+  ): Promise<T> {
+    const fullId = await this.resolveId(id);
+    const routing = await select(this.db, { session_id: tasks.session_id })
+      .from(tasks)
+      .where(eq(tasks.task_id, fullId))
+      .one();
+    if (!routing) throw new EntityNotFoundError('Task', id);
+
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            sessions,
+            eq(sessions.session_id, routing.session_id)
+          );
+          const sessionRow = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, routing.session_id))
+            .one();
+          if (!sessionRow) throw new EntityNotFoundError('Session', routing.session_id);
+
+          await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+          const taskRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!taskRow) throw new EntityNotFoundError('Task', id);
+          if (taskRow.session_id !== sessionRow.session_id) {
+            throw new RepositoryError('Task changed Session during dispatch admission');
+          }
+          return mutation(txDb, taskRow, sessionRow, fullId);
+        },
+        { sqliteImmediate: true }
+      )
+    );
+  }
+
+  /**
+   * Resolve a mutation timestamp from PostgreSQL's clock. SQLite retains its
+   * historical process-clock behavior, and callers may inject a clock for
+   * deterministic tests in either dialect.
+   */
+  private async mutationNow(txDb: Database, fullId: string, override?: Date): Promise<Date> {
+    if (override || isSQLiteDatabase(this.db)) return override ?? new Date();
+    const row = await select(txDb, { value: sql<Date>`CURRENT_TIMESTAMP` })
+      .from(tasks)
+      .where(eq(tasks.task_id, fullId))
+      .one();
+    if (!row) throw new EntityNotFoundError('Task', fullId);
+    return row.value instanceof Date ? row.value : new Date(row.value);
+  }
+
+  /**
    * Convert database row to Task type
    */
   private rowToTask(row: TaskRow): Task {
+    const storedTerminationRequest = row.data.termination_request;
+    const coordination: TerminationCoordinationClaim | undefined =
+      row.termination_coordination_token &&
+      row.termination_coordination_claimed_at &&
+      row.termination_coordination_expires_at &&
+      row.termination_coordination_instance_id &&
+      row.termination_coordination_boot_id
+        ? {
+            claim_token: row.termination_coordination_token,
+            claimed_at: new Date(row.termination_coordination_claimed_at).toISOString(),
+            lease_expires_at: new Date(row.termination_coordination_expires_at).toISOString(),
+            instance_id: row.termination_coordination_instance_id,
+            boot_id: row.termination_coordination_boot_id,
+          }
+        : undefined;
     return {
       task_id: row.task_id as UUID,
       session_id: row.session_id as UUID,
@@ -184,6 +387,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         : undefined,
       created_by: row.created_by,
       ...row.data,
+      ...(storedTerminationRequest
+        ? {
+            termination_request: {
+              ...storedTerminationRequest,
+              ...(coordination ? { coordination } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -207,6 +418,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       sha_at_start: 'unknown',
     };
 
+    const coordination = task.termination_request?.coordination;
+    const storedTerminationRequest = task.termination_request
+      ? (({ coordination: _coordination, ...request }) => request)(task.termination_request)
+      : undefined;
+
     return {
       task_id: taskId,
       session_id: task.session_id,
@@ -219,6 +435,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       last_executor_heartbeat_at: task.last_executor_heartbeat_at
         ? new Date(task.last_executor_heartbeat_at)
         : undefined,
+      termination_coordination_token: coordination?.claim_token,
+      termination_coordination_claimed_at: coordination
+        ? new Date(coordination.claimed_at)
+        : undefined,
+      termination_coordination_expires_at: coordination
+        ? new Date(coordination.lease_expires_at)
+        : undefined,
+      termination_coordination_instance_id: coordination?.instance_id,
+      termination_coordination_boot_id: coordination?.boot_id,
+      termination_unverified_at:
+        task.sdk_failure?.termination === 'unverified'
+          ? new Date(task.sdk_failure.detected_at)
+          : undefined,
       status: task.status ?? TaskStatus.CREATED,
       queue_position: task.queue_position ?? null,
       created_by: task.created_by,
@@ -245,7 +474,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         executor_mode: task.executor_mode,
         latest_executor_pulse: task.latest_executor_pulse,
         sdk_failure: task.sdk_failure,
-        termination_request: task.termination_request,
+        termination_request: storedTerminationRequest,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
       },
     };
@@ -287,41 +516,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to create task: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
-  }
-
-  /**
-   * Bulk create multiple tasks (for imports)
-   */
-  async createMany(taskList: Partial<Task>[]): Promise<Task[]> {
-    try {
-      // Handle empty array
-      if (taskList.length === 0) {
-        return [];
-      }
-
-      const inserts = taskList.map((task) => this.taskToInsert(task));
-
-      // Bulk insert all tasks
-      await insert(this.db, tasks).values(inserts).run();
-
-      // Retrieve all inserted tasks. SQLite SELECT order is undefined without
-      // an ORDER BY — we used to rely on UUIDv7's monotonic counter to make
-      // `id ASC` mirror insertion order, but `generateId` now passes random
-      // bytes to `uuid.v7()` (so 24-char short IDs don't collide for same-ms
-      // IDs), which breaks sub-ms sort. Re-impose insertion order explicitly
-      // by mapping returned rows back to the input order. Use drizzle's
-      // `inArray` so the query is parameterized rather than string-built.
-      const taskIds = inserts.map((t) => t.task_id);
-      const rows = await select(this.db).from(tasks).where(inArray(tasks.task_id, taskIds)).all();
-
-      const rowsById = new Map(rows.map((r: TaskRow) => [r.task_id, r]));
-      return taskIds.map((id) => this.rowToTask(rowsById.get(id) as TaskRow));
-    } catch (error) {
-      throw new RepositoryError(
-        `Failed to bulk create tasks: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -382,6 +576,71 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Find one exact SQL page for the public Task list contract. Count and data
+   * share the same tenant/RBAC predicate, and only returned rows hydrate their
+   * potentially large JSON payloads.
+   */
+  async findPage(
+    opts: TaskFindPageOptions = {}
+  ): Promise<{ data: Partial<Task>[]; total: number }> {
+    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.taskId) conditions.push(eq(tasks.task_id, opts.taskId));
+    if (opts.afterTaskId) conditions.push(gt(tasks.task_id, opts.afterTaskId));
+    if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
+    if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
+    if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
+    if (opts.status) conditions.push(eq(tasks.status, opts.status));
+    if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
+    if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
+    if (opts.visibleToUserId) {
+      conditions.push(
+        visibleSessionReferenceAccessExists(this.db, opts.visibleToUserId, tasks.session_id)
+      );
+    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(tasks);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+
+    let dataQuery = select(
+      this.db,
+      opts.selectTaskIdOnly ? { task_id: tasks.task_id } : undefined
+    ).from(tasks);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+    const sortColumns = {
+      task_id: tasks.task_id,
+      session_id: tasks.session_id,
+      status: tasks.status,
+      created_at: tasks.created_at,
+      created_by: tasks.created_by,
+    } as const;
+    const orderBy = Object.entries(opts.sort ?? {})
+      .map(([field, direction]) => {
+        const column = sortColumns[field as keyof typeof sortColumns];
+        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
+      })
+      .filter((expression): expression is SQL => expression !== undefined);
+    if (orderBy.length === 0) orderBy.push(asc(tasks.created_at));
+    if (!Object.hasOwn(opts.sort ?? {}, 'task_id')) orderBy.push(asc(tasks.task_id));
+    dataQuery = dataQuery.orderBy(...orderBy);
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
+
+    const rows = await dataQuery.all();
+    return {
+      data: opts.selectTaskIdOnly
+        ? rows.map((row: unknown) => ({
+            task_id: (row as Pick<TaskRow, 'task_id'>).task_id as TaskID,
+          }))
+        : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
+      total: Number(countRow?.count ?? 0),
+    };
+  }
+
+  /**
    * Find all tasks for a session
    */
   async findBySession(sessionId: string): Promise<Task[]> {
@@ -389,7 +648,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(eq(tasks.session_id, sessionId))
-        .orderBy(tasks.created_at)
+        .orderBy(tasks.created_at, tasks.task_id)
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
@@ -472,6 +731,190 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  private runtimeDiscoveryColumns() {
+    const tenantColumn = (tasks as unknown as { tenant_id?: unknown }).tenant_id;
+    return {
+      task_id: tasks.task_id,
+      ...(isSQLiteDatabase(this.db) || !tenantColumn ? {} : { tenant_id: tenantColumn }),
+    };
+  }
+
+  private runtimeDiscoveryRefs(rows: Array<Record<string, unknown>>): TaskRuntimeDiscoveryRef[] {
+    return rows.map((row) => ({
+      task_id: row.task_id as TaskID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+      ...(row.last_executor_heartbeat_at
+        ? {
+            executor_heartbeat_at: new Date(
+              row.last_executor_heartbeat_at as string | number | Date
+            ).toISOString(),
+          }
+        : {}),
+      cursor: {
+        task_id: row.task_id as TaskID,
+        ...(row.runtime_order_at
+          ? {
+              order_at: new Date(row.runtime_order_at as string | number | Date).toISOString(),
+            }
+          : {}),
+      },
+    }));
+  }
+
+  private runtimeCursorDate(
+    cursor: TaskRuntimeDiscoveryCursor | undefined,
+    category: string
+  ): Date | undefined {
+    if (!cursor) return undefined;
+    if (!cursor.order_at) {
+      throw new RepositoryError(`${category} runtime cursor requires an ordering timestamp`);
+    }
+    const value = new Date(cursor.order_at);
+    if (!Number.isFinite(value.getTime())) {
+      throw new RepositoryError(`${category} runtime cursor timestamp is invalid`);
+    }
+    return value;
+  }
+
+  private validateRuntimeDiscovery(limit = 25): number {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Task runtime discovery limit must be between 1 and 1000');
+    }
+    return limit;
+  }
+
+  private databaseCutoff(timeoutMs: number, now?: Date) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new RepositoryError('Task runtime timeout must be non-negative');
+    }
+    if (now || isSQLiteDatabase(this.db)) {
+      return new Date((now?.getTime() ?? Date.now()) - timeoutMs);
+    }
+    return sql`CURRENT_TIMESTAMP - (${timeoutMs} * INTERVAL '1 millisecond')`;
+  }
+
+  private databaseNow(now?: Date) {
+    if (now || isSQLiteDatabase(this.db)) return now ?? new Date();
+    return sql`CURRENT_TIMESTAMP`;
+  }
+
+  /** Bounded routing-only discovery for dispatches whose executor never connected. */
+  async findExpiredDispatchRefs(
+    timeoutMs: number,
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
+    const afterAt = this.runtimeCursorDate(options.after, 'Dispatch');
+    const rows = await select(this.db, {
+      ...this.runtimeDiscoveryColumns(),
+      runtime_order_at: tasks.started_at,
+    })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.status, TaskStatus.DISPATCHING),
+          isNull(tasks.executor_connected_at),
+          isNull(tasks.dispatch_timeout_observed_at),
+          lte(tasks.started_at, this.databaseCutoff(timeoutMs, options.now)),
+          afterAt
+            ? or(
+                gt(tasks.started_at, afterAt),
+                and(eq(tasks.started_at, afterAt), gt(tasks.task_id, options.after!.task_id))
+              )
+            : undefined
+        )
+      )
+      .orderBy(asc(tasks.started_at), asc(tasks.task_id))
+      .limit(limit)
+      .all();
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
+  }
+
+  /** Bounded routing-only discovery for connected executors with stale heartbeats. */
+  async findStaleHeartbeatRefs(
+    staleAfterMs: number,
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
+    const afterAt = this.runtimeCursorDate(options.after, 'Heartbeat');
+    const rows = await select(this.db, {
+      ...this.runtimeDiscoveryColumns(),
+      last_executor_heartbeat_at: tasks.last_executor_heartbeat_at,
+      runtime_order_at: tasks.last_executor_heartbeat_at,
+    })
+      .from(tasks)
+      .where(
+        and(
+          sql`${tasks.status} IN ('running', 'awaiting_permission', 'awaiting_input')`,
+          lte(tasks.last_executor_heartbeat_at, this.databaseCutoff(staleAfterMs, options.now)),
+          afterAt
+            ? or(
+                gt(tasks.last_executor_heartbeat_at, afterAt),
+                and(
+                  eq(tasks.last_executor_heartbeat_at, afterAt),
+                  gt(tasks.task_id, options.after!.task_id)
+                )
+              )
+            : undefined
+        )
+      )
+      .orderBy(asc(tasks.last_executor_heartbeat_at), asc(tasks.task_id))
+      .limit(limit)
+      .all();
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
+  }
+
+  /** Bounded routing-only discovery for unowned or expired STOPPING coordination. */
+  async findStrandedTerminationRefs(
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
+    const afterAt = options.after?.order_at ? new Date(options.after.order_at) : undefined;
+    if (afterAt && !Number.isFinite(afterAt.getTime())) {
+      throw new RepositoryError('Termination runtime cursor timestamp is invalid');
+    }
+    const after = options.after
+      ? afterAt
+        ? or(
+            and(
+              isNotNull(tasks.termination_coordination_expires_at),
+              gt(tasks.termination_coordination_expires_at, afterAt)
+            ),
+            and(
+              eq(tasks.termination_coordination_expires_at, afterAt),
+              gt(tasks.task_id, options.after.task_id)
+            ),
+            isNull(tasks.termination_coordination_expires_at)
+          )
+        : and(
+            isNull(tasks.termination_coordination_expires_at),
+            gt(tasks.task_id, options.after.task_id)
+          )
+      : undefined;
+    const rows = await select(this.db, {
+      ...this.runtimeDiscoveryColumns(),
+      runtime_order_at: tasks.termination_coordination_expires_at,
+    })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.status, TaskStatus.STOPPING),
+          isNull(tasks.termination_unverified_at),
+          or(
+            isNull(tasks.termination_coordination_expires_at),
+            lte(tasks.termination_coordination_expires_at, this.databaseNow(options.now))
+          ),
+          after
+        )
+      )
+      .orderBy(sql`${tasks.termination_coordination_expires_at} ASC NULLS LAST`, asc(tasks.task_id))
+      .limit(limit)
+      .all();
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
+  }
+
   /**
    * Find tasks by status
    */
@@ -492,7 +935,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * Atomically claim a daemon-dispatched task for its authenticated executor.
    * Repeated claims after the first successful transition are idempotent.
    */
-  async connectExecutor(id: string): Promise<{ task: Task; transitioned: boolean } | null> {
+  async connectExecutor(
+    id: string,
+    now?: Date
+  ): Promise<{ task: Task; transitioned: boolean } | null> {
     try {
       return await this.mutateLockedTask(id, async (txDb, row, fullId) => {
         if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
@@ -500,7 +946,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         }
         if (row.status !== TaskStatus.DISPATCHING) return null;
 
-        const connectedAt = new Date();
+        const connectedAt = await this.mutationNow(txDb, fullId, now);
         // Successful connection resolves any nonterminal startup diagnostic.
         const data = { ...row.data };
         delete data.error_message;
@@ -535,7 +981,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /** Record a nonterminal warning only while a templated executor is still pending. */
-  async recordExecutorStartupWarning(id: string, warning: string): Promise<Task | null> {
+  async recordExecutorStartupWarning(
+    id: string,
+    warning: string,
+    observedAt?: Date
+  ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
       if (
         row.status !== TaskStatus.DISPATCHING ||
@@ -544,11 +994,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       ) {
         return null;
       }
-      if (row.data.error_message === warning) return null;
+      if (row.data.error_message === warning && row.dispatch_timeout_observed_at) return null;
 
       const data = { ...row.data, error_message: warning };
-      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-      return this.rowToTask({ ...row, data });
+      const timeoutObservedAt = await this.mutationNow(txDb, fullId, observedAt);
+      await update(txDb, tasks)
+        .set({ data, dispatch_timeout_observed_at: timeoutObservedAt })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return this.rowToTask({
+        ...row,
+        data,
+        dispatch_timeout_observed_at: timeoutObservedAt,
+      });
     });
   }
 
@@ -556,22 +1014,28 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async reportRuntimeTelemetry(
     id: string,
     pulse?: Omit<ExecutorPulse, 'observed_at'>,
-    observedAt = new Date()
+    observedAt?: Date
   ): Promise<Task | null> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
-      if (!executorOwnsTask(row)) return null;
+      // STOPPING remains executor-owned until the scoped executor reports
+      // quiescence. An unverified containment guard is not proof of absence,
+      // so a still-live executor may continue publishing useful evidence and
+      // eventually recover the request with a late task/request-fenced ack.
+      if (!executorMayReportTelemetry(row)) return null;
+
+      const heartbeatAt = await this.mutationNow(txDb, fullId, observedAt);
 
       const previous = row.data.latest_executor_pulse;
       const latest =
         pulse && (!previous || pulse.sequence > previous.sequence)
-          ? { ...pulse, observed_at: observedAt.toISOString() }
+          ? { ...pulse, observed_at: heartbeatAt.toISOString() }
           : previous;
       const data = { ...row.data, latest_executor_pulse: latest };
       await update(txDb, tasks)
-        .set({ last_executor_heartbeat_at: observedAt, data })
+        .set({ last_executor_heartbeat_at: heartbeatAt, data })
         .where(eq(tasks.task_id, fullId))
         .run();
-      return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+      return this.rowToTask({ ...row, last_executor_heartbeat_at: heartbeatAt, data });
     });
   }
 
@@ -583,7 +1047,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async recordExecutorQuiescence(
     input: ExecutorTerminationCompleteInput,
-    observedAt = new Date()
+    observedAt?: Date
   ): Promise<Task | null> {
     return this.mutateLockedTask(input.task_id, async (txDb, row, fullId) => {
       const current = this.rowToTask(row);
@@ -597,15 +1061,51 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       if (request.executor_quiesced_at) return current;
 
+      const quiescedAt = await this.mutationNow(txDb, fullId, observedAt);
+
+      const { coordination: _coordination, ...storedRequest } = request;
+      // An unverified marker guards against an old coordinator terminalizing
+      // without proof. A new, correctly task/request-fenced executor report is
+      // new evidence, so make the same request recoverable again. If renewed
+      // containment is still unverified it writes a fresh guard after this
+      // quiescence timestamp; duplicate reports cannot clear that newer guard.
+      const recoveringUnverified =
+        !!row.termination_unverified_at || current.sdk_failure?.termination === 'unverified';
+      const sdkFailure = recoveringUnverified
+        ? current.sdk_failure?.reason === 'termination_unverified'
+          ? undefined
+          : current.sdk_failure
+            ? { ...current.sdk_failure, termination: 'requested' as const }
+            : undefined
+        : current.sdk_failure;
       const data = {
         ...row.data,
+        ...(sdkFailure ? { sdk_failure: sdkFailure } : {}),
         termination_request: {
-          ...request,
-          executor_quiesced_at: observedAt.toISOString(),
+          ...storedRequest,
+          executor_quiesced_at: quiescedAt.toISOString(),
         },
       };
-      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
-      return this.rowToTask({ ...row, data });
+      if (recoveringUnverified) {
+        // The guard wrote this diagnostic while absence was unknown. New
+        // evidence supersedes it; do not leave a successfully stopped Task
+        // carrying the obsolete "may still be running" error. Preserve only
+        // a real preceding SDK-health diagnosis, not the synthetic guard.
+        delete data.error_message;
+        if (!sdkFailure) delete data.sdk_failure;
+      }
+      await update(txDb, tasks)
+        .set({
+          data,
+          ...(recoveringUnverified ? { termination_unverified_at: null } : {}),
+        })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+      return this.rowToTask({
+        ...row,
+        data,
+        ...(recoveringUnverified ? { termination_unverified_at: null } : {}),
+      });
     });
   }
 
@@ -622,7 +1122,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
   /** Atomically validate and persist ownership of a termination request. */
   async claimTermination(input: TerminationClaimInput): Promise<TerminationClaimResult> {
-    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+    return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
       const current = this.rowToTask(row);
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
 
@@ -648,9 +1148,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       const incomingWins =
         !existing || input.cause === 'user_stop' || existing.cause === input.cause;
+      const mutationAt = await this.mutationNow(txDb, fullId, input.now);
+      const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
       const request = {
         cause,
-        requested_at: existing?.requested_at ?? (input.now ?? new Date()).toISOString(),
+        requested_at: requestedAt,
         error_message:
           cause === input.cause
             ? input.errorMessage
@@ -673,6 +1175,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .set({ status: TaskStatus.STOPPING, data })
         .where(eq(tasks.task_id, fullId))
         .run();
+      await update(txDb, sessions)
+        .set({
+          status: SessionStatus.STOPPING,
+          ready_for_prompt: false,
+          updated_at: mutationAt,
+        })
+        .where(eq(sessions.session_id, sessionRow.session_id))
+        .run();
       return {
         outcome: 'claimed',
         task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
@@ -680,9 +1190,81 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /**
+   * Claim one expiring containment attempt while keeping the termination
+   * request epoch stable. The conditional update is the database fence; the
+   * daemon identity is diagnostic only.
+   */
+  async claimTerminationCoordination(
+    input: TaskTerminationCoordinationClaimInput
+  ): Promise<TaskTerminationCoordinationClaimResult> {
+    if (!input.claimToken.trim()) throw new RepositoryError('Coordination claim token is required');
+    if (!Number.isFinite(input.leaseDurationMs) || input.leaseDurationMs <= 0) {
+      throw new RepositoryError('Coordination lease duration must be positive');
+    }
+    if (
+      input.minimumRequestAgeMs !== undefined &&
+      (!Number.isFinite(input.minimumRequestAgeMs) || input.minimumRequestAgeMs < 0)
+    ) {
+      throw new RepositoryError('Minimum termination-request age must be non-negative');
+    }
+    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+      if (current.status !== TaskStatus.STOPPING || !current.termination_request) {
+        return { outcome: 'condition_changed', task: current };
+      }
+      if (row.termination_unverified_at || current.sdk_failure?.termination === 'unverified') {
+        return { outcome: 'condition_changed', task: current };
+      }
+      if (current.termination_request.coordination?.claim_token === input.claimToken) {
+        return { outcome: 'unchanged', task: current };
+      }
+
+      const claimedAt = await this.mutationNow(txDb, fullId, input.now);
+      if (input.minimumRequestAgeMs !== undefined) {
+        const requestedAt = Date.parse(current.termination_request.requested_at);
+        if (
+          !Number.isFinite(requestedAt) ||
+          claimedAt.getTime() - requestedAt < input.minimumRequestAgeMs
+        ) {
+          return { outcome: 'condition_changed', task: current };
+        }
+      }
+      const expiresAt = new Date(claimedAt.getTime() + input.leaseDurationMs);
+      const result = await update(txDb, tasks)
+        .set({
+          termination_coordination_token: input.claimToken,
+          termination_coordination_claimed_at: claimedAt,
+          termination_coordination_expires_at: expiresAt,
+          termination_coordination_instance_id: input.instanceId,
+          termination_coordination_boot_id: input.bootId,
+        })
+        .where(
+          and(
+            eq(tasks.task_id, fullId),
+            eq(tasks.status, TaskStatus.STOPPING),
+            or(
+              isNull(tasks.termination_coordination_token),
+              isNull(tasks.termination_coordination_expires_at),
+              lte(tasks.termination_coordination_expires_at, claimedAt)
+            )
+          )
+        )
+        .run();
+
+      const latestRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+      if (!latestRow) throw new EntityNotFoundError('Task', input.taskId);
+      const latest = this.rowToTask(latestRow);
+      return result.rowsAffected > 0
+        ? { outcome: 'claimed', task: latest }
+        : { outcome: 'unchanged', task: latest };
+    });
+  }
+
   /** Atomically record containment evidence and, when safe, terminalize the task. */
   async settleTermination(input: TerminationSettlementInput): Promise<TerminationSettlementResult> {
-    return this.mutateLockedTask(input.taskId, async (txDb, row, fullId) => {
+    return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
       const current = this.rowToTask(row);
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
       const restartRelease = input.outcome === 'restart_unverified';
@@ -691,6 +1273,18 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         (current.status !== TaskStatus.STOPPING || !current.termination_request)
       ) {
         return { outcome: 'condition_changed', task: current };
+      }
+
+      if (input.outcome === 'verified_absent' || input.outcome === 'unverified') {
+        const coordinationToken = current.termination_request?.coordination?.claim_token;
+        if (
+          row.termination_unverified_at ||
+          current.sdk_failure?.termination === 'unverified' ||
+          !coordinationToken ||
+          coordinationToken !== input.coordinationToken
+        ) {
+          return { outcome: 'condition_changed', task: current };
+        }
       }
 
       if (restartRelease && (!input.sdkFailure || !input.errorMessage)) {
@@ -707,16 +1301,38 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           sdk_failure: { ...failure, termination: 'unverified' as const },
           error_message: input.errorMessage,
         };
-        await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+        const unverifiedAt = await this.mutationNow(txDb, fullId, input.now);
+        await update(txDb, tasks)
+          .set({
+            data,
+            termination_coordination_token: null,
+            termination_coordination_claimed_at: null,
+            termination_coordination_expires_at: null,
+            termination_coordination_instance_id: null,
+            termination_coordination_boot_id: null,
+            termination_unverified_at: unverifiedAt,
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
         return {
           outcome: 'unverified',
-          task: this.rowToTask({ ...row, data }),
+          task: this.rowToTask({
+            ...row,
+            data,
+            termination_coordination_token: null,
+            termination_coordination_claimed_at: null,
+            termination_coordination_expires_at: null,
+            termination_coordination_instance_id: null,
+            termination_coordination_boot_id: null,
+            termination_unverified_at: unverifiedAt,
+          }),
         };
       }
 
       if (
         input.outcome === 'forced_unverified' &&
-        current.sdk_failure?.termination !== 'unverified'
+        (current.sdk_failure?.termination !== 'unverified' ||
+          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt)
       ) {
         return { outcome: 'condition_changed', task: current };
       }
@@ -728,11 +1344,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           : current.termination_request!.cause === 'user_stop'
             ? TaskStatus.STOPPED
             : TaskStatus.FAILED;
-      const terminal = withTerminalTiming(
-        current,
-        { status: finalStatus },
-        input.now ?? new Date()
-      );
+      const settlementAt = await this.mutationNow(txDb, fullId, input.now);
+      const terminal = withTerminalTiming(current, { status: finalStatus }, settlementAt);
       const completedAt = new Date(terminal.completed_at!);
       const failure = input.sdkFailure ?? current.sdk_failure;
       const data = {
@@ -760,12 +1373,50 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           : {}),
       };
       await update(txDb, tasks)
-        .set({ status: finalStatus, completed_at: completedAt, data })
+        .set({
+          status: finalStatus,
+          completed_at: completedAt,
+          data,
+          termination_coordination_token: null,
+          termination_coordination_claimed_at: null,
+          termination_coordination_expires_at: null,
+          termination_coordination_instance_id: null,
+          termination_coordination_boot_id: null,
+          termination_unverified_at: null,
+        })
         .where(eq(tasks.task_id, fullId))
         .run();
+
+      // Task terminality is authoritative. Project the promptability fields
+      // in the same short transaction, after the Task write, so a coordinator
+      // cannot die in a durable Task-terminal/Session-stopping gap. The
+      // service layer still republishes the Session and owns queue/callback
+      // side effects after commit.
+      const sessionProjection = await update(txDb, sessions)
+        .set({
+          status: finalStatus === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+          ready_for_prompt: true,
+          updated_at: settlementAt,
+        })
+        .where(eq(sessions.session_id, sessionRow.session_id))
+        .run();
+      if (sessionProjection.rowsAffected === 0) {
+        throw new EntityNotFoundError('Session', current.session_id);
+      }
       return {
         outcome: 'transitioned',
-        task: this.rowToTask({ ...row, status: finalStatus, completed_at: completedAt, data }),
+        task: this.rowToTask({
+          ...row,
+          status: finalStatus,
+          completed_at: completedAt,
+          data,
+          termination_coordination_token: null,
+          termination_coordination_claimed_at: null,
+          termination_coordination_expires_at: null,
+          termination_coordination_instance_id: null,
+          termination_coordination_boot_id: null,
+          termination_unverified_at: null,
+        }),
       };
     });
   }
@@ -856,6 +1507,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             executor_connected_at: insertData.executor_connected_at,
             completed_at: insertData.completed_at,
             last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+            termination_coordination_token: insertData.termination_coordination_token,
+            termination_coordination_claimed_at: insertData.termination_coordination_claimed_at,
+            termination_coordination_expires_at: insertData.termination_coordination_expires_at,
+            termination_coordination_instance_id: insertData.termination_coordination_instance_id,
+            termination_coordination_boot_id: insertData.termination_coordination_boot_id,
+            termination_unverified_at: insertData.termination_unverified_at,
             data: insertData.data,
           })
           .where(eq(tasks.task_id, fullId))
@@ -913,10 +1570,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * caller would otherwise have to assemble by hand.
    *
    * For QUEUED tasks, `queue_position = max(queue_position) + 1` is computed
-   * inside a transaction so concurrent writers don't both observe the same
-   * max and collide. (The schema also carries a partial unique index on
-   * `(session_id, queue_position) WHERE status='queued'` as a belt-and-
-   * suspenders against transaction-isolation surprises.)
+   * while holding the owning Session row lock. A transaction by itself does
+   * not serialize PostgreSQL READ COMMITTED readers; the Session lock is the
+   * durable per-queue sequencer shared by every daemon. (The schema also
+   * carries a partial unique index as defense in depth.)
    *
    * Sentinel contract: while a task carries `message_range.start_index = -1`
    * and `git_state.sha_at_start = ''`, it has not yet been pinned to real
@@ -924,13 +1581,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * overwrites these on the way to RUNNING.
    */
   async createPending(input: {
+    /** Optional stable identity used by idempotent internal producers. */
+    task_id?: TaskID;
     session_id: SessionID;
     full_prompt: string;
     created_by: string;
-    status: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
+    status: TaskPendingDispatchStatus;
     metadata?: TaskMetadata;
   }): Promise<Task> {
     const taskBase: Partial<Task> = {
+      task_id: input.task_id,
       session_id: input.session_id,
       full_prompt: input.full_prompt,
       created_by: input.created_by,
@@ -951,37 +1611,224 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       tool_use_count: 0,
     };
 
-    if (input.status === TaskStatus.CREATED) {
+    if (input.status === TaskStatus.CREATED && !input.task_id) {
       return this.create(taskBase);
     }
 
-    // QUEUED: serialize the read-then-insert in a transaction so concurrent
-    // callers can't both observe the same `max(queue_position)` and produce
-    // duplicate positions. Two prompts arriving in the same tick now order
-    // deterministically instead of racing.
-    return this.db.transaction(async (tx) => {
-      const positionRow = await select(txAsDb(tx), {
-        maxPos: sql<number | null>`max(${tasks.queue_position})`,
-      })
-        .from(tasks)
-        .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
-        .one();
-
-      const nextPosition = (positionRow?.maxPos ?? 0) + 1;
-      const insertData = this.taskToInsert({
-        ...taskBase,
-        queue_position: nextPosition,
-      });
-      await insert(txAsDb(tx), tasks).values(insertData).run();
-
-      const row = await select(txAsDb(tx))
-        .from(tasks)
-        .where(eq(tasks.task_id, insertData.task_id))
-        .one();
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created queued task');
+    if (input.status === TaskStatus.CREATED) {
+      const insertData = this.taskToInsert(taskBase);
+      await insert(this.db, tasks).values(insertData).onConflictDoNothing().run();
+      const row = await select(this.db).from(tasks).where(eq(tasks.task_id, input.task_id!)).one();
+      if (!row) throw new RepositoryError('Failed to retrieve idempotent pending task');
+      const existing = this.rowToTask(row);
+      if (
+        existing.session_id !== input.session_id ||
+        existing.created_by !== input.created_by ||
+        existing.full_prompt !== input.full_prompt
+      ) {
+        throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
       }
-      return this.rowToTask(row);
+      return existing;
+    }
+
+    // QUEUED: lock the durable Session row before max+1. This is required on
+    // PostgreSQL: two ordinary READ COMMITTED transactions can otherwise read
+    // the same max concurrently and merely turn the unique index into a loser
+    // error rather than making one ordered admission decision.
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            sessions,
+            eq(sessions.session_id, input.session_id)
+          );
+          const sessionRow = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, input.session_id))
+            .one();
+          if (!sessionRow) throw new EntityNotFoundError('Session', input.session_id);
+
+          let existingCreated: Task | undefined;
+          if (input.task_id) {
+            await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, input.task_id));
+            const existingRow = await select(txDb)
+              .from(tasks)
+              .where(eq(tasks.task_id, input.task_id))
+              .one();
+            if (existingRow) {
+              const existing = this.rowToTask(existingRow);
+              if (
+                existing.session_id !== input.session_id ||
+                existing.created_by !== input.created_by ||
+                existing.full_prompt !== input.full_prompt
+              ) {
+                throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
+              }
+              if (existing.status !== TaskStatus.CREATED) return existing;
+
+              // A stable internal producer may recover a standalone SQLite
+              // crash that committed CREATED before launch admission. Move
+              // that same Task into the durable queue rather than letting it
+              // jump an already-admitted prompt or remain undiscoverable.
+              existingCreated = existing;
+            }
+          }
+
+          const positionRow = await select(txDb, {
+            maxPos: sql<number | null>`max(${tasks.queue_position})`,
+          })
+            .from(tasks)
+            .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
+            .one();
+
+          const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+          if (existingCreated) {
+            await update(txDb, tasks)
+              .set({ status: TaskStatus.QUEUED, queue_position: nextPosition })
+              .where(eq(tasks.task_id, existingCreated.task_id))
+              .run();
+            return {
+              ...existingCreated,
+              status: TaskStatus.QUEUED,
+              queue_position: nextPosition,
+            };
+          }
+
+          const insertData = this.taskToInsert({
+            ...taskBase,
+            queue_position: nextPosition,
+          });
+          await insert(txDb, tasks).values(insertData).run();
+
+          const row = await select(txDb)
+            .from(tasks)
+            .where(eq(tasks.task_id, insertData.task_id))
+            .one();
+          if (!row) throw new RepositoryError('Failed to retrieve created queued task');
+          return this.rowToTask(row);
+        },
+        { sqliteImmediate: true }
+      )
+    );
+  }
+
+  /**
+   * Atomically claim the CREATED/QUEUED -> DISPATCHING transition.
+   *
+   * The Session row lock, queue-head check, and Task expected-state check are
+   * the fence. A Task-only fence prevents duplicate launch of one Task but is
+   * insufficient when two daemons claim different Tasks for the same Session.
+   * A loser may do preparatory reads, but it cannot write launch intent,
+   * transcript/session state, or spawn an executor.
+   */
+  async claimDispatchAndProjectSession(
+    id: string,
+    expectedStatus: TaskPendingDispatchStatus,
+    updates: Partial<Task>
+  ): Promise<TaskDispatchClaimResult> {
+    return this.mutateLockedSessionTask(id, async (txDb, currentRow, sessionRow, fullId) => {
+      const current = this.rowToTask(currentRow);
+      if (current.status !== expectedStatus) {
+        return {
+          outcome:
+            current.status === TaskStatus.DISPATCHING || current.status === TaskStatus.RUNNING
+              ? 'already_claimed'
+              : 'condition_changed',
+          task: current,
+        };
+      }
+      if (updates.status !== TaskStatus.DISPATCHING) {
+        throw new RepositoryError('Dispatch claim must transition to dispatching');
+      }
+
+      // A queue claimant may only take the durable head. An explicit CREATED
+      // task may not jump an existing prompt queue. Both checks run under the
+      // same Session lock that serializes enqueue position assignment.
+      const queuedHead = await select(txDb, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
+        .limit(1)
+        .one();
+      if (
+        (expectedStatus === TaskStatus.QUEUED && queuedHead?.task_id !== fullId) ||
+        (expectedStatus === TaskStatus.CREATED && queuedHead != null)
+      ) {
+        return { outcome: 'condition_changed', task: current };
+      }
+
+      const competingExecution = await select(txDb, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.session_id, current.session_id),
+            ne(tasks.task_id, fullId),
+            inArray(tasks.status, [...EXECUTING_TASK_STATUSES])
+          )
+        )
+        .limit(1)
+        .one();
+      if (
+        competingExecution ||
+        !sessionCanStartTask(sessionRow.status, sessionRow.ready_for_prompt)
+      ) {
+        return { outcome: 'condition_changed', task: current };
+      }
+
+      const requestedStartedAt = updates.started_at ? new Date(updates.started_at) : undefined;
+      const dispatchAt = await this.mutationNow(
+        txDb,
+        fullId,
+        // Standalone SQLite retains injected/process time for deterministic
+        // compatibility. PostgreSQL launch deadlines use the database clock.
+        isSQLiteDatabase(this.db) ? requestedStartedAt : undefined
+      );
+
+      const merged: Task = {
+        ...deepMerge(current, { ...updates, started_at: dispatchAt.toISOString() }),
+        task_id: current.task_id,
+        session_id: current.session_id,
+        created_by: current.created_by,
+        created_at: current.created_at,
+        // Queue ownership ends at the durable launch-intent transition.
+        queue_position: undefined,
+      };
+      const insertData = this.taskToInsert(merged);
+      await update(txDb, tasks)
+        .set({
+          status: insertData.status,
+          queue_position: insertData.queue_position,
+          started_at: insertData.started_at,
+          executor_connected_at: insertData.executor_connected_at,
+          completed_at: insertData.completed_at,
+          last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+          data: insertData.data,
+        })
+        .where(eq(tasks.task_id, fullId))
+        .run();
+
+      // The launch-intent transition and its Session projection are one
+      // durable state change. Keeping this write inside the task-claim
+      // transaction (independent of any request-scope policy) closes the kill
+      // point where a Task could be DISPATCHING while its Session remained
+      // IDLE and omitted the task from data.tasks. The Session row is already
+      // locked by mutateLockedSessionTask.
+      const sessionTasks = sessionRow.data.tasks.includes(current.task_id)
+        ? sessionRow.data.tasks
+        : [...sessionRow.data.tasks, current.task_id];
+      await update(txDb, sessions)
+        .set({
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          updated_at: dispatchAt,
+          data: { ...sessionRow.data, tasks: sessionTasks },
+        })
+        .where(eq(sessions.session_id, current.session_id))
+        .run();
+      return { outcome: 'claimed', task: merged };
     });
   }
 
@@ -993,7 +1840,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
-        .orderBy(tasks.queue_position)
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
@@ -1014,7 +1861,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const row = await select(this.db)
         .from(tasks)
         .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
-        .orderBy(tasks.queue_position)
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
 
@@ -1025,6 +1872,59 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /**
+   * Bounded routing-only discovery for all-daemon queue recovery.
+   *
+   * The cursor is fairness state only. QUEUED rows remain the durable
+   * authority, and callers wrap after an empty page. PostgreSQL system scope
+   * exposes only queued rows through the dedicated RLS capability; each
+   * returned Session must be reloaded and mutated in its trusted tenant scope.
+   */
+  async findQueuedSessionRefs(
+    limit = 25,
+    after?: QueuedSessionCursor
+  ): Promise<QueuedSessionRef[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Queued Session discovery limit must be between 1 and 1000');
+    }
+
+    const tenantColumn = (tasks as unknown as { tenant_id?: typeof tasks.session_id }).tenant_id;
+    const postgresTenantColumn = isPostgresDatabase(this.db) ? tenantColumn : undefined;
+    const afterCondition = postgresTenantColumn
+      ? after?.tenant_id
+        ? or(
+            gt(postgresTenantColumn, after.tenant_id),
+            and(eq(postgresTenantColumn, after.tenant_id), gt(tasks.session_id, after.session_id))
+          )
+        : undefined
+      : after
+        ? gt(tasks.session_id, after.session_id)
+        : undefined;
+    const columns = {
+      session_id: tasks.session_id,
+      first_queued_at: sql<Date | number>`min(${tasks.created_at})`,
+      ...(postgresTenantColumn ? { tenant_id: postgresTenantColumn } : {}),
+    };
+    const grouped = select(this.db, columns)
+      .from(tasks)
+      .where(and(eq(tasks.status, TaskStatus.QUEUED), afterCondition))
+      .groupBy(
+        ...(postgresTenantColumn ? [postgresTenantColumn, tasks.session_id] : [tasks.session_id])
+      );
+    const rows = postgresTenantColumn
+      ? await grouped.orderBy(asc(postgresTenantColumn), asc(tasks.session_id)).limit(limit).all()
+      : await grouped.orderBy(asc(tasks.session_id)).limit(limit).all();
+
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+      session_id: row.session_id as SessionID,
+      first_queued_at:
+        row.first_queued_at instanceof Date
+          ? row.first_queued_at.getTime()
+          : new Date(row.first_queued_at as string | number).getTime(),
+      ...(typeof row.tenant_id === 'string' ? { tenant_id: row.tenant_id } : {}),
+    }));
   }
 
   /**

@@ -37,7 +37,8 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ArchiveToggleButton } from '../ArchiveButton';
-import { BoardFormFields, extractBoardFormValues, isCustomCSS } from '../forms/BoardFormFields';
+import { BoardTile, getBoardEmoji } from '../BoardTile';
+import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { ListPanelHeader } from './panelPrimitives';
@@ -404,11 +405,12 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   const columns = [
     {
-      title: 'Icon',
-      dataIndex: 'icon',
-      key: 'icon',
+      title: 'Board',
+      key: 'tile',
       width: 80,
-      render: (icon: string) => <span style={{ fontSize: 24 }}>{icon || '📋'}</span>,
+      render: (_: unknown, board: Board) => (
+        <BoardTile emoji={getBoardEmoji(board, branchById)} size={32} />
+      ),
     },
     {
       title: 'Name',
@@ -508,20 +510,19 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         <Form form={form} layout="vertical" onValuesChange={() => setDirty(true)}>
           {editingBoard ? (
             <BoardFormFields
-              // Keyed on board_id so useCustomCSS state and Collapse
-              // defaultActiveKey re-initialize when switching between boards.
+              // Keyed on board_id so the background editor and Collapse
+              // defaultActiveKey re-initialize when switching between boards;
+              // backgroundResetSignal re-syncs its mode from the loaded values.
               key={editingBoard.board_id}
               form={form}
               extra={customContextField}
-              initialCustomCSS={
-                isCustomCSS(editingBoard.background_color) || Boolean(editingBoard.custom_css)
-              }
+              backgroundResetSignal={editingBoard.board_id}
               rbacEnabled={rbacEnabled}
               allUsers={allUsers}
               allGroups={allGroups}
             />
           ) : (
-            <BoardFormFields form={form} extra={customContextField} initialCustomCSS />
+            <BoardFormFields form={form} extra={customContextField} />
           )}
         </Form>
       </DrillInFrame>

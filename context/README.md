@@ -39,13 +39,16 @@ Step-by-step implementation guides referenced from code.
 
 - [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
 - [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
-- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC + Unix user modes (referenced from CLI admin commands and unix utilities).
+- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC and simple/sandbox/delegated execution.
+- [`migrate-strict-to-sandbox.md`](guides/migrate-strict-to-sandbox.md) — Operator runbook for moving a deployment from `strict`/`insulated` to `unix_user_mode: sandbox` (uses the `scripts/*sandbox*` migration + pre-flight scripts).
 
 ### `guidelines/` — house rules
 
 - [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
+- [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
 - [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
+- [`onboarding-design.md`](guidelines/onboarding-design.md) — Onboarding wizard: goal-over-role framing, the locked goal cards, and composable-block recs.
 
 ### `explorations/` — active design docs
 
@@ -62,6 +65,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
+- [`web-terminal-ownership-ha.md`](explorations/web-terminal-ownership-ha.md) — process-affine terminal ownership, HA support, and failure semantics.
 
 ### Messaging & positioning (now in the Knowledge base)
 

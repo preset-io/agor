@@ -94,7 +94,7 @@ export type {
  * - Claude Code: 'auto' — the SDK's model classifier approves/denies each
  *   permission prompt; anything it doesn't confidently auto-resolve still
  *   falls through to Agor's permission UI via the executor's canUseTool hook
- *   (see sdk-handlers/claude/permissions/permission-hooks.ts). MCP tool calls
+ *   (see sdk-handlers/base/permission-hooks.ts). MCP tool calls
  *   for the built-in `agor` server and any attached MCP servers are
  *   auto-approved by that same hook, so MCP-heavy sessions don't
  *   death-by-modal. Users can flip a running session to `acceptEdits` or
@@ -152,18 +152,17 @@ export interface Session {
   created_by: string;
 
   /**
-   * Unix username to impersonate when executing this session
+   * Immutable execution-home key for this session.
    *
    * Set once at session creation time from the creator's unix_username.
    * IMMUTABLE - never changes, even if the user's unix_username changes.
    *
    * Why immutable?
    * - SDK sessions (Claude Code, Codex) store data in user home directories
-   * - Changing unix_username would break access to existing SDK session state
-   * - If unix user no longer exists, operations will fail (expected behavior)
+   * - Changing it would break access to existing SDK session state
+   * - If the delegated home key changes or disappears, resumable state may be unreachable
    *
-   * DEFENSIVE: Before prompting, we validate that creator's current unix_username
-   * matches session.unix_username. If they differ, reject the prompt with clear error.
+   * Before prompting, the creator's current key is checked against the stamp.
    */
   unix_username: string | null;
 
@@ -421,13 +420,13 @@ export interface Session {
      *
      * Used as queued_by_user_id when the callback is delivered, so the
      * resulting task is attributed to the callback setter, not the target
-     * session owner. Execution still runs as the target session's Unix user.
+     * session owner. Execution still uses the target session's home and credentials.
      */
     callback_created_by?: string;
     /**
      * Callback firing mode:
-     * - "once": Fire callback on first completion, then auto-disable (default)
-     * - "persistent": Fire on every completion (legacy behavior)
+     * - "persistent": Fire on every completion until disabled (default when omitted)
+     * - "once": Fire callback on first completion, then auto-disable
      */
     callback_mode?: 'once' | 'persistent';
   };
@@ -656,6 +655,13 @@ export interface ScheduledRunMetadata {
   run_index: number;
 
   /**
+   * Stable identity of the occurrence's initial task. The scheduler persists
+   * this with the session before creating the task so recovery can reconcile
+   * the same prompt after a daemon crash without creating a second task.
+   */
+  initial_task_id?: TaskID;
+
+  /**
    * Whether this run was triggered manually via execute-now (vs. cron tick).
    */
   triggered_manually?: boolean;
@@ -688,6 +694,8 @@ export interface ScheduledRunMetadata {
     retention: number;
     /** Concurrency policy at run time (applies to both cron and manual paths) */
     allow_concurrent_runs?: boolean;
+    /** Effective MCP attachment snapshot used by crash recovery. */
+    mcp_server_ids?: string[];
   };
 }
 

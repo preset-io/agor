@@ -7,12 +7,15 @@
 # packages/agor-live/build.sh), so the image is pinned to the built commit
 # rather than `agor-live@latest` on npm.
 #
-# Publish model: the :<full-sha> image is built and pushed on pushes to
-# main, v* tags, AND every in-repository PR commit (tagged by the PR *head*
-# SHA, with :pr-<n> re-pointed on each update), so trusted commits are
-# deployable by their own SHA. Fork and Dependabot PRs still build and run the
-# boot smoke test, but cannot publish because GitHub intentionally withholds
-# repository secrets from them. Plus a branch tag, and `latest` on main only.
+# Publish model: a successful CI run for a main push first publishes
+# :<full-sha>, then a serialized promotion may move :main and :latest. Those
+# mutable tags always identify a successfully tested main image; when a newer
+# main commit is red, they remain on the last successful promotion. v* tags
+# and every in-repository PR commit publish directly (PRs use the PR *head* SHA
+# and re-point :pr-<n> on each update), so trusted commits remain deployable by
+# their own SHA. Fork and Dependabot PRs still build and run the boot smoke
+# test, but cannot publish because GitHub intentionally withholds repository
+# secrets from them.
 #
 # Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
 # (Settings → Secrets and variables → Actions):
@@ -21,8 +24,11 @@
 name: Build image
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -31,29 +37,37 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: build-image-${{ github.ref }}
-  cancel-in-progress: true
-
 # docker.io is docker/login-action's default registry, so no `registry:` needed.
 env:
   IMAGE: preset/agor
-  # The commit we build, stamp, and tag: the PR head on pull_request events
-  # (github.sha is the ephemeral merge commit there), else the pushed commit.
+  # The commit we build, stamp, and tag: the PR head on pull_request events;
+  # the tested main commit on workflow_run events; otherwise the pushed commit.
   # Keeps the checkout, the :<sha> tag, and the in-app build banner in lockstep.
-  IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+  IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build:
     name: Build & push
+    # Branch filtering applies to both push- and PR-triggered CI runs. Only a
+    # successful push run is allowed to publish main; PRs keep using this
+    # workflow's direct pull_request trigger instead.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: build-image-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Build the PR's real head commit, not the ephemeral merge commit, so
-          # image contents match the :<sha> tag. No effect on push events.
+          # Build the exact tested/main, PR-head, or tag commit so image
+          # contents match the :<sha> tag.
           ref: ${{ env.IMAGE_REVISION }}
 
       - name: Set up Docker Buildx
@@ -68,32 +82,10 @@ jobs:
             github.event.pull_request.head.repo.full_name == github.repository &&
             github.event.pull_request.user.login != 'dependabot[bot]'
           )
-        uses: docker/login-action@v4.5.2
+        uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        env:
-          # Make `type=sha` emit the PR *head* SHA, so the tag equals
-          # `git rev-parse HEAD` of the PR branch. No effect on push events.
-          DOCKER_METADATA_PR_HEAD_SHA: 'true'
-        with:
-          images: ${{ env.IMAGE }}
-          # Full commit SHA on every build (push + PR); a branch/PR ref tag;
-          # semver on git tags; `latest` only on the default branch.
-          tags: |
-            type=sha,prefix=,format=long
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-          labels: |
-            org.opencontainers.image.title=agor
-            org.opencontainers.image.revision=${{ env.IMAGE_REVISION }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # Build once into the local Docker store so it can be smoke-tested before
       # anything is published. The push step below reuses this build via the
@@ -120,7 +112,10 @@ jobs:
       # can't see.
       - name: Smoke test
         run: |
-          docker run -d --name agor-smoke -p 3030:3030 ${{ env.IMAGE }}:smoke
+          docker run -d --name agor-smoke -p 3030:3030 \
+            -e AGOR_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+            -e AGOR_MASTER_SECRET=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 \
+            ${{ env.IMAGE }}:smoke
           for i in $(seq 1 60); do
             if curl -fsS http://localhost:3030/health > /dev/null 2>&1; then
               echo "Daemon healthy."
@@ -132,6 +127,23 @@ jobs:
           echo "::error::Daemon did not become healthy within 120s"
           docker logs agor-smoke
           exit 1
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # Full commit SHA on every build; PR ref and semver tags where
+          # applicable. Mutable main tags are promoted in the serialized job.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ env.IMAGE_REVISION }}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=agor
+            org.opencontainers.image.revision=${{ env.IMAGE_REVISION }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # Publish trusted events after the smoke test. Fork and Dependabot PRs
       # stop here after validating the same production image locally.
@@ -154,3 +166,58 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=agor-image
+
+  # Mutable tags are a separate, serialized promotion. Immutable SHA builds
+  # can proceed independently, while main/latest can never be pushed by two
+  # workflow_run jobs at once. Keep the full queue: builds may finish out of
+  # order, and dropping the one current-head promotion could strand the tags.
+  promote-main:
+    name: Promote main image
+    needs: build
+    if: github.event_name == 'workflow_run' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: build-image-main-promotion
+      queue: max
+    steps:
+      # Most queued jobs are stale when main advances quickly. Reject them
+      # before installing Buildx or opening an authenticated registry session.
+      - name: Preflight current main head
+        id: preflight
+        run: |
+          current_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)"
+          if [[ "$current_sha" == "$IMAGE_REVISION" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale promotion because main is now $current_sha"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.preflight.outputs.current == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        if: steps.preflight.outputs.current == 'true'
+        uses: docker/login-action@v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Keep the head check and registry mutation in one serialized step. A
+      # stale queued run skips; if main advances after this check, the tags
+      # intentionally remain on a tested image until a newer run passes CI.
+      - name: Promote tested main image
+        if: steps.preflight.outputs.current == 'true'
+        run: |
+          current_sha="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" refs/heads/main | cut -f1)"
+          if [[ "$current_sha" != "$IMAGE_REVISION" ]]; then
+            echo "::notice::Skipping mutable tags because main is now $current_sha"
+            exit 0
+          fi
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:main" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${IMAGE_REVISION}"

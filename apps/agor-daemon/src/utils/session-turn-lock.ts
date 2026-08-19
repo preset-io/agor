@@ -1,24 +1,22 @@
 /**
- * Per-session "turn" lock — single source of truth for "who's allowed to
- * transition `session.status: idle → running` right now" mutual exclusion.
+ * Per-session process-local turn coalescer.
  *
- * Acquired by every code path that decides between spawning an executor
- * immediately vs. queueing:
+ * Used by code paths that prepare or drain one Session turn:
  *
- *   - `POST /sessions/:id/prompt` (idle branch) — create CREATED task + spawn,
- *     or fall through to queue if a concurrent caller already flipped the
- *     session to RUNNING while we waited for the lock.
+ *   - `POST /sessions/:id/prompt` — durably enqueue, then attempt the queue-head
+ *     dispatch claim.
  *   - `POST /tasks/:id/run` — claim a pre-existing CREATED task and spawn it.
- *   - The queue processor's drain loop (`processNextQueuedTask`) — pop the
- *     next QUEUED task and spawn it.
+ *   - The queue processor's drain loop (`processNextQueuedTask`) — inspect the
+ *     next QUEUED task and attempt its dispatch claim.
  *
  * Mutual exclusion is per-session-ID; different sessions never block each
- * other. Single-process only: multi-instance deployments would additionally
- * need a row-level DB lock or atomic conditional UPDATE on `sessions.status`.
+ * other. This Map is intentionally not correctness state: every daemon owns a
+ * different Map and process death erases it. Durable queue-position admission
+ * and the Session-first Task dispatch claim provide cross-daemon correctness.
  *
- * Both this helper and the queue processor share the same `Map<SessionID,
- * Promise<void>>` instance — that's what makes the "no two callers spawn
- * concurrently for the same session" invariant hold across all entry points.
+ * Both this helper and the queue processor share one local Map only to reduce
+ * redundant preparation and noisy claim losses. Tests for this helper pin
+ * coalescing behavior, not the one-active-turn invariant.
  */
 import type { SessionID } from '@agor/core/types';
 

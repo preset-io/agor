@@ -43,6 +43,22 @@ describe('surface route registry', () => {
     }
   );
 
+  it.each(['/marketplace'])('classifies %s as Marketplace', (path) => {
+    expect(getRouteSurface(path).id).toBe('marketplace');
+    expect(isWorkspaceRoutePath(path)).toBe(false);
+    // Browsing the catalog must not spin up the board/session store.
+    expect(routeStartsWorkspaceRuntime(path)).toBe(false);
+    expect(routeUsesDeviceRouter(path)).toBe(false);
+    expect(routeUsesSharedUserSettings(path)).toBe(true);
+  });
+
+  it.each(['/marketplaces', '/marketplace/extra'])(
+    'does not treat similarly prefixed path %s as Marketplace',
+    (path) => {
+      expect(getRouteSurface(path).id).toBe('workspace');
+    }
+  );
+
   it.each(['/a/artifact/fullscreen'])('classifies %s as Artifact fullscreen', (path) => {
     expect(getRouteSurface(path).id).toBe('artifact-fullscreen');
     expect(isKnowledgeRoutePath(path)).toBe(false);

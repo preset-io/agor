@@ -11,9 +11,10 @@ import type {
   CodexSandboxMode,
   PersistedAgenticToolName,
 } from './agentic-tool';
+import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
 import type { ScheduleID } from './schedule';
-import type { PermissionMode } from './session';
+import type { PermissionMode, Session } from './session';
 import type { DefaultModelConfig } from './user';
 
 // ============================================================================
@@ -29,6 +30,9 @@ export type ThreadSessionMapID = UUID;
 /** Gateway outbound seed/audit message identifier */
 export type GatewayOutboundMessageID = UUID;
 
+/** Durable identity for one provider-delivered inbound gateway event. */
+export type GatewayInboundEventID = UUID;
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -43,8 +47,18 @@ export type ChannelType =
   | 'teams'
   | 'shortcut';
 
+/** Providers with an explicitly audited PostgreSQL listener ownership contract. */
+export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
+  'slack',
+  'github',
+  'shortcut',
+] as const satisfies readonly ChannelType[];
+
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
+
+/** Internal processing state for a provider event idempotency occurrence. */
+export type GatewayInboundEventStatus = 'processing' | 'completed';
 
 /** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
 export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
@@ -251,15 +265,8 @@ export interface GatewayEnvVar {
   forceOverride: boolean;
 }
 
-export interface GatewayAgenticConfig {
+interface GatewayAgenticConfigBase {
   agent: AgenticToolName;
-  /** Live preset reference. Remaining runtime fields are ignored when present. */
-  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
-  modelConfig?: DefaultModelConfig;
-  permissionMode?: PermissionMode;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
   /**
    * Gateway-level environment variables (e.g., service account tokens).
    *
@@ -272,9 +279,37 @@ export interface GatewayAgenticConfig {
   envVars?: GatewayEnvVar[];
 }
 
+type ReferencedGatewayAgenticConfig = {
+  /** Live preset/default reference. */
+  presetId: AgenticToolConfigurationReference;
+  modelConfig?: never;
+  permissionMode?: never;
+  codexSandboxMode?: never;
+  codexApprovalPolicy?: never;
+  codexNetworkAccess?: never;
+};
+
+type InlineGatewayAgenticConfig = {
+  presetId?: never;
+  modelConfig?: DefaultModelConfig;
+  permissionMode?: PermissionMode;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
+};
+
+export type GatewayAgenticConfig = GatewayAgenticConfigBase &
+  (ReferencedGatewayAgenticConfig | InlineGatewayAgenticConfig);
+
 /** Storage-facing gateway configuration, including readable removed identifiers. */
-export type PersistedGatewayAgenticConfig = Omit<GatewayAgenticConfig, 'agent'> & {
+export type PersistedGatewayAgenticConfig = GatewayAgenticConfigBase & {
   agent: PersistedAgenticToolName;
+  presetId?: AgenticToolConfigurationReference;
+  modelConfig?: DefaultModelConfig | NonNullable<Session['model_config']>;
+  permissionMode?: PermissionMode;
+  codexSandboxMode?: CodexSandboxMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  codexNetworkAccess?: boolean;
 };
 
 // ============================================================================
@@ -395,4 +430,28 @@ export interface GatewayOutboundMessage {
 
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Durable provider-event occurrence used to deduplicate listener redelivery.
+ *
+ * The processing token is an internal fence and is never exposed through a
+ * public service. Provider payloads and credentials are deliberately not
+ * stored here; connectors recover them from the provider using their durable
+ * channel checkpoint.
+ */
+export interface GatewayInboundEvent {
+  id: GatewayInboundEventID;
+  gateway_channel_id: GatewayChannelID;
+  provider_event_id: string;
+  thread_id: string;
+  /** Provider acknowledgement/reply coordinates recorded after preparation. */
+  delivery_metadata: Record<string, unknown> | null;
+  status: GatewayInboundEventStatus;
+  processing_token: string;
+  processing_expires_at: string;
+  session_id: SessionID | null;
+  task_id: TaskID | null;
+  received_at: string;
+  completed_at: string | null;
 }

@@ -22,6 +22,7 @@ import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
 import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -39,6 +40,7 @@ interface ArtifactsTableProps {
 }
 
 const templateColors: Record<string, string> = {
+  static: 'default',
   react: 'cyan',
   'react-ts': 'blue',
   vanilla: 'green',
@@ -125,13 +127,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     closeDrill();
   }, [closeDrill, editingArtifact, form, onUpdate]);
 
-  const boardOptions = mapToArray(boardById)
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((board) => ({
-      value: board.board_id,
-      label: `${board.icon || '📋'} ${board.name}`,
-    }));
+  const boardOptions = boardSelectOptions(mapToArray(boardById), branchById);
 
   const columns = [
     {
@@ -203,8 +199,9 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
         const branchText = artifact.branch_id ? branch?.name || shortId(artifact.branch_id) : '—';
         const board = boardById.get(artifact.board_id);
+        const boardEmoji = board ? getBoardEmoji(board, branchById) : undefined;
         const boardText = board
-          ? `${board.icon || ''} ${board.name}`.trim()
+          ? `${boardEmoji ? `${boardEmoji} ` : ''}${board.name}`
           : shortId(artifact.board_id);
         return (
           <Space orientation="vertical" size={0} style={{ width: '100%' }}>

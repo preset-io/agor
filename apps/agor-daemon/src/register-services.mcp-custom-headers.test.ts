@@ -55,7 +55,63 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
     expect(authHeadersBlock).toContain('shouldExposeMCPServerSecretsForSessionToken');
     expect(authHeadersBlock).toContain('SessionMCPServerRepository');
     expect(authHeadersBlock).toContain("scope: 'global'");
+    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
+  });
+
+  it('scopes the global set to what the session may use', () => {
+    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
+  });
+});
+
+/**
+ * Every endpoint that takes an `mcp_server_id` straight from the request and
+ * then reads that server's OAuth configuration, or writes a token or token
+ * endpoint onto it, has to ask whether the caller may touch that row — a
+ * private server belongs to one user. The helper is unit-tested elsewhere;
+ * what is easy to lose in a refactor is the call itself, at one of four sites.
+ */
+describe('register-services OAuth endpoints authorize the server they are given', () => {
+  const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
+
+  const blockFor = (mountPath: string): string => {
+    const start = source.indexOf(`app.use('${mountPath}'`);
+    expect(start, `${mountPath} is not mounted`).toBeGreaterThan(-1);
+    const next = source.indexOf('app.use(', start + 1);
+    return source.slice(start, next === -1 ? undefined : next);
+  };
+
+  it.each([
+    '/mcp-servers/test-oauth',
+    '/mcp-servers/oauth-start',
+    '/mcp-servers/oauth-disconnect',
+    '/mcp-servers/oauth-refresh',
+  ])('%s resolves its server through loadMcpServerForCaller', (mountPath) => {
+    expect(blockFor(mountPath)).toContain('loadMcpServerForCaller');
+  });
+
+  it('discovery decides on ownership rather than on scope', () => {
+    const block = blockFor('/mcp-servers/discover');
+    expect(block).toContain('denyDiscoverOfAnotherUsersServer');
+    expect(block).not.toContain("server.scope === 'global'");
+    expect(block).not.toContain("server.scope === 'session'");
+  });
+});
+
+describe('register-services /session-mcp-servers visibility', () => {
+  const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
+  const attachmentStart = source.indexOf("app.use('/session-mcp-servers'");
+  const attachmentEnd = source.indexOf('// Users service', attachmentStart);
+  const attachmentBlock =
+    attachmentStart === -1
+      ? ''
+      : source.slice(attachmentStart, attachmentEnd === -1 ? undefined : attachmentEnd);
+
+  it('joins saved ownership before returning attachment IDs', () => {
+    expect(attachmentBlock).toContain('let query = select(db, {');
+    expect(attachmentBlock).toContain('.innerJoin(mcpServers');
+    expect(attachmentBlock).toContain('.innerJoin(sessions');
+    expect(attachmentBlock).toContain('isSessionMcpServerLinkVisibleToCaller');
   });
 });

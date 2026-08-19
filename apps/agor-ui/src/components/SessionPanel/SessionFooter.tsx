@@ -30,7 +30,18 @@ import {
   ToolOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Badge,
+  Button,
+  Divider,
+  Popover,
+  Space,
+  Spin,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
@@ -47,6 +58,7 @@ import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 export interface SessionFooterProps {
   // Session data for chips
   session: Session & { agentic_tool: AgenticToolName };
+  currentUserId?: string;
   footerTimerTask: Task | null;
   tokenBreakdown: {
     total: number;
@@ -105,6 +117,7 @@ export interface SessionFooterProps {
 // wrappers, memoized slot/config objects) so the bailout actually holds.
 const SessionFooterInner: React.FC<SessionFooterProps> = ({
   session,
+  currentUserId,
   footerTimerTask,
   tokenBreakdown,
   latestContextWindow,
@@ -147,6 +160,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
+  const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
+  const getMorePopupContainer = React.useCallback(
+    (triggerNode: HTMLElement) =>
+      moreContentRef.current ?? triggerNode.parentElement ?? triggerNode,
+    []
+  );
   const [prefs, setPref] = useFooterPreferences();
   const pinnedItems = prefs.pinnedItems;
   const togglePin = (id: string) => {
@@ -229,7 +248,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const moreContent = (
     <fieldset
+      ref={moreContentRef}
       aria-label="More options"
+      onMouseDown={(event) => event.stopPropagation()}
       style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
     >
       {/* === Section: Settings === */}
@@ -279,7 +300,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             onChange={onModelConfigChange}
             agentic_tool={session.agentic_tool}
             client={client}
+            branchId={session.branch_id}
+            catalogEnabled={session.created_by === currentUserId}
             compact
+            getPopupContainer={getMorePopupContainer}
           />
         </div>
       </div>
@@ -1353,6 +1377,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         onChange={onModelConfigChange}
                         agentic_tool={session.agentic_tool}
                         client={client}
+                        branchId={session.branch_id}
+                        catalogEnabled={session.created_by === currentUserId}
                       />
                     )}
                   </div>
@@ -1361,24 +1387,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tag
                   icon={<RobotOutlined />}
                   color="default"
+                  truncate
+                  title={modelName}
                   style={{
                     cursor: managedByPreset ? 'default' : 'pointer',
                     height: 22,
                     display: 'inline-flex',
                     alignItems: 'center',
-                    maxWidth: 180,
                   }}
                   data-testid="model-chip"
                 >
-                  <span
-                    style={{
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {modelName}
-                  </span>
+                  {modelName}
                 </Tag>
               </Popover>
             )}
@@ -1479,6 +1498,21 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Popover>
             )}
           </div>
+        )}
+
+        {/* Unauthorized MCP servers block their tools silently — surface it as an
+            error the user must fix, right above the composer. */}
+        {unauthedMcpServers.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            message={
+              unauthedMcpServers.length === 1
+                ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
+                : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`
+            }
+            style={{ marginBottom: token.sizeUnit * 2, borderRadius: token.borderRadius }}
+          />
         )}
 
         {/* Row 2 — Prompt textarea */}

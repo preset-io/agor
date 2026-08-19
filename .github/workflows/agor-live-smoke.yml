@@ -1,25 +1,7 @@
-# Smoke-test the agor-live npm publish artifact.
-#
-# Purpose: catch broken releases (e.g. 0.17.1's `workspace:*` leak, or
-# 0.17.3's blank-page/500) BEFORE they ship to npm.
-#
-# Strategy:
-#   1. Build the package the same way `./build.sh` does (no --publish).
-#   2. `pnpm pack` (this resolves `workspace:*` refs the same way `pnpm publish`
-#      does — so the tarball matches what would actually get pushed to npm).
-#   3. Defense-in-depth grep: assert the packed manifest has no `workspace:*`
-#      strings. This is the single check that would have caught the 0.17.1
-#      regression even if someone bypassed `pnpm publish` and used `npm publish`.
-#   4. Install the tarball into a clean project with plain `npm install`.
-#   5. Run migrations, boot the daemon (background → NODE_ENV=production), and
-#      curl `/health`, `/ui/`, and a JS asset. Assert real HTML + a non-trivial
-#      JS bundle come back.
-#
-# This is the minimum viable "does the published artifact even start?" check.
-# A tag-triggered auto-publish workflow can build on top of this later (see
-# the PR description for the spec).
-
-name: agor-live publish smoke-test
+# Build the exact npm release artifacts once, then install and exercise those
+# bytes under the supported Node policy. Pull requests use one representative
+# lane; release/manual callers get the full matrix.
+name: agor-live packaged install smoke
 
 on:
   pull_request:
@@ -28,25 +10,28 @@ on:
       - 'packages/agor-live/**'
       - 'packages/client/**'
       - 'packages/core/**'
+      - 'packages/git/**'
       - 'packages/executor/**'
+      - 'packages/agentic-tool-opencode/**'
+      - 'packages/agentic-tools/**'
+      - 'packages/agor-*/**'
       - 'apps/agor-daemon/**'
       - 'apps/agor-cli/**'
       - 'apps/agor-ui/**'
+      - 'scripts/sync-agor-live-deps.mjs'
+      - 'scripts/check-agentic-tool-packages.mjs'
       - 'pnpm-lock.yaml'
       - '.github/workflows/agor-live-smoke.yml'
+      - '.github/workflows/release-agor-live.yml'
   workflow_dispatch:
-  # Allow `heavy-checks.yml` (nightly + push-to-main) to invoke this
-  # unconditionally — bypasses the path filter so we catch regressions
-  # that slip in via paths the filter doesn't cover.
   workflow_call:
 
 env:
   PNPM_VERSION: '11.17.0'
-  NODE_VERSION: '22'
 
 jobs:
-  smoke:
-    name: Pack + boot + curl
+  build-artifacts:
+    name: Build immutable release artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,168 +43,494 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '24.19.0'
           cache: 'pnpm'
+
+      # npm pack owns the release tarball bytes. Pin it independently of the
+      # runner image so a tag retry rebuilds the same artifacts.
+      - run: npm install -g --ignore-scripts npm@11.16.0
 
       - run: pnpm install --frozen-lockfile
 
-      # Build dist/ in packages/agor-live the same way `./build.sh` does
-      # (no --publish, no --bump). This stages cli/core/daemon/executor/ui
-      # under packages/agor-live/dist.
-      - name: Build agor-live
+      - name: Set reproducible build metadata
+        shell: bash
         run: |
-          cd packages/agor-live
-          ./build.sh --skip-install
+          set -euo pipefail
+          echo "AGOR_BUILD_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+          echo "AGOR_BUILT_AT=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_ENV"
+
+      - name: Build and pack once
+        run: packages/agor-live/build.sh --skip-install
         env:
-          # Match build.sh's heap ceiling so DTS / vite bundle steps don't OOM.
           NODE_OPTIONS: --max-old-space-size=4096
 
-      # Use `pnpm pack` (not `npm pack`) so workspace:* refs are rewritten
-      # to concrete semver — same transform `pnpm publish` does.
-      #
-      # We pack BOTH agor-live and its sibling @agor-live/client. agor-live's
-      # manifest declares "@agor-live/client": "<exact version>", and that
-      # version doesn't exist on the npm registry yet (the whole point of
-      # this smoke test is to validate before publishing). Installing both
-      # tarballs in a single `npm install` lets npm satisfy the sibling
-      # dep locally — zero registry hits.
-      - name: Pack tarballs (agor-live + @agor-live/client)
-        id: pack
+      - name: Inspect release contract
         run: |
           set -euo pipefail
-          pnpm pack -C packages/client    --pack-destination "$RUNNER_TEMP"
-          pnpm pack -C packages/agor-live --pack-destination "$RUNNER_TEMP"
-          CLIENT=$(ls "$RUNNER_TEMP"/agor-live-client-*.tgz | head -1)
-          LIVE=$(ls "$RUNNER_TEMP"/agor-live-[0-9]*.tgz | head -1)
-          if [ -z "$CLIENT" ] || [ -z "$LIVE" ]; then
-            echo "::error::pnpm pack produced incomplete tarballs"
-            ls "$RUNNER_TEMP"
-            exit 1
-          fi
-          echo "client=$CLIENT" >> "$GITHUB_OUTPUT"
-          echo "live=$LIVE" >> "$GITHUB_OUTPUT"
-          echo "Packed:"
-          echo "  client: $CLIENT"
-          echo "  live:   $LIVE"
-
-      # The single grep that would have caught agor-live@0.17.1.
-      # If this ever fails, someone packed/published with a tool that
-      # doesn't rewrite `workspace:` (e.g. plain `npm publish`).
-      - name: Assert no workspace:* refs in packed manifest
-        run: |
-          set -euo pipefail
+          RELEASE=packages/agor-live/release
+          LIVE=$(ls "$RELEASE"/agor-live-[0-9]*.tgz)
+          CLIENT=$(ls "$RELEASE"/agor-live-client-*.tgz)
+          test -n "$LIVE"
+          test -n "$CLIENT"
+          test "$(find "$RELEASE" -maxdepth 1 -name '*.tgz' | wc -l)" -eq 8
           mkdir -p "$RUNNER_TEMP/inspect"
-          tar -xzf "${{ steps.pack.outputs.live }}" -C "$RUNNER_TEMP/inspect"
-          MANIFEST="$RUNNER_TEMP/inspect/package/package.json"
-          echo "=== Packed manifest deps ==="
-          node -e "const p=require('$MANIFEST'); console.log(JSON.stringify({d:p.dependencies,pd:p.peerDependencies,od:p.optionalDependencies},null,2))"
-          if grep -nE '"workspace:' "$MANIFEST"; then
-            echo "::error::workspace:* leaked into the published manifest. \
-              The tarball would break `npm install agor-live` once published. \
-              Use `pnpm publish` (not `npm publish`) — see packages/agor-live/build.sh."
-            exit 1
-          fi
-          echo "✓ No workspace:* refs in packed manifest"
-
-      # Install BOTH tarballs together. List the client first so npm registers
-      # it before resolving agor-live's "@agor-live/client" dep — guarantees
-      # the local file: source wins over the (non-existent) registry version.
-      - name: Install tarballs in a clean project
-        id: install
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/smoke-install"
-          cd "$RUNNER_TEMP/smoke-install"
-          npm init -y >/dev/null
-          npm install --no-fund --no-audit \
-            "${{ steps.pack.outputs.client }}" \
-            "${{ steps.pack.outputs.live }}"
-          echo "=== Installed dist/ ==="
-          ls node_modules/agor-live/dist
-          echo "=== Postinstall artifacts (@agor symlinks) ==="
-          ls -la node_modules/agor-live/node_modules/@agor/core
-          ls -la node_modules/agor-live/node_modules/@agor/git
-          (cd node_modules/agor-live && node --input-type=module -e "await import('@agor/core/git/exec'); console.log('✓ @agor/core/git/exec imports from agor-live package context')")
-          # Confirm the UI bundle index.html is present and references a JS asset.
-          if [ ! -f node_modules/agor-live/dist/ui/index.html ]; then
-            echo "::error::dist/ui/index.html missing from installed package"
-            exit 1
-          fi
-
-      - name: Boot daemon and curl /ui/
-        run: |
-          set -euo pipefail
-          export HOME="$RUNNER_TEMP/smoke-home"
-          mkdir -p "$HOME/.agor"
-          cat > "$HOME/.agor/config.yaml" <<'EOF'
-          daemon:
-            port: 3030
-          EOF
-          BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
-          cd "$RUNNER_TEMP/smoke-install"
-
-          # `agor db migrate` prompts "press any key to continue" — feed it a newline.
-          echo "" | node "$BIN/agor.js" db migrate
-
-          # Background start sets NODE_ENV=production (see dist/cli/commands/daemon/start.js).
-          node "$BIN/agor.js" daemon start
-
-          # Wait for /health (max 45s).
-          for i in $(seq 1 45); do
-            if curl -fsS -o /dev/null http://localhost:3030/health; then
-              echo "daemon ready after ${i}s"
-              break
-            fi
-            if [ "$i" = "45" ]; then
-              echo "::error::daemon never became healthy"
-              tail -200 "$HOME/.agor/logs/daemon.log" || true
-              exit 1
-            fi
-            sleep 1
+          tar -xzf "$LIVE" -C "$RUNNER_TEMP/inspect"
+          node - "$RUNNER_TEMP/inspect/package/package.json" <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const lifecycle = ['preinstall', 'install', 'postinstall'].filter(
+            (name) => manifest.scripts?.[name]
+          );
+          if (lifecycle.length) throw new Error(`Release has install lifecycle hooks: ${lifecycle}`);
+          if (JSON.stringify(manifest).includes('workspace:')) {
+            throw new Error('workspace:* leaked into the release manifest');
+          }
+          const expected = [
+            '@agor/agentic-tool-opencode', '@agor/agentic-tools', '@agor/core', '@agor/git',
+          ];
+          if (JSON.stringify(manifest.bundleDependencies?.sort()) !== JSON.stringify(expected.sort())) {
+            throw new Error(`Unexpected bundleDependencies: ${manifest.bundleDependencies}`);
+          }
+          NODE
+          for package in agentic-tool-opencode agentic-tools core git; do
+            test -d "$RUNNER_TEMP/inspect/package/node_modules/@agor/$package"
+            test ! -L "$RUNNER_TEMP/inspect/package/node_modules/@agor/$package"
           done
 
-          # /ui/ should serve the SPA shell.
-          echo "=== GET /ui/ ==="
-          curl -fsS -o /tmp/ui.html -w "HTTP=%{http_code} bytes=%{size_download} ctype=%{content_type}\n" \
-            http://localhost:3030/ui/
-          if ! grep -q '<div id="root">' /tmp/ui.html; then
-            echo "::error::/ui/ response is missing <div id=\"root\"> — UI shell not being served"
-            head -80 /tmp/ui.html
-            tail -200 "$HOME/.agor/logs/daemon.log" || true
-            exit 1
-          fi
-          if ! grep -qE '/ui/assets/index-[A-Za-z0-9_-]+\.js' /tmp/ui.html; then
-            echo "::error::/ui/ response is missing a JS asset reference — index.html not stamped"
-            head -80 /tmp/ui.html
-            exit 1
-          fi
-
-          # Actually fetch the JS asset to confirm static-file serving works end-to-end.
-          ASSET_PATH=$(grep -oE '/ui/assets/index-[A-Za-z0-9_-]+\.js' /tmp/ui.html | head -1)
-          echo "=== GET $ASSET_PATH ==="
-          read -r SIZE CTYPE < <(curl -fsS -o /dev/null -w "%{size_download} %{content_type}\n" "http://localhost:3030$ASSET_PATH")
-          echo "JS asset size: $SIZE bytes; content-type: $CTYPE"
-          # Vite may split most application code out of the entry chunk. Verify that the
-          # referenced asset is non-empty JavaScript rather than relying on bundle size.
-          if [ "$SIZE" -lt 1000 ] || [[ "$CTYPE" != *javascript* ]]; then
-            echo "::error::/ui/ JS asset response is invalid (${SIZE} bytes, ${CTYPE}) — static serving broken"
-            exit 1
-          fi
-          echo "✓ Smoke test passed"
-
-      - name: Stop daemon
-        if: always()
-        run: |
-          export HOME="$RUNNER_TEMP/smoke-home"
-          BIN="$RUNNER_TEMP/smoke-install/node_modules/agor-live/bin"
-          if [ -d "$BIN" ]; then
-            node "$BIN/agor.js" daemon stop || true
-          fi
-
-      - name: Upload daemon log on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v6
         with:
-          name: daemon-log
-          path: ${{ runner.temp }}/smoke-home/.agor/logs/
-          if-no-files-found: warn
+          name: agor-live-release
+          path: packages/agor-live/release/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  packaged-smoke:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    needs: build-artifacts
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"24.19.0"}]' || '[{"os":"ubuntu-latest","node":"22.12.0"},{"os":"ubuntu-latest","node":"24.19.0"},{"os":"ubuntu-latest","node":"26"},{"os":"macos-latest","node":"24.19.0"}]') }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agor-live-release
+          path: ${{ runner.temp }}/release
+
+      - name: Locate artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE="$RUNNER_TEMP/release"
+          echo "LIVE=$(ls "$RELEASE"/agor-live-[0-9]*.tgz)" >> "$GITHUB_ENV"
+          echo "CLIENT=$(ls "$RELEASE"/agor-live-client-*.tgz)" >> "$GITHUB_ENV"
+          echo "CLAUDE=$(ls "$RELEASE"/agor-live-claude-*.tgz)" >> "$GITHUB_ENV"
+          echo "CODEX=$(ls "$RELEASE"/agor-live-codex-*.tgz)" >> "$GITHUB_ENV"
+          echo "COPILOT=$(ls "$RELEASE"/agor-live-copilot-*.tgz)" >> "$GITHUB_ENV"
+          echo "CURSOR=$(ls "$RELEASE"/agor-live-cursor-*.tgz)" >> "$GITHUB_ENV"
+          echo "GEMINI=$(ls "$RELEASE"/agor-live-gemini-*.tgz)" >> "$GITHUB_ENV"
+          echo "OPENCODE=$(ls "$RELEASE"/agor-live-opencode-*.tgz)" >> "$GITHUB_ENV"
+
+      - name: Plain global install is script-independent
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/plain-install"
+          mkdir -p "$ROOT/home"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit "$CLIENT" "$LIVE"
+          PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
+          for package in agentic-tool-opencode agentic-tools core git; do
+            test -d "$PACKAGE_ROOT/node_modules/@agor/$package"
+            test ! -L "$PACKAGE_ROOT/node_modules/@agor/$package"
+          done
+          test ! -e "$PACKAGE_ROOT/node_modules/hot-shots"
+          test ! -e "$ROOT/prefix/lib/node_modules/hot-shots"
+          if find "$ROOT/prefix/lib/node_modules" -type d -name unix-dgram -print -quit | grep -q .; then
+            echo "Default install unexpectedly contains unix-dgram" >&2
+            exit 1
+          fi
+          HOME="$ROOT/home" "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+
+          # Importing the metrics composition module must not resolve the peer
+          # while the default-disabled exporter is in use.
+          node --input-type=module - "$PACKAGE_ROOT" <<'NODE'
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const packageRoot = process.argv[2];
+          const metricsModule = await import(
+            pathToFileURL(join(packageRoot, 'dist/daemon/metrics/index.js')).href
+          );
+          const metrics = metricsModule.createDaemonMetrics(undefined, {
+            workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+            deploymentMode: 'standalone',
+            deploymentId: 'smoke',
+          });
+          if (metrics.enabled) throw new Error('Default metrics exporter must be disabled');
+          const warnings = [];
+          const originalWarn = console.warn;
+          console.warn = (message) => warnings.push(String(message));
+          const missingPeerMetrics = metricsModule.createDaemonMetrics(
+            { enabled: true },
+            {
+              workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+              deploymentMode: 'standalone',
+              deploymentId: 'smoke',
+            }
+          );
+          console.warn = originalWarn;
+          if (missingPeerMetrics.enabled) throw new Error('Missing peer must fall back to no-op');
+          if (!warnings.some((warning) => warning.includes('optional hot-shots peer dependency'))) {
+            throw new Error(`Missing peer warning was not actionable: ${JSON.stringify(warnings)}`);
+          }
+          NODE
+
+          # A second install with lifecycle execution forcibly disabled must be
+          # equally usable. This is a release invariant, not a user instruction.
+          NOSCRIPTS="$RUNNER_TEMP/no-scripts-install"
+          npm install -g --prefix "$NOSCRIPTS/prefix" --cache "$NOSCRIPTS/cache" \
+            --no-fund --no-audit --ignore-scripts "$CLIENT" "$LIVE"
+          HOME="$NOSCRIPTS/home" "$NOSCRIPTS/prefix/bin/agor" doctor --json >/dev/null
+
+          # Prove the optional prebuilt PTY can create a real pseudo-terminal,
+          # not merely that its JavaScript entry point imports.
+          node --input-type=module - "$PACKAGE_ROOT" <<'NODE'
+          import { createRequire } from 'node:module';
+          import { join } from 'node:path';
+          const packageRoot = process.argv[2];
+          const require = createRequire(join(packageRoot, 'package.json'));
+          const pty = require('@lydell/node-pty');
+          const marker = 'packaged-pty-ready';
+          const child = pty.spawn(process.execPath, ['-e', `process.stdout.write('${marker}')`], {
+            name: 'xterm', cols: 80, rows: 24, cwd: packageRoot, env: process.env,
+          });
+          let output = '';
+          child.onData((chunk) => { output += chunk; });
+          await new Promise((resolve, reject) => child.onExit(({ exitCode }) => {
+            if (exitCode === 0 && output.includes(marker)) resolve();
+            else reject(new Error(`PTY failed: exit=${exitCode}, output=${JSON.stringify(output)}`));
+          }));
+          NODE
+
+      - name: Optional StatsD peer works without lifecycle scripts
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.19.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/statsd-peer"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit "$CLIENT" "$LIVE"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit --ignore-scripts \
+            hot-shots@17.1.0
+          PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
+          test -d "$ROOT/prefix/lib/node_modules/hot-shots"
+          node --input-type=module - "$PACKAGE_ROOT" <<'NODE'
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const packageRoot = process.argv[2];
+          const metricsModule = await import(
+            pathToFileURL(join(packageRoot, 'dist/daemon/metrics/index.js')).href
+          );
+          const metrics = metricsModule.createDaemonMetrics(
+            { enabled: true, host: '127.0.0.1', port: 8125, prefix: 'agor.smoke.' },
+            {
+              workIdentity: { instanceId: 'standalone', bootId: 'smoke' },
+              deploymentMode: 'standalone',
+              deploymentId: 'smoke',
+            }
+          );
+          if (!metrics.enabled) throw new Error('StatsD peer did not initialize');
+          await metrics.close();
+          NODE
+
+      - name: A missing optional PTY does not block Agor
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.19.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/no-optional"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit --ignore-scripts "$CLIENT" "$LIVE"
+          # Deterministically model an unavailable platform artifact. npm's
+          # handling of --omit=optional for global local-tarball installs has
+          # varied, so omission itself is not the contract under test.
+          rm -rf "$ROOT/prefix/lib/node_modules/agor-live/node_modules/@lydell"
+          HOME="$ROOT/home" "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" <<'NODE'
+          const report = require(process.argv[2]);
+          if (report.optionalCapabilities?.webTerminal?.status !== 'unavailable') {
+            throw new Error(`Expected optional terminal to be unavailable: ${JSON.stringify(report)}`);
+          }
+          if (!report.ok) throw new Error('An optional terminal must not make doctor fail');
+          NODE
+
+      - name: Fresh init installs a selected tool with scripts disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/init-smoke"
+          REAL_NPM=$(command -v npm)
+          mkdir -p "$ROOT/npm-shim" "$ROOT/home"
+          cat > "$ROOT/npm-shim/npm" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" == @agor-live/codex@* ]]; then args+=("$AGOR_SMOKE_CODEX");
+            else args+=("$arg"); fi
+          done
+          exec "$AGOR_SMOKE_REAL_NPM" "${args[@]}"
+          SH
+          chmod +x "$ROOT/npm-shim/npm"
+          export HOME="$ROOT/home"
+          export AGOR_AGENTIC_TOOLS_DIR="$HOME/.agor/agentic-tools"
+          export PATH="$ROOT/npm-shim:$PATH"
+          export AGOR_SMOKE_REAL_NPM="$REAL_NPM"
+          export AGOR_SMOKE_CODEX="$CODEX"
+          # Model an upgrade initiated from an executor spawned by the prior
+          # Agor version. The newly installed launcher must own AGOR_VERSION.
+          export AGOR_VERSION=0.0.0-stale
+          AGOR_TELEMETRY=0 "$RUNNER_TEMP/plain-install/prefix/bin/agor" init \
+            --non-interactive --agentic-tools codex
+          AGOR_TELEMETRY=0 "$RUNNER_TEMP/plain-install/prefix/bin/agor" doctor --json \
+            > "$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" <<'NODE'
+          const report = require(process.argv[2]);
+          const codex = report.agenticTools?.find((tool) => tool.id === 'codex');
+          if (codex?.status !== 'ready') throw new Error(`Codex not ready: ${JSON.stringify(codex)}`);
+          NODE
+
+      - name: npm 12 and native managed tools need no lifecycle approval
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.19.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/npm12"
+          npm install --prefix "$ROOT/npm" --ignore-scripts --no-fund --no-audit npm@12.0.2
+          NPM12="$ROOT/npm/node_modules/npm/bin/npm-cli.js"
+          node "$NPM12" install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit "$CLIENT" "$LIVE"
+          HOME="$ROOT/base-home" "$ROOT/prefix/bin/agor" doctor --json >/dev/null
+
+          mkdir -p "$ROOT/npm-shim" "$ROOT/home"
+          cat > "$ROOT/npm-shim/npm" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          args=()
+          for arg in "$@"; do
+            if [[ "$arg" == @agor-live/opencode@* ]]; then args+=("$AGOR_SMOKE_OPENCODE");
+            elif [[ "$arg" == @agor-live/gemini@* ]]; then args+=("$AGOR_SMOKE_GEMINI");
+            else args+=("$arg"); fi
+          done
+          exec node "$AGOR_SMOKE_NPM12" "${args[@]}"
+          SH
+          chmod +x "$ROOT/npm-shim/npm"
+          export HOME="$ROOT/home"
+          export AGOR_AGENTIC_TOOLS_DIR="$HOME/.agor/agentic-tools"
+          export PATH="$ROOT/npm-shim:$PATH"
+          export AGOR_SMOKE_NPM12="$NPM12"
+          export AGOR_SMOKE_OPENCODE="$OPENCODE"
+          export AGOR_SMOKE_GEMINI="$GEMINI"
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" init \
+            --non-interactive --agentic-tools opencode,gemini
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" <<'NODE'
+          const report = require(process.argv[2]);
+          for (const id of ['opencode', 'gemini']) {
+            const tool = report.agenticTools?.find((item) => item.id === id);
+            if (tool?.status !== 'ready') throw new Error(`${id} not ready: ${JSON.stringify(tool)}`);
+          }
+          NODE
+          VERSION=$(node -p "require('$ROOT/prefix/lib/node_modules/agor-live/package.json').version")
+          TOOLS="$HOME/.agor/agentic-tools/$VERSION"
+          test ! -e "$TOOLS/opencode/node_modules/opencode-ai/bin/.opencode"
+          test -x "$TOOLS/opencode/node_modules/opencode-linux-x64/bin/opencode"
+
+          # OpenCode's standard launcher discovers its platform optional package
+          # at runtime when postinstall has not created bin/.opencode.
+          EXPECTED_OPENCODE=$(node -p \
+            "require('$TOOLS/opencode/node_modules/opencode-ai/package.json').version")
+          test "$(node "$TOOLS/opencode/node_modules/opencode-ai/bin/opencode" --version)" \
+            = "$EXPECTED_OPENCODE"
+
+          # Exercise the public Gemini SDK paths that consume its scriptless
+          # PTY prebuild and Bash parser WASM. Keep this vendor-specific proof
+          # in release CI rather than coupling Agor production modules to the
+          # vendor's private package layout.
+          node --input-type=module - "$TOOLS/gemini" <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const root = process.argv[2];
+          const { sdk } = await import(pathToFileURL(`${root}/node_modules/@agor-live/gemini/dist/index.js`).href);
+          const selectedPty = await sdk.getPty();
+          if (selectedPty?.name !== 'lydell-node-pty') throw new Error('Gemini did not select its scriptless PTY');
+          const marker = 'gemini-pty-ready';
+          const child = selectedPty.module.spawn(
+            process.execPath,
+            ['-e', `process.stdout.write('${marker}')`],
+            { name: 'xterm', cols: 80, rows: 24, cwd: root, env: process.env }
+          );
+          let output = '';
+          child.onData((chunk) => { output += chunk; });
+          await new Promise((resolve, reject) => child.onExit(({ exitCode }) => {
+            if (exitCode === 0 && output.includes(marker)) resolve();
+            else reject(new Error(`Gemini PTY failed: ${exitCode}, ${JSON.stringify(output)}`));
+          }));
+          await sdk.initializeShellParsers();
+          const parsed = sdk.parseBashCommandDetails('echo agor-gemini-ready');
+          if (!parsed?.details?.some(({ name }) => name === 'echo')) {
+            throw new Error('Gemini Bash parser WASM did not initialize');
+          }
+          NODE
+
+      - name: Clean project install, daemon boot, UI, and Git clone
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24.19.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/project-smoke"
+          mkdir -p "$ROOT/project" "$ROOT/home/.agor"
+          cd "$ROOT/project"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-fund --no-audit "$CLIENT" "$LIVE"
+          PACKAGE_ROOT="$ROOT/project/node_modules/agor-live"
+          cat > "$ROOT/home/.agor/config.yaml" <<'EOF'
+          daemon:
+            port: 3030
+            deployment_id: 019c1234-5678-7123-8123-123456789abc
+          agentic_tools:
+            installed: []
+          EOF
+          export HOME="$ROOT/home"
+          export AGOR_JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          export AGOR_MASTER_SECRET=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+          echo "" | node "$PACKAGE_ROOT/bin/agor.js" db migrate
+          node "$PACKAGE_ROOT/bin/agor.js" daemon start
+          trap 'node "$PACKAGE_ROOT/bin/agor.js" daemon stop || true' EXIT
+          for i in $(seq 1 45); do
+            curl -fsS http://localhost:3030/health >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://localhost:3030/health >/dev/null
+          curl -fsS http://localhost:3030/ui/ > "$ROOT/index.html"
+          grep -qi '<!doctype html>' "$ROOT/index.html"
+          ENTRY_ASSET=$(node - "$ROOT/index.html" <<'NODE'
+          const html = require('node:fs').readFileSync(process.argv[2], 'utf8');
+          const entry = html.match(/<script[^>]+src=["']([^"']+\.js)["']/i)?.[1];
+          if (!entry) throw new Error('Packaged UI has no JavaScript entry asset');
+          process.stdout.write(entry);
+          NODE
+          )
+          case "$ENTRY_ASSET" in
+            /ui/*) ;;
+            *) echo "::error::Unexpected packaged UI entry path: $ENTRY_ASSET"; exit 1 ;;
+          esac
+          curl -fsS -D "$ROOT/asset.headers" -o "$ROOT/entry.js" \
+            "http://localhost:3030${ENTRY_ASSET}"
+          grep -Eqi '^content-type:.*(javascript|ecmascript)' "$ROOT/asset.headers"
+          test "$(wc -c < "$ROOT/entry.js")" -gt 1000
+
+          node --input-type=module - "$ROOT" "$PACKAGE_ROOT" <<'NODE'
+          import { existsSync } from 'node:fs';
+          import { mkdir, writeFile } from 'node:fs/promises';
+          import { createRequire } from 'node:module';
+          import { pathToFileURL } from 'node:url';
+          const [root, packageRoot] = process.argv.slice(2);
+          const { cloneRepo } = await import(pathToFileURL(`${packageRoot}/node_modules/@agor/git/index.js`).href);
+          // Resolve from the package's consumer context: npm may hoist this
+          // dependency to the project root or keep it nested.
+          const require = createRequire(`${packageRoot}/package.json`);
+          const { simpleGit } = require('simple-git');
+          const source = `${root}/clone-source`;
+          await mkdir(source, { recursive: true });
+          const git = simpleGit(source);
+          await git.init(['--initial-branch=main']);
+          await git.addConfig('user.name', 'Agor smoke');
+          await git.addConfig('user.email', 'smoke@invalid.example');
+          await writeFile(`${source}/README.md`, '# smoke\n');
+          await git.add('README.md');
+          await git.commit('fixture');
+          const result = await cloneRepo({ url: source, targetDir: `${root}/clone-target`, env: {} });
+          if (!existsSync(`${result.path}/.git`)) throw new Error('Packaged clone did not create .git');
+          NODE
+
+  all-integrations-smoke:
+    name: All packaged agent integrations
+    if: github.event_name != 'pull_request'
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agor-live-release
+          path: ${{ runner.temp }}/release
+
+      - name: Install all exact integration artifacts with scripts disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/all-integrations"
+          RELEASE="$RUNNER_TEMP/release"
+          REAL_NPM=$(command -v npm)
+          LIVE=$(ls "$RELEASE"/agor-live-[0-9]*.tgz)
+          CLIENT=$(ls "$RELEASE"/agor-live-client-*.tgz)
+          mkdir -p "$ROOT/home" "$ROOT/npm-shim"
+          npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
+            --no-fund --no-audit --ignore-scripts "$CLIENT" "$LIVE"
+
+          cat > "$ROOT/npm-shim/npm" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          args=()
+          for arg in "$@"; do
+            case "$arg" in
+              @agor-live/claude@*) artifact="$AGOR_SMOKE_CLAUDE" ;;
+              @agor-live/codex@*) artifact="$AGOR_SMOKE_CODEX" ;;
+              @agor-live/copilot@*) artifact="$AGOR_SMOKE_COPILOT" ;;
+              @agor-live/cursor@*) artifact="$AGOR_SMOKE_CURSOR" ;;
+              @agor-live/gemini@*) artifact="$AGOR_SMOKE_GEMINI" ;;
+              @agor-live/opencode@*) artifact="$AGOR_SMOKE_OPENCODE" ;;
+              *) artifact="$arg" ;;
+            esac
+            args+=("$artifact")
+          done
+          exec "$AGOR_SMOKE_REAL_NPM" "${args[@]}"
+          SH
+          chmod +x "$ROOT/npm-shim/npm"
+
+          export HOME="$ROOT/home"
+          export AGOR_AGENTIC_TOOLS_DIR="$HOME/.agor/agentic-tools"
+          export PATH="$ROOT/npm-shim:$PATH"
+          export AGOR_SMOKE_REAL_NPM="$REAL_NPM"
+          for id in claude codex copilot cursor gemini opencode; do
+            upper=${id^^}
+            artifact=$(ls "$RELEASE"/agor-live-"$id"-*.tgz)
+            export "AGOR_SMOKE_$upper=$artifact"
+          done
+
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" init --non-interactive \
+            --agentic-tools claude,codex,copilot,cursor,gemini,opencode
+          AGOR_TELEMETRY=0 "$ROOT/prefix/bin/agor" doctor --json > "$ROOT/doctor.json"
+          node - "$ROOT/doctor.json" <<'NODE'
+          const report = require(process.argv[2]);
+          const expected = ['claude-code', 'codex', 'copilot', 'cursor', 'gemini', 'opencode'];
+          for (const id of expected) {
+            const tool = report.agenticTools?.find((item) => item.id === id);
+            if (tool?.status !== 'ready') throw new Error(`${id} not ready: ${JSON.stringify(tool)}`);
+          }
+          NODE

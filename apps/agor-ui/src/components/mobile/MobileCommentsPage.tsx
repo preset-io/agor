@@ -2,6 +2,7 @@ import type { AgorClient, Board, BoardComment, Branch, User } from '@agor-live/c
 import { Alert } from 'antd';
 import { useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
+import { getBoardEmoji } from '../BoardTile';
 import { CommentsPanel } from '../CommentsPanel';
 import { MobileHeader } from './MobileHeader';
 
@@ -55,10 +56,12 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
     );
   }
 
+  const boardEmoji = getBoardEmoji(board, branchById);
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
-        title={`${board.icon || '📋'} ${board.name}`}
+        title={boardEmoji ? `${boardEmoji} ${board.name}` : board.name}
         showMenu
         user={currentUser}
         onMenuClick={onMenuClick}

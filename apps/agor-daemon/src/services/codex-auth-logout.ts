@@ -2,7 +2,7 @@
  * Codex Auth Logout Service
  *
  * Removes the current user's Codex ChatGPT login from THIS server: deletes the
- * `auth.json` from the Codex home of the Unix identity that runs Codex for this
+ * `auth.json` from the resolved Codex credential home for this
  * user, and clears the stored `agentic_auth_methods.codex` so executors stop
  * resolving native auth and the UI re-probes to a disconnected state (the
  * `patched` event drives that).
@@ -20,13 +20,12 @@
  *   from the authenticated user, never from request data.
  * - Removal is idempotent; a genuine delete failure surfaces and does NOT clear
  *   the stored method (a login we couldn't remove keeps working).
- * - Refuses hosted multi-tenant mode, exactly like import/device: there the
- *   auth.json is the daemon's own server-global file, so a tenant user must not
- *   be able to delete it. (It is NOT gated on the tool-enabled check —
- *   cleaning up a login must stay possible even after Codex is disabled.)
+ * - Shared identity resolution refuses an auth-resolved tenant topology unless
+ *   the execution substrate guarantees a persistent-per-user home. Cleanup is
+ *   not gated on the tool-enabled check, so it remains possible after Codex is
+ *   disabled.
  */
 
-import { loadConfigSync } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -41,7 +40,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
-import { type AppLike, resolveCodexUnixIdentity } from './codex-auth-shared.js';
+import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
 interface UsersServiceLike {
@@ -61,22 +60,21 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       }
       const userId = authUser.user_id as UserID;
 
-      // Refuse hosted multi-tenant mode, like import/device: there the Codex
-      // auth.json is the daemon's server-global file, so no tenant user may
-      // delete it via this endpoint.
-      if (loadConfigSync().multi_tenancy?.mode === 'required_from_auth') {
-        throw new BadRequest('Codex login management is unavailable in hosted multi-tenant mode.');
-      }
-
+      // Hosted multi-tenant mode is safe only when the external substrate
+      // selects the same isolated home from trusted tenant/user identity for
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing active tenant context for Codex auth logout');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
 
-      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      const identity = await resolveCodexCredentialRoute(
+        userId,
+        withTenantDatabase,
+        app.get('config')
+      );
       if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account holds this Codex login: ${identity.message}`
+          `Cannot determine the credential home for this Codex login: ${identity.message}`
         );
       }
 
@@ -85,15 +83,17 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
       // do NOT clear the method in that case so a login we couldn't remove keeps
       // working. Log the error class only — never token bytes.
       try {
-        await deleteCodexAuthViaExecutor(identity.unixUser);
+        await deleteCodexAuthViaExecutor({
+          delegatedHomeKey: identity.delegatedHomeKey,
+          userId: identity.userId,
+          codexHome: identity.codexHome,
+        });
       } catch (err) {
         console.error(
-          `[CodexAuth] Failed to delete auth.json${
-            identity.unixUser ? ` as ${identity.unixUser}` : ''
-          }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+          `[CodexAuth] Failed to delete auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
         );
         throw new BadRequest(
-          'Could not remove the Codex credentials file on the server. Check daemon logs and sudo configuration.'
+          'Could not remove the Codex credentials file on the server. Check daemon logs.'
         );
       }
 

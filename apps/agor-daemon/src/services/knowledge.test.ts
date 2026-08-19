@@ -5,7 +5,7 @@ import {
   __resetConfigCacheForTests,
   type AgorConfig,
   loadConfig,
-  saveConfig,
+  saveConfigForTests,
 } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
@@ -17,6 +17,7 @@ import {
   kbDocumentUnits,
   select,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type { KnowledgeDocument, User, UserID } from '@agor/core/types';
@@ -24,7 +25,7 @@ import { parseKnowledgeUri, ROLES } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { knowledgeChunkerOptionsFromSettings, knowledgeUnitsForMarkdown } from '../knowledge/units';
-import { KnowledgeDocumentsService } from './knowledge-documents';
+import { type KnowledgeDocumentParams, KnowledgeDocumentsService } from './knowledge-documents';
 import { KnowledgeEmbeddingIndexer } from './knowledge-embedding-indexer';
 import { KnowledgeGraphService } from './knowledge-graph';
 import { KnowledgeIndexingStatusService } from './knowledge-indexing';
@@ -86,7 +87,7 @@ async function withTempConfig<T>(config: AgorConfig, run: () => Promise<T>): Pro
   const spy = vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
   __resetConfigCacheForTests();
   try {
-    await saveConfig(config);
+    await saveConfigForTests(config);
     return await run();
   } finally {
     __resetConfigCacheForTests();
@@ -435,6 +436,16 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(created.uri).toBe('agor://kb/mcp-style/guide.md');
       expect(created.icon_emoji).toBe('📘');
 
+      const assistantSessionId = generateId();
+      const assistantParams: KnowledgeDocumentParams = {
+        user: owner,
+        knowledgeWriteAttribution: {
+          sessionId: assistantSessionId,
+          agenticTool: 'codex',
+          teammateName: 'Scout',
+        },
+      };
+
       const updated = await service.putDocument(
         {
           namespace_slug: namespace.slug,
@@ -442,10 +453,15 @@ describe('KnowledgeDocumentsService permissions', () => {
           content_text: '# Guide\n\nUpdated',
           expected_version: 1,
         },
-        params(owner)
+        assistantParams
       );
       expect(updated.document_id).toBe(created.document_id);
       expect(updated.icon_emoji).toBe('📘');
+      expect(updated).toMatchObject({
+        updated_by_session_id: assistantSessionId,
+        updated_by_agentic_tool: 'codex',
+        updated_by_teammate_name: 'Scout',
+      });
 
       const iconOnlyUpdate = await service.putDocument(
         {
@@ -457,6 +473,25 @@ describe('KnowledgeDocumentsService permissions', () => {
       expect(iconOnlyUpdate.document_id).toBe(created.document_id);
       expect(iconOnlyUpdate.icon_emoji).toBe('🧭');
       expect(iconOnlyUpdate.current_version_id).toBe(updated.current_version_id);
+      expect(iconOnlyUpdate).toMatchObject({
+        updated_by_session_id: null,
+        updated_by_agentic_tool: null,
+        updated_by_teammate_name: null,
+      });
+
+      const assistantIconUpdate = await service.putDocument(
+        {
+          document_id: created.document_id,
+          icon_emoji: '🤖',
+        },
+        assistantParams
+      );
+      expect(assistantIconUpdate.current_version_id).toBe(updated.current_version_id);
+      expect(assistantIconUpdate).toMatchObject({
+        updated_by_session_id: assistantSessionId,
+        updated_by_agentic_tool: 'codex',
+        updated_by_teammate_name: 'Scout',
+      });
 
       const hydrated = await service.getDocument(
         { namespace_slug: namespace.slug, path: 'guide.md', include_content: true },
@@ -846,21 +881,46 @@ describe('Knowledge semantic indexing lifecycle', () => {
     }
   );
 
-  dbTest(
-    'indexer clears stale pgvector errors when semantic indexing is disabled',
-    async ({ db }) => {
-      await withTempConfig({}, async () => {
-        const indexer = new KnowledgeEmbeddingIndexer(db);
-        (
-          indexer as unknown as { lastErrorByTenant: Map<string, string | null> }
-        ).lastErrorByTenant.set('default', 'old pgvector error');
+  dbTest('keeps standalone SQLite embedding indexing as an explicit no-op', async ({ db }) => {
+    await withTempConfig({}, async () => {
+      const indexer = new KnowledgeEmbeddingIndexer(db);
 
-        await expect(indexer.indexBatch()).resolves.toBe(0);
-        expect(indexer.getLastError()).toBeNull();
-        expect(indexer.getLastError('another-tenant')).toBeNull();
+      await expect(indexer.indexBatch()).resolves.toBe(0);
+    });
+  });
+
+  dbTest('fences an in-flight chunk when indexing is paused', async ({ db }) => {
+    await withTempConfig({}, async () => {
+      const owner = await seedUser(db, 'pause-owner');
+      const doc = await seedDocument(db, owner);
+      await update(db, kbDocumentUnits)
+        .set({
+          embedding_status: 'pending',
+          embedding_claim_token: 'old-provider-call',
+          embedding_claim_generation: 4,
+          embedding_claimed_at: new Date(),
+          embedding_claim_expires_at: new Date(Date.now() + 60_000),
+        })
+        .where(eq(kbDocumentUnits.version_id, doc.current_version_id!))
+        .run();
+
+      await new KnowledgeSettingsService(db).patch(null, {
+        indexing: { paused: true },
       });
-    }
-  );
+
+      const unit = await select(db)
+        .from(kbDocumentUnits)
+        .where(eq(kbDocumentUnits.version_id, doc.current_version_id!))
+        .one();
+      expect(unit).toMatchObject({
+        embedding_status: 'pending',
+        embedding_claim_token: null,
+        embedding_claim_generation: 5,
+        embedding_claimed_at: null,
+        embedding_claim_expires_at: null,
+      });
+    });
+  });
 
   dbTest(
     'document content writes wake the embedding indexer through the app reference',

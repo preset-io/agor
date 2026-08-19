@@ -3,11 +3,12 @@ import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
-import { Form } from 'antd';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Button, Form, Input } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from './AgenticToolConfigurationPicker';
 
@@ -17,6 +18,7 @@ vi.mock('../../store/agorStore', () => ({
     selector({
       agenticToolSettingsByName: new Map([
         ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+        ['opencode', { inline_configuration_allowed: storeSettings.inlineAllowed }],
       ]),
     }),
 }));
@@ -93,10 +95,51 @@ function renderPicker(
 }
 
 describe('AgenticToolConfigurationPicker', () => {
+  it('preserves a stored owner default until that owner is hydrated', async () => {
+    const onFinish = vi.fn();
+    const client = makeClient();
+    const Harness = ({ owner, resolved }: { owner: User | null; resolved: boolean }) => (
+      <Form
+        initialValues={{ agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION }}
+        onFinish={onFinish}
+      >
+        <AgenticToolConfigurationPicker
+          tool="claude-code"
+          client={client}
+          mcpServerById={new Map()}
+          currentUser={owner}
+          configurationOwnerResolved={resolved}
+        />
+        <Form.Item shouldUpdate noStyle>
+          {({ getFieldValue }) => (
+            <output data-testid="selected-source">{getFieldValue('agenticToolPresetId')}</output>
+          )}
+        </Form.Item>
+        <Button htmlType="submit">Save</Button>
+      </Form>
+    );
+    const { rerender } = render(<Harness owner={null} resolved={false} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(
+        USER_DEFAULT_AGENTIC_CONFIGURATION
+      )
+    );
+
+    rerender(<Harness owner={userWithConfigDefault} resolved />);
+    await screen.findByText(/My default · Claude Sonnet 5 — 1M · Accept edits/);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onFinish).toHaveBeenCalledOnce());
+    expect(onFinish.mock.calls[0][0].agenticToolPresetId).toBe(USER_DEFAULT_AGENTIC_CONFIGURATION);
+  });
+
   it('shows "My default" with resolved model + permission summary', async () => {
     renderPicker(userWithConfigDefault);
     await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Sonnet 5 · Accept edits/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/My default · Claude Sonnet 5 — 1M · Accept edits/)
+      ).toBeInTheDocument()
     );
   });
 
@@ -167,6 +210,106 @@ describe('AgenticToolConfigurationPicker', () => {
 
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('selected-source')).toHaveTextContent('p1'));
+  });
+
+  it('does not expose an incomplete OpenCode workspace selection as My default', async () => {
+    const user = {
+      user_id: 'u-open-empty',
+      default_agentic_config: {},
+      default_agentic_selection: { opencode: { source: 'workspace_default' } },
+    } as unknown as User;
+
+    renderPicker(user, 'opencode');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(INLINE_AGENTIC_CONFIGURATION)
+    );
+    expect(screen.queryByText(/^My default/)).not.toBeInTheDocument();
+  });
+
+  it('preserves stored OpenCode inline config without allowing cross-owner edits', async () => {
+    const onFinish = vi.fn();
+    render(
+      <Form
+        initialValues={{
+          agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION,
+          modelConfig: { mode: 'exact', provider: 'anthropic', model: 'claude-test' },
+          permissionMode: 'auto',
+          name: 'Before',
+        }}
+        onFinish={onFinish}
+      >
+        <AgenticToolConfigurationPicker
+          tool="opencode"
+          client={makeClient()}
+          modelCatalogClient={null}
+          mcpServerById={new Map()}
+          currentUser={userWithoutDefault}
+        />
+        <Form.Item name="name">
+          <Input aria-label="Unrelated field" />
+        </Form.Item>
+        <Button htmlType="submit">Save</Button>
+      </Form>
+    );
+
+    expect(
+      await screen.findByText('OpenCode model selection is unavailable for this execution owner')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Stored configuration: anthropic\/claude-test/)).toBeInTheDocument();
+    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+    expect(screen.queryByText('Customize for this session…')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Unrelated field'), { target: { value: 'After' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
+    expect(onFinish.mock.calls[0][0]).toMatchObject({
+      agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION,
+      modelConfig: { mode: 'exact', provider: 'anthropic', model: 'claude-test' },
+      permissionMode: 'auto',
+      name: 'After',
+    });
+  });
+
+  it('prefers and summarizes a complete OpenCode workspace pair', async () => {
+    const workspacePreset = {
+      preset_id: 'opencode-workspace',
+      tool: 'opencode',
+      name: 'Workspace OpenCode',
+      is_default: true,
+      configuration: {
+        modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-test' },
+      },
+    };
+
+    renderPicker(userWithoutDefault, 'opencode', [workspacePreset]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('selected-source')).toHaveTextContent(
+        WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+      )
+    );
+    expect(
+      screen.getByText(/Workspace default · Workspace OpenCode · openai\/gpt-test/)
+    ).toBeInTheDocument();
+  });
+
+  it('disables legacy OpenCode presets that do not contain an exact pair', async () => {
+    renderPicker(userWithoutDefault, 'opencode', [
+      {
+        preset_id: 'legacy-preset',
+        tool: 'opencode',
+        name: 'Legacy preset',
+        is_default: false,
+        configuration: { permissionMode: 'yolo' },
+      },
+    ]);
+
+    await waitFor(() => expect(screen.getByTestId('inline-config-form')).toBeInTheDocument());
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    expect(screen.getByText('Legacy preset').closest('.ant-select-item-option')).toHaveClass(
+      'ant-select-item-option-disabled'
+    );
   });
 });
 

@@ -3,9 +3,13 @@ import type { Application } from '@agor/core/feathers';
 import type { Params, SessionID } from '@agor/core/types';
 import { isSessionExecuting, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
-import { requestExecutorTermination, type TerminationResult } from '../termination-coordinator.js';
+import {
+  requestExecutorTermination,
+  type TerminationInput,
+  type TerminationResult,
+} from '../termination-coordinator.js';
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
-import { findActiveTasksForSession } from './session-tasks.js';
+import type { findActiveTasksForSession } from './session-tasks.js';
 
 export interface StopSessionResult {
   success: boolean;
@@ -19,7 +23,14 @@ export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
+  findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
+  /**
+   * Opens one fresh, write-gated tenant database unit for each durable
+   * termination step. The Stop route itself deliberately has no route-wide
+   * database transaction because it may wait for executor quiescence.
+   */
+  runInFreshTenantWriteDatabase: TerminationInput['runInFreshTenantWriteDatabase'];
 }
 
 /**
@@ -67,6 +78,19 @@ export async function stopSessionPreserveQueue(
 ): Promise<StopSessionResult> {
   const session = await deps.sessionsService.get(sessionId, params);
 
+  // Stop is idempotent across retries and the per-session turn lock. A
+  // concurrent caller can observe the first caller's already-committed idle
+  // projection; report the requested postcondition instead of a false failure.
+  if (session.status === SessionStatus.IDLE) {
+    const queuedTasks = await deps.taskRepo.findQueued(sessionId);
+    return {
+      success: true,
+      status: SessionStatus.IDLE,
+      reason: 'Session is already idle',
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
+
   if (!isSessionExecuting(session)) {
     return {
       success: false,
@@ -74,7 +98,7 @@ export async function stopSessionPreserveQueue(
     };
   }
 
-  const targetTasksArray = await findActiveTasksForSession(deps.app, sessionId, params);
+  const targetTasksArray = await deps.findActiveTasks(deps.app, sessionId, params);
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {
@@ -105,6 +129,7 @@ export async function stopSessionPreserveQueue(
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
     params,
+    runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });
   if (termination.status !== 'terminal') {
     return {

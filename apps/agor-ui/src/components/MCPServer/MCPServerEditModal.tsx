@@ -1,9 +1,21 @@
-import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
-import { Form, Modal } from 'antd';
+import type {
+  AgorClient,
+  MCPScope,
+  MCPServer,
+  MCPTransport,
+  UpdateMCPServerInput,
+} from '@agor-live/client';
+import { Button, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 import { MCPServerFormFields } from './MCPServerFormFields';
+import {
+  describeMissingForSave,
+  firstFormErrorMessage,
+  missingMCPFieldLabels,
+  useFormRevision,
+} from './mcp-form-requirements';
 import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from './mcp-oauth-utils';
 
 export interface MCPServerEditModalProps {
@@ -11,6 +23,14 @@ export interface MCPServerEditModalProps {
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
+  /**
+   * The transports this editor may switch to. Omit to offer all of them — a
+   * caller that knows the user is held to remote transports passes those, so
+   * the form does not invite a change the daemon will refuse.
+   */
+  offeredTransports?: MCPTransport[];
+  /** The scopes this editor may switch to, on the same terms. */
+  offeredScopes?: MCPScope[];
   onClose: () => void;
   /**
    * Render inline (no outer Modal) as a Workspace Settings drill-in; the shared
@@ -42,17 +62,33 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
   open,
   client,
+  offeredTransports,
+  offeredScopes,
   onClose,
   embedded = false,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  const [transport, setTransport] = useState<MCPTransport>('stdio');
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
+  // The form is filled in an effect, so its fields read blank on the first
+  // render. Gating on this keeps Save from flashing disabled while the modal
+  // animates in.
+  const [formHydrated, setFormHydrated] = useState(false);
+  const [formRevision, bumpFormRevision] = useFormRevision();
+
+  // Only ask the form once it is rendered and filled — an unmounted instance
+  // warns, and a half-hydrated one would flash Save disabled.
+  const missingRequiredFields =
+    open && formHydrated
+      ? missingMCPFieldLabels(form.getFieldsValue(true), { mode: 'edit', transport, authType })
+      : [];
+  const saveBlocked = missingRequiredFields.length > 0;
 
   // Hydrate the form when the modal opens or the user swaps to a different
   // server. Intentionally NOT keyed on `server` itself — that would clobber
@@ -63,6 +99,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     if (!open || !server) return;
 
     setTestResult(null);
+    setPreserveAbsentDcrMode(false);
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
     setAuthType(serverAuthType);
     setTransport(server.transport || (server.url ? 'http' : 'stdio'));
@@ -93,6 +130,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.jwt_api_token = server.auth?.api_token;
       formValues.jwt_api_secret = server.auth?.api_secret;
     } else if (serverAuthType === 'oauth') {
+      setPreserveAbsentDcrMode(server.auth?.oauth_dcr_mode === undefined);
       formValues.oauth_authorization_url = server.auth?.oauth_authorization_url;
       formValues.oauth_token_url = server.auth?.oauth_token_url;
       formValues.oauth_client_id = server.auth?.oauth_client_id;
@@ -100,10 +138,14 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.oauth_scope = server.auth?.oauth_scope;
       formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
       formValues.oauth_mode = server.auth?.oauth_mode || 'per_user';
+      formValues.oauth_compatibility_mode = server.auth?.oauth_compatibility_mode || 'strict';
+      formValues.oauth_dcr_mode = server.auth?.oauth_dcr_mode || 'advertised';
     }
 
     form.setFieldsValue(formValues);
     setDirty(false);
+    setFormHydrated(true);
+    bumpFormRevision();
   }, [open, server?.mcp_server_id, form]);
 
   const closeAndReset = () => {
@@ -111,6 +153,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     setTransport('stdio');
     setAuthType('none');
     setTestResult(null);
+    setPreserveAbsentDcrMode(false);
+    setFormHydrated(false);
     onClose();
   };
 
@@ -192,8 +236,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
   };
 
-  const handleSave = async () => {
-    if (!server || !client) return;
+  const saveFormValues = async (): Promise<boolean> => {
+    if (!server || !client) return false;
 
     setSaving(true);
     try {
@@ -219,18 +263,36 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       const env = parseEnvJSON(values.env);
       if (env) updates.env = env;
 
-      updates.auth = buildAuthFromValues(values);
+      updates.auth = buildAuthFromValues(values, { preserveAbsentDcrMode });
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
-
-      showSuccess('MCP server updated successfully');
-      closeAndReset();
+      return true;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to update server';
+      // Name the field, rather than letting a rejected validation surface as
+      // the generic message its non-Error shape would produce.
+      const errorMessage =
+        firstFormErrorMessage(error) ??
+        (error instanceof Error ? error.message : 'Failed to update server');
       showError(errorMessage);
+      return false;
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (await saveFormValues()) {
+        showSuccess('MCP server updated successfully');
+        closeAndReset();
+      }
     } finally {
       setSaving(false);
     }
+  };
+
+  const prepareOAuthStart = async (): Promise<string | null> => {
+    if (!(await saveFormValues())) return null;
+    return server?.mcp_server_id ?? null;
   };
 
   const formBody = (
@@ -252,13 +314,20 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         onTestConnection={handleTestConnection}
         testing={testing}
         testResult={testResult}
+        onPrepareOAuthStart={prepareOAuthStart}
       />
     </Form>
   );
 
   if (embedded) {
     return (
-      <DrillInFrame title="Edit MCP Server" dirty={dirty} saving={saving} onSave={handleSave}>
+      <DrillInFrame
+        title="Edit MCP Server"
+        dirty={dirty}
+        saving={saving}
+        saveDisabled={saveBlocked}
+        onSave={handleSave}
+      >
         {formBody}
       </DrillInFrame>
     );
@@ -268,14 +337,35 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     <Modal
       title="Edit MCP Server"
       open={open}
-      onOk={handleSave}
       onCancel={closeAndReset}
-      okText="Save"
       width={600}
       destroyOnHidden
+      footer={
+        <Space>
+          <Button onClick={closeAndReset}>Cancel</Button>
+          {/* A disabled button can't host a tooltip of its own — hence the span. */}
+          <Tooltip title={saveBlocked ? describeMissingForSave(missingRequiredFields) : undefined}>
+            <span>
+              <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
+                Save
+              </Button>
+            </span>
+          </Tooltip>
+        </Space>
+      }
     >
-      <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        style={{ marginTop: 16 }}
+        onValuesChange={(changedValues) => {
+          if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+          bumpFormRevision();
+        }}
+      >
         <MCPServerFormFields
+          offeredTransports={offeredTransports}
+          offeredScopes={offeredScopes}
           mode="edit"
           transport={transport}
           onTransportChange={setTransport}
@@ -287,6 +377,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           onTestConnection={handleTestConnection}
           testing={testing}
           testResult={testResult}
+          onPrepareOAuthStart={prepareOAuthStart}
+          formRevision={formRevision}
         />
       </Form>
     </Modal>

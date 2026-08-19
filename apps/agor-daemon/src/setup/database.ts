@@ -11,7 +11,9 @@ import {
   checkMigrationStatus,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  detectDialectFromUrl,
   formatPendingMigrationsMessage,
+  getDatabaseDialect,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   seedInitialData,
@@ -47,7 +49,7 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
   try {
     await access(dbDir, constants.F_OK);
   } catch {
-    console.log(`📁 Creating database directory: ${dbDir}`);
+    console.log('[database] creating sqlite directory');
     await mkdir(dbDir, { recursive: true });
   }
 
@@ -108,15 +110,21 @@ export async function initializeDatabase(
     tenantId?: TenantID | string;
     requireTenantScope?: boolean;
     skipFirstRunAdminBootstrap?: boolean;
+    /** PostgreSQL per-replica connection limit. PostgreSQL only. */
+    pool?: { max: number };
   } = {}
 ): Promise<DatabaseInitResult> {
-  console.log(`📦 Connecting to database: ${dbPath}`);
+  const dialect = detectDialectFromUrl(dbPath) ?? getDatabaseDialect();
+  console.log(`[database] connecting backend=${dialect}`);
 
   // Ensure directory exists for SQLite
   await ensureDatabaseDirectory(dbPath);
 
   // Create database with foreign keys enabled
-  const db = await createDatabaseAsync({ url: dbPath });
+  const db = await createDatabaseAsync({
+    url: dbPath,
+    ...(options.pool ? { pool: options.pool } : {}),
+  });
   const scopedDb = createTenantScopedDatabaseProxy(db, {
     requireScope: options.requireTenantScope === true,
     label: 'daemon database',

@@ -18,6 +18,7 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
 }));
 
 import { AgorExecutor } from './index.js';
+import { globalPermissionManager } from './permissions/permission-manager.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
@@ -59,6 +60,7 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    runtime.execute.mockResolvedValue(undefined);
   });
 
   it('starts SDK observation before invoking the tool', async () => {
@@ -109,7 +111,7 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(exit).toHaveBeenCalledWith(70);
   });
 
-  it('aborts immediately on the durable stopping patch and reports quiescence', async () => {
+  it('aborts immediately but retains liveness until it can report quiescence', async () => {
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
     const heartbeatStop = vi.fn();
     const executor = new AgorExecutor({
@@ -141,12 +143,90 @@ describe('AgorExecutor watchdog handoff', () => {
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
-    expect(heartbeatStop).toHaveBeenCalledOnce();
+    expect(heartbeatStop).not.toHaveBeenCalled();
     await executor.reportTerminationComplete();
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',
     });
+  });
+
+  it('acknowledges Stop when an aborted provider rejects', async () => {
+    const reportTerminationComplete = vi.fn().mockResolvedValue({});
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service: () => { reportTerminationComplete: typeof reportTerminationComplete };
+      };
+      handleTaskLifecycleUpdate(task: unknown): void;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete }) };
+    executor.handleTaskLifecycleUpdate({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    });
+  });
+
+  it('warns once when provider cleanup remains active after Stop', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let settleProvider!: () => void;
+    runtime.execute.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (settleProvider = resolve))
+    );
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: object;
+      executeTask(): Promise<void>;
+      handleTaskLifecycleUpdate(task: unknown): void;
+    };
+    executor.client = {};
+    const execution = executor.executeTask();
+    await vi.advanceTimersByTimeAsync(0);
+    executor.handleTaskLifecycleUpdate({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes('provider_cleanup_slow'))
+    ).toHaveLength(1);
+
+    settleProvider();
+    await execution;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes('provider_cleanup_slow'))
+    ).toHaveLength(1);
   });
 
   it('handles the private task-scoped termination socket event', () => {
@@ -199,6 +279,78 @@ describe('AgorExecutor watchdog handoff', () => {
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
-    expect(heartbeatStop).toHaveBeenCalledOnce();
+    expect(heartbeatStop).not.toHaveBeenCalled();
+  });
+
+  it('forwards only this Task permission decision to the live permission waiter', () => {
+    const listeners = new Map<string, (data: unknown) => void>();
+    const resolvePermission = vi
+      .spyOn(globalPermissionManager, 'resolvePermission')
+      .mockImplementation(() => undefined);
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'claude-code',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service(path: string): {
+          on(event: string, listener: (data: unknown) => void): void;
+        };
+      };
+      setupEventListeners(): void;
+    };
+    executor.client = {
+      service(path) {
+        return {
+          on(event, listener) {
+            listeners.set(`${path}:${event}`, listener);
+          },
+        };
+      },
+    };
+    executor.setupEventListeners();
+
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-other',
+      taskId: 'task-other',
+      sessionId: 'session-1',
+      allow: true,
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-wrong-session',
+      taskId: 'task-1',
+      sessionId: 'session-other',
+      allow: true,
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+    listeners.get('messages:permission_resolved')?.({
+      requestId: 'request-1',
+      taskId: 'task-1',
+      sessionId: 'session-1',
+      allow: true,
+      reason: 'Approved by user',
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
+
+    expect(resolvePermission).toHaveBeenCalledOnce();
+    expect(resolvePermission).toHaveBeenCalledWith({
+      requestId: 'request-1',
+      taskId: 'task-1',
+      allow: true,
+      reason: 'Approved by user',
+      remember: false,
+      scope: 'once',
+      decidedBy: 'user-a',
+    });
   });
 });

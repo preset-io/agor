@@ -89,6 +89,7 @@ import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
 } from '../AgenticToolConfigurationPicker';
+import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
@@ -111,14 +112,19 @@ interface GatewayChannelsTableProps {
   onDelete?: (channelId: string) => void;
 }
 
-const CHANNEL_TYPE_OPTIONS: { value: ChannelType; label: string; icon: React.ReactNode }[] = [
+const CHANNEL_TYPE_OPTIONS: {
+  value: ChannelType;
+  label: string;
+  icon: React.ReactNode;
+  comingSoon?: boolean;
+}[] = [
   { value: 'slack', label: 'Slack', icon: <SlackOutlined /> },
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
   { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
-  { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
-  { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined /> },
-  { value: 'telegram', label: 'Telegram', icon: <MessageOutlined /> },
+  { value: 'discord', label: 'Discord', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'telegram', label: 'Telegram', icon: <MessageOutlined />, comingSoon: true },
 ];
 
 function getChannelTypeIcon(type: ChannelType): React.ReactNode {
@@ -807,50 +813,92 @@ const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
 
 const GatewayAgentConfigurationFields: React.FC<{
   client: AgorClient | null;
+  currentUser: User | null | undefined;
+  userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
   selectedAgent: AgenticToolName | null;
   onAgentChange: (agent: AgenticToolName) => void;
   requiresSupportedToolSelection: boolean;
-}> = ({ client, mcpServerById, selectedAgent, onAgentChange, requiresSupportedToolSelection }) => (
-  <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-      Configure which agent and settings to use for sessions created from this channel.
-    </Typography.Text>
-    {requiresSupportedToolSelection && (
-      <Alert
-        type="warning"
-        showIcon
-        title="This channel uses a removed agentic tool"
-        description="Its saved configuration is preserved, but it cannot create or resume sessions. Choose a supported tool to migrate the channel explicitly."
+}> = ({
+  client,
+  currentUser,
+  userById,
+  mcpServerById,
+  selectedAgent,
+  onAgentChange,
+  requiresSupportedToolSelection,
+}) => {
+  const form = Form.useFormInstance();
+  const branchId = Form.useWatch('target_branch_id', form) as string | undefined;
+  const executionOwnerId = Form.useWatch('agor_user_id', form) as string | undefined;
+  const alignSlackUsers =
+    (Form.useWatch('align_slack_users', form) as boolean | undefined) ??
+    (form.getFieldValue('align_slack_users') as boolean | undefined);
+  const alignGithubUsers =
+    (Form.useWatch('github_align_users', form) as boolean | undefined) ??
+    (form.getFieldValue('github_align_users') as boolean | undefined);
+  const alignShortcutUsers =
+    (Form.useWatch('shortcut_align_users', form) as boolean | undefined) ??
+    (form.getFieldValue('shortcut_align_users') as boolean | undefined);
+  const usesAlignedExecutionOwner = Boolean(
+    alignSlackUsers || alignGithubUsers || alignShortcutUsers
+  );
+  const resolvedExecutionOwnerId =
+    executionOwnerId ?? (form.getFieldValue('agor_user_id') as string | undefined);
+  const executionOwner =
+    !usesAlignedExecutionOwner && resolvedExecutionOwnerId
+      ? userById.get(resolvedExecutionOwnerId)
+      : undefined;
+  const canUseModelCatalog = Boolean(
+    currentUser && executionOwner?.user_id === currentUser.user_id
+  );
+
+  return (
+    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        Configure which agent and settings to use for sessions created from this channel.
+      </Typography.Text>
+      {requiresSupportedToolSelection && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This channel uses a removed agentic tool"
+          description="Its saved configuration is preserved, but it cannot create or resume sessions. Choose a supported tool to migrate the channel explicitly."
+        />
+      )}
+      <AgentSelectionGrid
+        agents={AVAILABLE_AGENTS}
+        selectedAgentId={selectedAgent}
+        onSelect={(agent) => onAgentChange(agent as AgenticToolName)}
+        columns={2}
+        showHelperText={false}
+        showComparisonLink={false}
       />
-    )}
-    <AgentSelectionGrid
-      agents={AVAILABLE_AGENTS}
-      selectedAgentId={selectedAgent}
-      onSelect={(agent) => onAgentChange(agent as AgenticToolName)}
-      columns={2}
-      showHelperText={false}
-      showComparisonLink={false}
-    />
-    {selectedAgent && (
-      <AgenticToolConfigurationPicker
-        tool={selectedAgent}
-        mcpServerById={mcpServerById}
-        showHelpText={false}
-        client={client}
-      />
-    )}
-  </Space>
-);
+      {selectedAgent && (
+        <AgenticToolConfigurationPicker
+          tool={selectedAgent}
+          mcpServerById={mcpServerById}
+          showHelpText={false}
+          client={client}
+          modelCatalogClient={canUseModelCatalog ? client : null}
+          branchId={branchId}
+          currentUser={executionOwner}
+        />
+      )}
+    </Space>
+  );
+};
 
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
- * and navigation lives in the unified modal footer. Selections drive a live
- * manifest preview + derived scope/event list via {@link buildSlackManifest} /
- * {@link requiredBotScopes}, so the user never adds a scope by hand.
+ * and navigation lives in the unified modal footer. Selections drive the derived
+ * scope/event list on the Options step ({@link requiredBotScopes}) and the
+ * copyable manifest on the Create app step ({@link buildSlackManifest}), so the
+ * user never adds a scope by hand.
  */
 const SlackSetupWizard: React.FC<{
   client: AgorClient | null;
+  currentUser: User | null | undefined;
   form: FormInstance;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
@@ -864,6 +912,7 @@ const SlackSetupWizard: React.FC<{
   onTest: () => void;
 }> = ({
   client,
+  currentUser,
   form,
   userById,
   mcpServerById,
@@ -1017,8 +1066,8 @@ const SlackSetupWizard: React.FC<{
       {/* Step 0: Options (kept mounted so Form.Items stay registered for validation) */}
       <div style={{ display: step === 0 ? undefined : 'none' }}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          Choose what the bot can do. Your selections build a Slack app manifest below — paste it
-          into Slack in the next step so every scope and event is preconfigured for you.
+          Choose what the bot can do. Your selections become a Slack app manifest you'll paste into
+          Slack on the next step, so every scope and event is preconfigured for you.
         </Typography.Paragraph>
 
         <Form.Item
@@ -1198,10 +1247,14 @@ const SlackSetupWizard: React.FC<{
           </Form.Item>
         )}
 
-        <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
-          Manifest preview
+        <Typography.Text strong style={{ fontSize: 13 }}>
+          {`Required Slack Scopes & Events (${scopes.length} scopes, ${events.length} events)`}
         </Typography.Text>
-        {manifestPreview}
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
+          Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+          <code>app_mention</code>, not <code>message.*</code> channel events. You copy the full
+          manifest on the next step.
+        </Typography.Paragraph>
         {scopeList}
       </div>
 
@@ -1318,6 +1371,8 @@ const SlackSetupWizard: React.FC<{
               children: (
                 <GatewayAgentConfigurationFields
                   client={client}
+                  currentUser={currentUser}
+                  userById={userById}
                   mcpServerById={mcpServerById}
                   selectedAgent={selectedAgent}
                   onAgentChange={onAgentChange}
@@ -1359,6 +1414,7 @@ const SlackSetupWizard: React.FC<{
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
   client: AgorClient | null;
+  currentUser: User | null | undefined;
   form: FormInstance;
   mode: 'create' | 'edit';
   channelType: ChannelType;
@@ -1384,6 +1440,7 @@ const ChannelFormFields: React.FC<{
   slackAppInfo: SlackAppInfo | null;
 }> = ({
   client,
+  currentUser,
   form,
   mode,
   channelType,
@@ -1564,10 +1621,11 @@ const ChannelFormFields: React.FC<{
           >
             <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
               {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                <Select.Option key={opt.value} value={opt.value}>
+                <Select.Option key={opt.value} value={opt.value} disabled={opt.comingSoon}>
                   <Space>
                     {opt.icon}
                     {opt.label}
+                    {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
               ))}
@@ -1957,6 +2015,8 @@ const ChannelFormFields: React.FC<{
                     children: (
                       <GatewayAgentConfigurationFields
                         client={client}
+                        currentUser={currentUser}
+                        userById={userById}
                         mcpServerById={mcpServerById}
                         selectedAgent={selectedAgent}
                         onAgentChange={onAgentChange}
@@ -2169,6 +2229,8 @@ const ChannelFormFields: React.FC<{
                 children: (
                   <GatewayAgentConfigurationFields
                     client={client}
+                    currentUser={currentUser}
+                    userById={userById}
                     mcpServerById={mcpServerById}
                     selectedAgent={selectedAgent}
                     onAgentChange={onAgentChange}
@@ -2398,6 +2460,8 @@ const ChannelFormFields: React.FC<{
                 children: (
                   <GatewayAgentConfigurationFields
                     client={client}
+                    currentUser={currentUser}
+                    userById={userById}
                     mcpServerById={mcpServerById}
                     selectedAgent={selectedAgent}
                     onAgentChange={onAgentChange}
@@ -2439,6 +2503,7 @@ const ChannelFormFields: React.FC<{
         {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
           <SlackSetupWizard
             client={client}
+            currentUser={currentUser}
             form={form}
             userById={userById}
             mcpServerById={mcpServerById}
@@ -2856,6 +2921,8 @@ const ChannelFormFields: React.FC<{
                 children: (
                   <GatewayAgentConfigurationFields
                     client={client}
+                    currentUser={currentUser}
+                    userById={userById}
                     mcpServerById={mcpServerById}
                     selectedAgent={selectedAgent}
                     onAgentChange={onAgentChange}
@@ -2940,21 +3007,30 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
   const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(false);
-  // One-shot flag consumed by the "pre-populate agentic config" effect below —
-  // set whenever handleEdit hydrates the edit form from a channel's persisted
-  // config, so that hydration is never immediately overwritten by the user's
-  // global defaults. Value-based guards (e.g. comparing selectedAgent to the
-  // channel's persisted agent) can't distinguish "just opened" from "switched
-  // away and back", so a one-shot ref is used instead.
-  const skipAgentDefaultsAfterEditHydrationRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const handleAgentChange = useCallback((agent: AgenticToolName) => {
-    setSelectedAgent(agent);
-    setRequiresSupportedToolSelection(false);
-  }, []);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  const handleAgentChange = useCallback(
+    (agent: AgenticToolName) => {
+      const form = editModalOpen ? editForm : createForm;
+      const usesAlignedExecutionOwner = Boolean(
+        form.getFieldValue('align_slack_users') ||
+          form.getFieldValue('github_align_users') ||
+          form.getFieldValue('shortcut_align_users')
+      );
+      const ownerId = form.getFieldValue('agor_user_id') as string | undefined;
+      const executionOwner = !usesAlignedExecutionOwner && ownerId ? userById.get(ownerId) : null;
+      const defaults = executionOwner?.default_agentic_config?.[agent];
+      form.setFieldsValue({
+        agenticToolPresetId: getUserDefaultConfigurationSource(executionOwner, agent),
+        ...getFormValuesFromConfig(agent, defaults),
+      });
+      setSelectedAgent(agent);
+      setRequiresSupportedToolSelection(false);
+    },
+    [createForm, editForm, editModalOpen, userById]
+  );
   const [referencedBranchesById, setReferencedBranchesById] = useState<Map<string, Branch>>(
     () => new Map()
   );
@@ -3194,25 +3270,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     await runConnectionProbe('slack', {}, editingChannel.id);
   }, [editingChannel, runConnectionProbe]);
 
-  // Pre-populate agentic config form with user defaults when agent changes.
-  // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
-  // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
-  // otherwise applying the user's *global* defaults would stomp the channel's own
-  // saved config (including the independently hydrated MCP selection). Every subsequent
-  // agent change — including switching
-  // back to the channel's original agent — legitimately re-applies that agent's
-  // defaults, so the form never holds a silent mix of stale fields.
-  useEffect(() => {
-    if (skipAgentDefaultsAfterEditHydrationRef.current) {
-      skipAgentDefaultsAfterEditHydrationRef.current = false;
-      return;
-    }
-    if (!selectedAgent) return;
-    const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent];
-    const activeForm = editModalOpen ? editForm : createForm;
-    activeForm.setFieldsValue(getFormValuesFromConfig(selectedAgent, agentDefaults));
-  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
-
   const extractFormData = (
     values: Record<string, unknown>,
     existingConfig?: Record<string, unknown>,
@@ -3333,25 +3390,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           effort: values.effort as EffortLevel | undefined,
         })
       : undefined;
-    const agenticConfig: GatewayAgenticConfig = {
+    const commonAgenticConfig = {
       agent: agent ?? 'claude-code',
-      ...(presetId ? { presetId } : {}),
-      ...(!presetId && values.permissionMode
-        ? { permissionMode: values.permissionMode as PermissionMode }
-        : {}),
-      ...(modelConfig ? { modelConfig } : {}),
-      ...(!presetId && values.codexSandboxMode
-        ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
-        : {}),
-      ...(!presetId && values.codexApprovalPolicy
-        ? {
-            codexApprovalPolicy:
-              values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
-          }
-        : {}),
-      ...(!presetId && values.codexNetworkAccess !== undefined
-        ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
-        : {}),
       // Include env vars — filter out empty-key entries only.
       // Sentinel values ('••••••••') are sent through so the backend can
       // substitute real values from the database. Empty array = delete all.
@@ -3361,6 +3401,30 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           }
         : {}),
     };
+    const agenticConfig: GatewayAgenticConfig = presetId
+      ? { ...commonAgenticConfig, presetId }
+      : {
+          ...commonAgenticConfig,
+          ...(values.permissionMode
+            ? { permissionMode: values.permissionMode as PermissionMode }
+            : {}),
+          ...(modelConfig ? { modelConfig } : {}),
+          ...(values.codexSandboxMode
+            ? {
+                codexSandboxMode:
+                  values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'],
+              }
+            : {}),
+          ...(values.codexApprovalPolicy
+            ? {
+                codexApprovalPolicy:
+                  values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
+              }
+            : {}),
+          ...(values.codexNetworkAccess !== undefined
+            ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
+            : {}),
+        };
 
     // Existing aligned channels may still carry a preserved agor_user_id from a
     // previous run-as configuration, but newly-created aligned channels can omit it.
@@ -3461,7 +3525,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setChannelType(channel.channel_type);
     const persistedAgent = channel.agentic_config?.agent ?? 'claude-code';
     const agent = isAgenticToolName(persistedAgent) ? persistedAgent : null;
-    skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
     setRequiresSupportedToolSelection(agent === null);
     resetConnectionTest();
@@ -3778,6 +3841,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           >
             <ChannelFormFields
               client={client}
+              currentUser={currentUser}
               form={createForm}
               mode="create"
               channelType={channelType}
@@ -3853,6 +3917,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           >
             <ChannelFormFields
               client={client}
+              currentUser={currentUser}
               form={editForm}
               mode="edit"
               channelType={channelType}
@@ -3957,7 +4022,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           dataSource={channels}
           columns={columns}
           rowKey="id"
-          pagination={{ pageSize: 10, showSizeChanger: true }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true }}
           size="small"
         />
       )}

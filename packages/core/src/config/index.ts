@@ -7,17 +7,21 @@
 export * from './agentic-tool-preset-resolver';
 export * from './config-manager';
 export * from './constants';
+export * from './deployment';
 export * from './env-blocklist';
 export * from './env-locking';
 export * from './env-resolver';
 export * from './env-validation';
 export * from './env-vars';
+export * from './executor-credential-storage';
 export * from './executor-heartbeat';
+export * from './initial-deployment-config';
 export * from './key-resolver';
 export * from './multitenancy';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './resolved-config-slice';
+export * from './sandbox-policy';
 export * from './schedule-agentic-tool-config';
 export type {
   AgorGitConfigParametersSettings,

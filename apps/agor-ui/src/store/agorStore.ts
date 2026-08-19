@@ -11,7 +11,7 @@
  *   lifecycle; React binds via `useStore`.
  * - IMMER breadth/depth rule: `immer` is installed (and `enableMapSet()`
  *   called) so genuine CASCADE / multi-map mutations can be expressed as
- *   imperative draft edits (see `evictBranchAndSessions`). The HOT single-entity
+ *   imperative draft edits (see the named branch lifecycle cascades). The HOT single-entity
  *   `*:patched` writes go through the object-form `setMap` / `applyMaps` (the
  *   immer middleware passes object-form `set` straight through — no draft proxy
  *   on the hot path). Object-form `set` + early-return mirror today's
@@ -23,8 +23,8 @@
  *   in `agorHydration.ts`.
  */
 
-import type { TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
-import { enableMapSet } from 'immer';
+import type { Session, TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
+import { type Draft, enableMapSet } from 'immer';
 import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
@@ -56,7 +56,7 @@ interface AgorMeta {
   agenticToolSettingsHydrated: boolean;
 }
 
-/** Store actions: foundational primitives + the one immer cascade. */
+/** Store actions: foundational primitives + named branch lifecycle cascades. */
 interface AgorActions {
   /** Reset every data map to empty and meta to its initial (loading) values. */
   reset: () => void;
@@ -106,18 +106,50 @@ interface AgorActions {
    * all-no-op reducer leaves the outer state object untouched.
    */
   applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
-  /**
-   * CASCADE (immer): drop a branch from `branchById` and prune every session
-   * that lived on it from `sessionById` / `sessionsByBranch`. Shared between the
-   * `archived: true` patch path and the hard-delete `removed` path. Expressed
-   * as a single immer draft (breadth=immer): structural sharing leaves
-   * untouched maps reference-stable and a no-op (unknown branch) produces no new
-   * state, matching the old three-`setState` version.
-   */
-  evictBranchAndSessions: (branchId: string) => void;
+  /** Mirror archive visibility while retaining the persisted board placement. */
+  evictArchivedBranch: (branchId: string) => void;
+  /** Atomically mirror every normalized FK cascade/SET NULL from a hard delete. */
+  applyBranchHardDeleteCascade: (branchId: string) => void;
 }
 
 export type AgorState = DataMaps & AgorMeta & AgorActions;
+
+function evictBranchAndSessions(draft: Draft<AgorState>, branchId: string): Set<string> {
+  if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
+  if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
+  const removedSessionIds = new Set<string>();
+  for (const [sessionId, session] of draft.sessionById) {
+    if (session.branch_id === branchId) removedSessionIds.add(sessionId);
+  }
+  for (const sessionId of removedSessionIds) draft.sessionById.delete(sessionId);
+  return removedSessionIds;
+}
+
+function removeRelationshipsToDeletedSessions(
+  session: Draft<Session>,
+  removedSessionIds: Set<string>
+): void {
+  const relationships = session.remote_relationships;
+  if (!relationships) return;
+  const survives = (relationship: { source_session_id: string; target_session_id: string }) =>
+    !removedSessionIds.has(relationship.source_session_id) &&
+    !removedSessionIds.has(relationship.target_session_id);
+  const asSource = relationships.as_source?.filter(survives);
+  const asTarget = relationships.as_target?.filter(survives);
+  if (
+    asSource?.length === relationships.as_source?.length &&
+    asTarget?.length === relationships.as_target?.length
+  ) {
+    return;
+  }
+  session.remote_relationships =
+    (asSource?.length ?? 0) > 0 || (asTarget?.length ?? 0) > 0
+      ? {
+          ...(asSource && asSource.length > 0 ? { as_source: asSource } : {}),
+          ...(asTarget && asTarget.length > 0 ? { as_target: asTarget } : {}),
+        }
+      : undefined;
+}
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
 const INITIAL_META: AgorMeta = {
@@ -228,15 +260,106 @@ export const agorStore = createStore<AgorState>()(
       set(changed as Partial<AgorState>);
     },
 
-    evictBranchAndSessions: (branchId) =>
+    evictArchivedBranch: (branchId) =>
       set((draft) => {
-        if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
-        if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
-        const orphanIds: string[] = [];
-        for (const [sessionId, session] of draft.sessionById) {
-          if (session.branch_id === branchId) orphanIds.push(sessionId);
+        evictBranchAndSessions(draft, branchId);
+      }),
+
+    applyBranchHardDeleteCascade: (branchId) =>
+      set((draft) => {
+        const removedSessionIds = evictBranchAndSessions(draft, branchId);
+
+        // The branch row owns its branch-type board_object via an FK cascade,
+        // so the database cannot emit a separate board-objects.removed event.
+        // Mirror that cascade in the normalized client indexes when the branch
+        // tombstone arrives.
+        const removedObjectIds = new Set<string>();
+        for (const [objectId, boardObject] of draft.boardObjectById) {
+          if (boardObject.branch_id === branchId) {
+            removedObjectIds.add(objectId);
+            draft.boardObjectById.delete(objectId);
+          }
         }
-        for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
+        const indexedBoardObject = draft.boardObjectByBranchId.get(branchId);
+        if (indexedBoardObject) removedObjectIds.add(indexedBoardObject.object_id);
+        if (draft.boardObjectByBranchId.has(branchId)) {
+          draft.boardObjectByBranchId.delete(branchId);
+        }
+        for (const [boardId, boardObjects] of draft.boardObjectsByBoardId) {
+          const remaining = boardObjects.filter(
+            (candidate) =>
+              candidate.branch_id !== branchId && !removedObjectIds.has(candidate.object_id)
+          );
+          if (remaining.length !== boardObjects.length) {
+            if (remaining.length > 0) {
+              draft.boardObjectsByBoardId.set(boardId, remaining);
+            } else {
+              draft.boardObjectsByBoardId.delete(boardId);
+            }
+          }
+        }
+
+        // Cascaded session relationship rows do not emit child service events.
+        for (const sessionId of removedSessionIds) {
+          draft.sessionMcpServerIds.delete(sessionId);
+        }
+
+        // Cross-branch remote-create relationships are also cascaded by the
+        // database without child service events. A target session can appear as
+        // a surrogate in another branch bucket, so remove deleted IDs from every
+        // bucket and strip the now-deleted relationship from surviving sessions.
+        for (const session of draft.sessionById.values()) {
+          removeRelationshipsToDeletedSessions(session, removedSessionIds);
+        }
+        for (const [bucketBranchId, sessions] of draft.sessionsByBranch) {
+          const remaining = sessions.filter((session) => {
+            if (removedSessionIds.has(session.session_id)) return false;
+            const surrogate = session.remote_surrogate;
+            return !(
+              surrogate &&
+              (removedSessionIds.has(surrogate.source_session_id) ||
+                removedSessionIds.has(surrogate.relationship.target_session_id))
+            );
+          });
+          for (const session of remaining) {
+            removeRelationshipsToDeletedSessions(session, removedSessionIds);
+          }
+          if (remaining.length !== sessions.length) {
+            if (remaining.length > 0) {
+              draft.sessionsByBranch.set(bucketBranchId, remaining);
+            } else {
+              draft.sessionsByBranch.delete(bucketBranchId);
+            }
+          }
+        }
+
+        for (const [commentId, comment] of draft.commentById) {
+          if (comment.branch_id === branchId) {
+            draft.commentById.delete(commentId);
+          } else if (comment.session_id && removedSessionIds.has(comment.session_id)) {
+            // Session-attached comments survive with a SET NULL attachment.
+            comment.session_id = undefined;
+          }
+        }
+
+        for (const [channelId, channel] of draft.gatewayChannelById) {
+          if (channel.target_branch_id === branchId) {
+            draft.gatewayChannelById.delete(channelId);
+          }
+        }
+
+        for (const board of draft.boardById.values()) {
+          if (board.primary_teammate_id === branchId) {
+            board.primary_teammate_id = undefined;
+          }
+        }
+
+        for (const artifact of draft.artifactById.values()) {
+          if (artifact.branch_id === branchId) artifact.branch_id = null;
+          if (artifact.source_session_id && removedSessionIds.has(artifact.source_session_id)) {
+            artifact.source_session_id = null;
+          }
+        }
       }),
   }))
 );

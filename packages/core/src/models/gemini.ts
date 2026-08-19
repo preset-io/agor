@@ -4,7 +4,6 @@
  * Reference: https://ai.google.dev/gemini-api/docs/models
  */
 
-import { GoogleGenAI } from '@google/genai';
 import type { GeminiModel, GeminiModelInfo } from './gemini-shared.js';
 import { GEMINI_MODELS } from './gemini-shared.js';
 
@@ -68,6 +67,7 @@ export async function fetchGeminiModels(
   }
 
   try {
+    const { GoogleGenAI } = await import('@google/genai');
     const genAI = new GoogleGenAI({ apiKey });
 
     // Fetch models from API

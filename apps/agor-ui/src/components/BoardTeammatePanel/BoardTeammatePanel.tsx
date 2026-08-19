@@ -1,4 +1,12 @@
-import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  Repo,
+  SpawnConfig,
+  User,
+} from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -29,13 +37,40 @@ import {
 import { mapToArray } from '../../utils/mapHelpers';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
-import { BoardSessionList } from '../BranchListDrawer';
+import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
-export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
+export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
+
+/**
+ * Outcome of the branch-owners lookup. A successful empty list is deliberately
+ * distinct from a failed one: the former means "no explicit owners, so the
+ * creator owns it", the latter means ownership is simply unknown.
+ */
+type OwnersState =
+  | { status: 'unresolved' }
+  | { status: 'resolved'; owners: User[] }
+  | { status: 'creator-fallback' }
+  | { status: 'failed' };
+
+// Frozen singletons so setting the same outcome twice is a state no-op and the
+// derived owner list keeps a stable identity for the panel's memo bailout.
+const OWNERS_UNRESOLVED: OwnersState = { status: 'unresolved' };
+const OWNERS_CREATOR_FALLBACK: OwnersState = { status: 'creator-fallback' };
+const OWNERS_FAILED: OwnersState = { status: 'failed' };
+const NO_OWNERS: User[] = [];
+
+/**
+ * The owners route is only registered when branch RBAC is enabled, so a 404 is
+ * a configuration answer rather than a failure. Mirrors the Settings modal.
+ */
+function isOwnersRouteUnavailable(error: unknown): boolean {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  return code === 404 || (typeof message === 'string' && message.includes('not found'));
+}
 
 interface BoardTeammatePanelProps {
   board: Board | null;
@@ -50,13 +85,7 @@ interface BoardTeammatePanelProps {
   onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
@@ -180,6 +209,77 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       onTabChange?.(defaultTab);
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
+
+  // Depend on the branch's identifying primitives rather than the branch object:
+  // the store hands out a fresh Branch on every row patch, which would re-fire
+  // the request on churn unrelated to ownership.
+  const teammateBranchId = primaryTeammateBranch?.branch_id;
+  const teammateCreatedBy = primaryTeammateBranch?.created_by;
+
+  const [ownersState, setOwnersState] = useState<OwnersState>(OWNERS_UNRESOLVED);
+  useEffect(() => {
+    if (!client || !teammateBranchId) {
+      setOwnersState(OWNERS_UNRESOLVED);
+      return;
+    }
+
+    // Drop the previous branch's owners immediately: keeping them on screen
+    // until the new request lands attributes one branch to another's owner.
+    setOwnersState(OWNERS_UNRESOLVED);
+
+    let cancelled = false;
+    const service = client.service('branches/:id/owners');
+
+    const load = () => {
+      service
+        .find({ route: { id: teammateBranchId } })
+        .then((response) => {
+          if (cancelled) return;
+          const owners = response as User[];
+          // A branch predating RBAC has no branch_owners rows at all. Settings
+          // seeds the creator as the owner in exactly that case, so mirror it
+          // instead of rendering an ownerless branch on one surface only.
+          setOwnersState(
+            owners.length > 0 ? { status: 'resolved', owners } : OWNERS_CREATOR_FALLBACK
+          );
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          if (isOwnersRouteUnavailable(error)) {
+            // RBAC is off, so the route is unregistered and created_by is the
+            // only ownership signal the deployment has.
+            setOwnersState(OWNERS_CREATOR_FALLBACK);
+            return;
+          }
+          // Ownership is unknown after a real failure. Naming the creator here
+          // would render confidently wrong attribution off a transport error.
+          console.warn('Failed to load branch owners:', error);
+          setOwnersState(OWNERS_FAILED);
+        });
+    };
+
+    load();
+
+    // Owner edits never patch the branch row, so this branch-scoped route is
+    // the only signal the panel gets. The payload is a bare User carrying no
+    // branch id, so any owner change the socket can see triggers a refetch.
+    service.on('created', load);
+    service.on('removed', load);
+    return () => {
+      cancelled = true;
+      service.off('created', load);
+      service.off('removed', load);
+    };
+  }, [client, teammateBranchId]);
+
+  // Resolve owners for render rather than inside the effect, so a user map that
+  // hydrates after the response still names the creator without a refetch.
+  const branchOwners = useMemo(() => {
+    if (ownersState.status === 'resolved') return ownersState.owners;
+    if (ownersState.status !== 'creator-fallback' || !teammateCreatedBy) return NO_OWNERS;
+    const creator = userById.get(teammateCreatedBy);
+    return creator ? [creator] : NO_OWNERS;
+  }, [ownersState, teammateCreatedBy, userById]);
 
   const teammateOptions = useMemo(() => {
     if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
@@ -306,7 +406,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             <BranchMetadataRow
               branch={primaryTeammateBranch}
               repo={primaryTeammateRepo}
-              userById={userById}
+              owners={branchOwners}
               currentUserId={currentUserId}
               style={{ minWidth: 0 }}
             >
@@ -442,7 +542,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           },
           {
             key: 'all-sessions',
-            label: 'All sessions',
+            label: 'Sessions',
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
@@ -454,6 +554,23 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                     sessionsByBranch={sessionsByBranch}
                     onSessionClick={onSessionClick}
                   />
+                ) : (
+                  <div style={{ padding: 16 }}>
+                    <Skeleton active paragraph={{ rows: 4 }} title={false} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
+            ),
+          },
+          {
+            key: 'all-branches',
+            label: 'Branches',
+            children: board ? (
+              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+                {sessionDetailsHydrated ? (
+                  <BoardBranchList board={board} repoById={repoById} client={client} />
                 ) : (
                   <div style={{ padding: 16 }}>
                     <Skeleton active paragraph={{ rows: 4 }} title={false} />

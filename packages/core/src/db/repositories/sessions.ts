@@ -6,12 +6,20 @@
 
 import type { BranchID, Session, SessionID, SessionUpdate, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isPostgresDatabase,
+  lockRowForUpdate,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import { sanitizeDbError } from '../sanitize-error';
 import {
   branches,
@@ -20,6 +28,7 @@ import {
   type SessionInsert,
   type SessionRow,
   sessions,
+  tasks,
 } from '../schema';
 import {
   AmbiguousIdError,
@@ -39,6 +48,25 @@ import { deepMerge } from './merge-utils';
 export interface SessionWithLastMessage extends Session {
   last_message?: string;
 }
+
+export interface IncompleteScheduledSessionRef {
+  session_id: SessionID;
+  /**
+   * The live FK is nullable because deleting a schedule must not erase the
+   * scheduler's ability to finish an occurrence admitted before that delete.
+   * Recovery uses the schedule ID snapshotted in custom_context when this is
+   * absent; system discovery projects this only as bounded diagnostic context.
+   */
+  schedule_id?: import('@agor/core/types').ScheduleID;
+  scheduled_run_at: number;
+  created_at: number;
+  tenant_id?: string;
+}
+
+export type IncompleteScheduledSessionCursor = Pick<
+  IncompleteScheduledSessionRef,
+  'created_at' | 'session_id'
+>;
 
 type SessionArchiveReason = NonNullable<Session['archived_reason']>;
 
@@ -156,7 +184,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       agentic_tool: session.agentic_tool ?? 'claude-code',
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
       created_by: session.created_by,
-      unix_username: session.unix_username ?? null, // Stamped at creation time by setSessionUnixUsername hook
+      unix_username: session.unix_username ?? null, // Immutable execution-home stamp set at creation
       board_id: null, // Board ID tracked separately in boards.sessions array
       parent_session_id: session.genealogy?.parent_session_id ?? null,
       forked_from_session_id: session.genealogy?.forked_from_session_id ?? null,
@@ -982,9 +1010,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * Find the session that corresponds to one specific scheduled run.
    *
    * Used by the scheduler to dedup: "is there already a session for
-   * (schedule_id, scheduled_run_at)?". Uses the covering index
-   * `sessions_schedule_run_unique (schedule_id, scheduled_run_at)` so the
-   * lookup is O(log n), not an O(n) full table scan.
+   * (schedule_id, scheduled_run_at)?". PostgreSQL uses the tenant-aware
+   * covering index `sessions_schedule_run_unique
+   * (tenant_id, schedule_id, scheduled_run_at)`; SQLite uses the standalone
+   * two-column equivalent. The lookup is O(log n), not a full table scan.
    *
    * Returns the matching session (with branch_board_id + url populated
    * like the other readers in this repo) or null if no match.
@@ -1015,6 +1044,81 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         error
       );
     }
+  }
+
+  /** Bounded routing-only discovery for recoverable scheduler initialization. */
+  async findIncompleteScheduledRefs(
+    limit = 25,
+    after?: IncompleteScheduledSessionCursor
+  ): Promise<IncompleteScheduledSessionRef[]> {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
+      throw new RepositoryError('Incomplete scheduled Session limit must be between 1 and 1000');
+    }
+    const tenantColumn = (sessions as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns = {
+      session_id: sessions.session_id,
+      schedule_id: sessions.schedule_id,
+      scheduled_run_at: sessions.scheduled_run_at,
+      created_at: sessions.created_at,
+      ...(isPostgresDatabase(this.db) && tenantColumn ? { tenant_id: tenantColumn } : {}),
+    };
+    const afterCondition = after
+      ? or(
+          gt(sessions.created_at, new Date(after.created_at)),
+          and(
+            eq(sessions.created_at, new Date(after.created_at)),
+            gt(sessions.session_id, after.session_id)
+          )
+        )
+      : undefined;
+    const rows = await select(this.db, columns)
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.scheduled_from_branch, true),
+          isNotNull(sessions.scheduled_run_at),
+          isNull(sessions.scheduler_init_completed_at),
+          afterCondition
+        )
+      )
+      .orderBy(asc(sessions.created_at), asc(sessions.session_id))
+      .limit(limit)
+      .all();
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+      session_id: row.session_id as SessionID,
+      ...(typeof row.schedule_id === 'string'
+        ? { schedule_id: row.schedule_id as import('@agor/core/types').ScheduleID }
+        : {}),
+      scheduled_run_at: Number(row.scheduled_run_at),
+      created_at:
+        row.created_at instanceof Date
+          ? row.created_at.getTime()
+          : new Date(row.created_at as string | number).getTime(),
+      ...(typeof row.tenant_id === 'string' ? { tenant_id: row.tenant_id } : {}),
+    }));
+  }
+
+  async isScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
+    const row = await select(this.db, { completedAt: sessions.scheduler_init_completed_at })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    return row?.completedAt != null;
+  }
+
+  /** Conditional/idempotent completion marker written after schedule finalization. */
+  async markScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
+    const result = await update(this.db, sessions)
+      .set({ scheduler_init_completed_at: new Date() })
+      .where(
+        and(
+          eq(sessions.session_id, sessionId),
+          eq(sessions.scheduled_from_branch, true),
+          isNull(sessions.scheduler_init_completed_at)
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
   }
 
   /**
@@ -1076,9 +1180,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
   /**
    * True iff at least one session in this branch has a status in the
-   * given set. Generic primitive — the caller owns the policy
-   * (e.g. the scheduler's "active statuses" list lives in `scheduler.ts`
-   * next to the concurrency-guard call site, not here).
+   * given set. Generic primitive — the caller owns the policy and selects
+   * the appropriate canonical lifecycle set from `@agor/core/types`.
    *
    * Implemented as an existence probe (`SELECT 1 ... LIMIT 1`) rather
    * than a COUNT so busy branches don't pay the cost of counting every
@@ -1123,6 +1226,51 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     } catch (error) {
       throw new RepositoryError(
         `Failed to probe sessions in schedule: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Scheduler admission probe covering both an active Session and the narrow
+   * initialization window before its first Task reaches DISPATCHING. A
+   * completed scheduled session is IDLE with only terminal tasks and does not
+   * block the next occurrence.
+   */
+  async existsActiveOrInitializingInSchedule(
+    scheduleId: import('@agor/core/types').ScheduleID,
+    activeSessionStatuses: ReadonlySet<Session['status']>,
+    activeTaskStatuses: ReadonlySet<import('@agor/core/types').Task['status']>
+  ): Promise<boolean> {
+    const activeSession =
+      activeSessionStatuses.size > 0
+        ? inArray(sessions.status, [...activeSessionStatuses])
+        : sql`false`;
+    const taskIsActive =
+      activeTaskStatuses.size > 0 ? inArray(tasks.status, [...activeTaskStatuses]) : sql`false`;
+    try {
+      const row = await select(this.db, { one: sql<number>`1` })
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.schedule_id, scheduleId),
+            or(
+              activeSession,
+              // New scheduled Sessions remain initialization-active until the
+              // scheduler writes its internal completion marker. Migrations
+              // backfill historical Sessions so old no-Task rows do not block
+              // a schedule forever.
+              isNull(sessions.scheduler_init_completed_at),
+              sql`EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.session_id} = ${sessions.session_id} AND ${taskIsActive})`
+            )
+          )
+        )
+        .limit(1)
+        .one();
+      return row != null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to probe active or initializing scheduled sessions: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

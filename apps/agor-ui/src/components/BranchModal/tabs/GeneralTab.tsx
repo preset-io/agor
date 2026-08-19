@@ -1,10 +1,20 @@
-import type { Board, Branch, MCPServer, Repo, Session } from '@agor-live/client';
+import type {
+  Board,
+  Branch,
+  BranchArchiveOrDeleteOptions,
+  MCPServer,
+  Repo,
+  Session,
+} from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { useAgorStore } from '../../../store/agorStore';
+import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
+import { boardSelectOptions } from '../../BoardTile';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -24,13 +34,7 @@ interface GeneralTabProps {
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
-  onArchiveOrDelete?: (
-    branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
-  ) => void;
+  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
@@ -45,11 +49,9 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   onArchiveOrDelete,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const branchById = useAgorStore(selectBranchById);
 
-  const handleArchiveOrDelete = (options: {
-    metadataAction: 'archive' | 'delete';
-    filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-  }) => {
+  const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
     onArchiveOrDelete?.(branch.branch_id, options);
   };
 
@@ -122,12 +124,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 placeholder="Select board (optional)..."
                 allowClear
                 disabled={!canEdit}
-                options={boards
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((board) => ({
-                    value: board.board_id,
-                    label: `${board.icon || '📋'} ${board.name}`,
-                  }))}
+                options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>
 

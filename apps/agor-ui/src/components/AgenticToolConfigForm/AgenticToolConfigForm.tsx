@@ -14,8 +14,10 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
+import { AGENTIC_TOOL_CAPABILITIES, getAgenticToolModelSelectionError } from '@agor/agentic-tools';
+import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
-import { AGENTIC_TOOL_CAPABILITIES, DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
+import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
@@ -45,6 +47,8 @@ export interface AgenticToolConfigFormProps {
    * dynamic discovery (e.g., default-settings preview, schedule editor).
    */
   client?: AgorClient | null;
+  /** Optional authorized branch scope for integration-owned model discovery. */
+  branchId?: string;
   /**
    * Render the Claude advisor model inline with the model selector. Surfaces
    * that relocate it into their own "Advanced" area pass `false`.
@@ -55,19 +59,20 @@ export interface AgenticToolConfigFormProps {
 const MODEL_LABELS: Record<string, string> = {
   codex: 'Codex Model',
   gemini: 'Gemini Model',
-  opencode: 'OpenCode LLM Provider',
   copilot: 'Copilot Model',
   cursor: 'Cursor Model',
 };
 
 /** The rendered label of a tool's model/provider selector (defaults to Claude). */
-export const modelLabelForTool = (tool: string): string => MODEL_LABELS[tool] ?? 'Claude Model';
+export const modelLabelForTool = (tool: AgenticToolName): string =>
+  getAgenticToolUIIntegration(tool)?.modelLabel ?? MODEL_LABELS[tool] ?? 'Claude Model';
 
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,
   showHelpText = true,
   compact = false,
   client,
+  branchId,
   showAdvisor = true,
 }) => {
   const modelLabel = modelLabelForTool(agenticTool);
@@ -80,13 +85,26 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
       <Form.Item
         name="modelConfig"
         label={modelLabel}
+        rules={[
+          {
+            validator: (_, value) => {
+              const error = getAgenticToolModelSelectionError(agenticTool, value);
+              return error ? Promise.reject(new Error(error)) : Promise.resolve();
+            },
+          },
+        ]}
         help={
           showHelpText && agenticTool === 'claude-code'
             ? `Choose which Claude model to use (defaults to ${DEFAULT_CLAUDE_MODEL})`
             : undefined
         }
       >
-        <ModelSelector agentic_tool={agenticTool} client={client} showAdvisor={showAdvisor} />
+        <ModelSelector
+          agentic_tool={agenticTool}
+          client={client}
+          branchId={branchId}
+          showAdvisor={showAdvisor}
+        />
       </Form.Item>
 
       <Form.Item

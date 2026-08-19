@@ -10,6 +10,8 @@ const repoRoot = resolve(__dirname, '..');
 
 const targetManifest = 'packages/agor-live/package.json';
 const sourceManifests = [
+  'packages/agentic-tool-opencode/package.json',
+  'packages/agentic-tools/package.json',
   'packages/core/package.json',
   'packages/git/package.json',
   'apps/agor-cli/package.json',
@@ -17,9 +19,22 @@ const sourceManifests = [
   'packages/executor/package.json',
 ];
 
-// Internal workspace packages are bundled/copied into agor-live dist.
-// They are not publishable npm dependencies and should not be synced into dependencies.
-const skipDeps = new Set(['@agor/core', '@agor/daemon', '@agor/git']);
+// Internal workspace packages are materialized inside the agor-live tarball.
+// Keep workspace references in the source manifest so pnpm links local projects;
+// the release packer rewrites them to the materialized packages' exact versions.
+const skipDeps = new Set([
+  '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
+  '@agor/core',
+  '@agor/daemon',
+  '@agor/git',
+]);
+const bundledInternalPackages = new Set([
+  '@agor/agentic-tool-opencode',
+  '@agor/agentic-tools',
+  '@agor/core',
+  '@agor/git',
+]);
 const mode = process.argv.includes('--check') ? 'check' : 'write';
 
 const readJson = (relPath) => JSON.parse(readFileSync(resolve(repoRoot, relPath), 'utf8'));
@@ -28,9 +43,26 @@ const writeJson = (relPath, data) =>
 
 const target = readJson(targetManifest);
 const targetDeps = { ...(target.dependencies ?? {}) };
+const targetOptionalDeps = { ...(target.optionalDependencies ?? {}) };
+const targetPeerDeps = { ...(target.peerDependencies ?? {}) };
+const targetPeerMeta = { ...(target.peerDependenciesMeta ?? {}) };
+// This is the only dependency owned directly by the publishable wrapper.
+// Everything else is derived from the copied workspace packages below.
+const targetOnlyDependencies = new Set(['@agor-live/client']);
+// These runtime capabilities stay out of default installs. Their published
+// peer contract is derived from the workspace package that implements them.
+const publishedPeerDependencies = new Set(['hot-shots']);
 
 const aggregated = new Map();
+const aggregatedOptional = new Map();
+const aggregatedPeers = new Map();
+const aggregatedPeerMeta = new Map();
 const conflicts = [];
+
+for (const manifest of sourceManifests) {
+  const pkg = readJson(manifest);
+  if (bundledInternalPackages.has(pkg.name)) aggregated.set(pkg.name, 'workspace:*');
+}
 
 for (const manifest of sourceManifests) {
   const pkg = readJson(manifest);
@@ -42,6 +74,36 @@ for (const manifest of sourceManifests) {
     } else if (!seen) {
       aggregated.set(dep, version);
     }
+  }
+  for (const [dep, version] of Object.entries(pkg.optionalDependencies ?? {})) {
+    if (skipDeps.has(dep) || aggregated.has(dep)) continue;
+    const seen = aggregatedOptional.get(dep);
+    if (seen && seen !== version) {
+      conflicts.push({ dep, seen, version, manifest });
+    } else if (!seen) {
+      aggregatedOptional.set(dep, version);
+    }
+  }
+  for (const [dep, version] of Object.entries(pkg.peerDependencies ?? {})) {
+    if (!publishedPeerDependencies.has(dep)) continue;
+    const seen = aggregatedPeers.get(dep);
+    if (seen && seen !== version) {
+      conflicts.push({ dep: `peer:${dep}`, seen, version, manifest });
+    } else if (!seen) {
+      aggregatedPeers.set(dep, version);
+      aggregatedPeerMeta.set(dep, pkg.peerDependenciesMeta?.[dep] ?? {});
+    }
+  }
+}
+
+for (const dep of publishedPeerDependencies) {
+  if (!aggregatedPeers.has(dep)) {
+    conflicts.push({
+      dep: `peer:${dep}`,
+      seen: 'missing',
+      version: 'required by the published peer contract',
+      manifest: 'workspace manifests',
+    });
   }
 }
 
@@ -56,6 +118,12 @@ if (conflicts.length) {
 }
 
 const updates = [];
+for (const dep of Object.keys(targetDeps)) {
+  if (!targetOnlyDependencies.has(dep) && !aggregated.has(dep)) {
+    updates.push({ dep, from: targetDeps[dep], to: undefined });
+    if (mode === 'write') delete targetDeps[dep];
+  }
+}
 for (const [dep, version] of aggregated) {
   const current = targetDeps[dep];
   if (current !== version) {
@@ -65,12 +133,49 @@ for (const [dep, version] of aggregated) {
     }
   }
 }
+for (const dep of Object.keys(targetOptionalDeps)) {
+  if (!aggregatedOptional.has(dep)) {
+    updates.push({ dep: `optional:${dep}`, from: targetOptionalDeps[dep], to: undefined });
+    if (mode === 'write') delete targetOptionalDeps[dep];
+  }
+}
+for (const [dep, version] of aggregatedOptional) {
+  const current = targetOptionalDeps[dep];
+  if (current !== version) {
+    updates.push({ dep: `optional:${dep}`, from: current, to: version });
+    if (mode === 'write') targetOptionalDeps[dep] = version;
+  }
+}
+for (const dep of Object.keys(targetPeerDeps)) {
+  if (!publishedPeerDependencies.has(dep) || aggregatedPeers.has(dep)) continue;
+  updates.push({ dep: `peer:${dep}`, from: targetPeerDeps[dep], to: undefined });
+  if (mode === 'write') {
+    delete targetPeerDeps[dep];
+    delete targetPeerMeta[dep];
+  }
+}
+for (const [dep, version] of aggregatedPeers) {
+  const current = targetPeerDeps[dep];
+  if (current !== version) {
+    updates.push({ dep: `peer:${dep}`, from: current, to: version });
+    if (mode === 'write') targetPeerDeps[dep] = version;
+  }
+  const expectedMeta = aggregatedPeerMeta.get(dep);
+  if (JSON.stringify(targetPeerMeta[dep] ?? {}) !== JSON.stringify(expectedMeta)) {
+    updates.push({
+      dep: `peer-meta:${dep}`,
+      from: JSON.stringify(targetPeerMeta[dep] ?? {}),
+      to: JSON.stringify(expectedMeta),
+    });
+    if (mode === 'write') targetPeerMeta[dep] = expectedMeta;
+  }
+}
 
 if (mode === 'check') {
   if (updates.length) {
     console.error('packages/agor-live/package.json is missing dependency updates:');
     for (const update of updates) {
-      console.error(` - ${update.dep}: expected ${update.to}, found ${update.from ?? '∅'}`);
+      console.error(` - ${update.dep}: expected ${update.to ?? '∅'}, found ${update.from ?? '∅'}`);
     }
     console.error('Run pnpm sync:agor-live-deps to fix.');
     process.exit(1);
@@ -90,9 +195,18 @@ for (const dep of Object.keys(targetDeps).sort()) {
 }
 
 target.dependencies = sortedDeps;
+target.optionalDependencies = Object.fromEntries(
+  Object.entries(targetOptionalDeps).sort(([left], [right]) => left.localeCompare(right))
+);
+target.peerDependencies = Object.fromEntries(
+  Object.entries(targetPeerDeps).sort(([left], [right]) => left.localeCompare(right))
+);
+target.peerDependenciesMeta = Object.fromEntries(
+  Object.entries(targetPeerMeta).sort(([left], [right]) => left.localeCompare(right))
+);
 writeJson(targetManifest, target);
 
 console.log(`Updated ${targetManifest} with ${updates.length} change(s):`);
 for (const update of updates) {
-  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to}`);
+  console.log(` - ${update.dep}: ${update.from ?? '∅'} -> ${update.to ?? '∅'}`);
 }

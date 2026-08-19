@@ -1566,12 +1566,43 @@ describe('createBranchAsClone', () => {
       .catch(() => false);
     expect(alternatesExists).toBe(false);
   });
+
+  it('falls back to a plain clone when referencePath is a shallow repository', async () => {
+    await seedRemoteWithBranches();
+
+    const shallowReference = path.join(tempDir, 'shallow-reference');
+    await simpleGit().clone(`file://${remoteDir}`, shallowReference, [
+      '--branch',
+      'main',
+      '--single-branch',
+      '--depth',
+      '1',
+    ]);
+    expect((await simpleGit(shallowReference).revparse(['--is-shallow-repository'])).trim()).toBe(
+      'true'
+    );
+
+    const targetPath = path.join(tempDir, 'wt-shallow-reference');
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: 'main',
+      referencePath: shallowReference,
+    });
+
+    expect(result.ref).toBe('main');
+    const alternatesExists = await fs
+      .access(path.join(targetPath, '.git', 'objects', 'info', 'alternates'))
+      .then(() => true)
+      .catch(() => false);
+    expect(alternatesExists).toBe(false);
+  });
 });
 
 describe('categorizeGitError', () => {
   // Issue #1126 / Bug B: clone failures need to bucket into categories so the
   // UI / MCP can suggest the right next step. The auth_failed bucket is the
-  // important one — it's the path that points users at Settings → API Keys.
+  // important one — it's the path that points users at User Settings → Env Vars.
   it('categorizes private-repo authentication failures as auth_failed', () => {
     expect(
       categorizeGitError('fatal: Authentication failed for https://github.com/foo/bar.git/')
@@ -1579,6 +1610,15 @@ describe('categorizeGitError', () => {
     expect(categorizeGitError('remote: HTTP Basic: Access denied')).toBe('auth_failed');
     expect(categorizeGitError('Permission denied (publickey).')).toBe('auth_failed');
     expect(categorizeGitError('terminal prompts disabled')).toBe('auth_failed');
+  });
+
+  it('categorizes missing Git as git_unavailable', () => {
+    expect(
+      categorizeGitError(
+        'Git executable is unavailable. Install Git and verify `git --version` before retrying.'
+      )
+    ).toBe('git_unavailable');
+    expect(categorizeGitError('Error: spawn git ENOENT')).toBe('git_unavailable');
   });
 
   it('categorizes missing repos as not_found', () => {
@@ -1593,6 +1633,16 @@ describe('categorizeGitError', () => {
     expect(
       categorizeGitError('fatal: unable to connect to git.example.com: Connection refused')
     ).toBe('network');
+    expect(
+      categorizeGitError(
+        'fatal: unable to access: server certificate verification failed. CAfile: none'
+      )
+    ).toBe('network');
+    expect(categorizeGitError('fatal: unable to get local issuer certificate')).toBe('network');
+    expect(categorizeGitError('fatal: certificate verify failed')).toBe('network');
+    expect(categorizeGitError('fatal: self-signed certificate in certificate chain')).toBe(
+      'network'
+    );
   });
 
   it('falls through to unknown for unrecognised stderr', () => {

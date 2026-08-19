@@ -5,6 +5,7 @@
  * Makes it easier to add new tools and ensures consistency.
  */
 
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type {
   ExecutorPulseKind,
   MessageSource,
@@ -12,8 +13,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 /**
@@ -32,6 +32,7 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
@@ -50,6 +51,30 @@ export interface ToolConfig {
   /** Tool runner function */
   runner: ToolRunner;
 }
+
+export interface AgenticToolAuxiliaryInput {
+  context: unknown;
+  request: unknown;
+  dryRun?: boolean;
+}
+
+export interface AgenticToolInteractiveChannel {
+  emit(event: unknown): void;
+  read(): Promise<unknown>;
+}
+
+export interface AgenticToolAuxiliaryAdapter {
+  execute(input: AgenticToolAuxiliaryInput): Promise<ExecutorResult>;
+  executeInteractive?(
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult>;
+}
+
+const auxiliaryAdapters: Partial<Record<Tool, () => Promise<AgenticToolAuxiliaryAdapter>>> = {
+  opencode: async () =>
+    (await import('@agor/agentic-tool-opencode/runtime')).OPENCODE_AUXILIARY_ADAPTER,
+};
 
 /**
  * Tool registry - centralized configuration for all tools
@@ -110,6 +135,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
     }
@@ -120,6 +146,51 @@ export class ToolRegistry {
     }
     return config.runner(params);
   }
+
+  static async executeAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput
+  ): Promise<ExecutorResult> {
+    const loader = auxiliaryAdapters[tool];
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    return (await loader()).execute(input);
+  }
+
+  static async executeInteractiveAuxiliary(
+    tool: Tool,
+    input: AgenticToolAuxiliaryInput,
+    channel: AgenticToolInteractiveChannel
+  ): Promise<ExecutorResult> {
+    const loader = auxiliaryAdapters[tool];
+    if (!loader) {
+      return {
+        success: false,
+        error: {
+          code: 'AGENTIC_TOOL_AUXILIARY_UNSUPPORTED',
+          message: `Agentic tool does not support auxiliary executor operations: ${tool}`,
+        },
+      };
+    }
+    const adapter = await loader();
+    if (!adapter.executeInteractive) {
+      return {
+        success: false,
+        error: {
+          code: 'INTERACTIVE_COMMAND_UNSUPPORTED',
+          message: `Agentic tool does not support interactive auxiliary operations: ${tool}`,
+        },
+      };
+    }
+    return adapter.executeInteractive(input, channel);
+  }
 }
 
 /**
@@ -127,60 +198,94 @@ export class ToolRegistry {
  */
 export async function initializeToolRegistry(): Promise<void> {
   // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot, cursor] = await Promise.all([
+  const [claude, codex, opencode, copilot] = await Promise.all([
     import('./claude.js'),
     import('./codex.js'),
-    import('./gemini.js'),
     import('./opencode.js'),
     import('./copilot.js'),
-    import('./cursor.js'),
   ]);
 
   // Register Claude Code
   ToolRegistry.register({
     tool: 'claude-code',
-    name: 'Claude Code',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES['claude-code']!,
+    name: getAgenticToolIntegration('claude-code').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('claude-code').apiKeyName!,
     runner: claude.executeClaudeCodeTask,
   });
 
   // Register Codex
   ToolRegistry.register({
     tool: 'codex',
-    name: 'Codex',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.codex!,
+    name: getAgenticToolIntegration('codex').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('codex').apiKeyName!,
     runner: codex.executeCodexTask,
   });
 
   // Register Gemini
   ToolRegistry.register({
     tool: 'gemini',
-    name: 'Gemini',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.gemini!,
-    runner: gemini.executeGeminiTask,
+    name: getAgenticToolIntegration('gemini').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('gemini').apiKeyName!,
+    runner: async (params) => {
+      try {
+        const gemini = await import('./gemini.js');
+        return await gemini.executeGeminiTask(params);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message.includes('@google/gemini-cli-core') ||
+            (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND')
+        ) {
+          throw new Error(
+            'Gemini support is not installed on this Agor instance. ' +
+              'See https://agor.live/guide/extended-install#agentic-tools',
+            { cause: error }
+          );
+        }
+        throw error;
+      }
+    },
   });
 
   // Register OpenCode
   ToolRegistry.register({
     tool: 'opencode',
-    name: 'OpenCode',
-    apiKeyEnvVar: 'NONE', // OpenCode doesn't need API key
+    name: getAgenticToolIntegration('opencode').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('opencode').apiKeyName ?? 'NONE',
     runner: opencode.executeOpenCodeTask,
   });
 
   // Register Copilot
   ToolRegistry.register({
     tool: 'copilot',
-    name: 'GitHub Copilot',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.copilot!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
+    name: getAgenticToolIntegration('copilot').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('copilot').apiKeyName!, // Note: execution also accepts GH_TOKEN / GITHUB_TOKEN aliases
     runner: copilot.executeCopilotTask,
   });
 
-  // Register Cursor SDK (experimental skeleton; handler intentionally fails until runtime lands)
+  // Register Cursor SDK (beta). Load it only when selected so Cursor remains optional.
   ToolRegistry.register({
     tool: 'cursor',
-    name: 'Cursor SDK',
-    apiKeyEnvVar: TOOL_API_KEY_NAMES.cursor!,
-    runner: cursor.executeCursorTask,
+    name: getAgenticToolIntegration('cursor').displayName,
+    apiKeyEnvVar: getAgenticToolIntegration('cursor').apiKeyName!,
+    runner: async (params) => {
+      try {
+        const cursor = await import('./cursor.js');
+        return await cursor.executeCursorTask(params);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message.includes('@cursor/sdk') ||
+            (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND')
+        ) {
+          throw new Error(
+            'Cursor SDK support is not installed on this Agor instance. ' +
+              'See https://agor.live/guide/extended-install#agentic-tools',
+            { cause: error }
+          );
+        }
+        throw error;
+      }
+    },
   });
 }

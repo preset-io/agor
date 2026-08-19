@@ -44,7 +44,7 @@ describe('resolveChildUnixUsername', () => {
   });
 
   it('non-legacy with null caller unix_username returns null', () => {
-    // Caller has no unix_username set → null is a valid stamp in non-strict modes.
+    // Caller has no unix_username set → null is valid outside delegated mode.
     expect(resolveChildUnixUsername('alice-unix', null, false)).toBeNull();
   });
 

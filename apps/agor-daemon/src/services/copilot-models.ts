@@ -24,6 +24,7 @@
  *     the UI already has bundled. The picker stays usable.
  */
 
+import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -33,7 +34,8 @@ import {
 } from '@agor/core/db';
 import { COPILOT_MODEL_METADATA, DEFAULT_COPILOT_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
-import { CopilotClient, type ModelInfo } from '@github/copilot-sdk';
+import type * as CopilotSdk from '@github/copilot-sdk';
+import type { ModelInfo } from '@github/copilot-sdk';
 
 export interface CopilotModelOption {
   id: string;
@@ -102,9 +104,10 @@ export class CopilotModelsService {
       return STATIC_RESULT;
     }
 
-    let client: CopilotClient | undefined;
+    let client: InstanceType<typeof CopilotSdk.CopilotClient> | undefined;
     try {
-      client = new CopilotClient({
+      const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
+      client = new Copilot.CopilotClient({
         useStdio: true,
         githubToken: resolution.apiKey,
         env: { HOME: process.env.HOME || '' },

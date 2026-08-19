@@ -11,13 +11,11 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   getBranchesDir,
-  loadConfig,
-  loadConfigSync,
   PAGINATION,
   resolveBranchStorageConfig,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -28,7 +26,6 @@ import {
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
-  UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -46,6 +43,8 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
+  BranchArchiveOrDeleteResult,
   BranchEnvironmentUpdate,
   BranchID,
   KnowledgeNamespace,
@@ -59,20 +58,16 @@ import {
   getTeammateConfig,
   isTeammate,
 } from '@agor/core/types';
-import {
-  getGidFromGroupName,
-  resolveUnixUserForImpersonation,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-realtime.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
@@ -209,7 +204,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   private async getManagedEnvExecutionMode(): Promise<ManagedEnvExecutionMode> {
-    const config = await loadConfig();
+    const config = this.app.get('config');
     return config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   }
 
@@ -349,38 +344,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     branch: Branch,
     params?: BranchParams
   ): Promise<{
-    asUser?: string;
+    delegatedHomeKey?: string;
     env: Record<string, string>;
   }> {
-    const config = await loadConfig();
-    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+    const config = this.app.get('config');
     return this.withTenantDatabase(params, async () => {
-      let asUser: string | undefined;
-
-      // Only insulated/strict impersonate; simple and delegated both run
-      // environment commands as the daemon user.
-      if (unixUserMode === 'insulated' || unixUserMode === 'strict') {
-        const usersRepo = new UsersRepository(this.db);
-        const user = await usersRepo.findById(branch.created_by);
-        const impersonationResult = resolveUnixUserForImpersonation({
-          mode: unixUserMode,
-          userUnixUsername: user?.unix_username,
-          executorUnixUser: config.execution?.executor_unix_user,
-        });
-
-        asUser = impersonationResult.unixUser ?? undefined;
-        if (asUser) {
-          validateResolvedUnixUser(unixUserMode, asUser);
-        }
-      }
-
-      const env = await createUserProcessEnvironment(
-        branch.created_by,
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        undefined,
-        !!asUser
+        branch.created_by,
+        config
       );
-      return { asUser, env };
+
+      const env = await createUserProcessEnvironment(branch.created_by, this.db);
+      return { delegatedHomeKey, env };
     });
   }
 
@@ -390,7 +366,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
   }): Promise<{
     payload: EnvironmentLifecycleExecutorPayload;
-    asUser?: string;
+    delegatedHomeKey?: string;
     env: Record<string, string>;
   }> {
     const { branch, action, params } = options;
@@ -412,10 +388,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, options.params);
+    const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(
+      branch,
+      options.params
+    );
 
     return {
-      asUser,
+      delegatedHomeKey,
       env,
       payload: {
         command: 'environment.lifecycle',
@@ -441,14 +420,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action, params } = options;
-    const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
+    const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
     const logPrefix = `[Environment.${action} ${branch.name}]`;
 
     const spawnLifecycleExecutor = async () => {
       try {
         spawnExecutor(payload, {
           logPrefix,
-          asUser,
+          delegatedHomeKey,
           preparedEnv: env,
           templateVariables: {
             branch_id: branch.branch_id,
@@ -485,11 +464,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
   }): Promise<void> {
     const { branch, action } = options;
-    const { payload, asUser, env } = await this.createEnvironmentExecutorPayload(options);
+    const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
 
     const result = await runExecutorCommand(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
-      asUser,
+      delegatedHomeKey,
       preparedEnv: env,
       // Mixed webhook/shell restart needs the daemon to wait for shell stop
       // before it invokes the daemon-owned webhook start. Keep this generous
@@ -535,7 +514,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Session token service unavailable; cannot fetch environment logs');
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, params);
+    const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
     const result = await runExecutorCommand(
       {
         command: 'environment.logs',
@@ -550,7 +529,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       },
       {
         logPrefix: `[Environment.logs ${branch.name}]`,
-        asUser,
+        delegatedHomeKey,
         preparedEnv: env,
         timeoutMs: ENVIRONMENT.LOGS_TIMEOUT_MS,
         templateVariables: {
@@ -670,7 +649,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     ensureBranchStorageModeAllowed(storageMode);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -682,6 +661,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
       if (!Number.isInteger(withDefaults.clone_depth) || withDefaults.clone_depth <= 0) {
         throw new BadRequest('clone_depth must be a positive integer when set.');
+      }
+      try {
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+      } catch (error) {
+        throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
     }
     // Persist the effective mode so the executor never reconstructs a
@@ -1288,11 +1272,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (deleteFromFilesystem) {
       console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
 
-      // Resolve Unix user for sudo wrap. Returns undefined in simple/no-RBAC
-      // mode so we don't try to sudo on hosts without passwordless sudoers
-      // (#1140 root cause; #1143 fixed the branch-remove sister bug by
-      // centralizing the gate inside the resolver itself).
-      const asUser = await resolveGitImpersonationForBranch(this.db, branch);
+      // Resolve the optional delegated execution-home key. Local execution
+      // never selects or impersonates a host account.
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+        this.db,
+        branch.created_by,
+        this.app.get('config')
+      );
 
       // Generate session token for executor authentication. Hook chain
       // enforces auth before we get here, so non-null assertion is safe.
@@ -1326,7 +1312,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             {
               logPrefix: `[BranchesService.remove ${branch.name}]`,
-              asUser, // Run as resolved user (fresh groups via sudo -u)
+              delegatedHomeKey: delegatedHomeKey,
             }
           );
         })
@@ -1342,6 +1328,39 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
+   * Internal metadata-only hard-delete primitive.
+   *
+   * The visibility snapshot, row deletion, and post-commit tombstone enqueue
+   * share one tenant transaction. This method deliberately bypasses the
+   * registered `remove` wrapper and its filesystem/Unix hooks; it is not listed
+   * in the service's transport methods.
+   */
+  async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
+    const removalParams = params ?? ({} as BranchParams);
+    return this.withTenantDatabase(removalParams, async () => {
+      const branch = (await super.get(id, removalParams)) as Branch;
+      await captureBranchRemovalRealtimeVisibility({
+        params: removalParams,
+        branchRepository: this.branchRepo,
+        branchId: branch.branch_id,
+      });
+
+      // Feathers replaces registered standard methods with event-producing
+      // wrappers. The adapter call performs only the metadata deletion; the
+      // explicit event below is the single authoritative tombstone.
+      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'removed',
+        data: removedBranch,
+        params: removalParams,
+        id: removedBranch.branch_id,
+      });
+      return removedBranch;
+    });
+  }
+
+  /**
    * Custom method: Archive or delete branch with filesystem options
    *
    * This method implements the archive/delete modal functionality.
@@ -1353,15 +1372,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async archiveOrDelete(
     id: BranchID,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: BranchArchiveOrDeleteOptions,
     params?: BranchParams
-  ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
+  ): Promise<BranchArchiveOrDeleteResult> {
+    if (!params) {
+      throw new Forbidden(
+        'Branch archive/delete must be invoked through the authorized archive-or-delete service'
+      );
+    }
+    // This method coordinates external side effects, so a direct in-process
+    // call must never be able to bypass the route's branch-control hook.
+    consumeBranchArchiveDeleteAuthorization(params, id, options.metadataAction);
+
     const { metadataAction, filesystemAction } = options;
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
     // Stop environment if running
@@ -1379,7 +1403,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Perform filesystem action via executor (fire-and-forget)
     // Executor handles its own logging and error reporting via Feathers
-    // Using executor ensures proper Unix isolation for file operations
+    // Use the executor so filesystem operations follow the selected substrate.
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
@@ -1388,9 +1412,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (filesystemAction === 'cleaned') {
       console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
 
-      // No user impersonation for infrastructure operations — the daemon user
-      // owns all branches and impersonation would resolve getBranchesDir()
-      // to the wrong home directory, causing safety check failures.
+      // Infrastructure cleanup uses the canonical branch path supplied by the
+      // daemon rather than reconstructing it from an execution home.
 
       void this.withTenantDatabase(
         params,
@@ -1425,9 +1448,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
       const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
-      // No user impersonation for infrastructure operations — the daemon user
-      // owns all branches and impersonation would resolve getBranchesDir()
-      // to the wrong home directory, causing safety check failures.
+      // Infrastructure cleanup uses the canonical branch path supplied by the
+      // daemon rather than reconstructing it from an execution home.
 
       void this.withTenantDatabase(
         params,
@@ -1472,6 +1494,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
         });
     }
+
+    // Retire branch-scoped terminal attachments before archive/delete. The
+    // local event handles this replica; serverSideEmit carries only trusted
+    // tenant/branch lifecycle metadata (never terminal contents) to peer
+    // replicas when the HA adapter is available.
+    const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
+    const terminalClose = {
+      tenantId: String(terminalTenantId),
+      branchId: branch.branch_id,
+    };
+    this.app.emit?.('terminal:close-branch', terminalClose);
+    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
@@ -1532,7 +1567,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      await this.withTenantDatabase(params, () => this.remove(id, params));
+      await this.removeMetadataWithRealtime(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };
@@ -1550,7 +1585,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     if (
       (branch.storage_mode ?? 'worktree') === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
@@ -1603,7 +1638,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       },
       {
         logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
-        asUser: await resolveExecutorReadAsUser(this.db, params?.user?.user_id),
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+          this.db,
+          params?.user?.user_id,
+          this.app.get('config')
+        ),
       }
     );
     if (!statusResult.success) {
@@ -1630,12 +1669,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params,
         () => reposService.get(branch.repo_id, params) as Promise<Repo>
       );
-
-      // Unix group initialization is a filesystem concern controlled by
-      // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
-      // without creating OS groups.
-      const executionMode = resolveExecutionSecurityMode();
-      const initUnixGroup = executionMode.shouldInitUnixGroups;
 
       // The executor derives the materialization mode from this persisted row.
       const storageMode = branch.storage_mode ?? 'worktree';
@@ -1675,12 +1708,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               // This is safe because it only creates a new branch when ls-remote confirms
               // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
               restoreMode: true,
-              // Unix group isolation
-              initUnixGroup,
-              ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
-              fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
               useReference:
-                storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
+                storageMode === 'clone' &&
+                !!repo.local_path &&
+                shouldUseCloneReferencePath(this.app.get('config')),
             },
           },
           {
@@ -1843,7 +1874,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           environmentUpdate?: BranchEnvironmentUpdate;
         },
     environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
-    params?: BranchParams
+    params?: BranchParams,
+    internalOptions?: { beginLifecycle?: boolean }
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
@@ -1887,7 +1919,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       existing.environment_instance,
       updatedEnvironment
     );
-    if (!hasPersistedChange) {
+    if (!hasPersistedChange && !internalOptions?.beginLifecycle) {
       return existing;
     }
 
@@ -1916,7 +1948,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Observation-only persistence deliberately bypasses Feathers publication.
     // It also preserves branch.updated_at so health bookkeeping does not affect
     // branch ordering or modification semantics every five seconds.
-    if (!hasChanged) {
+    if (!hasChanged && !internalOptions?.beginLifecycle) {
       return this.withTenantDatabase(resolvedParams, () =>
         this.branchRepo.update(
           id,
@@ -1926,16 +1958,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     }
 
-    const branch = await this.withTenantDatabase(resolvedParams, () =>
-      this.patch(
-        id,
-        {
-          environment_instance: updatedEnvironment,
-          updated_at: new Date().toISOString(),
-        },
-        resolvedParams
-      )
-    );
+    const branch = internalOptions?.beginLifecycle
+      ? await this.withTenantDatabase(resolvedParams, async () => {
+          await this.branchRepo.update(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            { invalidateEnvironmentObservation: true }
+          );
+          return this.get(id, resolvedParams);
+        })
+      : await this.withTenantDatabase(resolvedParams, () =>
+          this.patch(
+            id,
+            {
+              environment_instance: updatedEnvironment,
+              updated_at: new Date().toISOString(),
+            },
+            resolvedParams
+          )
+        );
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
@@ -1987,7 +2031,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         last_health_check: undefined,
         last_error: undefined,
       },
-      params
+      params,
+      { beginLifecycle: true }
     );
 
     try {
@@ -2526,10 +2571,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Resolve host IP + unix GID (matches executor's renderEnvironmentTemplates).
-    const config = await loadConfig();
+    // Resolve host IP for environment template rendering.
+    const config = this.app.get('config');
     const hostIpAddress = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const unixGid = branch.unix_group ? getGidFromGroupName(branch.unix_group) : undefined;
 
     const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },
@@ -2538,7 +2582,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         name: branch.name,
         path: branch.path,
         custom_context: branch.custom_context,
-        unix_gid: unixGid,
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,

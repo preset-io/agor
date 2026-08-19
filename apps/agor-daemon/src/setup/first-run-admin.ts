@@ -25,6 +25,7 @@ import {
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
   createUser,
+  DEVELOPMENT_DEFAULT_ADMIN_USER,
   generateAdminPassword,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -35,6 +36,7 @@ const closeP = promisify(close);
 const unlinkP = promisify(unlink);
 
 const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials';
+const ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV = 'AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN';
 
 /** Where the generated admin password is persisted on first run. */
 export function getAdminCredentialsPath(baseDir: string = join(homedir(), '.agor')): string {
@@ -84,7 +86,7 @@ async function writeCredentialsExclusive(
           'This usually means a previous bootstrap left a credentials file behind',
           'while the database was reset. To proceed:',
           `  - If you still have the password: keep ${path} as-is and create the`,
-          `    admin manually (\`agor user create-admin\`), or restore the DB.`,
+          `    admin manually (\`agor local create-admin\`), or restore the DB.`,
           `  - If the password is lost: delete ${path} and restart the daemon`,
           '    to regenerate.',
         ].join('\n')
@@ -150,20 +152,31 @@ export async function runFirstRunAdminBootstrap(
 ): Promise<DaemonBootstrapResult> {
   const credentialsPath = getAdminCredentialsPath(options.credentialsBaseDir);
   const envPassword = process.env.AGOR_ADMIN_PASSWORD;
+  const allowDevelopmentDefault = process.env[ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV] === 'true';
   let credentialsWritten = false;
+
+  if (allowDevelopmentDefault && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is development-only and is refused when NODE_ENV=production.`
+    );
+  }
 
   const result = await bootstrapFirstRunAdmin(db, async () => {
     // 1) Env-var path: use the operator-provided password verbatim. No file
     // touch, no rollback to worry about.
     if (envPassword && envPassword.length > 0) {
-      assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
+      const useDevelopmentDefault =
+        allowDevelopmentDefault && envPassword === DEVELOPMENT_DEFAULT_ADMIN_USER.password;
+      if (!useDevelopmentDefault) {
+        assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
+      }
       return await createUser(db, {
         email: BOOTSTRAP_ADMIN_EMAIL,
         password: envPassword,
         name: 'Admin',
         role: 'superadmin',
         unix_username: 'admin',
-        must_change_password: true,
+        must_change_password: !useDevelopmentDefault,
       });
     }
 

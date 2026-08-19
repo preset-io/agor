@@ -1,5 +1,5 @@
 import {
-  isPostgresDatabase,
+  isPostgresDatabaseHandle,
   KnowledgeSemanticSettingsRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -27,7 +27,7 @@ export class KnowledgeReindexService {
   private async reindexInTransaction(db: TenantScopedDatabase): Promise<KnowledgeReindexResult> {
     const semantic = await new KnowledgeSemanticSettingsRepository(db).lockAggregateForUpdate(db);
     const embeddingConfigured =
-      isPostgresDatabase(db) &&
+      isPostgresDatabaseHandle(db) &&
       isUsableOpenAIEmbeddingConfig(semantic, semantic.api_key_configured) &&
       (await ensureKnowledgePgvectorStorage(db)).available;
     const status: KnowledgeEmbeddingStatus = embeddingConfigured ? 'pending' : 'not_configured';

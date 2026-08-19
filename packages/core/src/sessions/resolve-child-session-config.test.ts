@@ -39,7 +39,7 @@ describe('resolveChildSessionConfig', () => {
       agentic_tool: 'claude-code',
       model_config: {
         mode: 'alias',
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-7[1m]',
         updated_at: '2026-05-01T00:00:00.000Z',
       },
       permission_config: { mode: 'acceptEdits' },
@@ -100,7 +100,7 @@ describe('resolveChildSessionConfig', () => {
       agentic_tool: 'claude-code',
       model_config: {
         mode: 'alias',
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-7[1m]',
         effort: 'high',
         advisorModel: 'opus',
         updated_at: '2026-05-01T00:00:00.000Z',
@@ -116,7 +116,7 @@ describe('resolveChildSessionConfig', () => {
         now,
       });
       // Parent wins over user default on same-tool spawns.
-      expect(r.model_config?.model).toBe('claude-opus-4-7');
+      expect(r.model_config?.model).toBe('claude-opus-4-7[1m]');
       expect(r.model_config?.effort).toBe('high');
       expect(r.model_config?.advisorModel).toBe('opus');
     });
@@ -156,7 +156,7 @@ describe('resolveChildSessionConfig', () => {
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-7[1m]',
         effort: 'high',
         advisorModel: 'sonnet',
         updated_at: now.toISOString(),
@@ -170,7 +170,7 @@ describe('resolveChildSessionConfig', () => {
         now,
       });
       // Same-tool path → inherits parent.
-      expect(r.model_config?.model).toBe('claude-opus-4-7');
+      expect(r.model_config?.model).toBe('claude-opus-4-7[1m]');
       expect(r.permission_config.mode).toBe('bypassPermissions');
     });
   });

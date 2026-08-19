@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 import {
+  ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
   getBranchesDir,
@@ -18,16 +19,16 @@ import {
   getReposDir,
   isValidGitUrl,
   isValidSlug,
-  loadConfigSync,
   normalizeRepoUrl,
   PAGINATION,
   resolveBranchStorageConfig,
-  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   BranchRepository,
+  getCurrentTenantId,
   RepoRepository,
+  runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -46,10 +47,11 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import type { BranchesServiceImpl } from '../declarations.js';
+import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
+import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -134,7 +136,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Repo | Repo[]> {
     const rows = Array.isArray(data) ? data : [data];
     if (
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth' &&
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth' &&
       rows.some((row) => row.repo_type === 'local')
     ) {
       throw new BadRequest(
@@ -151,7 +153,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   ): Promise<Repo | Repo[]> {
     if (
       data.repo_type === 'local' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       if (!id) {
         throw new BadRequest(
@@ -186,7 +188,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * - Parse .agor.yml
    * - Patch the existing row to `'ready'` (with parsed env, default branch)
    *   or `'failed'` (with categorized clone_error)
-   * - Initialize Unix group
    *
    * Returns immediately with `{ status: 'pending', slug, repo_id }`.
    * Clients see a `repos.created` event for the placeholder row, then a
@@ -257,16 +258,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    // Unix group initialization is a filesystem concern controlled by
-    // unix_user_mode, not by app-level branch RBAC.
-    const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
-
-    // A managed clone is lifecycle storage beneath the daemon-owned repo
-    // root, not a read/probe in the requesting user's home. Run it as the Git
-    // lifecycle identity; the post-clone group initialization grants the
-    // creator access. Requesting-user impersonation cannot create the first
-    // slug directory in strict mode.
-    const asUser = await resolveGitImpersonationForUser(this.db, userId);
+    // A managed clone is lifecycle storage beneath the configured repo root,
+    // not a read/probe in the requesting user's home. Delegated substrates
+    // receive the caller's stable execution-home key for routing.
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
 
     // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
     // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
@@ -326,68 +325,71 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           ...(data.default_branch ? { default_branch: data.default_branch } : {}),
           createDbRecord: true,
           userId: userId as string | undefined,
-          initUnixGroup,
-          ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
         },
       },
       {
         logPrefix: `[clone ${slug}]`,
-        asUser, // Run as resolved user (fresh groups via sudo -u)
+        delegatedHomeKey: delegatedHomeKey,
+        templateVariables: {
+          user_id: userId,
+        },
         onExit: (code) => {
           if (code !== 0 && code !== null) {
-            // Broadcast clone failure to all connected clients (the existing
-            // toast UX). Persistent failure state lives on the repo row.
             console.error(
-              `[clone ${slug}] Clone failed with exit code ${code}, broadcasting error`
+              `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
             );
-            const io = (app as unknown as { io?: { emit: (event: string, data: unknown) => void } })
-              .io;
-            if (io) {
-              // Include the pinned branch in the message so an operator who
-              // typo'd the Default Branch can self-diagnose. `git clone
-              // --branch <X>` failure is one of the most common reasons a
-              // clone exits non-zero, but the executor's stderr is consumed
-              // by spawnExecutorFireAndForget — without this hint the user
-              // sees only "Clone failed (exit code 128)" and has no idea
-              // the branch field is the cause.
-              const branchHint = data.default_branch
-                ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
-                : '';
-              io.emit('repo:cloneError', {
-                slug,
-                url: remoteUrl,
-                error: `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
-                repo_id: repoId,
-              });
-            }
-
-            // Safety net: if the executor crashed before it could patch the
-            // row (e.g. lost daemon connection), the repo would be stuck in
-            // `'cloning'` forever. Force it to `'failed'` here, but only if
-            // it's still 'cloning' (don't clobber a 'failed' write the
-            // executor already made with a richer category/message).
-            //
-            // Use the service (no `params` → internal call, bypasses auth
-            // hooks) so the patched event fires for any client that joined
-            // after the initial broadcast above.
+            const io = (
+              app as unknown as {
+                io?: {
+                  to: (room: string) => { emit: (event: string, data: unknown) => void };
+                };
+              }
+            ).io;
+            // Resolve the durable row before emitting the fallback event. If
+            // the executor already persisted a categorized error, include the
+            // same structured payload so the fallback toast cannot lose the
+            // auth/CA/Git remediation hints. If the executor crashed before
+            // patching, preserve the safety-net failure row and emit that one.
             void (async () => {
+              let current: Repo | undefined;
               try {
-                const current = (await reposService.get(repoId)) as Repo;
+                current = (await reposService.get(repoId)) as Repo;
                 if (current.clone_status === 'cloning') {
-                  await reposService.patch(repoId, {
+                  current = (await reposService.patch(repoId, {
                     clone_status: 'failed',
                     clone_error: {
                       exit_code: code,
                       category: 'unknown',
                       message: `Clone exited with code ${code} before reporting an error.`,
                     },
-                  });
+                  })) as Repo;
                 }
               } catch (err) {
                 console.error(
                   `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
                   err instanceof Error ? err.message : String(err)
                 );
+              }
+
+              if (io && tenantId) {
+                // Include the pinned branch in the message so an operator who
+                // typo'd the Default Branch can self-diagnose.
+                const branchHint = data.default_branch
+                  ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
+                  : '';
+                emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
+                  slug,
+                  url: remoteUrl,
+                  error:
+                    current?.clone_error?.message ??
+                    `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
+                  repo_id: repoId,
+                  ...(current?.clone_error ? { clone_error: current.clone_error } : {}),
+                });
+              } else if (io) {
+                // Never fall back to a global raw Socket.IO broadcast. The
+                // durable repos.patched event remains the source of truth.
+                console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
               }
             })();
           }
@@ -479,7 +481,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (
       effectiveType === 'local' &&
       current.repo_type !== 'local' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
@@ -503,7 +505,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: { path: string; slug?: string },
     params?: RepoParams
   ): Promise<Repo> {
-    if (resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth') {
+    if (resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth') {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
       );
@@ -518,14 +520,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const asUser = await resolveExecutorReadAsUser(this.db, userId);
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
     const inspection = await runExecutorCommand(
       {
         command: 'git.repo.inspect',
         daemonUrl: getDaemonUrl(),
         params: { path: inputPath },
       },
-      { asUser, logPrefix: '[repos.local.inspect]' }
+      { delegatedHomeKey: delegatedHomeKey, logPrefix: '[repos.local.inspect]' }
     );
     if (!inspection.success)
       throw new Error(inspection.error?.message ?? 'Repository inspection failed');
@@ -569,13 +575,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       params
     )) as Repo;
-
-    // TODO: Unix group initialization for local repos
-    // For local repos, Unix group init should also go through executor.
-    // Currently, local repos don't trigger git operations via executor,
-    // so we'd need a separate executor command (e.g., 'unix.init-repo-group').
-    // For now, local repos don't get Unix group isolation automatically.
-    // Use `agor local sync-unix` to initialize groups for existing repos.
 
     return repo;
   }
@@ -651,7 +650,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     ensureBranchStorageModeAllowed(storageMode);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(loadConfigSync()).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -671,11 +670,21 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Omit to make a full clone, or pass a positive int for --depth.`
         );
       }
+      ensureBranchCloneDepthAllowed(cloneDepth);
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
     // the time we get here. The identity is forwarded so executor-local Git
-    // can resolve the requesting user's credentials in strict Unix mode.
+    // can resolve the requesting user's credential route.
     const userId = (params as AuthenticatedParams).user!.user_id as UserID;
+
+    // Delegated routing is configuration/auth validation, not filesystem
+    // materialization. Resolve it before persisting a branch intent so an
+    // invalid or missing home key cannot leave a row stuck in `creating`.
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+      this.db,
+      userId,
+      this.app.get('config')
+    );
 
     if (storageMode === 'clone') {
       if (!repo.remote_url) {
@@ -742,10 +751,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     const branchesService = this.app.service('branches');
 
-    // NOTE: Environment command templates (start_command, stop_command, etc.) are NOT
-    // rendered here. They will be rendered by the executor after Unix groups are created
-    // and GID is available, ensuring {{branch.gid}} is populated in templates.
-    // See: packages/executor/src/commands/git.ts:renderEnvironmentTemplates()
+    // Environment command templates (start_command, stop_command, etc.) are
+    // rendered by the executor after filesystem materialization.
 
     // Storage mode (storageMode + cloneDepth) was resolved + validated up
     // top so the preflights could gate on it; reuse those vars below.
@@ -753,10 +760,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Create DB record EARLY with 'creating' status
     // Executor will:
     // 1. Create git branch on filesystem
-    // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
-    // 3. Render environment templates with full context including GID
-    // 4. Patch branch to 'ready' with rendered templates
-    const branch = (await branchesService.create(
+    // 2. Render environment templates with the materialized branch context
+    // 3. Patch branch to 'ready' with rendered templates
+    let branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
         name: data.name,
@@ -767,7 +773,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
-        // Environment templates will be rendered by executor after Unix group creation
+        // Environment templates are rendered after filesystem materialization.
         // RBAC fields are intentionally omitted at creation: new branches
         // always align with their board defaults. Overrides are a deliberate
         // post-create action from the Branch permissions tab.
@@ -899,24 +905,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // materialization of admin-defined templates.
     //
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
-    // Unix permissions: fail-closed inside the tenant-mounted lifecycle executor.
+    // Filesystem authorization stays fail-closed inside the selected substrate.
     try {
       const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
         { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
       );
-
-      // Unix group initialization is a filesystem concern controlled by
-      // unix_user_mode, not by app-level branch RBAC.
-      const executionMode = resolveExecutionSecurityMode();
-      const initUnixGroup = executionMode.shouldInitUnixGroups;
-
-      // Managed Git lifecycle operations must run as the daemon lifecycle
-      // identity. In strict mode the requesting user can read an initialized
-      // branch through its group/ACL, but cannot create a child beneath the
-      // daemon-owned worktree root or mutate the base repo's .git/worktrees.
-      // Keep resolveExecutorReadAsUser for read/probe commands only.
-      const asUser = await resolveGitImpersonationForUser(this.db, userId);
 
       spawnExecutorFireAndForget(
         {
@@ -927,27 +921,36 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             branchId: branch.branch_id,
             repoId: repo.repo_id,
             userId: userId as string | undefined,
-            // Unix group isolation (only when unix_user_mode is non-simple)
-            initUnixGroup,
-            ...(initUnixGroup ? { daemonUser: loadConfigSync().daemon?.unix_user } : {}),
-            fixBasicPermissions: !executionMode.appRbacEnabled && !initUnixGroup,
             useReference:
-              storageMode === 'clone' && !!repo.local_path && shouldUseCloneReferencePath(),
+              storageMode === 'clone' &&
+              !!repo.local_path &&
+              shouldUseCloneReferencePath(this.app.get('config')),
           },
         },
         {
           logPrefix: `[ReposService.createBranch ${data.name}]`,
-          asUser, // Run as lifecycle identity with fresh supplemental groups
+          delegatedHomeKey: delegatedHomeKey,
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: userId,
+          },
         }
       );
     } catch (error) {
-      console.error(
-        '[ReposService.createBranch] Failed to spawn executor:',
-        error instanceof Error ? error.message : String(error)
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[ReposService.createBranch] Failed to spawn executor:', message);
+      branch = (await branchesService.patch(
+        branch.branch_id,
+        {
+          filesystem_status: 'failed',
+          error_message: `Failed to spawn executor: ${message}`,
+        },
+        { ...params, provider: undefined }
+      )) as Branch;
     }
 
-    // Return immediately with 'creating' status - UI will see updates via WebSocket
+    // Return immediately; asynchronous filesystem updates arrive via WebSocket.
+    // A synchronous dispatch failure instead returns the patched failed branch.
     return branch;
   }
 
@@ -981,11 +984,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const asUser = await resolveExecutorReadAsUser(
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
       this.db,
       (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.user_id as
         | UserID
-        | undefined
+        | undefined,
+      this.app.get('config')
     );
 
     return runExecutorCommand(
@@ -1001,7 +1005,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
       {
         logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
-        asUser,
+        delegatedHomeKey: delegatedHomeKey,
       }
     );
   }
@@ -1138,26 +1142,22 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const cleanup = params?.query?.cleanup === true;
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
-    // CRITICAL: Use an internal call (no provider) so repo deletion owns the
-    // full branch inventory for this repo, independent of caller RBAC scope.
-    const branchesService = this.app.service('branches');
-    const branchesResult = await branchesService.find({
-      query: { repo_id: repo.repo_id },
-      paginate: false,
-    });
-
-    const branches = (
-      Array.isArray(branchesResult) ? branchesResult : branchesResult.data
-    ) as Branch[];
-
-    // Safety check: verify all branches belong to this repo (defense in depth)
-    const foreignBranches = branches.filter((wt) => wt.repo_id !== repo.repo_id);
-    if (foreignBranches.length > 0) {
-      throw new Error(
-        `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repo.repo_id}. ` +
-          `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
-      );
-    }
+    // CRITICAL: Use the unbounded repository query so transport pagination and
+    // caller RBAC scope cannot truncate the deletion inventory.
+    const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
+    const branchRepo = new BranchRepository(this.db);
+    const findRepoBranches = async (repoId: UUID): Promise<Branch[]> => {
+      const found = await branchRepo.findAllByRepoId(repoId);
+      const foreignBranches = found.filter((branch) => branch.repo_id !== repoId);
+      if (foreignBranches.length > 0) {
+        throw new Error(
+          `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(s) not belonging to repo ${repoId}. ` +
+            `Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.`
+        );
+      }
+      return found;
+    };
+    const branches = await findRepoBranches(repo.repo_id as UUID);
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`
@@ -1221,28 +1221,25 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Only reach here if filesystem cleanup succeeded (or wasn't requested)
     // Now safe to delete from database
 
-    // IMPORTANT: Use Feathers service to delete branches (not direct DB cascade) because:
-    // 1. WebSocket events broadcast to all clients (real-time UI updates)
-    // 2. Service hooks run properly (lifecycle, validation, etc.)
-    // 3. Session cascades trigger (sessions → tasks → messages)
-    // 4. Foreign key cascades may not be reliable (pragmas are async fire-and-forget)
-    // NOTE: Don't spread external params — use internal call to bypass auth/RBAC hooks.
-    // The repo deletion itself is already authorized; individual branch permission checks
-    // would incorrectly block cleanup of branches the user doesn't directly own.
-    for (const branch of branches) {
-      try {
-        await branchesService.remove(branch.branch_id);
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async () => {
+      // Lock the parent first. PostgreSQL branch inserts take a conflicting FK
+      // key-share lock, so none can appear after the unbounded inventory read;
+      // SQLite's IMMEDIATE transaction provides the corresponding exclusion.
+      const lockedRepo = await this.repoRepo.lockForBranchInventory(repo.repo_id);
+      const metadataBranches = await findRepoBranches(lockedRepo.repo_id);
+      for (const branch of metadataBranches) {
+        // The repo deletion itself is already authorized; individual branch
+        // permission hooks would incorrectly block full repository cleanup.
+        await branchesService.removeMetadataWithRealtime(branch.branch_id, params);
         console.log(`🗑️  Deleted branch from database: ${branch.name}`);
-      } catch (error) {
-        console.warn(
-          `⚠️  Failed to delete branch ${branch.name} from database:`,
-          error instanceof Error ? error.message : String(error)
-        );
       }
-    }
 
-    // Finally, delete repository from database
-    return super.remove(id, params) as Promise<Repo>;
+      // The native transaction covers every branch row plus the repository.
+      // Tombstones queued above drain once, only after this final delete commits.
+      return super.remove(lockedRepo.repo_id, params) as Promise<Repo>;
+    });
   }
 }
 

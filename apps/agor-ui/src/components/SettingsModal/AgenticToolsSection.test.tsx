@@ -14,14 +14,16 @@ vi.mock('./AgenticToolPresetsManager', () => ({
 
 type Row = {
   tool: string;
+  deployment_available: boolean;
   enabled: boolean;
   resolution_policy: string;
   inline_configuration_allowed: boolean;
   connection: Record<string, { configured: boolean }>;
 };
 
-const row = (tool: string, enabled = true): Row => ({
+const row = (tool: string, enabled = true, deployment_available = true): Row => ({
   tool,
+  deployment_available,
   enabled,
   resolution_policy: 'user_preferred',
   inline_configuration_allowed: true,
@@ -87,7 +89,22 @@ describe('AgenticToolsSection', () => {
   it('reflects the tool availability state', async () => {
     renderTool('codex', [row('claude-code', true), row('codex', false), row('gemini')]);
 
-    expect(await screen.findByText('Disabled in this workspace')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Installed, but disabled in this workspace')
+    ).toBeInTheDocument();
     expect(screen.getByRole('switch')).not.toBeChecked();
+  });
+
+  it('marks a tool the deployment did not install and hides its config', async () => {
+    // deployment_available = false
+    renderTool('codex', [row('claude-code'), row('codex', false, false)]);
+
+    expect(await screen.findByText('Not installed by this deployment')).toBeInTheDocument();
+    expect(
+      screen.getByText('This deployment did not install this agentic tool')
+    ).toBeInTheDocument();
+    // Config is hidden for an uninstalled tool.
+    expect(screen.queryByText('Credential resolution')).not.toBeInTheDocument();
+    expect(screen.getByRole('switch')).toBeDisabled();
   });
 });

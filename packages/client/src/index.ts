@@ -6,6 +6,12 @@
  *   const client = createClient('http://localhost:3030');
  */
 
+import {
+  AGENTIC_TOOL_CAPABILITIES as PRIVATE_AGENTIC_TOOL_CAPABILITIES,
+  AGENTIC_TOOL_DISPLAY_NAMES as PRIVATE_AGENTIC_TOOL_DISPLAY_NAMES,
+  AGENTIC_TOOL_KEY_CREATION_URL as PRIVATE_AGENTIC_TOOL_KEY_CREATION_URL,
+  TOOL_API_KEY_NAMES as PRIVATE_TOOL_API_KEY_NAMES,
+} from '@agor/agentic-tools';
 import type { AgorClient as CoreAgorClient } from '@agor/core/client';
 import {
   createClient as createCoreClient,
@@ -13,6 +19,12 @@ import {
   getApiKeyFromEnv,
   isDaemonRunning,
 } from '@agor/core/client';
+import type {
+  AgenticToolCapabilities,
+  AgenticToolName,
+  ApiKeyName,
+  PersistedAgenticToolName,
+} from '@agor/core/types';
 import {
   attachReactiveSessionApi,
   type ReactiveAgorClient,
@@ -36,6 +48,7 @@ export type {
   BoardsService,
   BranchesService,
   ClientInput,
+  FindResult,
   GatewayChannelsService,
   MessagesService,
   ReposCloneService,
@@ -47,6 +60,16 @@ export type {
   TasksService,
 } from '@agor/core/client';
 export * from '@agor/core/client';
+
+// Preserve the published client contract while keeping registry values package-owned.
+export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> =
+  PRIVATE_TOOL_API_KEY_NAMES;
+export const AGENTIC_TOOL_DISPLAY_NAMES: Record<PersistedAgenticToolName, string> =
+  PRIVATE_AGENTIC_TOOL_DISPLAY_NAMES;
+export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> =
+  PRIVATE_AGENTIC_TOOL_KEY_CREATION_URL;
+export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> =
+  PRIVATE_AGENTIC_TOOL_CAPABILITIES;
 // `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).
 // Use it for any UUID rendered to a user — URLs, pills, logs, notifications.
 // `toShortId(id, length)` is the lower-level primitive for rare cases that

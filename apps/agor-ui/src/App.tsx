@@ -6,6 +6,7 @@ import type {
   Board,
   BoardID,
   Branch,
+  BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -66,13 +67,16 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MARKETPLACE_ROUTE_PATHS,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
+import { cloneErrorHint } from './utils/cloneErrorHint';
 import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
+import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import { getRouterBasename } from './utils/uiRoutes';
@@ -164,6 +168,11 @@ const loadKnowledgePage = cacheRouteLoader(
   () => import('./pages/KnowledgePage'),
   (module) => ({ default: module.KnowledgePage })
 );
+const loadMarketplacePage = cacheRouteLoader(
+  'marketplace',
+  () => import('./pages/MarketplacePage'),
+  (module) => ({ default: module.MarketplacePage })
+);
 const loadArtifactFullscreenPage = cacheRouteLoader(
   'artifact-fullscreen',
   () => import('./pages/ArtifactFullscreenPage'),
@@ -192,6 +201,7 @@ const MarketingVideoPage = lazy(() =>
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
+const MarketplacePage = lazy(loadMarketplacePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
@@ -199,6 +209,7 @@ const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
+  marketplace: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
@@ -495,9 +506,10 @@ function AppContent() {
   const integrationsHydrated = useAgorStore(
     (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
   );
-  // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
-  // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
-  // banner is never a dead-end for users who can't open it.
+  // The "Connect tools" banner asks for workspace-wide setup — MCP servers and
+  // Slack/GitHub channels — so it is offered to the role that can complete it.
+  // Members reach the MCP settings tab without it, to read the policy that
+  // governs them.
   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
@@ -565,14 +577,11 @@ function AppContent() {
         } else if (repo.clone_status === 'failed') {
           settled = true;
           const err = repo.clone_error;
-          // Authoring-failed clones almost always mean the user has no
-          // `GITHUB_TOKEN` configured (or it expired). Surface that hint
-          // alongside the raw git message so the recovery path is one click.
-          const hint =
-            err?.category === 'auth_failed'
-              ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
-              : '';
-          if (!options.silent) {
+          // Keep Git's first-line diagnostic, then add category-specific
+          // remediation. In particular, TLS failures need a CA-store hint;
+          // never suggest disabling certificate verification.
+          const hint = cloneErrorHint(err);
+          if (!options.silent || options.showErrors) {
             showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
               key: toastKey,
             });
@@ -580,21 +589,28 @@ function AppContent() {
           cleanup();
         }
       };
-      const handleCloneError = (payload: { slug?: string; url?: string; error?: string }) => {
+      const handleCloneError = (payload: {
+        slug?: string;
+        url?: string;
+        error?: string;
+        clone_error?: Repo['clone_error'];
+      }) => {
         if (settled) return;
         if (payload.slug !== data.slug && payload.url !== data.url) return;
         settled = true;
-        if (!options.silent) {
-          showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-            key: toastKey,
-          });
+        const hint = cloneErrorHint(payload.clone_error);
+        if (!options.silent || options.showErrors) {
+          showError(
+            `Failed to clone ${data.slug}: ${payload.clone_error?.message ?? payload.error ?? 'unknown error'}${hint}`,
+            { key: toastKey }
+          );
         }
         cleanup();
       };
       const timeoutHandle = setTimeout(() => {
         if (settled) return;
         settled = true;
-        if (!options.silent) {
+        if (!options.silent || options.showErrors) {
           showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
             key: toastKey,
           });
@@ -627,7 +643,7 @@ function AppContent() {
       } catch (error) {
         if (!settled) {
           settled = true;
-          if (!options.silent) {
+          if (!options.silent || options.showErrors) {
             showError(
               `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
               { key: toastKey }
@@ -655,11 +671,11 @@ function AppContent() {
     () => (frameworkRepo ? [frameworkRepo] : EMPTY_REPOS),
     [frameworkRepo]
   );
-  // Suppress the shared clone toasts for the onboarding auto-clone — a fresh user
-  // mid-wizard shouldn't see "Cloning…"/"Cloned"/token-hint toasts from behind
-  // the modal. handleCreateRepo's own `silent` branches already gate every toast.
+  // Suppress loading/success toasts for the onboarding auto-clone — a fresh user
+  // mid-wizard shouldn't see "Cloning…"/"Cloned" toasts from behind the modal.
+  // Keep failures visible: a CA/Git/auth error needs to be actionable now.
   const onboardingCreateRepo = useCallback(
-    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true }),
+    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true, showErrors: true }),
     [handleCreateRepo]
   );
   useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
@@ -697,7 +713,8 @@ function AppContent() {
     teammateEmoji?: string;
     agent?: AgenticToolName | null;
     suggestedIntegrations?: string[];
-    persona?: string | null;
+    canManageIntegrations?: boolean;
+    goals?: string[];
   }) => {
     // The wizard awaits this and stays open in a loading state until it
     // resolves, so we do the teammate creation + navigation FIRST and only
@@ -708,27 +725,20 @@ function AppContent() {
       return;
     }
 
-    // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
-    // Non-critical — if the preference save fails the wizard just re-opens on next login.
-    // Marked complete up front so a slow/failed teammate bootstrap below never
-    // strands the user back in onboarding.
-    handleUpdateUser(
+    // Persist completion authoritatively before starting best-effort teammate
+    // setup. Read the latest store snapshot to minimize whole-preferences lost
+    // updates, and always write goals — including [] for an explicit Skip.
+    const latestPreferences =
+      agorStore.getState().userById.get(currentUser.user_id)?.preferences ??
+      currentUser.preferences;
+    await handleUpdateUser(
       currentUser.user_id,
       {
         onboarding_completed: true,
-        preferences: {
-          ...currentUser.preferences,
-          mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
-          onboarding: {
-            ...currentUser.preferences?.onboarding,
-            path: result.path,
-            branchId: result.branchId,
-            boardId: result.boardId,
-          },
-        },
+        preferences: buildCompletedOnboardingPreferences(latestPreferences, result),
       },
       { silent: true }
-    ).catch(() => {});
+    );
 
     // Seed the user's first AI teammate on the board they just named. The
     // framework repo has been cloning in the background since the wizard opened
@@ -765,12 +775,13 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
+      canManageIntegrations: result.canManageIntegrations,
+      // Goals drive the first-session prompt; [] (skipped) yields the generic
+      // follow-the-user guidance. Passed straight from the wizard.
+      goals: result.goals,
       user: {
         name: currentUser.name,
         email: currentUser.email,
-        // Prefer the wizard's authoritative selection; the persisted preference
-        // is an async save that a fast completion can outrun.
-        persona: result.persona ?? currentUser.preferences?.onboarding?.persona,
       },
       client,
       repoById: agorStore.getState().repoById,
@@ -782,20 +793,22 @@ function AppContent() {
     });
     if (seeded.sessionId) sessionId = seeded.sessionId;
 
-    // Navigate to the user's board + session, or to the boards list if they
-    // skipped. Use the centralized path builders — the old
-    // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
+    // Always land the user on a board — never the homepage. Prefer the seeded
+    // session, then the board the wizard created, then the user's main board,
+    // then any existing board. With the workspace step now required a board
+    // always exists, so the later fallbacks are belt-and-suspenders. Use the
+    // centralized path builders — the old `/b/<board>/<session>/` shape was
+    // removed when we flattened entity URLs.
+    const boardById = agorStore.getState().boardById;
+    const mainBoardId = currentUser.preferences?.mainBoardId;
+    const targetBoardId =
+      result.boardId ||
+      (mainBoardId && boardById.has(mainBoardId) ? mainBoardId : undefined) ||
+      boardById.keys().next().value;
     if (sessionId) {
       navigate(sessionPath(sessionId as SessionID));
-    } else if (result.boardId) {
-      navigate(
-        boardPath(
-          result.boardId as BoardID,
-          agorStore.getState().boardById.get(result.boardId)?.slug
-        )
-      );
-    } else {
-      navigate('/');
+    } else if (targetBoardId) {
+      navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
 
     // Close the wizard only now that creation + navigation are done, so the
@@ -1143,7 +1156,6 @@ function AppContent() {
     try {
       await client.sessions.prompt(sessionId, prompt, {
         permissionMode,
-        messageSource: 'agor',
       });
 
       // Clear the draft after sending
@@ -1284,6 +1296,7 @@ function AppContent() {
     if (updated) {
       showSuccess('Board updated successfully!');
     }
+    return Boolean(updated);
   };
 
   const handleDeleteBoard = async (boardId: string) => {
@@ -1373,10 +1386,7 @@ function AppContent() {
 
   const handleArchiveOrDeleteBranch = async (
     branchId: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    }
+    options: BranchArchiveOrDeleteOptions
   ) => {
     if (!client) {
       throw new Error('Not connected to daemon');
@@ -1783,6 +1793,16 @@ function AppContent() {
     />
   );
 
+  const marketplacePageElement = (
+    <MarketplacePage
+      client={client}
+      connected={connected}
+      currentUser={currentUser}
+      onUserSettingsClick={() => setOpenUserSettings(true)}
+      onLogout={logout}
+    />
+  );
+
   const artifactFullscreenElement = (
     <ArtifactFullscreenPage
       client={client}
@@ -1939,6 +1959,13 @@ function AppContent() {
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
           {KNOWLEDGE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={knowledgePageElement} />
+          ))}
+
+          {/* MCP marketplace: browse the catalog and connect a server. Its own
+                surface because it reads the global catalog table, not the
+                tenant's board/session store. */}
+          {MARKETPLACE_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={marketplacePageElement} />
           ))}
 
           {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

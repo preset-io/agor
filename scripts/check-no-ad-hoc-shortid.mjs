@@ -29,7 +29,7 @@
  * why the receiver isn't a UUIDv7.
  *
  * Allowlist (whole-file): the helper itself, the type definitions, the
- * Unix-naming carve-out, the integration test scripts.
+ * integration test scripts.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -42,8 +42,6 @@ const ALLOWLIST = new Set([
   'packages/core/src/lib/ids.ts',
   'packages/core/src/lib/ids.test.ts',
   'packages/core/src/types/id.ts',
-  'packages/core/src/unix/group-manager.ts',
-  'packages/core/src/unix/user-manager.ts',
   'packages/core/src/db/scripts/test-integration.ts',
   'packages/core/src/db/scripts/test-integration.test.ts',
 ]);
@@ -139,15 +137,16 @@ async function main() {
     if (!(await dirExists(abs))) continue;
     for await (const file of walk(abs)) {
       const rel = path.relative(ROOT, file);
-      if (ALLOWLIST.has(rel)) continue;
       const text = await fs.readFile(file, 'utf8');
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        if (!lineMatches(lines[i])) continue;
         const prev = lines[i - 1] ?? '';
-        if (PRAGMA_RE.test(prev) || PRAGMA_RE.test(lines[i])) continue;
-        console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
-        violations++;
+        if (!ALLOWLIST.has(rel) && lineMatches(lines[i])) {
+          if (!PRAGMA_RE.test(prev) && !PRAGMA_RE.test(lines[i])) {
+            console.error(`${rel}:${i + 1}: ${lines[i].trim()}`);
+            violations++;
+          }
+        }
       }
     }
   }

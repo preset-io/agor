@@ -1,86 +1,36 @@
 import type { Board, Group, User } from '@agor-live/client';
 import type { FormInstance } from 'antd';
-import { Alert, Checkbox, ColorPicker, Form, Input, Select, Space, Tabs, Typography } from 'antd';
-import { useState } from 'react';
+import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import {
   RbacPermissionFields,
   type RbacPermissionValue,
   type RbacVisibility,
 } from '../permissions/RbacPermissionFields';
-import { BACKGROUND_PRESETS } from './boardBackgroundPresets';
+import { BoardBackgroundEditor } from './BoardBackgroundEditor';
+
+/** A value carrying AntD's ColorPicker `toHexString()` serializer. */
+interface HexSerializable {
+  toHexString: () => string;
+}
+
+function hasToHexString(value: unknown): value is HexSerializable {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { toHexString?: unknown }).toHexString === 'function'
+  );
+}
 
 /**
- * Animation CSS presets — each sets background-size + animation + @keyframes.
- * Designed to pair with gradient backgrounds from BACKGROUND_PRESETS.
+ * Normalize the form's `background_color` to the persisted wire value: a
+ * string as-is, an AntD ColorPicker value via `toHexString()`, or `null` when
+ * empty (so the backend clears the field rather than dropping `undefined`).
  */
-export const ANIMATION_PRESETS = [
-  {
-    label: 'Slow gradient shift (12s)',
-    value: `background-size: 400% 400%;
-animation: agorGradientShift 12s ease infinite;
-
-@keyframes agorGradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}`,
-  },
-  {
-    label: 'Fast gradient shift (4s)',
-    value: `background-size: 400% 400%;
-animation: agorGradientFast 4s ease infinite;
-
-@keyframes agorGradientFast {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}`,
-  },
-  {
-    label: 'Diagonal sweep (8s)',
-    value: `background-size: 400% 400%;
-animation: agorDiagonalSweep 8s linear infinite;
-
-@keyframes agorDiagonalSweep {
-  0% { background-position: 0% 0%; }
-  50% { background-position: 100% 100%; }
-  100% { background-position: 0% 0%; }
-}`,
-  },
-  {
-    label: 'Pulse zoom (6s)',
-    value: `background-size: 200% 200%;
-animation: agorPulse 6s ease-in-out infinite;
-
-@keyframes agorPulse {
-  0%, 100% { background-size: 200% 200%; background-position: center; }
-  50% { background-size: 300% 300%; background-position: center; }
-}`,
-  },
-  {
-    label: 'Horizontal scroll (20s)',
-    value: `background-size: 200% 100%;
-animation: agorHScroll 20s linear infinite;
-
-@keyframes agorHScroll {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
-}`,
-  },
-  {
-    label: 'Rotate (conic, 10s)',
-    value: `animation: agorRotate 10s linear infinite;
-
-@keyframes agorRotate {
-  0% { filter: hue-rotate(0deg); }
-  100% { filter: hue-rotate(360deg); }
-}`,
-  },
-];
-
-/** Detect if a background value is custom CSS (not a simple hex color or rgba) */
-export function isCustomCSS(value: string | undefined | null): boolean {
-  if (!value) return false;
-  return !value.match(/^#[0-9a-fA-F]{3,8}$/) && !value.match(/^rgba?\(/);
+function normalizeBackgroundColor(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() ? value : null;
+  if (hasToHexString(value)) return value.toHexString();
+  return null;
 }
 
 /**
@@ -97,13 +47,15 @@ export function extractBoardFormValues(form: FormInstance): Partial<Board> {
   const bgColor = values.background_color;
   return {
     name: values.name,
+    // Board icons are Unicode emoji strings. Keep the historical default when
+    // a new board has not selected one; existing multi-codepoint values pass
+    // through unchanged.
     icon: values.icon || '📋',
     description: values.description,
-    background_color: bgColor
-      ? typeof bgColor === 'string'
-        ? bgColor
-        : bgColor.toHexString()
-      : null,
+    // background_color is usually a string (gradient/CSS/hex), but the
+    // ColorPicker yields an AntD AggregationColor. Only serialize via
+    // toHexString when it's actually present; otherwise clear the field.
+    background_color: normalizeBackgroundColor(bgColor),
     custom_css: values.custom_css || null,
     access_mode: values.access_mode || 'shared',
     default_others_can:
@@ -122,8 +74,11 @@ export interface BoardFormFieldsProps {
   autoFocus?: boolean;
   /** Extra content rendered inside the "Advanced" collapse panel */
   extra?: React.ReactNode;
-  /** Initial custom CSS mode — auto-detected from board values if not provided */
-  initialCustomCSS?: boolean;
+  /**
+   * Per-board identity forwarded to the background editor so it re-syncs its
+   * mode from the freshly-loaded form values when the board changes.
+   */
+  backgroundResetSignal?: string;
   rbacEnabled?: boolean;
   allUsers?: User[];
   allGroups?: Group[];
@@ -133,27 +88,23 @@ export interface BoardFormFieldsProps {
  * Shared board form fields used in the CreateDialog BoardTab
  * and the SettingsModal BoardsTable create/edit modals.
  *
- * Renders: Name, Description, and collapsible CSS / Advanced sections.
- * Manages useCustomCSS state internally.
+ * Renders: Name, Description, and CSS / Advanced tabs.
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
 export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   form,
   autoFocus,
   extra,
-  initialCustomCSS = false,
+  backgroundResetSignal,
   rbacEnabled = false,
   allUsers = [],
   allGroups = [],
 }) => {
-  const [useCustomCSS, setUseCustomCSS] = useState(initialCustomCSS);
-  const backgroundColor = Form.useWatch('background_color', { form, preserve: true });
-
   const generalFields = (
     <>
       <Form.Item label="Name" required style={{ marginBottom: 24 }}>
         <Space.Compact style={{ display: 'flex' }}>
-          <FormEmojiPickerInput form={form} fieldName="icon" defaultEmoji="📋" />
+          <FormEmojiPickerInput fieldName="icon" defaultEmoji="📋" />
           <Form.Item
             name="name"
             noStyle
@@ -237,78 +188,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     </Form>
   );
 
-  const cssFields = (
-    <>
-      <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
-        <Checkbox
-          checked={useCustomCSS}
-          onChange={(e) => {
-            setUseCustomCSS(e.target.checked);
-            if (e.target.checked) {
-              const current = form.getFieldValue('background_color');
-              if (current && typeof current !== 'string') {
-                form.setFieldsValue({ background_color: current.toHexString() });
-              }
-            }
-          }}
-        >
-          Use custom CSS background
-        </Checkbox>
-
-        {!useCustomCSS ? (
-          <Form.Item name="background_color" noStyle>
-            <ColorPicker showText format="hex" allowClear />
-          </Form.Item>
-        ) : (
-          <>
-            <Select
-              placeholder="Load a preset..."
-              style={{ width: '100%', marginBottom: 8 }}
-              allowClear
-              showSearch
-              options={BACKGROUND_PRESETS}
-              value={
-                BACKGROUND_PRESETS.some((preset) => preset.value === backgroundColor)
-                  ? backgroundColor
-                  : undefined
-              }
-              onChange={(value) => {
-                if (value) form.setFieldsValue({ background_color: value });
-              }}
-            />
-            <Form.Item name="background_color" noStyle>
-              <Input.TextArea
-                placeholder="Enter custom CSS background value (gradients, patterns, etc.)"
-                rows={3}
-                style={{ fontFamily: 'monospace', fontSize: '12px' }}
-              />
-            </Form.Item>
-          </>
-        )}
-      </Space>
-
-      {useCustomCSS && (
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Typography.Text strong style={{ fontSize: '13px' }}>
-            Animation CSS
-          </Typography.Text>
-          <Select
-            placeholder="Load an animation preset..."
-            style={{ width: '100%', marginBottom: 8 }}
-            allowClear
-            showSearch
-            options={ANIMATION_PRESETS}
-            onChange={(value) => {
-              if (value) form.setFieldsValue({ custom_css: value });
-            }}
-          />
-          <Form.Item name="custom_css" noStyle>
-            <Input.TextArea rows={6} style={{ fontFamily: 'monospace', fontSize: '12px' }} />
-          </Form.Item>
-        </Space>
-      )}
-    </>
-  );
+  const cssFields = <BoardBackgroundEditor form={form} resetSignal={backgroundResetSignal} />;
 
   return (
     <Tabs

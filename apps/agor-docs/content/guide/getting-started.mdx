@@ -13,42 +13,31 @@ Install Agor, open the UI, and follow the onboarding wizard. Your **first AI tea
 
 <InstallTabs />
 
+Run `agor init` after installation. It shows a multi-select for every supported agentic tool and
+requires an intentional selection of at least one. The prompt explains that each selection adds
+download time and disk use; credentials are configured later in the UI. Init writes the selection
+once to `agentic_tools.installed` and installs the exact version-aligned packages before reporting
+success. Press Ctrl+C to cancel. An intentionally tool-free headless deployment must use
+`--agentic-tools none`.
+
+To change the deployment policy later, edit `agentic_tools.installed` in `config.yaml`, run
+`agor install --sync`, and restart the daemon. Agor does not silently rewrite existing config.
+Repeat the readiness check with `agor doctor`; see
+[Agentic tools](/guide/extended-install#agentic-tools) for the complete model.
+
 ## Follow the onboarding wizard
 
 The first time you open the UI, the **Onboarding Wizard** runs — five quick steps that end with your first AI teammate ready to work:
 
-1. **You.** Pick how you work: *I write code*, *I manage projects*, *I lead a team*, or *Building solo*. The rest of the setup — and your teammate's first briefing — is tailored to this.
+1. **Goals.** Pick up to two outcomes, such as _Ship without the busywork_ or _Dig into anything_. The recommendations and your teammate's first briefing are tailored to what you want done. You can skip this step for a neutral start.
 2. **AI.** Connect a model: Claude (recommended), GPT, Gemini, or a custom endpoint. Paste an API key, use a Claude subscription token, or sign in with ChatGPT; Agor verifies the credential on the spot.
 3. **Workspace.** Name your AI teammate and pick its emoji. Agor creates a board named after it — the teammate's home for every branch and session it works on.
-4. **Tools.** Persona-tailored MCP integration suggestions (Slack first, plus the likes of GitHub, Sentry, HubSpot, Linear, or Figma). Connect what you want now, or skip — everything is available later in **Settings → MCP**.
-5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your new board and launches its first session with the agent you connected.
+4. **Tools.** Review goal-tailored integration suggestions such as Slack, GitHub, Sentry, HubSpot, Linear, or Figma. An admin can connect them from **Marketplace**; other members can ask a workspace admin. This step recommends tools but does not connect them automatically.
+5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your board. If you connected an AI model, it also launches the teammate's first session.
 
-Every step except the last can be skipped — the wizard never blocks you on a decision.
+Goals and AI are optional. Workspace and Tools are required so onboarding always finishes with a board and an explicit review of the recommendations.
 
-<div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '24px 0' }}>
-  <img
-    src="/screenshots/onboarding-persona.png"
-    alt="Onboarding step 1: persona cards — I write code, I manage projects, I lead a team, Building solo"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-connect-ai.png"
-    alt="Onboarding step 2: Connect your AI — Claude selected (Recommended) with API key and Subscription token tabs; GPT and Gemini below"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-name-teammate.png"
-    alt="Onboarding step 3: Name your AI teammate — name and emoji, with its own board"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-  <img
-    src="/screenshots/onboarding-mcp-tools.png"
-    alt="Onboarding step 4: Connect your tools via MCP — persona-tailored suggestions like Slack, HubSpot, Amplitude, Figma"
-    style={{ flex: '1 1 0', minWidth: 0, width: '100%', height: 'auto', borderRadius: 8 }}
-  />
-</div>
-
-When the board opens, your teammate's first session picks up where the wizard left off — it already knows its name, how you work, and which tools you flagged. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp).
+When the board opens, a connected teammate's first session picks up where the wizard left off — it already knows its name, the goals you selected, and which tools were recommended. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp). If you skipped AI setup, connect a model later from **Settings → AI & Agents** and start a session from the board.
 
 ## Customize your install
 
@@ -56,7 +45,7 @@ Agor runs out of the box on SQLite as a single-user instance, but it's designed 
 
 - **PostgreSQL backend** instead of SQLite, for multi-user / team setups
 - **Multiplayer mode** with branch-level [RBAC](/guide/multiplayer-unix-isolation) and per-user permissions
-- **Unix-user impersonation** so each Agor user's sessions run as their own OS identity
+- **Execution isolation** with fail-closed local sandboxing or a reviewed delegated substrate
 - **Docker Compose** and source builds for contributor / dev workflows — see the **Docker Compose** tab above for the evaluation quickstart
 - **Custom config / database paths** for non-default install layouts
 

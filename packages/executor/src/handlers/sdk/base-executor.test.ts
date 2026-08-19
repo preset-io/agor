@@ -3,6 +3,7 @@ import {
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
+  settleTaskFailure,
 } from './base-executor.js';
 
 vi.mock('./git-safe-directory.js', () => ({
@@ -89,10 +90,80 @@ describe('resolveApiKeyForTask', () => {
   });
 });
 
-describe('executeToolTask credential preflight', () => {
-  it('persists an explicit missing-credential failure before invoking the tool', async () => {
+describe('settleTaskFailure', () => {
+  it('appends after the maximum Message index rather than the row count', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const messageFind = vi.fn().mockResolvedValue({
+      total: 2,
+      data: [{ index: 2 }],
+    });
+    const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { find: messageFind, create: messageCreate };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, new Error('failed'), {
+      status: 'failed',
+      error_message: 'failed',
+    });
+
+    expect(messageFind).toHaveBeenCalledWith({
+      query: {
+        session_id: 'session-1',
+        $sort: { index: -1 },
+        $limit: 1,
+        $select: ['index'],
+      },
+    });
+    expect(messageCreate).toHaveBeenCalledWith(expect.objectContaining({ index: 3 }));
+  });
+
+  it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {
+    const secret = 'secret-binary-tool-result';
     const taskPatch = vi.fn().mockResolvedValue(undefined);
     const messageCreate = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: messageCreate,
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = Object.assign(new Error(`Failed query: update messages params: ${secret}`), {
+      query: 'update messages',
+      params: [secret],
+      cause: { code: '22P05' },
+    });
+
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+      status: 'failed',
+      error_message: failure.message,
+    });
+
+    const persisted = JSON.stringify({
+      message: messageCreate.mock.calls,
+      task: taskPatch.mock.calls,
+    });
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain('update messages');
+    expect(persisted).toContain('Database operation failed');
+  });
+});
+
+describe('executeToolTask credential preflight', () => {
+  it('persists an explicit missing-credential failure before invoking the tool', async () => {
+    const order: string[] = [];
+    const taskPatch = vi.fn(async () => order.push('task'));
+    const messageCreate = vi.fn(async () => order.push('message'));
     const client = {
       service(name: string) {
         if (name === 'config/resolve-api-key') {
@@ -146,6 +217,7 @@ describe('executeToolTask credential preflight', () => {
         },
       })
     );
+    expect(order).toEqual(['message', 'task']);
   });
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {
@@ -194,6 +266,87 @@ describe('executeToolTask credential preflight', () => {
     expect(createTool).toHaveBeenCalledOnce();
     expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
     expect(executePromptWithStreaming).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeToolTask provider-failure settlement', () => {
+  it('patches a classified Claude result with sanitized raw response and accounting', async () => {
+    const secret = 'provider-secret-body';
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const safeRawResponse = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      duration_ms: 42,
+      duration_api_ms: 31,
+      is_error: true,
+      num_turns: 1,
+      stop_reason: null,
+      total_cost_usd: 0.12,
+      usage: { input_tokens: 10, output_tokens: 4 },
+      modelUsage: {
+        'claude-sonnet-4-6': {
+          inputTokens: 10,
+          outputTokens: 4,
+          contextWindow: 200_000,
+        },
+      },
+      permission_denials: [],
+    };
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
+        if (name === '/tasks/streaming') return { create: vi.fn() };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const createTool = vi.fn(() => ({
+      executePromptWithStreaming: vi.fn().mockResolvedValue({
+        userMessageId: 'user-1',
+        assistantMessageIds: [],
+        hadError: true,
+        errorDetails: undefined,
+        rawSdkResponse: safeRawResponse,
+      }),
+    }));
+
+    try {
+      await executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+        toolName: 'claude-code',
+        createTool,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    const patch = taskPatch.mock.calls[0]?.[1];
+    expect(patch).toMatchObject({
+      status: 'failed',
+      raw_sdk_response: safeRawResponse,
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 10, outputTokens: 4 },
+        durationMs: 42,
+        costUsd: 0.12,
+      },
+    });
+    expect(JSON.stringify(patch)).not.toContain(secret);
   });
 });
 

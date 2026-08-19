@@ -52,12 +52,20 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import {
   groupMemberships,
   groups,
@@ -173,6 +181,7 @@ export interface KnowledgeSearchQuery {
   include_indexing?: boolean;
   includeIndexing?: boolean;
   limit?: number;
+  offset?: number;
   readable_by_user_id?: UserID;
   readable_as_admin?: boolean;
   readable_namespace_ids?: KnowledgeNamespaceID[];
@@ -460,7 +469,7 @@ export class KnowledgeNamespaceRepository
     const rows = await select(this.db)
       .from(kbNamespaces)
       .where(and(...conditions))
-      .orderBy(desc(kbNamespaces.updated_at))
+      .orderBy(desc(kbNamespaces.updated_at), asc(kbNamespaces.namespace_id))
       .all();
     return rows.map((row: KBNamespaceRow) => this.rowToNamespace(row));
   }
@@ -744,6 +753,23 @@ export class KnowledgeNamespaceRepository
         .set({ archived: true, archived_at: archivedAt, updated_at: archivedAt })
         .where(eq(kbDocuments.namespace_id, fullId))
         .run();
+      await update(txDb, kbDocumentUnits)
+        .set({
+          embedding_status: 'not_configured',
+          embedding_error: null,
+          embedding_claim_token: null,
+          embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+          embedding_claimed_at: null,
+          embedding_claim_expires_at: null,
+          embedding_claim_instance_id: null,
+          embedding_claim_boot_id: null,
+          embedding_retry_at: null,
+          updated_at: archivedAt,
+        })
+        .where(
+          sql`${kbDocumentUnits.document_id} IN (SELECT document_id FROM kb_documents WHERE namespace_id = ${fullId})`
+        )
+        .run();
     });
   }
 }
@@ -769,6 +795,12 @@ export class KnowledgeDocumentVersionRepository
       metadata: row.metadata ?? null,
       change_summary: row.change_summary ?? null,
       created_by: (row.created_by as UserID | null) ?? null,
+      created_by_session_id:
+        (row.created_by_session_id as KnowledgeDocumentVersion['created_by_session_id']) ?? null,
+      created_by_agentic_tool:
+        (row.created_by_agentic_tool as KnowledgeDocumentVersion['created_by_agentic_tool']) ??
+        null,
+      created_by_teammate_name: row.created_by_teammate_name ?? null,
       created_at: new Date(row.created_at),
     };
   }
@@ -796,6 +828,9 @@ export class KnowledgeDocumentVersionRepository
       metadata: data.metadata ?? null,
       change_summary: data.change_summary ?? null,
       created_by: data.created_by ?? null,
+      created_by_session_id: data.created_by_session_id ?? null,
+      created_by_agentic_tool: data.created_by_agentic_tool ?? null,
+      created_by_teammate_name: data.created_by_teammate_name ?? null,
       created_at: data.created_at ? new Date(data.created_at) : new Date(),
     };
   }
@@ -902,6 +937,11 @@ export class KnowledgeDocumentRepository
       created_by: (row.created_by as UserID | null) ?? null,
       created_at: new Date(row.created_at),
       updated_by: (row.updated_by as UserID | null) ?? null,
+      updated_by_session_id:
+        (row.updated_by_session_id as KnowledgeDocument['updated_by_session_id']) ?? null,
+      updated_by_agentic_tool:
+        (row.updated_by_agentic_tool as KnowledgeDocument['updated_by_agentic_tool']) ?? null,
+      updated_by_teammate_name: row.updated_by_teammate_name ?? null,
       updated_at: row.updated_at ? new Date(row.updated_at) : null,
       archived: Boolean(row.archived),
       archived_at: row.archived_at ? new Date(row.archived_at) : null,
@@ -956,6 +996,9 @@ export class KnowledgeDocumentRepository
       created_by: data.created_by ?? null,
       created_at: data.created_at ? new Date(data.created_at) : new Date(now),
       updated_by: data.updated_by ?? data.created_by ?? null,
+      updated_by_session_id: data.updated_by_session_id ?? null,
+      updated_by_agentic_tool: data.updated_by_agentic_tool ?? null,
+      updated_by_teammate_name: data.updated_by_teammate_name ?? null,
       updated_at: data.updated_at ? new Date(data.updated_at) : new Date(now),
       archived: data.archived ?? false,
       archived_at: data.archived_at ? new Date(data.archived_at) : null,
@@ -1049,6 +1092,9 @@ export class KnowledgeDocumentRepository
           metadata: data.version_metadata ?? null,
           change_summary: data.change_summary ?? null,
           created_by: data.created_by ?? null,
+          created_by_session_id: data.updated_by_session_id ?? null,
+          created_by_agentic_tool: data.updated_by_agentic_tool ?? null,
+          created_by_teammate_name: data.updated_by_teammate_name ?? null,
           created_at: new Date(),
         })
         .run();
@@ -1202,7 +1248,9 @@ export class KnowledgeDocumentRepository
     }
 
     for (const status of result.values()) {
-      status.queue_depth = status.chunks.pending + status.chunks.stale;
+      // Error rows are durably retryable after embedding_retry_at, so they
+      // remain part of the queue even while their backoff is active.
+      status.queue_depth = status.chunks.pending + status.chunks.stale + status.chunks.error;
       if (status.total_units === 0) status.state = 'empty';
       else if (status.chunks.error > 0) status.state = 'error';
       else if (status.chunks.stale > 0) status.state = 'stale';
@@ -1258,7 +1306,7 @@ export class KnowledgeDocumentRepository
     const rows = await select(this.db)
       .from(kbDocuments)
       .where(and(...conditions))
-      .orderBy(desc(kbDocuments.updated_at))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     const [baseUrl, namespaceRows] = await Promise.all([
       getBaseUrl(),
@@ -1324,6 +1372,9 @@ export class KnowledgeDocumentRepository
             metadata: updates.version_metadata ?? null,
             change_summary: updates.change_summary ?? null,
             created_by: updates.updated_by ?? current.updated_by ?? current.created_by ?? null,
+            created_by_session_id: updates.updated_by_session_id ?? null,
+            created_by_agentic_tool: updates.updated_by_agentic_tool ?? null,
+            created_by_teammate_name: updates.updated_by_teammate_name ?? null,
             created_at: new Date(),
           })
           .run();
@@ -1338,6 +1389,32 @@ export class KnowledgeDocumentRepository
             })
           )
           .run();
+
+        // Once the document pointer advances, provider work for the previous
+        // version is obsolete. Fence an in-flight daemon in the same document
+        // transaction; ready historical vectors remain available for reuse.
+        if (current.current_version_id) {
+          await update(txDb, kbDocumentUnits)
+            .set({
+              embedding_status: 'not_configured',
+              embedding_error: null,
+              embedding_claim_token: null,
+              embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+              embedding_claimed_at: null,
+              embedding_claim_expires_at: null,
+              embedding_claim_instance_id: null,
+              embedding_claim_boot_id: null,
+              embedding_retry_at: null,
+              updated_at: new Date(),
+            })
+            .where(
+              and(
+                eq(kbDocumentUnits.version_id, current.current_version_id),
+                inArray(kbDocumentUnits.embedding_status, ['pending', 'stale', 'error'])
+              )
+            )
+            .run();
+        }
       }
 
       const merged = deepMerge(current, {
@@ -1416,11 +1493,28 @@ export class KnowledgeDocumentRepository
 
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);
-    const result = await update(this.db, kbDocuments)
-      .set({ archived: true, archived_at: new Date(), updated_at: new Date() })
-      .where(eq(kbDocuments.document_id, fullId))
-      .run();
-    if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeDocument', id);
+    await runDatabaseTransaction(this.db, async (txDb) => {
+      const result = await update(txDb, kbDocuments)
+        .set({ archived: true, archived_at: new Date(), updated_at: new Date() })
+        .where(eq(kbDocuments.document_id, fullId))
+        .run();
+      if (result.rowsAffected === 0) throw new EntityNotFoundError('KnowledgeDocument', id);
+      await update(txDb, kbDocumentUnits)
+        .set({
+          embedding_status: 'not_configured',
+          embedding_error: null,
+          embedding_claim_token: null,
+          embedding_claim_generation: sql`${kbDocumentUnits.embedding_claim_generation} + 1`,
+          embedding_claimed_at: null,
+          embedding_claim_expires_at: null,
+          embedding_claim_instance_id: null,
+          embedding_claim_boot_id: null,
+          embedding_retry_at: null,
+          updated_at: new Date(),
+        })
+        .where(eq(kbDocumentUnits.document_id, fullId))
+        .run();
+    });
   }
 }
 
@@ -1443,7 +1537,10 @@ export class KnowledgeSearchRepository {
       );
     }
     const q = query.q?.trim() ?? '';
-    const limit = Math.min(Math.max(query.limit ?? 25, 1), 100);
+    // Internal callers may request one look-ahead row to compute hasMore;
+    // public schemas remain capped at 100.
+    const limit = Math.min(Math.max(query.limit ?? 25, 1), 101);
+    const offset = Math.max(query.offset ?? 0, 0);
     let namespaceId = query.namespace_id;
     if (!namespaceId && query.namespace_slug) {
       const namespace = await this.namespaces.findBySlug(query.namespace_slug);
@@ -1518,8 +1615,8 @@ export class KnowledgeSearchRepository {
     }
 
     const rows = (await dbQuery
-      .orderBy(desc(kbDocuments.updated_at))
-      .limit(q ? Math.max(limit, 100) : limit)
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
+      .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
     const baseUrl = await getBaseUrl();
 
@@ -1567,9 +1664,10 @@ export class KnowledgeSearchRepository {
         (a, b) =>
           b.score - a.score ||
           new Date(b.document.updated_at ?? 0).getTime() -
-            new Date(a.document.updated_at ?? 0).getTime()
+            new Date(a.document.updated_at ?? 0).getTime() ||
+          a.document.document_id.localeCompare(b.document.document_id)
       )
-      .slice(0, limit);
+      .slice(offset, offset + limit);
   }
 }
 

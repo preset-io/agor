@@ -69,8 +69,56 @@ describe('register-services OAuth callback URL regression', () => {
     // before persisting user_mcp_oauth_tokens or backfilling mcp_servers auth.
     expect(codeOnly).toMatch(/tenantId\?\s*:\s*string/);
     expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\s*\(\s*\)/);
-    expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
+    expect(codeOnly).toMatch(/runInOAuthTenantWriteScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
     expect(codeOnly).toMatch(/Missing tenant context for MCP OAuth callback/);
     expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
+  });
+
+  it('keeps saved-server OAuth authoritative and DCR credentials request-local', () => {
+    const oauthStartBody = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/oauth-start'"),
+      codeOnly.indexOf("app.service('mcp-servers/oauth-start').hooks")
+    );
+    // The saved row is loaded inside the tenant scope and by the supplied id,
+    // through the loader that also decides whether this caller may see it —
+    // `loadMcpServerForCaller` is `findById` plus that check, so pinning it
+    // keeps the authority this test is named for and adds the caller to it.
+    // `params` is part of the pin: without it the lookup would resolve any
+    // tenant row, and a member could borrow another user's OAuth client.
+    expect(oauthStartBody).toMatch(
+      /runInOAuthTenantScope\s*\([\s\S]*loadMcpServerForCaller\s*\(\s*db,\s*savedServerId,\s*params/
+    );
+    expect(oauthStartBody).toMatch(/effectiveMcpUrl\s*=\s*savedServer\?\.url\s*\?\?/);
+    expect(oauthStartBody).toMatch(/clientId:\s*savedServer\s*\?\s*clientIdFromConfig/);
+    expect(codeOnly).toMatch(/reuseDynamicClientRegistration:\s*false/);
+  });
+
+  it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
+    expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
+    expect(codeOnly).toMatch(/cacheToken:\s*false/);
+    expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
+    expect(codeOnly).toMatch(
+      /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
+    );
+    expect(codeOnly).not.toMatch(/app\.io\.emit\s*\(\s*['"]oauth:open_browser['"]/);
+    expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
+  });
+
+  it('keeps provider capability material out of callback logs', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const loggedExpressions = [...callbackBody.matchAll(/console\.(?:log|warn|error)\(([^;]+)\)/g)]
+      .map((match) => match[1])
+      .join('\n');
+    expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
+  });
+
+  it('uses one phase-aware failure classifier for callback and manual completion', () => {
+    const classifications = codeOnly.match(/classifyMCPOAuthCompletionFailure\s*\(/g) ?? [];
+    expect(classifications).toHaveLength(2);
+    expect(codeOnly).toMatch(/durableOAuthFlows!\.finish[\s\S]{0,180}classification\.status/);
+    expect(codeOnly.match(/classification\.failureCode/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

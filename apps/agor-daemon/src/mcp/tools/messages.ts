@@ -1,4 +1,3 @@
-import { isBranchRbacEnabled } from '@agor/core/config';
 import {
   and,
   asc,
@@ -14,7 +13,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { ContentBlock } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
@@ -81,7 +80,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Content detail level. "preview" returns first 200 chars (default). "full" returns complete text content.'
           ),
-        limit: mcpLimit(20),
+        limit: mcpLimit(20, 100),
         offset: mcpOffset(0),
         order: z
           .enum(['asc', 'desc'])
@@ -180,7 +179,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       // every matching row into daemon memory.
       const fetchLimit = Math.min(limit + 100, 200);
       const allRows = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-        if (isBranchRbacEnabled()) {
+        if (ctx.app.get('config').execution?.branch_rbac === true) {
           const userRole = ctx.authenticatedUser?.role as string | undefined;
           if (!isSuperAdmin(userRole)) {
             conditions.push(

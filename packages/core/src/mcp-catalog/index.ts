@@ -1,0 +1,12 @@
+/**
+ * MCP catalog: the checked-in catalog file, the reads over it, and the auth
+ * probe the connect flow runs before it installs anything.
+ */
+
+export { type AuthProbeOptions, probeRemoteAuthType } from './auth-probe';
+export { findCatalogEntry, loadCatalog } from './catalog';
+export { CuratedCatalogError, loadCuratedCatalog } from './curated-loader';
+// Also reachable as `@agor/core/mcp-catalog/query`, which is the import the
+// browser bundle uses: this barrel pulls in the loader, and the loader reads
+// the file off disk.
+export { filterCatalog } from './query';

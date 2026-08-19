@@ -7,7 +7,7 @@
  * predicate (preventing cross-branch leakage via the `search` parameter).
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoist-safe mocks must be declared before the module under test is imported.
@@ -89,7 +89,11 @@ async function registerAndGetTool(ctx: { userId: string; role?: string }): Promi
   } as unknown as McpServer;
 
   registerMessageTools(fakeServer, {
-    app: {} as any,
+    app: {
+      get: () => ({
+        execution: { branch_rbac: mockIsBranchRbacEnabled() },
+      }),
+    } as any,
     db: {} as any,
     userId: ctx.userId as import('@agor/core/types').UserID,
     sessionId: 'sess-0001' as import('@agor/core/types').SessionID,

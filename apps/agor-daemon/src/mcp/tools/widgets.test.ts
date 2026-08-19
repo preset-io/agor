@@ -14,7 +14,8 @@
  *     creation.
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { MessageID } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../utils/append-system-message.js', () => ({
@@ -22,6 +23,7 @@ vi.mock('../../utils/append-system-message.js', () => ({
 }));
 
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
 import { registerWidgetTools } from './widgets.js';
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -35,8 +37,13 @@ type CapturedTool = {
 
 function registerAndCapture(ctx: {
   app: unknown;
+  db?: unknown;
   userId: string;
   sessionId: string;
+  /** Authenticated caller role — defaults to 'member'. Set 'admin' to exercise
+   * the gateway-token admin gate. */
+  role?: string;
+  baseServiceParams?: Parameters<typeof registerWidgetTools>[1]['baseServiceParams'];
 }): Record<string, CapturedTool> {
   const captured: Record<string, CapturedTool> = {};
   const fakeServer = {
@@ -47,13 +54,13 @@ function registerAndCapture(ctx: {
 
   registerWidgetTools(fakeServer, {
     app: ctx.app as unknown as Parameters<typeof registerWidgetTools>[1]['app'],
-    db: {} as unknown as Parameters<typeof registerWidgetTools>[1]['db'],
+    db: (ctx.db ?? {}) as Parameters<typeof registerWidgetTools>[1]['db'],
     userId: ctx.userId as unknown as Parameters<typeof registerWidgetTools>[1]['userId'],
     sessionId: ctx.sessionId as unknown as Parameters<typeof registerWidgetTools>[1]['sessionId'],
-    authenticatedUser: { user_id: ctx.userId, role: 'member' } as unknown as Parameters<
+    authenticatedUser: { user_id: ctx.userId, role: ctx.role ?? 'member' } as unknown as Parameters<
       typeof registerWidgetTools
     >[1]['authenticatedUser'],
-    baseServiceParams: {},
+    baseServiceParams: ctx.baseServiceParams ?? {},
   });
   return captured;
 }
@@ -76,19 +83,15 @@ function makeApp(opts: {
   sessionCreator: string;
   creatorEnvVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
   /**
-   * The session's tasks. Mirrors how the real `TasksService.find({ session_id })`
-   * returns ALL session tasks (ASC by created_at) regardless of status / sort,
-   * because of the short-circuit at `services/tasks.ts:65-110`.
-   * When omitted, a single RUNNING task is returned.
+   * The session's tasks. The fake below applies the same exact status, sort,
+   * skip, and limit query semantics used by the host-Task selector.
    */
   sessionTasks?: FakeTask[] | null;
 }): {
   app: unknown;
   calls: ServiceCall[];
-  patchedMessage(): Record<string, unknown> | undefined;
 } {
   const calls: ServiceCall[] = [];
-  let lastMessagePatch: Record<string, unknown> | undefined;
   const defaultTasks: FakeTask[] = [
     {
       task_id: 'task-host-1',
@@ -118,11 +121,31 @@ function makeApp(opts: {
     tasks: {
       find: async (...args: unknown[]) => {
         calls.push({ service: 'tasks', method: 'find', args });
+        const query = ((args[0] as { query?: Record<string, unknown> } | undefined)?.query ??
+          {}) as Record<string, unknown>;
+        const filtered = query.status
+          ? sessionTasks.filter((task) => task.status === query.status)
+          : [...sessionTasks];
+        const sort = (query.$sort ?? {}) as Record<string, 1 | -1>;
+        const sortEntries = Object.entries(sort);
+        if (sortEntries.length > 0) {
+          filtered.sort((left, right) => {
+            for (const [field, direction] of sortEntries) {
+              const a = String(left[field as keyof FakeTask] ?? '');
+              const b = String(right[field as keyof FakeTask] ?? '');
+              const comparison = a.localeCompare(b);
+              if (comparison !== 0) return comparison * direction;
+            }
+            return 0;
+          });
+        }
+        const skip = typeof query.$skip === 'number' ? query.$skip : 0;
+        const limit = typeof query.$limit === 'number' ? query.$limit : filtered.length;
         return {
-          data: sessionTasks,
-          total: sessionTasks.length,
-          limit: 1000,
-          skip: 0,
+          data: filtered.slice(skip, skip + limit),
+          total: filtered.length,
+          limit,
+          skip,
         };
       },
       get: async (...args: unknown[]) => {
@@ -137,13 +160,6 @@ function makeApp(opts: {
         const id = args[0] as string;
         const t = tasksById.get(id);
         return { ...t, ...(args[1] as Record<string, unknown>) };
-      },
-    },
-    messages: {
-      patch: async (...args: unknown[]) => {
-        calls.push({ service: 'messages', method: 'patch', args });
-        lastMessagePatch = args[1] as Record<string, unknown>;
-        return { message_id: args[0] };
       },
     },
     '/sessions/:id/prompt': {
@@ -162,9 +178,6 @@ function makeApp(opts: {
       },
     },
     calls,
-    patchedMessage() {
-      return lastMessagePatch;
-    },
   };
 }
 
@@ -174,17 +187,23 @@ describe('agor_widgets_request_env_vars', () => {
   beforeEach(() => {
     appendStub.mockReset();
     // Default: return a freshly-created widget message row.
-    appendStub.mockImplementation(async (opts: { content: string }) => ({
-      message_id: 'widget-msg-1',
-      session_id: 'sess-1',
-      type: 'widget_request',
-      role: 'system',
-      index: 0,
-      timestamp: '2026-05-19T00:00:00.000Z',
-      content: opts.content,
-      content_preview: opts.content,
-      metadata: {},
-    }));
+    appendStub.mockImplementation(
+      async (opts: {
+        content: string;
+        messageId?: MessageID;
+        metadata?: Record<string, unknown>;
+      }) => ({
+        message_id: opts.messageId ?? ('widget-msg-1' as MessageID),
+        session_id: 'sess-1',
+        type: 'widget_request',
+        role: 'system',
+        index: 0,
+        timestamp: '2026-05-19T00:00:00.000Z',
+        content: opts.content,
+        content_preview: opts.content,
+        metadata: opts.metadata,
+      })
+    );
   });
 
   it('normal path: creates a pending widget_request and returns status "requested"', async () => {
@@ -211,7 +230,8 @@ describe('agor_widgets_request_env_vars', () => {
     // Returns the new widget_id + "requested"
     const text = JSON.parse(res.content[0].text);
     expect(text.status).toBe('requested');
-    expect(text.widget_id).toBe('widget-msg-1');
+    expect(text.widget_id).toBe(appendArgs.metadata.widget.widget_id);
+    expect(text.widget_id).not.toBe('pending');
 
     // No auto-resume task on the normal path — it fires only after the user
     // submits/dismisses, via the resolve handler.
@@ -230,6 +250,40 @@ describe('agor_widgets_request_env_vars', () => {
       message_range: { end_index: number };
     };
     expect(patchBody.message_range.end_index).toBe(0); // index of the appended widget
+  });
+
+  it('generates the persisted widget id before the MCP message create', async () => {
+    const { app, calls } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+      baseServiceParams: {
+        user: { user_id: 'user-creator', role: 'member' },
+        authenticated: true,
+        provider: 'mcp',
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+      db: { run: vi.fn() },
+    });
+
+    const res = await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    const widgetId = appendArgs.metadata.widget.widget_id;
+    expect(appendArgs.messageId).toBe(widgetId);
+    expect(widgetId).not.toBe('pending');
+    expect(
+      calls.find((call) => call.service === 'messages' && call.method === 'patch')
+    ).toBeUndefined();
+    expect(JSON.parse(res.content[0].text)).toMatchObject({
+      widget_id: widgetId,
+      status: 'requested',
+    });
   });
 
   it('normalizes requested names before storing widget metadata and preview text', async () => {
@@ -454,11 +508,18 @@ describe('agor_widgets_request_env_vars', () => {
       (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
     );
     expect(promptCall).toBeDefined();
-    const promptData = promptCall?.args[0] as { prompt: string; metadata: Record<string, unknown> };
+    const promptData = promptCall?.args[0] as {
+      prompt: string;
+      idempotencyTaskId: string;
+      metadata: Record<string, unknown>;
+    };
     expect(promptData.prompt).toContain('HUBSPOT_API_KEY');
     expect(promptData.prompt.toLowerCase()).toContain('already configured');
     expect(promptData.metadata.system_authored).toBe(true);
-    expect(promptData.metadata.widget_id).toBe('widget-msg-1');
+    const widgetId = appendStub.mock.calls[0][0].metadata.widget.widget_id;
+    expect(promptData.metadata.widget_id).toBe(widgetId);
+    expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId(widgetId as MessageID));
+    expect(promptData.idempotencyTaskId).not.toBe(widgetId);
   });
 
   it('does NOT short-circuit when even one requested name is missing', async () => {
@@ -542,5 +603,93 @@ describe('agor_widgets_request_env_vars', () => {
     expect(desc.toLowerCase()).toContain('fire-and-forget');
     expect(desc.toLowerCase()).toContain('end your turn');
     expect(desc.toLowerCase()).toContain('never enter your context');
+  });
+
+  it('tool description steers the agent to PREFER the widget over Settings instructions', () => {
+    // Regression guard for the "prefer widget over manual Settings" guidance:
+    // the agent-facing contract must keep telling agents to call the widget
+    // rather than pointing users at Settings → Environment Variables.
+    const { app } = makeApp({ sessionCreator: 'u' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+    const desc = (captured.agor_widgets_request_env_vars.cfg.description ?? '').toLowerCase();
+    expect(desc).toContain('prefer');
+    expect(desc).toContain('settings');
+  });
+
+  it('renders a grammatical singular/plural preview line for the widget row', async () => {
+    const captured = registerAndCapture({
+      app: makeApp({ sessionCreator: 'user-creator' }).app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+    await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+    expect(appendStub.mock.calls[0][0].content).toBe(
+      'Please provide variable HUBSPOT_API_KEY: call hubspot'
+    );
+
+    appendStub.mockClear();
+    const captured2 = registerAndCapture({
+      app: makeApp({ sessionCreator: 'user-creator' }).app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+    await captured2.agor_widgets_request_env_vars.cb({
+      names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+      reason: 'two integrations',
+      auto_resume: true,
+    });
+    expect(appendStub.mock.calls[0][0].content).toBe(
+      'Please provide variables HUBSPOT_API_KEY, STRIPE_SECRET_KEY: two integrations'
+    );
+  });
+});
+
+describe('agor_widgets_request_gateway_token', () => {
+  const appendStub = appendSystemMessage as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    appendStub.mockReset();
+  });
+
+  it('rejects a non-admin caller before creating any widget (admin-only)', async () => {
+    // The gateway-token widget mints platform credentials, so a non-admin agent
+    // must NOT be able to render the form. requireAdmin runs before any service
+    // call, so no gateway-channels/messages plumbing is needed here.
+    const { app } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-member',
+      sessionId: 'sess-1',
+      role: 'member',
+    });
+
+    await expect(
+      captured.agor_widgets_request_gateway_token.cb({ gatewayChannelId: 'channel-1' })
+    ).rejects.toThrow(/admin role required/i);
+
+    // No widget message was created for the dead-end form.
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
+  it('tool description marks it admin-only and prefers the widget over manual setup', () => {
+    const { app } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-admin',
+      sessionId: 'sess-1',
+      role: 'admin',
+    });
+    const desc = (captured.agor_widgets_request_gateway_token.cfg.description ?? '').toLowerCase();
+    expect(desc).toContain('admin-only');
+    expect(desc).toContain('prefer');
+    expect(desc).toContain('fire-and-forget');
   });
 });

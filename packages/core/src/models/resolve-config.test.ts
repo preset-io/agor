@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   getDefaultModelForTool,
+  InvalidModelConfigError,
+  isInvalidModelConfigError,
   resolveModelConfig,
   resolveModelConfigPrecedence,
   resolveModelConfigWithFallback,
 } from './resolve-config.js';
+
+it('recognizes invalid model errors without constructor identity', () => {
+  expect(isInvalidModelConfigError(new InvalidModelConfigError('invalid'))).toBe(true);
+  expect(isInvalidModelConfigError({ code: 'INVALID_MODEL_CONFIG' })).toBe(true);
+  expect(isInvalidModelConfigError(new Error('invalid'))).toBe(false);
+});
 
 describe('resolveModelConfig', () => {
   const now = new Date('2026-04-23T00:00:00.000Z');
@@ -24,6 +32,12 @@ describe('resolveModelConfig', () => {
       model: 'claude-opus-4-6',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
+  });
+
+  it('preserves the Claude Code context-window suffix as model identity', () => {
+    expect(resolveModelConfig({ model: 'claude-opus-5[1m]' }, { now })?.model).toBe(
+      'claude-opus-5[1m]'
+    );
   });
 
   it('preserves explicit mode', () => {

@@ -24,10 +24,9 @@ function gitSafeDirectoryDebug(...args: unknown[]): void {
 /**
  * Trust the managed checkout paths for every git subprocess the SDK agent starts.
  *
- * Interactive agents can run plain `git status` inside their sessions. In insulated
- * and strict Unix modes the session user may be a group member rather than the
- * checkout owner, so git's ownership check rejects the repo unless the session
- * process environment preconfigures these directories as safe.
+ * Interactive agents can run plain `git status` inside their sessions. A delegated
+ * launcher may expose paths owned by another runtime principal, so git's ownership
+ * check rejects the repo unless the process environment preconfigures them as safe.
  *
  * We use `GIT_CONFIG_PARAMETERS` instead of mutating the user's global
  * ~/.gitconfig: it is scoped to this executor process and inherited by the

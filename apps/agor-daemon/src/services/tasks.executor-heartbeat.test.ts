@@ -51,6 +51,27 @@ function completionHarness(input: {
 }
 
 describe('TasksService executor heartbeat helpers', () => {
+  it('returns durable STOPPING control state when a heartbeat reaches another daemon', async () => {
+    const stoppingTask = {
+      task_id: '018f0000-0000-7000-8000-000000000099',
+      session_id: '018f0000-0000-7000-8000-000000000098',
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-08-06T12:00:00.000Z',
+      },
+    };
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      reportRuntimeTelemetry: vi.fn().mockResolvedValue(null),
+      findById: vi.fn().mockResolvedValue(stoppingTask),
+    });
+
+    await expect(service.reportRuntimeTelemetry({ task_id: stoppingTask.task_id })).resolves.toBe(
+      stoppingTask
+    );
+  });
+
   it('does not let an executor terminal patch bypass coordinator-owned stopping', async () => {
     const stoppingTask = {
       task_id: '018f0000-0000-7000-8000-000000000000',
@@ -138,7 +159,7 @@ describe('TasksService executor heartbeat helpers', () => {
     }
   );
 
-  it('falls back to the canonical session projection when completion context cannot load', async () => {
+  it('does not rewrite the atomic Session projection when completion context cannot load', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000010';
     const sessionId = '018f0000-0000-7000-8000-000000000011';
     const failedTask = {
@@ -158,13 +179,45 @@ describe('TasksService executor heartbeat helpers', () => {
       sessionReadFails: true,
     });
 
-    await service.settleTermination({ taskId, outcome: 'verified_absent' });
+    await service.settleTermination({
+      taskId,
+      outcome: 'verified_absent',
+      coordinationToken: 'completion-test',
+    });
 
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      sessionId,
-      { status: 'failed', ready_for_prompt: true },
-      expect.objectContaining({ provider: undefined, suppressTerminalQueueProcessing: true })
-    );
+    expect(sessionsPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not clobber a newer Task that claimed the Session after settlement', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000012';
+    const sessionId = '018f0000-0000-7000-8000-000000000013';
+    const nextTaskId = '018f0000-0000-7000-8000-000000000014';
+    const failedTask = {
+      task_id: taskId,
+      session_id: sessionId,
+      status: TaskStatus.FAILED,
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '2026-01-01T00:00:04.000Z',
+      },
+    };
+    const { service, sessionsPatch } = completionHarness({
+      currentTask: failedTask,
+      resultTask: failedTask,
+      // The harness returns RUNNING/ready=false: this list makes the newer
+      // admission explicit while completion side effects are in flight.
+      sessionTasks: [taskId, nextTaskId],
+    });
+
+    await service.settleTermination({
+      taskId,
+      outcome: 'verified_absent',
+      coordinationToken: 'completion-test',
+    });
+
+    expect(sessionsPatch).not.toHaveBeenCalled();
   });
 
   it('settles a stopped active task ahead of queued work and triggers queue processing', async () => {

@@ -80,10 +80,14 @@
   cursor: grabbing;
 }
 
-/* Prevent nodrag children from inheriting grab cursor */
-.nodrag,
-.nodrag * {
+/* Prevent a nodrag region from inheriting the node's grab cursor. Set this on
+   the boundary only: descendants then inherit `auto` unless an interactive
+   element (link, button, clickable pill) supplies its own cursor. Resetting
+   every descendant used to override those affordances. A no-drag region is
+   also where ordinary text selection is safe without moving the node. */
+.nodrag {
   cursor: auto;
+  user-select: text;
 }
 
 /* Widen the resize hit-area on board items (zones, artifacts, apps) so the

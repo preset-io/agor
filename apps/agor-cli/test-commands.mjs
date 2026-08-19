@@ -4,7 +4,6 @@ import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 
 const tests = [
-  { name: 'whoami', cmd: 'pnpm -w agor whoami' },
   { name: 'repo list', cmd: 'pnpm -w agor repo list' },
   { name: 'mcp list', cmd: 'pnpm -w agor mcp list' },
   { name: 'user list', cmd: 'pnpm -w agor user list' },
