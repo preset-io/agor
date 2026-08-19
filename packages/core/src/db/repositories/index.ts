@@ -22,6 +22,7 @@ export * from './gateway-outbound-messages';
 export * from './github-install-states';
 export * from './groups';
 export * from './knowledge';
+export * from './knowledge-attribution';
 export * from './knowledge-embedding-work';
 export * from './knowledge-semantic-settings';
 export * from './mcp-member-policy';

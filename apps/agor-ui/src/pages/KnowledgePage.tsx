@@ -892,6 +892,7 @@ export function KnowledgePage({
     ? knowledgeAttributionDisplay(
         {
           userId: activeDoc.updated_by,
+          user: activeDoc.updated_by_user,
           sessionId: activeDoc.updated_by_session_id,
           agenticTool: activeDoc.updated_by_agentic_tool,
           teammateName: activeDoc.updated_by_teammate_name,
@@ -3645,6 +3646,7 @@ export function KnowledgePage({
                 const attribution = knowledgeAttributionDisplay(
                   {
                     userId: version.created_by,
+                    user: version.created_by_user,
                     sessionId: version.created_by_session_id,
                     agenticTool: version.created_by_agentic_tool,
                     teammateName: version.created_by_teammate_name,

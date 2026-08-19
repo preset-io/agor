@@ -9,6 +9,7 @@ import { PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
   isPostgresDatabaseHandle,
+  KnowledgeAttributionRepository,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
@@ -136,6 +137,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   KnowledgeDocumentParams
 > {
   private repo: KnowledgeDocumentRepository;
+  private attribution: KnowledgeAttributionRepository;
   private semanticSettings: KnowledgeSemanticSettingsRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
@@ -155,6 +157,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
     });
     this.repo = repo;
+    this.attribution = new KnowledgeAttributionRepository(db);
     this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
@@ -401,7 +404,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
         ? ((await this.repo.attachIndexingStatus(document)) as KnowledgeDocument)
         : document;
     if (params?.include_content !== true && params?.include_links !== true) return withIndexing;
-    const version = await this.versionFor(document, params?.version);
+    const rawVersion = await this.versionFor(document, params?.version);
+    const version = rawVersion ? (await this.attribution.attachToVersions([rawVersion]))[0] : null;
     return {
       ...withIndexing,
       document: withIndexing,
@@ -458,14 +462,15 @@ export class KnowledgeDocumentsService extends DrizzleService<
     for (const doc of rows) {
       if (await this.canRead(doc, user)) readable.push(doc);
     }
+    const attributed = await this.attribution.attachToDocuments(readable);
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
       if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
-        return this.repo.attachIndexingStatus(readable) as Promise<KnowledgeDocument[]>;
+        return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
-      return readable;
+      return attributed;
     }
     return Promise.all(
-      readable.map((doc) =>
+      attributed.map((doc) =>
         this.hydrateDocument(doc, {
           include_content: params?.query?.include_content,
           include_links: params?.query?.include_links,
@@ -484,7 +489,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    return this.hydrateDocument(doc, params?.query);
+    const [attributed] = await this.attribution.attachToDocuments([doc]);
+    return this.hydrateDocument(attributed, params?.query);
   }
 
   async getDocument(
@@ -497,7 +503,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    return this.hydrateDocument(doc, data);
+    const [attributed] = await this.attribution.attachToDocuments([doc]);
+    return this.hydrateDocument(attributed, data);
   }
 
   async putDocument(
@@ -536,7 +543,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
       await this.assertExpectedVersion(existing, data.expected_version);
-      const result = await this.repo.update(
+      const persisted = await this.repo.update(
         existing.document_id,
         this.prepareWriteData(
           {
@@ -550,8 +557,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
           existing
         )
       );
-      await this.replaceSearchUnitsForContent(result, data.content_text);
-      await this.syncGraphReferences(result, data.content_text, userId);
+      await this.replaceSearchUnitsForContent(persisted, data.content_text);
+      await this.syncGraphReferences(persisted, data.content_text, userId);
+      const [result] = await this.attribution.attachToDocuments([persisted]);
       this.emitDocumentEvent('patched', result, params);
       return result;
     }
@@ -586,7 +594,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (namespace.archived) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
     await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
 
-    const result = await this.repo.create(
+    const persisted = await this.repo.create(
       this.prepareWriteData({
         ...data,
         namespace_id: namespace.namespace_id,
@@ -597,8 +605,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
         ...assistantAttribution(params),
       })
     );
-    await this.replaceSearchUnitsForContent(result, data.content_text);
-    await this.syncGraphReferences(result, data.content_text, userId);
+    await this.replaceSearchUnitsForContent(persisted, data.content_text);
+    await this.syncGraphReferences(persisted, data.content_text, userId);
+    const [result] = await this.attribution.attachToDocuments([persisted]);
     this.emitDocumentEvent('created', result, params);
     return result;
   }
@@ -624,14 +633,14 @@ export class KnowledgeDocumentsService extends DrizzleService<
         : null;
     if (!namespace || namespace.archived) throw new NotFound('Knowledge namespace not found');
     await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
-    const result = await this.repo.create({
+    const persisted = await this.repo.create({
       ...prepared,
       namespace_id: namespace.namespace_id,
       namespace_slug: namespace.slug,
     });
-    await this.replaceSearchUnitsForContent(result, data.content_text);
-    await this.syncGraphReferences(result, data.content_text, userId);
-    return result;
+    await this.replaceSearchUnitsForContent(persisted, data.content_text);
+    await this.syncGraphReferences(persisted, data.content_text, userId);
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async create(
@@ -684,22 +693,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const result = await this.repo.update(String(id), {
+    const persisted = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
       ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text
     );
     await this.syncGraphReferences(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    return result;
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async update(
@@ -728,22 +737,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const result = await this.repo.update(String(id), {
+    const persisted = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
       ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text
     );
     await this.syncGraphReferences(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    return result;
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async remove(id: NullableId, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
@@ -756,7 +765,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }
     await this.repo.delete(String(id));
-    return existing;
+    return (await this.attribution.attachToDocuments([existing]))[0];
   }
 
   private emitDocumentEvent(
