@@ -18,8 +18,6 @@ export interface TeammateGalleryProps {
   onChange: (templateId: string) => void;
 }
 
-const CARD_WIDTH = 168;
-
 interface GalleryCardProps {
   template: TeammateTemplate;
   selected: boolean;
@@ -47,9 +45,9 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
       onClick={onSelect}
       onKeyDown={handleKeyDown}
       style={{
-        flex: '0 0 auto',
-        width: CARD_WIDTH,
-        scrollSnapAlign: 'start',
+        // Fill the grid cell so cards in the same row are equal height, aligned
+        // to the tallest in that row.
+        height: '100%',
         // Constant 2px border in both states — only the color changes on select,
         // so the card never resizes and the row never shifts (no re-click bait).
         borderWidth: 2,
@@ -72,20 +70,12 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
             </Tag>
           )}
         </Flex>
-        <Text strong ellipsis={{ tooltip: template.title }} style={{ fontSize: token.fontSize }}>
+        {/* Title + description flow at their natural height — no ellipsis/clamp, so
+            the full copy is always shown (matches the step-1 goal cards). */}
+        <Text strong style={{ fontSize: token.fontSize }}>
           {template.title}
         </Text>
-        <Paragraph
-          type="secondary"
-          ellipsis={{ rows: 3, tooltip: template.description }}
-          style={{
-            fontSize: token.fontSizeSM,
-            marginBottom: 0,
-            // Reserve three lines so every card keeps the same height regardless
-            // of copy length (matches the equal-height goal cards from #2293).
-            minHeight: `calc(${token.fontSizeSM}px * ${token.lineHeight} * 3)`,
-          }}
-        >
+        <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
           {template.description}
         </Paragraph>
       </Flex>
@@ -94,10 +84,16 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
 };
 
 /**
- * Horizontally-scrolling gallery of teammate starter templates plus a blank
- * card. Single-select: clicking a card reports its id (blank included). Cards
- * matching the goal-derived recommendations get a "Recommended" badge (up to
- * two; never the blank card).
+ * Responsive 2-column grid of teammate starter templates plus a blank card.
+ * Single-select: clicking a card reports its id (blank included). Cards matching
+ * the goal-derived recommendations get a "Recommended" badge (up to two; never
+ * the blank card).
+ *
+ * The grid holds two columns at the modal's width and collapses to one only when
+ * the container gets very narrow. Descriptions are shown in full (no truncation);
+ * cards in a row share the tallest card's height. It sits inside the modal's own
+ * vertically-scrollable content region, so every card is reachable by normal
+ * vertical scroll while the wizard footer stays on-screen.
  *
  * Standalone and theme-token driven so it renders correctly both on the
  * onboarding wizard's dark-glass surface and on the standard create-teammate
@@ -112,12 +108,13 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
       role="radiogroup"
       aria-label="Teammate template"
       style={{
-        display: 'flex',
+        display: 'grid',
+        // Two columns at the ~600px modal width; each column is at least 220px so
+        // the row collapses to a single column only on a very narrow container.
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
         gap: token.marginSM,
-        overflowX: 'auto',
-        // Room for the focus ring + a hint that the row scrolls.
-        paddingBottom: token.paddingXS,
-        scrollSnapType: 'x proximity',
+        // Room for card focus rings at the grid edges.
+        padding: token.paddingXXS,
       }}
     >
       {TEAMMATE_GALLERY_CARDS.map((template) => (

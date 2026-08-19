@@ -33,6 +33,25 @@ describe('TeammateGallery', () => {
     }
   });
 
+  it('lays the cards out in a responsive multi-column grid', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    const group = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    expect(group).toHaveStyle({ display: 'grid' });
+    // Two columns at the modal width, collapsing to one only when very narrow.
+    expect(group).toHaveStyle({ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' });
+  });
+
+  it('renders each description in full with no ellipsis truncation', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    // The Competitive Analyst copy used to truncate ("...then tells you...") in
+    // the narrow carousel; the full sentence must now be present verbatim.
+    expect(
+      screen.getByText(
+        "Tracks every rival's pricing, launches, and moves, then tells you what it means for the next deal."
+      )
+    ).toBeInTheDocument();
+  });
+
   it('reports the clicked template id (blank included) and reflects selection', () => {
     const onChange = vi.fn();
     const { rerender } = render(<TeammateGallery value={null} onChange={onChange} />);
