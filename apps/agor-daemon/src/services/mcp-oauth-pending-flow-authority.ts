@@ -29,7 +29,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
-import { MCP_OAUTH_GRANT_BINDING_VERSION } from './mcp-oauth-grant-binding.js';
+import { grantBindingVersionForCompatibilityMode } from './mcp-oauth-grant-binding.js';
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
@@ -136,7 +136,9 @@ export class MCPOAuthPendingFlowAuthority {
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: grantBindingVersionForCompatibilityMode(
+          input.context.compatibilityMode
+        ),
         configFingerprint: input.configFingerprint,
         resourceUri: input.context.resourceUri,
         issuer: input.context.issuer,
@@ -174,7 +176,7 @@ export class MCPOAuthPendingFlowAuthority {
         oauthMode: input.oauthMode,
         subjectUserId,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: material.configFingerprintVersion,
         configFingerprint: input.configFingerprint,
         envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
         sealedMaterial,

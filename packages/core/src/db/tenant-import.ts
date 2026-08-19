@@ -34,6 +34,7 @@
 
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
@@ -96,6 +97,35 @@ export interface TenantImportOptions {
 }
 
 type PortionState = 'empty' | 'matches' | 'conflict';
+
+/**
+ * Catalog trust is deployment-local review authority, not portable tenant
+ * data. Validate archived public OAuth values before any write; the database
+ * rewrite later marks every restored MCP row `imported` and removes its
+ * catalog stamp.
+ */
+export async function validateArchivedMCPCompatibilityModes(
+  archivePath: string,
+  manifest: TenantArchiveManifest
+): Promise<void> {
+  const table = manifest.database.tables.find((candidate) => candidate.name === 'mcp_servers');
+  if (!table || table.rowCount === 0) return;
+  const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
+  for (const line of lines) {
+    const row = JSON.parse(line) as { data?: unknown };
+    const data = row.data;
+    const auth = data && typeof data === 'object' ? (data as { auth?: unknown }).auth : undefined;
+    try {
+      assertPublicMCPOAuthCompatibilityMode(auth);
+    } catch (error) {
+      throw new MalformedArchiveError(
+        `Refusing to import mcp_servers: ${
+          error instanceof Error ? error.message : 'invalid OAuth compatibility policy'
+        }`
+      );
+    }
+  }
+}
 
 /**
  * Classify the live database for the destination tenant relative to the archive:
@@ -250,6 +280,8 @@ export async function importTenant(
   // The archive must carry exactly the live catalog's movable tenant tables —
   // no missing, extra, or duplicate — before we read or restore any of them.
   assertManifestTablesMatchCatalog(manifest, identity.tenantTables);
+
+  await validateArchivedMCPCompatibilityModes(options.archivePath, manifest);
 
   // Derive the exact per-table snapshots the destination will hold once the
   // archive's rows are rewritten to `tenantId` and restored. Comparing the live

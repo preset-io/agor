@@ -9,13 +9,24 @@ import {
 import type {
   MCPAuth,
   MCPOAuthGrantBindingVersion,
+  MCPOAuthRuntimeCompatibilityMode,
   MCPServer,
   MCPServerID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
-import { resolveMCPOAuthCompatibilityMode } from './mcp-oauth-compatibility.js';
 
-export const MCP_OAUTH_GRANT_BINDING_VERSION = 2 as const;
+/** Latest format; only the derived marketplace policy needs the v3 envelope. */
+export const MCP_OAUTH_GRANT_BINDING_VERSION = 3 as const;
+
+export function grantBindingVersionForCompatibilityMode(
+  mode: MCPOAuthRuntimeCompatibilityMode
+): MCPOAuthGrantBindingVersion {
+  // Keeping strict/legacy on v2 preserves every historically valid fingerprint.
+  // New marketplace grants use v3 so their derived policy is explicit in the
+  // envelope. A #2377-era v2 marketplace HMAC can still be verified below;
+  // pre-marketplace v2 strict HMACs cannot silently cross the policy change.
+  return mode === 'marketplace' ? 3 : 2;
+}
 
 /**
  * Serialize an MCP server's OAuth configuration with grant creation and
@@ -45,17 +56,24 @@ export interface MCPOAuthResolvedGrantBinding {
   redirectUri: string;
   clientId: string;
   clientSecret?: string;
+  /** Exact runtime policy used to produce this authorization grant. */
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
 }
 
 function authBinding(
-  server: { source?: MCPServer['source']; auth?: MCPAuth },
-  version: MCPOAuthGrantBindingVersion
+  server: { auth?: MCPAuth },
+  version: MCPOAuthGrantBindingVersion,
+  effectiveMode: MCPOAuthRuntimeCompatibilityMode
 ): Record<string, unknown> {
   const auth = server.auth;
   return {
     type: auth?.type ?? 'none',
     mode: auth?.oauth_mode ?? 'per_user',
-    compatibility: resolveMCPOAuthCompatibilityMode(server),
+    // Version 1 predates derived marketplace policy. Version 2 was emitted by
+    // both the pre-marketplace strict implementation and the merged #2377
+    // implementation; the HMAC itself disambiguates those values. Version 3
+    // additionally records the effective mode in `resolved` for auditability.
+    compatibility: version >= 2 ? effectiveMode : (auth?.oauth_compatibility_mode ?? 'strict'),
     // Preserve version 1 for existing grants and pending flows. New bindings
     // record the effective default so an explicit switch to disabled revokes a
     // DCR-created grant just like any other relevant policy change.
@@ -77,17 +95,20 @@ export function fingerprintMCPOAuthGrantConfiguration(
     'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
   >,
   resolved: MCPOAuthResolvedGrantBinding,
-  version: MCPOAuthGrantBindingVersion = MCP_OAUTH_GRANT_BINDING_VERSION
+  version: MCPOAuthGrantBindingVersion = grantBindingVersionForCompatibilityMode(
+    resolved.compatibilityMode
+  )
 ): string {
   if (!masterSecret) throw new Error('MCP OAuth grant binding requires AGOR_MASTER_SECRET');
+  const { compatibilityMode, ...historicalResolved } = resolved;
   const canonical = JSON.stringify({
     version,
     serverId: server.mcp_server_id,
     enabled: server.enabled,
     transport: server.transport,
     serverUrl: server.url ?? null,
-    auth: authBinding(server, version),
-    resolved,
+    auth: authBinding(server, version, compatibilityMode),
+    resolved: version >= 3 ? resolved : historicalResolved,
   });
   return createHmac('sha256', masterSecret)
     .update(`agor:mcp-oauth:grant-configuration:v${version}\0`, 'utf8')
@@ -102,7 +123,10 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     enabled: server.enabled,
     transport: server.transport,
     url: server.url ?? null,
-    auth: authBinding(server, MCP_OAUTH_GRANT_BINDING_VERSION),
+    // Mutation invalidation compares public row data, not a catalog-derived
+    // policy. Catalog policy changes are caught by v3 fingerprint checks.
+    auth: authBinding(server, 2, server.auth?.oauth_compatibility_mode ?? 'strict'),
+    configuredCompatibility: server.auth?.oauth_compatibility_mode ?? null,
   });
 }
 
@@ -124,7 +148,8 @@ export function isMCPOAuthGrantBoundToServer(
     MCPServer,
     'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
   >,
-  grant: UserMCPOAuthToken
+  grant: UserMCPOAuthToken,
+  effectiveMode: MCPOAuthRuntimeCompatibilityMode
 ): boolean {
   if (
     !isMCPOAuthGrantBindingVersion(grant.grant_binding_version) ||
@@ -153,6 +178,7 @@ export function isMCPOAuthGrantBoundToServer(
           redirectUri: grant.oauth_redirect_uri,
           clientId: grant.oauth_client_id,
           clientSecret: grant.oauth_client_secret,
+          compatibilityMode: effectiveMode,
         },
         grant.grant_binding_version
       ) === grant.grant_binding_fingerprint

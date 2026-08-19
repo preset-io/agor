@@ -84,6 +84,8 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
     expect(updates.auth).not.toHaveProperty('oauth_dcr_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_grant_type');
     expect(showSuccess).toHaveBeenCalled();
     expect(showError).not.toHaveBeenCalled();
   });
@@ -128,6 +130,8 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       oauth_client_id: 'fresh-client-id',
       oauth_client_secret: 'fresh-client-secret',
     });
+    expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    expect(updates.auth).not.toHaveProperty('oauth_grant_type');
     expect(onClose).not.toHaveBeenCalled();
     expect(showError).not.toHaveBeenCalled();
   });

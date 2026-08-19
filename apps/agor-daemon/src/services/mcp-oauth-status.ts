@@ -33,7 +33,7 @@ export interface OAuthStatusDeps {
    * Only durable (Postgres) flows carry the fields that makes this answerable.
    */
   requireGrantBinding: boolean;
-  isGrantBoundToServer(server: MCPServer, grant: UserMCPOAuthToken): boolean;
+  isGrantBoundToServer(server: MCPServer, grant: UserMCPOAuthToken): boolean | Promise<boolean>;
   now?: Date;
 }
 
@@ -67,7 +67,7 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
 
     // Durable status is authoritative. A realtime hint or stale row must never
     // make the UI advertise a grant which the request path would refuse to use.
-    if (deps.requireGrantBinding && !deps.isGrantBoundToServer(server, token)) continue;
+    if (deps.requireGrantBinding && !(await deps.isGrantBoundToServer(server, token))) continue;
 
     authenticatedServerIds.add(token.mcp_server_id);
   }

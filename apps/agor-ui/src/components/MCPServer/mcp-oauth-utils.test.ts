@@ -194,6 +194,37 @@ describe('buildAuthFromValues', () => {
     ).toMatchObject({ oauth_dcr_mode: 'fallback' });
   });
 
+  it('preserves a derived compatibility mode across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'strict',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('materializes compatibility after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_compatibility_mode: 'legacy' },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).toMatchObject({ oauth_compatibility_mode: 'legacy' });
+  });
+
+  it('preserves an absent OAuth grant type across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_grant_type: 'client_credentials' },
+        { preserveAbsentGrantType: true }
+      )
+    ).not.toHaveProperty('oauth_grant_type');
+  });
+
   it('returns undefined when auth_type is none / missing / unrecognized', () => {
     expect(buildAuthFromValues({})).toBeUndefined();
     expect(buildAuthFromValues({ auth_type: 'none' })).toBeUndefined();

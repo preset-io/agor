@@ -71,6 +71,26 @@ export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
 
 export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
 
+/** Runtime guard for every public/persisted OAuth compatibility input. */
+export function isMCPOAuthCompatibilityMode(value: unknown): value is MCPOAuthCompatibilityMode {
+  return (
+    typeof value === 'string' &&
+    MCP_OAUTH_COMPATIBILITY_MODES.includes(value as MCPOAuthCompatibilityMode)
+  );
+}
+
+/**
+ * Reject internal or unknown compatibility policies at public/storage
+ * boundaries. `marketplace` is deliberately absent: it is a runtime decision,
+ * never data a caller or archive may provide.
+ */
+export function assertPublicMCPOAuthCompatibilityMode(auth: unknown): void {
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return;
+  const value = (auth as Record<string, unknown>).oauth_compatibility_mode;
+  if (value === undefined || isMCPOAuthCompatibilityMode(value)) return;
+  throw new Error('oauth_compatibility_mode must be either strict or legacy');
+}
+
 /**
  * Effective OAuth discovery policy while a flow is running.
  *
@@ -102,7 +122,7 @@ export interface MCPOAuthStartFailure {
   redirect_uri?: string;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
@@ -228,7 +248,10 @@ export type MCPScope = (typeof MCP_SCOPES)[number];
  * - `catalog`: installed from the marketplace; `catalog_entry_name` records
  *   which entry, the way `import_path` records which file
  *
- * This is provenance, not authorization — nothing reads it to decide access.
+ * This is not an access-control decision. Catalog provenance is one required
+ * input to the daemon's current-entry OAuth policy, but never grants access or
+ * relaxation by itself: the protected stamp and complete current catalog
+ * endpoint/transport/auth prescription must also match.
  */
 export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 

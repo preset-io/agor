@@ -32,133 +32,15 @@ import type {
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
   MCPServer,
-  MCPTransport,
   Session,
   UserID,
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug } from '@agor/core/types';
-
-/** Catalog transports, as `mcp_servers` names them. */
-function toServerTransport(entry: MCPCatalogEntry): MCPTransport {
-  return entry.transport === 'sse' ? 'sse' : 'http';
-}
-
-/**
- * Whether two endpoint URLs name the same place.
- *
- * Normalised through `URL` so a trailing slash, a default port, or a
- * differently-cased host does not read as a different server and cost somebody
- * their install. Anything unparseable falls back to an exact comparison rather
- * than guessing.
- */
-function sameEndpoint(a: string | undefined, b: string): boolean {
-  if (!a) return false;
-  const normalize = (value: string): string => {
-    try {
-      const url = new URL(value.trim());
-      url.pathname = url.pathname.replace(/\/+$/, '');
-      return url.href;
-    } catch {
-      return value.trim();
-    }
-  };
-  return normalize(a) === normalize(b);
-}
-
-/**
- * Auth fields a read of an `mcp_servers` row can carry without anyone having
- * configured them.
- *
- * The OAuth flow never writes to the server row: an access token, its refresh
- * token, and its expiry belong to one user and live in `user_mcp_oauth_tokens`,
- * keyed by `(user_id, mcp_server_id)`. But `mcp-servers` has a read hook that
- * hydrates the caller's own token onto the payload it returns, and
- * {@link MCPCatalogConnectService} finds existing installs through that service
- * — so these three arrive on exactly the rows that reuse is most important for,
- * the ones the caller already authenticated. Comparing them would make every
- * successful authentication look like drift and mint a second row beside the
- * working one.
- */
-const RUNTIME_HYDRATED_AUTH_FIELDS = [
-  'oauth_access_token',
-  'oauth_refresh_token',
-  'oauth_token_expires_at',
-] as const satisfies readonly (keyof MCPAuth)[];
-
-/**
- * Whether `auth` is the configuration `prescribed` describes, ignoring what the
- * read hook hydrated.
- *
- * Compared by difference rather than field by field: every key on the row that
- * is not runtime-hydrated must appear in the prescription with the same value,
- * and vice versa. A named-fields comparison would silently stop covering any
- * field later added to {@link MCPAuth} — and the fields most worth adding to an
- * auth block are the ones that route a credential. This way an unrecognised key
- * on the row is a mismatch, so a new field is excluded from reuse until someone
- * decides otherwise, rather than being waved through by omission.
- */
-function isPrescribedAuth(auth: MCPAuth | undefined, prescribed: MCPAuth): boolean {
-  const significant = (value: MCPAuth | undefined): Record<string, unknown> => {
-    const entries = Object.entries(value ?? { type: 'none' }).filter(
-      ([key, field]) =>
-        field !== undefined && !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(key)
-    );
-    return Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-  };
-  return JSON.stringify(significant(auth)) === JSON.stringify(significant(prescribed));
-}
-
-/**
- * Whether `server` still carries the configuration the catalog described.
- *
- * The stamp records where a row came from; this asks whether it is still that.
- * The two come apart because a member may edit their own server — which is
- * theirs to do — so a stamp on its own would let an edited row stand in for
- * the catalog's, and reuse would hand the next caller something the catalog
- * never described. A stamp nobody but the install path can write (see
- * `authorizeMcpServerWrite`) closes the forged half; this closes the half
- * where a legitimately stamped row is changed afterwards.
- *
- * What is compared is everything that decides where the session's traffic goes
- * and what it carries: the endpoint, and the credential routing. `prescribed`
- * is the auth block this same connect just derived from the entry and the
- * probe, so the comparison is against what installing right now would produce
- * rather than against a fixed shape — which is what lets an OAuth entry be
- * reused at all, and what makes a row whose owner has since pointed
- * `oauth_token_url` at their own host fail to match. That field, and
- * `oauth_authorization_url` and `oauth_client_secret` with it, are ones connect
- * never sets, so on a catalog row their mere presence is the drift: they are
- * where an authorization code and a client credential get sent.
- *
- * It also means an entry whose endpoint has changed sides — installed while it
- * was open, now answering with an OAuth challenge — does not match its old
- * unauthenticated row, and the caller gets one configured the way the endpoint
- * now answers instead of a row that can no longer work.
- *
- * Custom headers are refused wholesale rather than screened for the
- * dangerous-looking ones. Agor redacts every custom header value on read and
- * documents them as secret-bearing; the only names it classifies are the
- * reserved ones it refuses to store at all. There is no notion of a harmless
- * header anywhere in the codebase, and reuse is the wrong place to invent one
- * — a rule that has to guess which headers carry secrets is a rule that will
- * eventually guess wrong.
- *
- * Genuinely cosmetic fields stay the owner's: name, labels, description, and
- * scope. A second row for a benign edit would be its own bug.
- */
-function isInstallOf(
-  server: MCPServer,
-  entry: MCPCatalogEntry & { remote_url: string },
-  prescribed: MCPAuth
-): boolean {
-  return (
-    server.catalog_entry_name === entry.name &&
-    server.transport === toServerTransport(entry) &&
-    sameEndpoint(server.url, entry.remote_url) &&
-    isPrescribedAuth(server.auth, prescribed) &&
-    Object.keys(server.headers ?? {}).length === 0
-  );
-}
+import {
+  catalogOAuthConfig,
+  catalogServerTransport,
+  isCurrentCatalogInstall,
+} from './mcp-catalog-install-policy.js';
 
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
   remote_url: string;
@@ -251,18 +133,6 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  * block above and not a row full of `undefined` that would then have to be
  * compared around.
  */
-function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
-  const stated = entry.oauth;
-  return {
-    type: 'oauth',
-    oauth_mode: 'per_user',
-    ...(stated?.scope ? { oauth_scope: stated.scope } : {}),
-    ...(stated?.client_id ? { oauth_client_id: stated.client_id } : {}),
-    ...(stated?.dcr_mode ? { oauth_dcr_mode: stated.dcr_mode } : {}),
-    ...(stated?.compatibility_mode ? { oauth_compatibility_mode: stated.compatibility_mode } : {}),
-  };
-}
-
 /**
  * Decide how the entry's endpoint wants to be talked to, and produce the auth
  * block to install it with — or refuse.
@@ -333,7 +203,8 @@ export function createMCPCatalogConnectService(
    * the entry is unique on, so there is no second normalisation to keep in
    * step and an install survives every edit to the entry except a rename.
    *
-   * The name alone does not settle it, though: see {@link isInstallOf}. A row
+   * The name alone does not settle it, though: see
+   * {@link isCurrentCatalogInstall}. A row
    * that no longer carries the entry's configuration is passed over rather
    * than handed back, so a caller who has one of those and a real install gets
    * the real one.
@@ -358,7 +229,13 @@ export function createMCPCatalogConnectService(
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => server.enabled && isInstallOf(server, entry, prescribed));
+    return servers.find(
+      (server) =>
+        server.enabled &&
+        isCurrentCatalogInstall(server, entry, prescribed, {
+          reconcileMissingCompatibilityMode: true,
+        })
+    );
   };
 
   return {
@@ -391,7 +268,7 @@ export function createMCPCatalogConnectService(
         name: catalogServerSlug(entry.name),
         display_name: catalogDisplayName(entry),
         description: entry.benefit ?? entry.description,
-        transport: toServerTransport(entry),
+        transport: catalogServerTransport(entry),
         url: entry.remote_url,
         auth,
         // Session scope: an install is for the session it launched, not

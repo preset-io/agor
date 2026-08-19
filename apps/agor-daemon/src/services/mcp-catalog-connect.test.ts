@@ -33,6 +33,7 @@ const CURATED: MCPCatalogEntry = {
 function installOf(overrides: Record<string, unknown> = {}) {
   return {
     mcp_server_id: 'server-existing',
+    source: 'catalog',
     catalog_entry_name: LINEAR,
     transport: 'http',
     url: 'https://mcp.linear.app/mcp',

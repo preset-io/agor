@@ -1302,6 +1302,40 @@ describe('marketplace oauth-start production boundary', () => {
     ).rejects.toThrow('Failed to fetch authorization server metadata');
   });
 
+  it('accepts exactly one trailing-slash spelling difference for a marketplace issuer', async () => {
+    const fixture = linearFetch({ metadataIssuer: 'https://mcp.linear.example/' });
+    globalThis.fetch = fixture.fetch as unknown as typeof fetch;
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${fixture.metadataUrl}"`,
+        'pre-registered-client',
+        redirectUri,
+        { resourceUri: fixture.mcpUrl, compatibilityMode: 'marketplace' }
+      )
+    ).resolves.toMatchObject({
+      issuer: 'https://mcp.linear.example/',
+      compatibilityMode: 'marketplace',
+    });
+  });
+
+  it.each([
+    'https://MCP.linear.example',
+    'https://mcp.linear.example:443',
+    'https://mcp.linear.example/a/../',
+    'https://mcp.linear.example//',
+  ])('does not accept URL canonicalization of marketplace issuer %s', async (metadataIssuer) => {
+    const fixture = linearFetch({ metadataIssuer });
+    globalThis.fetch = fixture.fetch as unknown as typeof fetch;
+    await expect(
+      startMCPOAuthFlow(
+        `Bearer resource_metadata="${fixture.metadataUrl}"`,
+        'pre-registered-client',
+        redirectUri,
+        { resourceUri: fixture.mcpUrl, compatibilityMode: 'marketplace' }
+      )
+    ).rejects.toThrow('Failed to fetch authorization server metadata');
+  });
+
   it('requires the callback issuer when a marketplace authorization server advertises RFC 9207', async () => {
     const fixture = linearFetch({ callbackIssuer: true });
     globalThis.fetch = fixture.fetch as unknown as typeof fetch;

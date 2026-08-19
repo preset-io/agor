@@ -660,12 +660,17 @@ function oauthIssuerIdentifiersMatch(left: unknown, right: unknown): boolean {
   if (typeof left !== 'string' || typeof right !== 'string') return false;
   if (left === right) return true;
   try {
-    const normalize = (value: string): string => {
-      const url = new URL(value);
-      if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '');
-      return url.toString();
-    };
-    return normalize(left) === normalize(right);
+    // Parse only to reject non-URL issuer identifiers. Do not compare the
+    // parsed values: URL serialization also folds host case, removes default
+    // ports, and resolves dot segments, none of which this reviewed exception
+    // intends to accept.
+    new URL(left);
+    new URL(right);
+    const differsByOneTrailingSlash = (withSlash: string, withoutSlash: string): boolean =>
+      withSlash.endsWith('/') &&
+      !withSlash.slice(0, -1).endsWith('/') &&
+      withSlash.slice(0, -1) === withoutSlash;
+    return differsByOneTrailingSlash(left, right) || differsByOneTrailingSlash(right, left);
   } catch {
     return false;
   }

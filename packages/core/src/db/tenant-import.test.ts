@@ -7,7 +7,7 @@
  * access: if the escaping link is caught first, that proxy is never touched.
  */
 
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,11 +19,12 @@ import {
   sha256Hex,
   TENANT_ARCHIVE_MANIFEST_VERSION,
   type TenantArchiveManifest,
+  tableJsonlPath,
   writeManifest,
 } from './tenant-archive';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
 import { UnsafeArchivePathError } from './tenant-filesystem';
-import { importTenant } from './tenant-import';
+import { importTenant, validateArchivedMCPCompatibilityModes } from './tenant-import';
 
 let scratch: string;
 
@@ -115,5 +116,47 @@ describe('importTenant pre-mutation validation ordering', () => {
     await expect(importTenant(untouchableDb(), { archivePath: scratch })).rejects.toThrow(
       /database was accessed/
     );
+  });
+});
+
+describe('importTenant MCP OAuth public policy boundary', () => {
+  async function archivedMcpManifest(mode: unknown): Promise<TenantArchiveManifest> {
+    const line = `${JSON.stringify({ data: { auth: { type: 'oauth', oauth_compatibility_mode: mode } } })}\n`;
+    await mkdir(databaseDir(scratch), { recursive: true });
+    await writeFile(tableJsonlPath(scratch, 'mcp_servers'), line, 'utf8');
+    return {
+      manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+      tenantId: 'acme',
+      operationId: 'op-oauth-policy',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: 'not-used-by-direct-validator',
+      database: {
+        identity,
+        tables: [
+          {
+            name: 'mcp_servers',
+            rowCount: 1,
+            sha256: sha256Hex(line),
+            bytes: Buffer.byteLength(line),
+          },
+        ],
+      },
+      filesystem: { included: false, entries: [], skippedSpecialCount: 0, unsafeSymlinkCount: 0 },
+    };
+  }
+
+  it.each(['marketplace', 'future-mode'])(
+    'rejects archived public compatibility mode %s',
+    async (mode) => {
+      await expect(
+        validateArchivedMCPCompatibilityModes(scratch, await archivedMcpManifest(mode))
+      ).rejects.toThrow(/must be either strict or legacy/);
+    }
+  );
+
+  it.each([undefined, 'strict', 'legacy'])('accepts archived public mode %s', async (mode) => {
+    await expect(
+      validateArchivedMCPCompatibilityModes(scratch, await archivedMcpManifest(mode))
+    ).resolves.toBeUndefined();
   });
 });

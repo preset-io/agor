@@ -13,6 +13,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
+import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
 import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
@@ -86,6 +87,7 @@ export class MCPServerRepository
    * Convert MCPServer to database insert format
    */
   private mcpServerToInsert(data: CreateMCPServerInput | Partial<MCPServer>): MCPServerInsert {
+    assertPublicMCPOAuthCompatibilityMode('auth' in data ? data.auth : undefined);
     const now = Date.now();
     const serverId =
       'mcp_server_id' in data && data.mcp_server_id ? data.mcp_server_id : generateId();

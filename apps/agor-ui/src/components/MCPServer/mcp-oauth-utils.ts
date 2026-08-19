@@ -176,7 +176,11 @@ export interface BuiltAuth {
  */
 export function buildAuthFromValues(
   values: Record<string, unknown>,
-  options: { preserveAbsentDcrMode?: boolean } = {}
+  options: {
+    preserveAbsentDcrMode?: boolean;
+    preserveAbsentCompatibilityMode?: boolean;
+    preserveAbsentGrantType?: boolean;
+  } = {}
 ): BuiltAuth | undefined {
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
@@ -192,6 +196,12 @@ export function buildAuthFromValues(
     Object.assign(auth, extractOAuthConfig(values));
     if (options.preserveAbsentDcrMode && values.oauth_dcr_mode === 'advertised') {
       delete auth.oauth_dcr_mode;
+    }
+    if (options.preserveAbsentCompatibilityMode && values.oauth_compatibility_mode === 'strict') {
+      delete auth.oauth_compatibility_mode;
+    }
+    if (options.preserveAbsentGrantType && values.oauth_grant_type === 'client_credentials') {
+      delete auth.oauth_grant_type;
     }
   }
   return auth;

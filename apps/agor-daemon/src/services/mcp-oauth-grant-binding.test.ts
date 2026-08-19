@@ -3,6 +3,7 @@ import type { MCPServer, MCPServerID } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   fingerprintMCPOAuthGrantConfiguration,
+  grantBindingVersionForCompatibilityMode,
   hasMCPOAuthRelevantServerConfigurationChanged,
   isMCPOAuthGrantBoundToServer,
   MCP_OAUTH_GRANT_BINDING_VERSION,
@@ -45,11 +46,12 @@ const resolved = {
   redirectUri: 'https://agor.example/oauth/callback',
   clientId: 'registered-client',
   clientSecret: 'registered-secret',
+  compatibilityMode: 'strict',
 } satisfies MCPOAuthResolvedGrantBinding;
 
 function tokenFor(
   fingerprint: string,
-  version: UserMCPOAuthToken['grant_binding_version'] = MCP_OAUTH_GRANT_BINDING_VERSION
+  version: UserMCPOAuthToken['grant_binding_version'] = 2
 ): UserMCPOAuthToken {
   return {
     user_id: null,
@@ -101,12 +103,13 @@ describe('MCP OAuth grant configuration binding', () => {
       isMCPOAuthGrantBoundToServer(
         masterSecret,
         withoutPolicy,
-        tokenFor(legacyFingerprint(withoutPolicy), 1)
+        tokenFor(legacyFingerprint(withoutPolicy), 1),
+        'strict'
       )
     ).toBe(true);
   });
 
-  it('binds the marketplace-derived profile and an explicit strict opt-in differently', () => {
+  it('versions and binds a marketplace policy transition explicitly', () => {
     const catalogDefault: ServerBinding = {
       ...server,
       source: 'catalog',
@@ -118,9 +121,67 @@ describe('MCP OAuth grant configuration binding', () => {
       auth: { ...catalogDefault.auth, oauth_compatibility_mode: 'strict' },
     };
 
-    expect(fingerprintMCPOAuthGrantConfiguration(masterSecret, catalogDefault, resolved)).not.toBe(
-      fingerprintMCPOAuthGrantConfiguration(masterSecret, catalogStrict, resolved)
+    const marketplaceResolved = { ...resolved, compatibilityMode: 'marketplace' as const };
+    const strictFingerprint = fingerprintMCPOAuthGrantConfiguration(
+      masterSecret,
+      catalogStrict,
+      resolved
     );
+    const marketplaceFingerprint = fingerprintMCPOAuthGrantConfiguration(
+      masterSecret,
+      catalogDefault,
+      marketplaceResolved
+    );
+    expect(strictFingerprint).not.toBe(marketplaceFingerprint);
+    expect(grantBindingVersionForCompatibilityMode('strict')).toBe(2);
+    expect(grantBindingVersionForCompatibilityMode('legacy')).toBe(2);
+    expect(grantBindingVersionForCompatibilityMode('marketplace')).toBe(3);
+    // A pre-marketplace v2 strict grant cannot silently cross into the new
+    // policy even though both formats share the historical version number.
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        catalogDefault,
+        tokenFor(
+          fingerprintMCPOAuthGrantConfiguration(masterSecret, catalogDefault, resolved, 2),
+          2
+        ),
+        'marketplace'
+      )
+    ).toBe(false);
+    // A v2 grant actually issued by the merged #2377 implementation did bind
+    // marketplace into its HMAC. Keep it when the row still satisfies today's
+    // canonical catalog policy; edited/removed rows resolve strict upstream.
+    const mergedPrFingerprint = fingerprintMCPOAuthGrantConfiguration(
+      masterSecret,
+      catalogDefault,
+      marketplaceResolved,
+      2
+    );
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        catalogDefault,
+        tokenFor(mergedPrFingerprint, 2),
+        'marketplace'
+      )
+    ).toBe(true);
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        catalogDefault,
+        tokenFor(marketplaceFingerprint, 3),
+        'marketplace'
+      )
+    ).toBe(true);
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        catalogDefault,
+        tokenFor(marketplaceFingerprint, 3),
+        'strict'
+      )
+    ).toBe(false);
     expect(hasMCPOAuthRelevantServerConfigurationChanged(catalogDefault, catalogStrict)).toBe(true);
   });
 
@@ -135,7 +196,7 @@ describe('MCP OAuth grant configuration binding', () => {
       [
         'compatibility mode',
         { ...server, auth: { ...server.auth, oauth_compatibility_mode: 'legacy' } },
-        resolved,
+        { ...resolved, compatibilityMode: 'legacy' },
       ],
       ['DCR policy', { ...server, auth: { ...server.auth, oauth_dcr_mode: 'fallback' } }, resolved],
       [
@@ -169,6 +230,7 @@ describe('MCP OAuth grant configuration binding', () => {
       ['redirect contract', server, { ...resolved, redirectUri: 'https://other-agor.example/cb' }],
       ['resolved client id', server, { ...resolved, clientId: 'other-registered-client' }],
       ['resolved client secret', server, { ...resolved, clientSecret: 'other-registered-secret' }],
+      ['effective compatibility mode', server, { ...resolved, compatibilityMode: 'marketplace' }],
     ];
 
     for (const [label, changedServer, changedResolved] of variants) {
@@ -177,21 +239,46 @@ describe('MCP OAuth grant configuration binding', () => {
         label
       ).not.toBe(original);
     }
-    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(2);
+    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(3);
   });
 
   it('revalidates a stored grant and rejects a configuration change', () => {
     const fingerprint = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
     const grant = tokenFor(fingerprint);
-    expect(isMCPOAuthGrantBoundToServer(masterSecret, server, grant)).toBe(true);
+    expect(isMCPOAuthGrantBoundToServer(masterSecret, server, grant, 'strict')).toBe(true);
     expect(
       isMCPOAuthGrantBoundToServer(
         masterSecret,
         { ...server, url: 'https://replacement.example/mcp' },
-        grant
+        grant,
+        'strict'
       )
     ).toBe(false);
-    expect(isMCPOAuthGrantBoundToServer('other-master', server, grant)).toBe(false);
+    expect(isMCPOAuthGrantBoundToServer('other-master', server, grant, 'strict')).toBe(false);
+  });
+
+  it('keeps a v2 strict grant for an existing catalog row whose stored mode was absent', () => {
+    const existingStrictCatalogServer: ServerBinding = {
+      ...server,
+      source: 'catalog',
+      catalog_entry_name: 'com.example/strict-provider',
+      auth: { ...server.auth, oauth_compatibility_mode: undefined },
+    };
+    const fingerprint = fingerprintMCPOAuthGrantConfiguration(
+      masterSecret,
+      existingStrictCatalogServer,
+      resolved,
+      2
+    );
+
+    expect(
+      isMCPOAuthGrantBoundToServer(
+        masterSecret,
+        existingStrictCatalogServer,
+        tokenFor(fingerprint, 2),
+        'strict'
+      )
+    ).toBe(true);
   });
 
   it('detects all server-side OAuth configuration changes for invalidation', () => {

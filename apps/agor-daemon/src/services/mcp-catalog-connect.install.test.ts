@@ -237,17 +237,26 @@ describe('marketplace install, as it lands in the database', () => {
  * `around`, and `after` hooks on `mcp-servers` too, and none of them are the
  * claim under test.
  */
-function captureRegisteredMcpServerCreateHooks(
-  db: TenantScopeAwareDatabase
-): Array<(context: McpServerWriteHookContext) => Promise<unknown>> {
-  const captured: Array<(context: McpServerWriteHookContext) => Promise<unknown>> = [];
+function captureRegisteredMcpServerCreateHooks(db: TenantScopeAwareDatabase): {
+  create: Array<(context: McpServerWriteHookContext) => Promise<unknown>>;
+  patch: Array<(context: McpServerWriteHookContext) => Promise<unknown>>;
+} {
+  const captured = {
+    create: [] as Array<(context: McpServerWriteHookContext) => Promise<unknown>>,
+    patch: [] as Array<(context: McpServerWriteHookContext) => Promise<unknown>>,
+  };
   const app = {
     service(path: string) {
       return {
-        hooks(hooks: { before?: { create?: unknown[] } }) {
+        hooks(hooks: { before?: { create?: unknown[]; patch?: unknown[] } }) {
           if (path.replace(/^\//, '') !== 'mcp-servers') return;
-          captured.push(
+          captured.create.push(
             ...((hooks.before?.create ?? []) as Array<
+              (context: McpServerWriteHookContext) => Promise<unknown>
+            >)
+          );
+          captured.patch.push(
+            ...((hooks.before?.patch ?? []) as Array<
               (context: McpServerWriteHookContext) => Promise<unknown>
             >)
           );
@@ -319,11 +328,25 @@ describe('the write hook this seam depends on', () => {
           user: { user_id: caller.user_id, role: 'member' },
         } as unknown as AuthenticatedParams,
       } satisfies McpServerWriteHookContext;
-      for (const hook of registeredHooks) await hook(context);
+      for (const hook of registeredHooks.create) await hook(context);
       return context;
     };
 
-    return { bob, mallory, createAs };
+    const patchAs = async (caller: User, data: Record<string, unknown>) => {
+      const context = {
+        method: 'patch',
+        id: '01900000-0000-7000-8000-000000000099',
+        data,
+        params: {
+          provider: 'rest',
+          user: { user_id: caller.user_id, role: 'member' },
+        } as unknown as AuthenticatedParams,
+      } satisfies McpServerWriteHookContext;
+      for (const hook of registeredHooks.patch) await hook(context);
+      return context;
+    };
+
+    return { bob, mallory, createAs, patchAs };
   };
 
   it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
@@ -345,4 +368,18 @@ describe('the write hook this seam depends on', () => {
 
     expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(bob.user_id);
   });
+
+  it.each(['marketplace', 'future-mode'])(
+    'rejects public create and patch compatibility mode %s before authorization',
+    async (mode) => {
+      const { bob, createAs, patchAs } = await standUpDaemonHooks();
+      const data = {
+        transport: 'http',
+        auth: { type: 'oauth', oauth_compatibility_mode: mode },
+      };
+
+      await expect(createAs(bob, data)).rejects.toThrow(/must be either strict or legacy/);
+      await expect(patchAs(bob, data)).rejects.toThrow(/must be either strict or legacy/);
+    }
+  );
 });
