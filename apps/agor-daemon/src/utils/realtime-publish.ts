@@ -496,7 +496,8 @@ async function resolvePublishScope(
   context: PublishContext,
   accessCache: RealtimeAccessCache
 ): Promise<PublishScope> {
-  switch (audienceFor(context.path)) {
+  const audience = audienceFor(context.path);
+  switch (audience) {
     case 'branch':
     case 'branch-route': {
       const branchId = extractBranchId(data, context);
@@ -537,12 +538,44 @@ async function resolvePublishScope(
       return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
     }
 
-    // 'knowledge' never reaches here — resolveKnowledgeRealtimeUserIds answers
-    // for every `kb/*` path earlier in resolveDelivery. 'tenant' is the only
-    // remaining declared audience, and 'none'/undefined were denied at the gate.
-    default:
+    case 'tenant':
+    // 'knowledge' should not reach here — resolveKnowledgeRealtimeUserIds
+    // answers for every `kb/*` path earlier in resolveDelivery. It is listed
+    // explicitly anyway: if that call ever stops covering a kb path, the
+    // tenant channel is the same answer it had before, not a silent widening
+    // through a catch-all.
+    case 'knowledge':
       return { kind: 'global' };
+
+    case 'none':
+    case undefined:
+      // Unreachable: the gate in resolveLocalDelivery denied both before this
+      // ran. Answering serviceOnly rather than falling through keeps the two
+      // in agreement if the gate is ever moved.
+      return { kind: 'serviceOnly' };
+
+    default:
+      return unhandledAudienceScope(audience, context);
   }
+}
+
+/**
+ * Fail closed on an audience nobody wrote a case for.
+ *
+ * The `never` parameter is the real mechanism: adding a member to
+ * `RealtimePublishAudience` without a case above stops compiling, so
+ * `turbo run typecheck` catches it before anyone can ship it. This body is the
+ * belt to that braces — if the type is ever widened through a cast, delivery
+ * narrows to service connections instead of quietly reaching the whole tenant,
+ * which is the failure this whole file exists to prevent.
+ */
+function unhandledAudienceScope(audience: never, context: PublishContext): PublishScope {
+  console.warn('[realtime] Suppressing event with an unhandled publish audience', {
+    audience,
+    path: context.path,
+    event: context.event,
+  });
+  return { kind: 'serviceOnly' };
 }
 
 function filterToServiceConnections(authenticated: PublishChannel): PublishChannel {
