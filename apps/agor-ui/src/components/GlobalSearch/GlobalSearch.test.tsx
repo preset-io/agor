@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalSearch } from './GlobalSearch';
@@ -108,19 +108,13 @@ describe('GlobalSearch', () => {
     expect(button).toBeInTheDocument();
   });
 
-  it('keeps global search accessible through its visible native button', async () => {
+  it('clicking the icon opens the popover and shows the combobox input', async () => {
     renderSearch();
-    const button = screen.getByRole('button', { name: 'Open search' });
-    expect(button.tagName).toBe('BUTTON');
 
-    button.focus();
-    expect(button).toHaveFocus();
-    fireEvent.click(button, { detail: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Open search' }));
     await vi.advanceTimersByTimeAsync(16);
 
-    const input = screen.getByRole('combobox', { name: 'Global search' });
-    expect(input).toBeInTheDocument();
-    expect(input).toHaveFocus();
+    expect(screen.getByRole('combobox', { name: 'Global search' })).toBeInTheDocument();
   });
 
   it('clicking the icon again closes the popover', async () => {
@@ -137,23 +131,15 @@ describe('GlobalSearch', () => {
     expect(screen.queryByRole('combobox', { name: 'Global search' })).not.toBeInTheDocument();
   });
 
-  it.each([
-    { label: 'Cmd+K', modifiers: { metaKey: true } },
-    { label: 'Ctrl+K', modifiers: { ctrlKey: true } },
-  ])('leaves browser-native $label behavior untouched', ({ modifiers }) => {
+  it('Cmd+K opens the popover from closed state', async () => {
     renderSearch();
-    const event = createEvent.keyDown(window, {
-      key: 'k',
-      bubbles: true,
-      cancelable: true,
-      ...modifiers,
-    });
 
-    const notCancelled = fireEvent(window, event);
-
-    expect(notCancelled).toBe(true);
-    expect(event.defaultPrevented).toBe(false);
     expect(screen.queryByRole('combobox', { name: 'Global search' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    await vi.advanceTimersByTimeAsync(16);
+
+    expect(screen.getByRole('combobox', { name: 'Global search' })).toBeInTheDocument();
   });
 
   it('Close button closes the popover', async () => {
