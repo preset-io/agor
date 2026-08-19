@@ -55,6 +55,8 @@ type TestProvider = {
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
   releaseToken: () => void;
+  releaseTokenRequest: (requestNumber: number) => void;
+  waitForTokenRequest: (requestNumber: number) => Promise<void>;
   releaseRefresh: () => void;
   close: () => Promise<void>;
 };
@@ -69,8 +71,23 @@ async function createTestProvider(
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
-  const tokenRequested = deferred<void>();
-  const release = deferred<void>();
+  const tokenRequestMilestones = new Map<number, Deferred<void>>();
+  const tokenReleaseGates = new Map<number, Deferred<void>>();
+  const tokenRequestMilestone = (requestNumber: number): Deferred<void> => {
+    const existing = tokenRequestMilestones.get(requestNumber);
+    if (existing) return existing;
+    const created = deferred<void>();
+    tokenRequestMilestones.set(requestNumber, created);
+    return created;
+  };
+  const tokenReleaseGate = (requestNumber: number): Deferred<void> => {
+    const existing = tokenReleaseGates.get(requestNumber);
+    if (existing) return existing;
+    const created = deferred<void>();
+    tokenReleaseGates.set(requestNumber, created);
+    return created;
+  };
+  const tokenRequested = tokenRequestMilestone(1);
   const refreshRequested = deferred<void>();
   const releaseRefresh = deferred<void>();
   let tokenRequestCount = 0;
@@ -135,9 +152,10 @@ async function createTestProvider(
         return;
       }
       tokenRequestCount += 1;
-      tokenRequested.resolve();
+      const requestRelease = tokenReleaseGate(tokenRequestCount);
+      tokenRequestMilestone(tokenRequestCount).resolve();
       if (options.holdToken || options.holdTokenRequests?.includes(tokenRequestCount)) {
-        await release.promise;
+        await requestRelease.promise;
       }
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -206,10 +224,14 @@ async function createTestProvider(
     requests,
     tokenRequested,
     refreshRequested,
-    releaseToken: () => release.resolve(),
+    releaseToken: () => {
+      for (const gate of tokenReleaseGates.values()) gate.resolve();
+    },
+    releaseTokenRequest: (requestNumber: number) => tokenReleaseGate(requestNumber).resolve(),
+    waitForTokenRequest: (requestNumber: number) => tokenRequestMilestone(requestNumber).promise,
     releaseRefresh: () => releaseRefresh.resolve(),
     close: () => {
-      release.resolve();
+      for (const gate of tokenReleaseGates.values()) gate.resolve();
       releaseRefresh.resolve();
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -622,6 +644,154 @@ describe('SQLite saved-row OAuth authority', () => {
       grant_generation: generation,
       oauth_access_token: 'new-authorization-access-token',
     });
+  });
+
+  it.each([
+    {
+      mode: 'per_user' as const,
+      name: 'lower generation commits first',
+      order: 'lower-first' as const,
+    },
+    {
+      mode: 'per_user' as const,
+      name: 'higher generation commits first',
+      order: 'higher-first' as const,
+    },
+    { mode: 'per_user' as const, name: 'both empty-row writes race', order: 'concurrent' as const },
+    {
+      mode: 'shared' as const,
+      name: 'lower generation commits first',
+      order: 'lower-first' as const,
+    },
+    {
+      mode: 'shared' as const,
+      name: 'higher generation commits first',
+      order: 'higher-first' as const,
+    },
+    { mode: 'shared' as const, name: 'both empty-row writes race', order: 'concurrent' as const },
+  ])('keeps the higher first-time $mode callback when $name', async ({ mode, order }) => {
+    const provider = await createTestProvider({
+      holdTokenRequests: [1, 2],
+      numberedTokenResponses: true,
+    });
+    providers.push(provider);
+    const harness = await createHarness(provider, mode);
+    databases.push(harness.rawDb);
+
+    const start = async (): Promise<string> => {
+      const result = (await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+        authorizationUrl: string;
+      };
+      return new URL(result.authorizationUrl).searchParams.get('state')!;
+    };
+
+    // Both one-shot callbacks are claimed and blocked inside their provider
+    // exchanges while the grant subject is still empty.
+    const callbackA = harness.callback(await start());
+    await provider.waitForTokenRequest(1);
+    const callbackB = harness.callback(await start());
+    await provider.waitForTokenRequest(2);
+
+    let emptyReadBarrierSpy: ReturnType<typeof vi.spyOn> | undefined;
+    if (order === 'concurrent') {
+      // Deterministically reproduce the old read-then-insert race: if callback
+      // persistence performs an empty-row read, hold the first until both have
+      // observed null. The atomic upsert correctly performs no such read.
+      const originalGetToken = UserMCPOAuthTokenRepository.prototype.getToken;
+      const bothEmptyReads = deferred<void>();
+      let emptyReadCount = 0;
+      emptyReadBarrierSpy = vi
+        .spyOn(UserMCPOAuthTokenRepository.prototype, 'getToken')
+        .mockImplementation(async function (userId, serverId) {
+          const row = await originalGetToken.call(this, userId, serverId);
+          if (row) return row;
+          emptyReadCount += 1;
+          if (emptyReadCount === 2) bothEmptyReads.resolve();
+          await bothEmptyReads.promise;
+          return null;
+        });
+    }
+
+    let resultA: { status: number; body: string };
+    let resultB: { status: number; body: string };
+    try {
+      if (order === 'lower-first') {
+        provider.releaseTokenRequest(1);
+        resultA = await callbackA;
+        provider.releaseTokenRequest(2);
+        resultB = await callbackB;
+      } else if (order === 'higher-first') {
+        provider.releaseTokenRequest(2);
+        resultB = await callbackB;
+        provider.releaseTokenRequest(1);
+        resultA = await callbackA;
+      } else {
+        provider.releaseTokenRequest(1);
+        provider.releaseTokenRequest(2);
+        [resultA, resultB] = await Promise.all([callbackA, callbackB]);
+      }
+    } finally {
+      emptyReadBarrierSpy?.mockRestore();
+    }
+
+    expect(resultB.status).toBe(200);
+    if (order === 'lower-first') expect(resultA.status).toBe(200);
+
+    const repository = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const subjectUserId = mode === 'per_user' ? (harness.user.user_id as UserID) : null;
+    const durable = await repository.getToken(
+      subjectUserId,
+      harness.server.mcp_server_id as MCPServerID
+    );
+    expect(durable).toMatchObject({
+      user_id: subjectUserId,
+      mcp_server_id: harness.server.mcp_server_id,
+      grant_generation: 2,
+      grant_binding_version: 4,
+      oauth_access_token: 'sqlite-access-token-2',
+      oauth_refresh_token: 'refresh-2',
+      oauth_client_id: 'saved-client-id',
+      oauth_resource_uri: provider.savedMcpUrl,
+    });
+    expect(durable?.grant_binding_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    const attemptReplacement = (generation: number, accessToken: string) =>
+      repository.saveToken(subjectUserId, harness.server.mcp_server_id as MCPServerID, {
+        accessToken,
+        refreshToken: `${accessToken}-refresh`,
+        clientId: durable!.oauth_client_id,
+        grantBinding: {
+          generation,
+          version: 4,
+          fingerprint: durable!.grant_binding_fingerprint!,
+          metadataUri: durable!.oauth_metadata_uri!,
+          resourceUri: durable!.oauth_resource_uri!,
+          issuer: durable!.oauth_issuer!,
+          authorizationEndpoint: durable!.oauth_authorization_endpoint!,
+          tokenEndpoint: durable!.oauth_token_endpoint!,
+          redirectUri: durable!.oauth_redirect_uri!,
+        },
+      });
+    await expect(attemptReplacement(1, 'lower-generation')).rejects.toThrow(
+      'A newer MCP OAuth grant superseded this attempt'
+    );
+    await expect(attemptReplacement(2, 'equal-generation')).rejects.toThrow(
+      'A newer MCP OAuth grant superseded this attempt'
+    );
+    await expect(
+      repository.getToken(subjectUserId, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toMatchObject({
+      grant_generation: 2,
+      oauth_access_token: 'sqlite-access-token-2',
+    });
+    await expect(
+      repository.getToken(
+        mode === 'per_user' ? null : (harness.user.user_id as UserID),
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toBeNull();
   });
 
   it('never reuses a released generation while an older callback is exchanging', async () => {

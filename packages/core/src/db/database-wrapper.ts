@@ -447,6 +447,14 @@ function wrapQuery(
         db,
         table
       ),
+    onConflictDoUpdate: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { onConflictDoUpdate: (...args: unknown[]) => DrizzleQuery }).onConflictDoUpdate(
+          ...args
+        ),
+        db,
+        table
+      ),
   };
 }
 
