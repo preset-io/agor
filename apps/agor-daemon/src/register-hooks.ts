@@ -2207,9 +2207,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Users hooks
   // ============================================================================
 
+  /**
+   * The users service deliberately serves two unauthenticated callers — internal
+   * calls (no `provider`) and the Feathers local-auth email lookup during login —
+   * so it cannot take a blanket `requireAuth` on `all` the way other services do.
+   *
+   * But with no authenticate hook at all, `params.user` was never populated on the
+   * REST transport, so every downstream guard that reads it (the `find` hook,
+   * `authorizeUsersGet`, the role checks) rejected a perfectly valid Bearer token
+   * with "Authentication required". Socket.IO connections carry `params.user` from
+   * the authenticated connection, which is why this only ever failed over REST and
+   * only for the CLI — the UI never exercises this path.
+   *
+   * So: authenticate when the caller actually presented credentials, and leave both
+   * intentional unauthenticated paths exactly as they were.
+   */
+  const authenticateUsersRequestWhenCredentialed = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const params = context.params as AuthenticatedParams;
+    if (!params.provider) return context;
+    if (params.user) return context;
+    if (isLocalAuthenticationLookup(params) || isAuthenticationUserLookup(params)) return context;
+    if (!params.authentication) return context;
+    return requireAuth(context);
+  };
+
   app.service('users').hooks({
     before: {
-      all: [typedValidateQuery(userQueryValidator)],
+      all: [typedValidateQuery(userQueryValidator), authenticateUsersRequestWhenCredentialed],
       find: [
         (context) => {
           const params = context.params as AuthenticatedParams;
