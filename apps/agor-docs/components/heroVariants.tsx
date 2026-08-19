@@ -74,7 +74,7 @@ export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
   // technical-collaboration (solution-sell) above.
   'technical-collaboration-problem': {
     headline: 'Your AI coding agents\nare working [alone]',
-    subheadline: 'Siloed {terminals}, no shared {context}, no team {oversight}.',
+    subheadline: 'Bring every session onto one [board] your whole team can see.',
     ctaLabel: 'Start building together',
   },
   governance: {
