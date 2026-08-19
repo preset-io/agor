@@ -11,6 +11,9 @@ import styles from './LandingPage.module.css';
  */
 export type HeroVariantKey =
   | 'technical-collaboration'
+  // Exp 2 framing variant — problem-sell counterpart to
+  // technical-collaboration (solution-sell), for the messaging A/B test.
+  | 'technical-collaboration-problem'
   | 'governance'
   | 'business-builders'
   | 'outcomes'
@@ -21,6 +24,9 @@ export type HeroVariantKey =
   | 'selfware'
   | 'dev-team'
   | 'cost-control'
+  // Exp 2 framing variant — solution-sell counterpart to cost-control
+  // (problem-sell), for the messaging A/B test.
+  | 'cost-control-solution'
   // Shelved (not a hit in review) — copy kept here rather than deleted so
   // it can be reinstated cheaply if wanted later. Has no routed page; add
   // back a content/agentify-everyone.mdx stub (see git history for the
@@ -43,7 +49,14 @@ export interface HeroVariant {
 export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
   'technical-collaboration': {
     headline: 'Raise a team\nof [AI teammates]',
-    subheadline: '{Build} together, {learn} together. No lonely {terminals}.',
+    subheadline: '{Build} together on one [multiplayer canvas]. No lonely {terminals}.',
+    ctaLabel: 'Start building together',
+  },
+  // Exp 2 framing variant — problem-sell counterpart to
+  // technical-collaboration (solution-sell) above.
+  'technical-collaboration-problem': {
+    headline: 'Your AI coding agents\nare working [alone]',
+    subheadline: 'Siloed {terminals}, no shared {context}, no team {oversight}.',
     ctaLabel: 'Start building together',
   },
   governance: {
@@ -77,8 +90,15 @@ export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
     ctaLabel: 'Enable your dev team',
   },
   'cost-control': {
-    headline: 'Keep your [AI costs] under control',
-    subheadline: '{Governance}, {observability}, and {model agnosticism}.',
+    headline: 'Locked into [one AI vendor]\nas costs climb?',
+    subheadline: 'No way to {switch models} or keep agent {spend} in view.',
+    ctaLabel: 'Control your AI costs',
+  },
+  // Exp 2 framing variant — solution-sell counterpart to cost-control
+  // (problem-sell) above.
+  'cost-control-solution': {
+    headline: 'AI costs under control.\nNo [frontier lock-in].',
+    subheadline: 'Run {Claude}, {Codex}, {Gemini} & {Copilot}. Switch models anytime.',
     ctaLabel: 'Control your AI costs',
   },
   // Shelved — see HeroVariantKey comment above. Not routed to a live page.
