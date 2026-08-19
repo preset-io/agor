@@ -30,7 +30,7 @@ interface GlobalSearchProps extends GlobalSearchEntityMaps {
  *
  * Implementation per docs/internal/global-search-design-2026-05-23.md.
  * V1 scaffolding: client-side filtering over in-memory entity maps, sectioned
- * dropdown, type + scope chips, Cmd+K to focus.
+ * dropdown, and type + scope chips.
  */
 export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   currentUserId,
@@ -108,20 +108,8 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     document.getElementById(rowDomId(target))?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex, visibleRows, open]);
 
-  // Global Cmd+K / Ctrl+K opens + focuses the input.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setOpen(true);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
-
-  // Focus the input whenever the popover opens — covers both icon click
-  // and Cmd+K. Uses rAF because the Input mounts in the same render tick.
+  // Focus the input whenever the popover opens. Uses rAF because the Input
+  // mounts in the same render tick.
   useEffect(() => {
     if (open) {
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -221,7 +209,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
-      <Tooltip title="Search  ⌘K" open={open ? false : undefined}>
+      <Tooltip title="Search" open={open ? false : undefined}>
         <Button
           type="text"
           icon={<SearchOutlined style={{ fontSize: token.fontSizeLG }} />}

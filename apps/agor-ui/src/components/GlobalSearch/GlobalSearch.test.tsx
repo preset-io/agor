@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalSearch } from './GlobalSearch';
@@ -131,15 +131,23 @@ describe('GlobalSearch', () => {
     expect(screen.queryByRole('combobox', { name: 'Global search' })).not.toBeInTheDocument();
   });
 
-  it('Cmd+K opens the popover from closed state', async () => {
+  it.each([
+    { label: 'Cmd+K', modifiers: { metaKey: true } },
+    { label: 'Ctrl+K', modifiers: { ctrlKey: true } },
+  ])('leaves browser-native $label behavior untouched', ({ modifiers }) => {
     renderSearch();
+    const event = createEvent.keyDown(window, {
+      key: 'k',
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
 
+    const notCancelled = fireEvent(window, event);
+
+    expect(notCancelled).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
     expect(screen.queryByRole('combobox', { name: 'Global search' })).not.toBeInTheDocument();
-
-    fireEvent.keyDown(window, { key: 'k', metaKey: true });
-    await vi.advanceTimersByTimeAsync(16);
-
-    expect(screen.getByRole('combobox', { name: 'Global search' })).toBeInTheDocument();
   });
 
   it('Close button closes the popover', async () => {
