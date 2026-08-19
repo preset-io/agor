@@ -3,12 +3,22 @@ import {
   resolveAgenticToolSelectionPolicy,
   resolveManagedAgenticToolVersion,
 } from '@agor/core/agentic-integrations';
-import { loadConfig, resolveEffectiveConfig } from '@agor/core/config';
+import {
+  getConfigPath,
+  loadConfig,
+  requireDeploymentId,
+  resolveEffectiveConfig,
+} from '@agor/core/config';
 import { diagnoseGit } from '@agor/git';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { diagnoseAgenticTools } from '../lib/agentic-tool-diagnostics.js';
 import { listManagedAgorVersions } from '../lib/agentic-tool-integrations.js';
+import {
+  describeMissingDeploymentId,
+  isMissingDeploymentIdError,
+  repairDeploymentId,
+} from '../lib/daemon-deployment-config.js';
 import { diagnoseWebTerminalRuntime } from '../lib/optional-capabilities.js';
 import { diagnoseSandbox, sandboxInstallHint } from '../lib/sandbox-diagnostics.js';
 
@@ -33,12 +43,24 @@ export default class Doctor extends Command {
     // (e.g. AGOR_SANDBOX_ENABLED from the `sandbox` .agor.yml variant), matching
     // what the daemon actually runs — not just the raw config.yaml.
     const sandbox = diagnoseSandbox(resolveEffectiveConfig(cfg));
+
+    // `daemon start` refuses to run without this and sends people here, so doctor
+    // has to both report it and be able to fix it.
+    let deploymentIdPresent = true;
+    try {
+      requireDeploymentId(cfg);
+    } catch (error) {
+      if (!isMissingDeploymentIdError(error)) throw error;
+      deploymentIdPresent = false;
+    }
+
     if (flags.json) {
       this.log(
         JSON.stringify(
           {
-            ok: git.status === 'ready',
+            ok: git.status === 'ready' && deploymentIdPresent,
             git,
+            deploymentId: { present: deploymentIdPresent, configPath: getConfigPath() },
             optionalCapabilities: { webTerminal },
             policy,
             sandbox,
@@ -59,6 +81,25 @@ export default class Doctor extends Command {
     } else {
       this.log(`${chalk.red('✗')} ${git.detail}`);
     }
+
+    if (deploymentIdPresent) {
+      this.log(`${chalk.green('✓')} Deployment ID is set`);
+    } else {
+      this.log(`${chalk.red('✗')} daemon.deployment_id is missing — the daemon will not start`);
+      const repaired = await repairDeploymentId().catch((error: unknown) => {
+        this.log('');
+        this.log(error instanceof Error ? error.message : String(error));
+        return null;
+      });
+      if (repaired) {
+        this.log(`  ${chalk.green('✓')} Wrote deployment_id: ${repaired.deploymentId}`);
+        this.log(chalk.dim(`      Backup: ${repaired.backupPath}`));
+      } else {
+        this.log('');
+        this.log(describeMissingDeploymentId(getConfigPath()));
+      }
+    }
+
     this.log('');
     this.log(chalk.bold('Optional capabilities'));
     if (webTerminal.status === 'ready') {

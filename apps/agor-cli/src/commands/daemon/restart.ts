@@ -56,10 +56,6 @@ export default class DaemonRestart extends Command {
     try {
       const result = await loadDaemonConfigWithDeploymentIdentity(identity?.configPath);
       restartConfig = result.config;
-      if (result.migrated) {
-        this.log(chalk.green(`✓ Added daemon.deployment_id: ${result.migrated.deploymentId}`));
-        this.log(chalk.dim(`Backup: ${result.migrated.backupPath}`));
-      }
     } catch (error) {
       this.log(chalk.red('✗ Failed to load daemon configuration'));
       this.log(error instanceof Error ? error.message : String(error));
