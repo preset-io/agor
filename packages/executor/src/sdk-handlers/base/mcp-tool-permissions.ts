@@ -52,10 +52,35 @@ function sanitizeToToolNameAlphabet(name: string): string {
  * Indexing the rewritten server forms alongside the raw one keeps lookups
  * working for servers named e.g. "preset sdx" or "my.server". Codex also
  * lowercases, so that variant is indexed too.
+ *
+ * The collapsed form models a special case in the Claude CLI, which sanitizes
+ * a server name as we do and then, ONLY for names beginning `claude.ai `,
+ * additionally squeezes runs of underscores and trims them from both ends:
+ *
+ *     let t = e.replace(/[^a-zA-Z0-9_-]/g, "_");
+ *     if (e.startsWith("claude.ai ")) t = t.replace(/_+/g, "_").replace(/^_|_$/g, "");
+ *
+ * Without it, a connector called `claude.ai Gmail (Beta)` gets the rule
+ * `mcp__claude_ai_Gmail__Beta___delete_item` while the CLI mints
+ * `mcp__claude_ai_Gmail_Beta__delete_item`. The rule matches nothing and the
+ * deny silently becomes an allow — the exact failure this alias set exists to
+ * prevent, on precisely the names the claude.ai connectors carry.
+ *
+ * It also repairs a second problem with the same root: the CLI resolves a
+ * namespaced name by `split("__")` and taking the FIRST segment as the server,
+ * so any sanitized server name containing a doubled underscore fragments and
+ * can never be addressed. The collapsed alias contains no `__` by
+ * construction.
+ *
+ * Emitted for every name, not just `claude.ai ` ones. Over-emitting is safe in
+ * both directions: an extra `disallowedTools` rule that matches nothing is
+ * inert, and an extra index key can only ever add a denial, which errs closed.
+ * Under-emitting is the failure mode that matters.
  */
 export function mcpToolNameAliasesForServer(name: string): string[] {
   const sanitized = sanitizeToToolNameAlphabet(name);
-  return [name, sanitized, sanitized.toLowerCase()];
+  const collapsed = sanitized.replace(/_+/g, '_').replace(/^_|_$/g, '');
+  return [name, sanitized, sanitized.toLowerCase(), collapsed, collapsed.toLowerCase()];
 }
 
 /**
