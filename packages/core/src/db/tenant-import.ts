@@ -34,9 +34,9 @@
 
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { findDuplicateMCPCustomHeaderName } from '@agor/core/tools/mcp/http-headers';
 import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
+import { findDuplicateMCPCustomHeaderName } from '../tools/mcp/http-headers';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { isDatabaseUniqueConstraintError } from './sanitize-error';
