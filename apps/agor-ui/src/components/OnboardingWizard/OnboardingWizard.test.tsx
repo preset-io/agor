@@ -178,16 +178,19 @@ describe('OnboardingWizard', () => {
     ).toBeInTheDocument();
   });
 
-  it('reserves a fixed 2-line block for goal title and description so cards align in height', () => {
+  it('gives every goal card an even title→description gap and equal-height cards', () => {
     renderWizard({ initialStep: 'goals' });
-    // A short description ("PRs, bug triage, release notes — handled.") still
-    // reserves two lines of height so its card matches the taller ones — this is
-    // what keeps all six cards the same height regardless of copy length.
+    // The description still reserves two lines of height so its card matches the
+    // taller ones — this is what keeps all six cards the same height regardless
+    // of copy length.
     const shortDesc = screen.getByText('PRs, bug triage, release notes — handled.');
     expect(shortDesc).toHaveStyle({ minHeight: '2.8em' });
-    // A one-line title ("Ship without the busywork") reserves two lines too.
+    // The title flows at its natural height with a single consistent gap below.
+    // It must NOT reserve a blank second line — doing so made one-line-title
+    // cards show a larger title→description gap than two-line ones.
     const shortTitle = screen.getByText('Ship without the busywork');
-    expect(shortTitle).toHaveStyle({ minHeight: '2.6em' });
+    expect(shortTitle).not.toHaveStyle({ minHeight: '2.6em' });
+    expect(shortTitle).toHaveStyle({ marginBottom: '5px' });
   });
 
   it('centers the modal so the footer stays on-screen on shorter viewports', () => {

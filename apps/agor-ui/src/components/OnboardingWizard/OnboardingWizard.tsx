@@ -1157,16 +1157,17 @@ export function OnboardingWizard({
                       <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
                     </div>
                   )}
-                  {/* Reserve a fixed 2-line title block too: some titles wrap to
-                      two lines and some to one, so without this the cards would
-                      still differ in height even with uniform descriptions. */}
+                  {/* Title flows at its natural height (one or two lines) with a
+                      single consistent gap to the description below. No min-height:
+                      reserving a blank second line made one-line-title cards show a
+                      larger title→description gap than two-line ones. Equal card
+                      height comes from the grid, not from padding the title. */}
                   <div
                     style={{
                       color: TEXT_PRIMARY,
                       fontWeight: 600,
                       fontSize: 14,
                       lineHeight: 1.3,
-                      minHeight: '2.6em',
                       marginBottom: 5,
                       paddingRight: 20,
                     }}
