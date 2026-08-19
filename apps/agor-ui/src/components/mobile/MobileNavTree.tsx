@@ -145,7 +145,14 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                 label: 'Agentic Tools',
                 icon: <ThunderboltOutlined />,
               },
-              { key: 'settings:mcp', label: 'MCP Servers', icon: <ApiOutlined /> },
+            ]
+          : []),
+        // Offered to everyone, matching desktop: what a member may do there is
+        // the tenant's `mcp_member_policy`, which members may read precisely so
+        // a refusal is legible to the person it refuses.
+        { key: 'settings:mcp', label: 'MCP Servers', icon: <ApiOutlined /> },
+        ...(isAdmin
+          ? [
               { key: 'settings:gateway', label: 'Gateway Channels', icon: <MessageOutlined /> },
               { key: 'settings:groups', label: 'Groups', icon: <TeamOutlined /> },
             ]

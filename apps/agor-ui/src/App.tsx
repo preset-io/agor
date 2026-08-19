@@ -2156,6 +2156,10 @@ function AppContent() {
                 onUpdateDraft={handleUpdateDraft}
                 onOpenWorkspaceSettings={setSettingsTabToOpen}
                 onOpenUserSettings={() => setOpenUserSettings(true)}
+                onUpdateBranch={handleUpdateBranch}
+                onUpdateRepo={handleUpdateRepo}
+                onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+                onExecuteScheduleNow={handleExecuteScheduleNow}
               />
             }
           />

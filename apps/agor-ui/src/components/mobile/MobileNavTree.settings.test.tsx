@@ -44,4 +44,33 @@ describe('MobileNavTree settings navigation', () => {
     expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('gateway');
     expect(onNavigate).toHaveBeenCalled();
   });
+
+  // MCP Servers is not admin-only on desktop: a member may read the tenant's
+  // `mcp_member_policy` so a refusal is legible to the person it refuses.
+  // Mobile navigation has to reach the same tab.
+  it('offers MCP settings to members while still hiding admin-only sections', () => {
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <MemoryRouter>
+        <MobileNavTree
+          boardById={new Map()}
+          branchById={new Map()}
+          sessionsByBranch={new Map()}
+          commentById={new Map()}
+          currentUser={{ role: 'member' } as User}
+          onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+          onOpenUserSettings={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByText('Workspace settings'));
+    for (const adminOnly of ['Agentic Tools', 'Gateway Channels', 'Groups']) {
+      expect(screen.queryByText(adminOnly)).not.toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByText('MCP Servers'));
+    expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('mcp');
+  });
 });

@@ -146,13 +146,15 @@ function parseEntityPath(pathname: string): ParsedEntityPath {
   return { kind, token };
 }
 
-// The mobile comments deep link (`/m/comments/<board_id>`) lives OUTSIDE the
-// main entity route table (ENTITY_PATH_SEGMENTS) but still displays a single
-// board's annotations (zones drive comment anchoring) at first paint. Match it
-// here so a cold deep-link resolves its board scope and triggers the targeted
-// full-board `get` — otherwise `board.objects` stays undefined until the boards
-// background hydration lands. The `:boardId` is a full board_id.
-const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
+// The mobile routes (`/m/board/<board_id>`, `/m/session/<session_id>`,
+// `/m/comments/<board_id>`) live OUTSIDE the main entity route table
+// (ENTITY_PATH_SEGMENTS) and use full ids rather than short ids, so
+// `parseEntityPath` never matches them. Each still displays a single board at
+// first paint, so match them here: a cold deep-link then resolves its board
+// scope and triggers the targeted full-board `get`. Without this the load
+// falls back to a GLOBAL first paint and `board.objects` stays undefined until
+// the background boards hydration lands.
+const MOBILE_PATH_RE = /\/m\/(board|session|comments)\/([^/]+)/;
 
 // Resolve the board the app will ACTUALLY display on first paint from the
 // current URL, reusing the same slug/short-id resolvers `useUrlState` uses.
@@ -163,7 +165,7 @@ const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
 //   - `/a/<artifact>/`: artifacts aren't in the gated light batch (they load
 //     in the background), so the board can't be resolved synchronously here.
 //   - Unresolvable / ambiguous short id or a board_id we can't chain to.
-function resolveDisplayedBoardId(
+export function resolveDisplayedBoardId(
   pathname: string,
   boardById: Map<string, { board_id: string; slug?: string }>,
   branchById: Map<string, { branch_id: string; board_id?: string | null }>,
@@ -172,9 +174,19 @@ function resolveDisplayedBoardId(
     { session_id: string; branch_id?: string; branch_board_id?: string | null }
   >
 ): string | null {
-  const mobileComments = pathname.match(MOBILE_COMMENTS_PATH_RE);
-  if (mobileComments) {
-    return resolveBoardFromUrlPure(mobileComments[1], boardById);
+  const mobile = pathname.match(MOBILE_PATH_RE);
+  if (mobile) {
+    const [, mobileSegment, token] = mobile;
+    if (mobileSegment === 'session') {
+      // Full session_id in the URL, so this is a direct lookup rather than the
+      // short-id resolution the desktop `/s/` route needs.
+      const session = sessionById.get(token);
+      if (!session) return null;
+      if (session.branch_board_id) return session.branch_board_id;
+      const branchId = session.branch_id;
+      return branchId ? (branchById.get(branchId)?.board_id ?? null) : null;
+    }
+    return resolveBoardFromUrlPure(token, boardById);
   }
 
   const parsed = parseEntityPath(pathname);

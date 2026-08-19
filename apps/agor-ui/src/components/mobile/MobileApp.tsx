@@ -1,7 +1,7 @@
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgorClient, BranchArchiveOrDeleteOptions, Repo, User } from '@agor-live/client';
 import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectArtifactById,
@@ -16,6 +16,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
+import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHomePage } from './MobileHomePage';
@@ -39,6 +40,13 @@ interface MobileAppProps {
   onOpenUserSettings: () => void;
   promptDrafts: Map<string, string>;
   onUpdateDraft: (sessionId: string, draft: string) => void;
+  // The branch bottom sheet offers the same edit/archive controls as the
+  // desktop modal, so it needs the same handlers behind them — without these
+  // the controls render enabled and then do nothing when tapped.
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -55,7 +63,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onOpenUserSettings,
   promptDrafts,
   onUpdateDraft,
+  onUpdateBranch,
+  onUpdateRepo,
+  onArchiveOrDeleteBranch,
+  onExecuteScheduleNow,
 }) => {
+  const navigate = useNavigate();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
   // subscription boundary so the shell re-renders only on load-state.
@@ -187,6 +200,16 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         currentUser={user}
         defaultTab={branchEditor?.tab}
         presentation="bottom-sheet"
+        onUpdateBranch={onUpdateBranch}
+        onUpdateRepo={onUpdateRepo}
+        onArchiveOrDelete={onArchiveOrDeleteBranch}
+        onExecuteScheduleNow={onExecuteScheduleNow}
+        onSessionClick={(sessionId) => {
+          // Sessions live on their own mobile route, so this stays inside /m
+          // rather than reusing the desktop board-switching navigation.
+          setBranchEditor(null);
+          navigate(`/m/session/${sessionId}`);
+        }}
         onOpenSettings={() => {
           setBranchEditor(null);
           onOpenWorkspaceSettings('repos');
