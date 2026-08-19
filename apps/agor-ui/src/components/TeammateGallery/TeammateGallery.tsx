@@ -18,8 +18,30 @@ export interface TeammateGalleryProps {
   goals?: string[];
   /** Currently selected template id, or null when nothing is chosen yet. */
   value: string | null;
-  /** Fires with the clicked card's id (the blank starter included). */
-  onChange: (templateId: string) => void;
+  /**
+   * Fires with the clicked card's id (the blank starter included), or `null`
+   * when the current pick is cleared (double-click, or keyboard toggle-off).
+   */
+  onChange: (templateId: string | null) => void;
+}
+
+/**
+ * Shared pointer/keyboard handlers for a single-select card that can also be
+ * deselected. Single-click selects; double-click always clears (a dblclick also
+ * emits its two clicks, so forcing null last guarantees it ends deselected);
+ * Enter/Space toggles the current card off when it's already selected.
+ */
+function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => void) {
+  return {
+    onClick: onSelect,
+    onDoubleClick: onClear,
+    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      if (selected) onClear();
+      else onSelect();
+    },
+  };
 }
 
 interface GalleryCardProps {
@@ -27,9 +49,16 @@ interface GalleryCardProps {
   selected: boolean;
   recommended: boolean;
   onSelect: () => void;
+  onClear: () => void;
 }
 
-const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommended, onSelect }) => {
+const GalleryCard: React.FC<GalleryCardProps> = ({
+  template,
+  selected,
+  recommended,
+  onSelect,
+  onClear,
+}) => {
   const { token } = theme.useToken();
   const Icon = template.icon;
 
@@ -47,11 +76,7 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
   const borderColor = selected ? selectedBorder : token.colorBorderSecondary;
   const background = selected ? (accent ? `${accent}14` : token.colorFillQuaternary) : undefined;
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    onSelect();
-  };
+  const toggleHandlers = useCardToggle(selected, onSelect, onClear);
 
   return (
     <Card
@@ -60,8 +85,7 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
       aria-checked={selected}
       aria-label={template.title}
       tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={handleKeyDown}
+      {...toggleHandlers}
       style={{
         // Fill the grid cell so cards in the same row are equal height.
         height: '100%',
@@ -140,18 +164,15 @@ const BlankCard: React.FC<{
   template: TeammateTemplate;
   selected: boolean;
   onSelect: () => void;
-}> = ({ template, selected, onSelect }) => {
+  onClear: () => void;
+}> = ({ template, selected, onSelect, onClear }) => {
   const { token } = theme.useToken();
   const Icon = template.icon;
 
   const borderColor = selected ? token.colorText : token.colorBorderSecondary;
   const background = selected ? token.colorFillQuaternary : undefined;
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    onSelect();
-  };
+  const toggleHandlers = useCardToggle(selected, onSelect, onClear);
 
   return (
     <Card
@@ -160,8 +181,7 @@ const BlankCard: React.FC<{
       aria-checked={selected}
       aria-label={template.title}
       tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={handleKeyDown}
+      {...toggleHandlers}
       style={{
         // Span every column of the auto-fit grid → full-width footer card.
         gridColumn: '1 / -1',
@@ -207,7 +227,9 @@ const BlankCard: React.FC<{
  * Responsive 2-column grid of teammate starter templates plus a blank card,
  * with category filter chips above it.
  *
- * Single-select: clicking a card reports its id (blank included). Cards matching
+ * Single-select: clicking a card reports its id (blank included). Selecting is
+ * optional, so a pick can be cleared — double-click the selected card (or press
+ * Enter/Space on it) deselects it (`onChange(null)`). Cards matching
  * the goal-derived recommendations get a "Recommended" badge (up to two; never
  * the blank card) and, in the default "All" view, sort to the front in
  * recommendation order. Filter chips (All · Grow · Build · Operate, plus a
@@ -305,6 +327,7 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
               template={template}
               selected={value === template.id}
               onSelect={() => onChange(template.id)}
+              onClear={() => onChange(null)}
             />
           ) : (
             <GalleryCard
@@ -313,6 +336,7 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
               selected={value === template.id}
               recommended={recommendedIds.has(template.id)}
               onSelect={() => onChange(template.id)}
+              onClear={() => onChange(null)}
             />
           )
         )}

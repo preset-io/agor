@@ -1559,8 +1559,9 @@ export function OnboardingWizard({
   };
 
   // Selecting a template sets the default avatar (and later the source branch),
-  // but never the name — the name stays personal and user-chosen.
-  const applyTemplate = (templateId: string) => {
+  // but never the name — the name stays personal and user-chosen. Passing null
+  // clears the pick (deselect) and restores the default avatar.
+  const applyTemplate = (templateId: string | null) => {
     setSelectedTemplateId(templateId);
     setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
   };

@@ -99,6 +99,50 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith('competitive-analyst');
   });
 
+  it('double-clicking the selected card deselects it (onChange null); single-click still selects', () => {
+    const onChange = vi.fn();
+    render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
+
+    // Single-click an unselected card still selects it.
+    fireEvent.click(cardFor('Product Manager'));
+    expect(onChange).toHaveBeenLastCalledWith('product-manager');
+
+    // Double-click the selected card clears the pick. Replay the full
+    // click,click,dblclick sequence a real double-click emits — it must end
+    // deselected (null), not re-selected.
+    const selected = cardFor('Legal Analyst');
+    fireEvent.click(selected);
+    fireEvent.click(selected);
+    fireEvent.doubleClick(selected);
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('keyboard toggles the already-selected card off (Enter/Space) but selects an unselected one', () => {
+    const onChange = vi.fn();
+    render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
+
+    // Enter on the already-selected card clears it.
+    fireEvent.keyDown(cardFor('Legal Analyst'), { key: 'Enter' });
+    expect(onChange).toHaveBeenLastCalledWith(null);
+
+    // Space on a different (unselected) card selects it.
+    onChange.mockClear();
+    fireEvent.keyDown(cardFor('Product Manager'), { key: ' ' });
+    expect(onChange).toHaveBeenLastCalledWith('product-manager');
+  });
+
+  it('also clears the blank starter via double-click or keyboard toggle-off', () => {
+    const onChange = vi.fn();
+    render(<TeammateGallery value="blank" onChange={onChange} />);
+
+    fireEvent.doubleClick(cardFor('Start blank'));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+
+    onChange.mockClear();
+    fireEvent.keyDown(cardFor('Start blank'), { key: 'Enter' });
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
   it('badges up to two goal-recommended templates and never the blank card', () => {
     render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
 
