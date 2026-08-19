@@ -506,6 +506,67 @@ describe('SlackConnector outbound target resolution', () => {
 });
 
 describe('SlackConnector.fetchThreadHistory', () => {
+  it('adapts Slack timestamps to the provider-neutral catch-up capability', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            has_more: false,
+            messages: [
+              { ts: '1700000001.000000', user: 'U1', text: 'context' },
+              { ts: '1700000002.000000', user: 'U1', text: 'summon' },
+            ],
+          };
+        },
+      },
+      users: {
+        info: async () => ({ ok: true, user: { profile: { display_name: 'Alice' } } }),
+      },
+    };
+
+    const result = await connector.history.fetchConversationHistory({
+      threadId: 'C123-1700000000.000000',
+      afterCursor: '1700000000.000000',
+      throughCursor: '1700000002.000000',
+      triggerCursor: '1700000002.000000',
+      limit: 200,
+      includeBotMessages: false,
+    });
+
+    expect(calls[0]).toEqual({
+      channel: 'C123',
+      ts: '1700000000.000000',
+      limit: 200,
+      oldest: '1700000000.000000',
+      latest: '1700000002.000000',
+      inclusive: true,
+    });
+    expect(result).toEqual({
+      has_more: false,
+      messages: [
+        {
+          cursor: '1700000001.000000',
+          iso_time: '2023-11-14T22:13:21.000Z',
+          actor_label: 'Alice',
+          text: 'context',
+          is_trigger: false,
+        },
+        {
+          cursor: '1700000002.000000',
+          iso_time: '2023-11-14T22:13:22.000Z',
+          actor_label: 'Alice',
+          text: 'summon',
+          is_trigger: true,
+        },
+      ],
+    });
+    expect(connector.history.compareCursors('1700000002.000000', '1700000001.999999')).toBe(1);
+  });
+
   it('normalizes Slack thread replies and filters bot messages by default', async () => {
     const calls: Array<{ method: string; args: unknown }> = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });

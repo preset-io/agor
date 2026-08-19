@@ -11,9 +11,12 @@ import {
   getRequiredSecretFields,
   type UUID,
 } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { update } from '../database-wrapper';
+import { gatewayChannels } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
@@ -261,6 +264,30 @@ describe('GatewayChannelRepository', () => {
         ).rejects.toThrow('missing required secret(s) app_token');
       }
     );
+
+    dbTest('refuses to enable a Discord draft on SQLite even with a bot token', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const draft = await repo.create({
+        name: 'Draft Discord',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+        config: {},
+      });
+
+      await expect(repo.update(draft.id, { enabled: true })).rejects.toThrow(
+        'PostgreSQL is required'
+      );
+      await expect(
+        repo.update(draft.id, {
+          enabled: true,
+          config: { bot_token: 'discord-bot-token' },
+        })
+      ).rejects.toThrow('PostgreSQL is required');
+      expect((await repo.findById(draft.id))?.enabled).toBe(false);
+    });
   });
 
   describe('getRequiredSecretFields', () => {
@@ -283,6 +310,191 @@ describe('GatewayChannelRepository', () => {
       expect(
         getRequiredSecretFields('slack', { outbound_enabled: true, enable_channels: true })
       ).toEqual(['bot_token', 'app_token']);
+      expect(getRequiredSecretFields('discord', {})).toEqual(['bot_token']);
+    });
+  });
+
+  describe('verified provider installation identity', () => {
+    dbTest('rejects Discord provider probe ownership on SQLite', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channel = await repo.create({
+        name: 'Disabled Discord probe',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+        config: {
+          bot_token: 'discord-token',
+          application_id: '123456789012345678',
+        },
+      });
+      await expect(
+        repo.claimProviderProbe({
+          channelId: channel.id,
+          claimToken: 'probe-token',
+          leaseDurationMs: 30_000,
+        })
+      ).rejects.toThrow(/require PostgreSQL/);
+      await expect(repo.providerProbeClaimIsCurrent(channel.id, 'probe-token', 1, 1)).resolves.toBe(
+        false
+      );
+      await expect(
+        repo.renewProviderProbe({
+          channelId: channel.id,
+          claimToken: 'probe-token',
+          generation: 1,
+          providerConfigGeneration: 1,
+          leaseDurationMs: 30_000,
+        })
+      ).rejects.toThrow(/require PostgreSQL/);
+    });
+
+    dbTest('refuses enablement while a persisted Discord probe lease is live', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channel = await repo.create({
+        name: 'Disabled Discord probe',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+        config: {
+          bot_token: 'discord-token',
+          application_id: '123456789012345678',
+        },
+      });
+      // SQLite cannot acquire a product probe claim. Seed only the parity
+      // columns to exercise the dialect-independent update guard.
+      await update(db, gatewayChannels)
+        .set({
+          provider_probe_claim_token: 'probe-token',
+          provider_probe_lease_expires_at: new Date(Date.now() + 60_000),
+          provider_probe_generation: 1,
+          provider_probe_config_generation: channel.provider_config_generation,
+        })
+        .where(eq(gatewayChannels.id, channel.id))
+        .run();
+
+      await expect(repo.update(channel.id, { enabled: true })).rejects.toThrow(
+        'Discord connection test is in progress'
+      );
+    });
+
+    dbTest(
+      'claims only the exact stored token/application pair and clears on credential change',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const channel = await repo.create({
+          name: 'Discord installation',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          enabled: false,
+          provider_installation_id: '123456789012345678',
+          config: {
+            bot_token: 'discord-token-a',
+            application_id: '123456789012345678',
+          },
+        });
+
+        expect(channel.provider_installation_id).toBeNull();
+        expect(channel.provider_config_generation).toBe(1);
+
+        expect(
+          await repo.claimProviderInstallationIdentity({
+            channelId: channel.id,
+            channelType: 'discord',
+            providerInstallationId: '123456789012345678',
+            expectedConfig: {
+              bot_token: 'stale-token',
+              application_id: '123456789012345678',
+            },
+          })
+        ).toBe(false);
+        expect((await repo.findById(channel.id))?.provider_installation_id).toBeNull();
+
+        expect(
+          await repo.claimProviderInstallationIdentity({
+            channelId: channel.id,
+            channelType: 'discord',
+            providerInstallationId: '123456789012345678',
+            expectedConfig: {
+              bot_token: 'discord-token-a',
+              application_id: '123456789012345678',
+            },
+          })
+        ).toBe(true);
+        expect((await repo.findById(channel.id))?.provider_installation_id).toBe(
+          '123456789012345678'
+        );
+        expect((await repo.findById(channel.id))?.provider_config_generation).toBe(2);
+        expect(
+          await repo.claimProviderInstallationIdentity({
+            channelId: channel.id,
+            channelType: 'discord',
+            providerInstallationId: '123456789012345678',
+            expectedConfig: {
+              bot_token: 'discord-token-a',
+              application_id: '123456789012345678',
+            },
+          })
+        ).toBe(true);
+        expect((await repo.findById(channel.id))?.provider_config_generation).toBe(2);
+
+        const renamed = await repo.update(channel.id, { name: 'Renamed installation' });
+        expect(renamed.provider_config_generation).toBe(2);
+
+        const changed = await repo.update(channel.id, {
+          config: { bot_token: 'discord-token-b' },
+        });
+        expect(changed.provider_installation_id).toBeNull();
+        expect(changed.provider_config_generation).toBe(3);
+        const redactedReplay = await repo.update(channel.id, {
+          config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+        });
+        expect(redactedReplay.provider_config_generation).toBe(3);
+        await expect(repo.update(channel.id, { enabled: true })).rejects.toThrow(
+          'PostgreSQL is required'
+        );
+        expect((await repo.findById(channel.id))?.provider_config_generation).toBe(3);
+      }
+    );
+
+    dbTest('returns a generic conflict for a duplicate provider installation', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const config = {
+        bot_token: 'shared-token',
+        application_id: '223456789012345678',
+      };
+      const first = await repo.create({
+        name: 'First Discord installation',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+        config,
+      });
+      const second = await repo.create({
+        name: 'Second Discord installation',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'discord',
+        enabled: false,
+        config,
+      });
+      const claim = (channelId: typeof first.id) =>
+        repo.claimProviderInstallationIdentity({
+          channelId,
+          channelType: 'discord',
+          providerInstallationId: '223456789012345678',
+          expectedConfig: config,
+        });
+
+      await expect(claim(first.id)).resolves.toBe(true);
+      await expect(claim(second.id)).rejects.toThrow('Provider installation is already connected');
     });
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE `gateway_provider_actions` ADD COLUMN `execution_metadata` text CHECK (`execution_metadata` IS NULL OR (`kind` = 'deliver_message' AND length(CAST(`execution_metadata` AS BLOB)) <= 4096));

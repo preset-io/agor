@@ -315,4 +315,12 @@ export class GatewayInboundEventRepository {
       .one();
     return row ? rowToEvent(row) : null;
   }
+
+  async findById(eventId: GatewayInboundEventID): Promise<GatewayInboundEvent | null> {
+    const row = await select(this.db)
+      .from(gatewayInboundEvents)
+      .where(eq(gatewayInboundEvents.id, eventId))
+      .one();
+    return row ? rowToEvent(row) : null;
+  }
 }

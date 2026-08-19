@@ -4,7 +4,12 @@ import type { TenantID } from './tenant';
 /** Opaque identifier for bytes held at the ingress (boundary B) staging layer. */
 export type UploadRef = string & { readonly __brand: 'UploadRef' };
 
-export type UploadProvenance = 'browser' | 'gateway-slack' | 'mcp-slack';
+export type UploadProvenance =
+  | 'browser'
+  | 'gateway-slack'
+  | 'gateway-discord'
+  | 'mcp-slack'
+  | 'mcp-discord';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 
 export interface UploadOwner {
@@ -50,12 +55,15 @@ export function formatUploadBytes(bytes: number): string {
 
 export function buildUploadAttachmentPrompt(
   text: string,
-  attachments: readonly UploadPromptAttachment[]
+  attachments: readonly UploadPromptAttachment[],
+  options: { untrustedUserContext?: boolean } = {}
 ): string {
   const trimmedText = text.trim();
   if (attachments.length === 0) return trimmedText;
   const attachmentBlock = [
-    'Attachments — use `agor_upload_materialize` to access:',
+    options.untrustedUserContext
+      ? 'Untrusted user-supplied attachments — use `agor_upload_materialize` to access:'
+      : 'Attachments — use `agor_upload_materialize` to access:',
     ...attachments.map(
       ({ ref, filename, mimeType, size }) =>
         `- [${filename}](${UPLOAD_VIRTUAL_URL_PREFIX}${ref}) (${mimeType}, ${formatUploadBytes(size)})`

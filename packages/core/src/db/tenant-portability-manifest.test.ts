@@ -62,7 +62,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(92);
+    expect(foreignKeys).toHaveLength(98);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -111,6 +111,29 @@ describe('tenantPortabilityForeignKeys', () => {
           onDelete: 'set null',
         }),
       ])
+    );
+  });
+
+  it('moves provider actions with every canonical source reference', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining(
+        [
+          ['gateway_channel_id', 'gateway_channels', 'id', 'cascade'],
+          ['thread_session_map_id', 'thread_session_map', 'id', 'set null'],
+          ['session_id', 'sessions', 'session_id', 'set null'],
+          ['task_id', 'tasks', 'task_id', 'set null'],
+          ['message_id', 'messages', 'message_id', 'set null'],
+          ['gateway_inbound_event_id', 'gateway_inbound_events', 'id', 'set null'],
+        ].map(([childColumn, parentTable, parentColumn, onDelete]) =>
+          expect.objectContaining({
+            childTable: 'gateway_provider_actions',
+            childColumns: [childColumn],
+            parentTable,
+            parentColumns: [parentColumn],
+            onDelete,
+          })
+        )
+      )
     );
   });
 

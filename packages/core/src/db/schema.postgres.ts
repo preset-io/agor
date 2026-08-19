@@ -24,6 +24,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   customType,
   foreignKey,
   index,
@@ -1975,7 +1976,7 @@ export const uploads = pgTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack', 'mcp-discord'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -1984,6 +1985,10 @@ export const uploads = pgTable(
     tenantOwnerIdx: index('uploads_tenant_owner_idx').on(table.tenant_id, table.created_by),
     tenantSessionIdx: index('uploads_tenant_session_idx').on(table.tenant_id, table.session_id),
     expiryIdx: index('uploads_expiry_idx').on(table.expires_at),
+    provenanceValue: check(
+      'uploads_provenance_check',
+      sql`${table.provenance} IN ('browser', 'gateway-slack', 'gateway-discord', 'mcp-slack', 'mcp-discord')`
+    ),
   })
 );
 
@@ -2016,6 +2021,8 @@ export const gatewayChannels = pgTable(
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
     channel_key: text('channel_key').notNull(),
+    provider_installation_id: text('provider_installation_id'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
 
@@ -2040,6 +2047,13 @@ export const gatewayChannels = pgTable(
     listener_generation: integer('listener_generation').notNull().default(0),
     listener_checkpoint: t.json<Record<string, unknown> | null>('listener_checkpoint'),
     listener_checkpoint_updated_at: t.timestamp('listener_checkpoint_updated_at'),
+
+    // Short-lived disabled-channel setup probe ownership. Separate from the
+    // enabled listener lease so setup can never make Discord locally runnable.
+    provider_probe_claim_token: text('provider_probe_claim_token'),
+    provider_probe_lease_expires_at: t.timestamp('provider_probe_lease_expires_at'),
+    provider_probe_generation: integer('provider_probe_generation').notNull().default(0),
+    provider_probe_config_generation: integer('provider_probe_config_generation'),
   },
   (table) => ({
     tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
@@ -2051,6 +2065,9 @@ export const gatewayChannels = pgTable(
       table.tenant_id,
       table.channel_key
     ),
+    providerInstallationUnique: uniqueIndex('gateway_channels_provider_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(sql`${table.provider_installation_id} IS NOT NULL`),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.tenant_id,
@@ -2061,6 +2078,11 @@ export const gatewayChannels = pgTable(
     listenerDiscoveryIdx: index('gateway_channels_listener_discovery_idx').on(
       table.enabled,
       table.tenant_id,
+      table.id
+    ),
+    providerProbeLeaseIdx: index('gateway_channels_provider_probe_lease_idx').on(
+      table.tenant_id,
+      table.provider_probe_lease_expires_at,
       table.id
     ),
   })
@@ -2153,6 +2175,142 @@ export const threadSessionMap = pgTable(
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
     threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/**
+ * Tenant-owned provider action outbox.
+ *
+ * Rows contain canonical Agor references and small provider coordinates only;
+ * provider payload/content remains in canonical source tables and is rendered
+ * by the current listener owner immediately before the REST request.
+ */
+export const gatewayProviderActions = pgTable(
+  'gateway_provider_actions',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    id: varchar('id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    channel_type: text('channel_type', {
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
+    }).notNull(),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    kind: text('kind', {
+      enum: ['deliver_message', 'discord_progress', 'discord_notice', 'discord_thread_history'],
+    }).notNull(),
+    idempotency_key: varchar('idempotency_key', { length: 200 }).notNull(),
+    thread_session_map_id: varchar('thread_session_map_id', { length: 36 }).references(
+      () => threadSessionMap.id,
+      { onDelete: 'set null' }
+    ),
+    session_id: varchar('session_id', { length: 36 }).references(() => sessions.session_id, {
+      onDelete: 'set null',
+    }),
+    task_id: varchar('task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    message_id: varchar('message_id', { length: 36 }).references(() => messages.message_id, {
+      onDelete: 'set null',
+    }),
+    gateway_inbound_event_id: varchar('gateway_inbound_event_id', { length: 36 }).references(
+      () => gatewayInboundEvents.id,
+      { onDelete: 'set null' }
+    ),
+    params: t.json<Record<string, unknown>>('params').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'retry', 'completed', 'dead_letter', 'canceled'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    not_before: t.timestamp('not_before').notNull(),
+    drop_after: t.timestamp('drop_after'),
+    claim_token: text('claim_token'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_listener_token: text('claim_listener_token'),
+    claim_listener_generation: integer('claim_listener_generation'),
+    claim_instance_id: text('claim_instance_id'),
+    claim_boot_id: text('claim_boot_id'),
+    last_error_code: varchar('last_error_code', { length: 64 }),
+    execution_metadata: t.json<Record<string, unknown> | null>('execution_metadata'),
+    result_metadata: t.json<Record<string, unknown> | null>('result_metadata'),
+    completed_at: t.timestamp('completed_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+    canceled_at: t.timestamp('canceled_at'),
+  },
+  (table) => ({
+    tenantIdx: index('gateway_provider_actions_tenant_id_idx').on(table.tenant_id),
+    idempotencyUnique: uniqueIndex(
+      'gateway_provider_actions_tenant_channel_generation_key_unique'
+    ).on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.provider_config_generation,
+      table.idempotency_key
+    ),
+    backlogIdx: index('gateway_provider_actions_backlog_idx').on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.status,
+      table.not_before,
+      table.id
+    ),
+    claimIdx: index('gateway_provider_actions_claim_idx').on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.status,
+      table.claim_expires_at,
+      table.id
+    ),
+    activityExpiryIdx: index('gateway_provider_actions_activity_expiry_idx').on(
+      table.tenant_id,
+      table.gateway_channel_id,
+      table.kind,
+      table.drop_after,
+      table.status
+    ),
+    idempotencyKeyBounds: check(
+      'gateway_provider_actions_idempotency_key_bounds',
+      sql`octet_length(${table.idempotency_key}) BETWEEN 1 AND 200`
+    ),
+    paramsBounds: check(
+      'gateway_provider_actions_params_bounds',
+      sql`octet_length(${table.params}::text) <= 512`
+    ),
+    resultBounds: check(
+      'gateway_provider_actions_result_bounds',
+      sql`${table.result_metadata} IS NULL OR octet_length(${table.result_metadata}::text) <= 512`
+    ),
+    executionBounds: check(
+      'gateway_provider_actions_execution_bounds',
+      sql`${table.execution_metadata} IS NULL OR (${table.kind} IN ('deliver_message', 'discord_notice') AND octet_length(${table.execution_metadata}::text) <= 4096)`
+    ),
+    lifecycleBounds: check(
+      'gateway_provider_actions_lifecycle_bounds',
+      sql`${table.provider_config_generation} > 0 AND ${table.attempts} >= 0 AND ${table.claim_generation} >= 0`
+    ),
+    errorCodeFormat: check(
+      'gateway_provider_actions_error_code_format',
+      sql`${table.last_error_code} IS NULL OR ${table.last_error_code} ~ '^[a-z][a-z0-9_]{0,63}$'`
+    ),
+    kindValue: check(
+      'gateway_provider_actions_kind_check',
+      sql`${table.kind} IN ('deliver_message', 'discord_progress', 'discord_notice', 'discord_thread_history')`
+    ),
+    actionShape: check(
+      'gateway_provider_actions_shape_check',
+      sql`(${table.kind} = 'deliver_message' AND ${table.message_id} IS NOT NULL AND ${table.drop_after} IS NULL) OR (${table.kind} = 'discord_progress' AND ${table.message_id} IS NULL AND (((${table.params}->>'state') = 'done' AND ${table.drop_after} IS NULL) OR ((${table.params}->>'state') <> 'done' AND ${table.drop_after} IS NOT NULL))) OR (${table.kind} = 'discord_notice' AND ${table.message_id} IS NULL AND ${table.thread_session_map_id} IS NULL AND ${table.session_id} IS NULL AND ${table.task_id} IS NULL AND (${table.gateway_inbound_event_id} IS NOT NULL OR ${table.status} IN ('completed', 'dead_letter', 'canceled')) AND ${table.drop_after} IS NOT NULL) OR (${table.kind} = 'discord_thread_history' AND ${table.message_id} IS NULL AND ${table.task_id} IS NULL AND ${table.gateway_inbound_event_id} IS NULL AND ((${table.thread_session_map_id} IS NOT NULL AND ${table.session_id} IS NOT NULL) OR ${table.status} IN ('completed', 'dead_letter', 'canceled')) AND ${table.drop_after} IS NOT NULL)`
+    ),
+    statusValue: check(
+      'gateway_provider_actions_status_check',
+      sql`${table.status} IN ('pending', 'processing', 'retry', 'completed', 'dead_letter', 'canceled')`
+    ),
   })
 );
 
@@ -2775,6 +2933,8 @@ export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSel
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;
 export type GatewayInboundEventInsert = typeof gatewayInboundEvents.$inferInsert;
+export type GatewayProviderActionRow = typeof gatewayProviderActions.$inferSelect;
+export type GatewayProviderActionInsert = typeof gatewayProviderActions.$inferInsert;
 export type UploadRow = typeof uploads.$inferSelect;
 export type UploadInsert = typeof uploads.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;

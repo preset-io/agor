@@ -142,6 +142,173 @@ describe('Postgres migrations', () => {
     }
   });
 
+  it('adds the tenant-fenced provider action outbox without provider content or secrets', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0089_gateway_provider_actions.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0092_gateway_provider_actions.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('provider_config_generation');
+      expect(migration).toContain('gateway_provider_actions');
+      expect(migration).toContain('provider_installation_id');
+      expect(migration).toContain('message_id');
+      expect(migration).toContain('idempotency_key');
+      expect(migration).toContain('claim_generation');
+      expect(migration).not.toMatch(/message_(?:text|content|body)|attachment_(?:bytes|data)/i);
+      expect(migration).not.toMatch(/raw_(?:error|payload)|bot_token|webhook_secret/i);
+    }
+    expect(postgres).toContain('FORCE ROW LEVEL SECURITY');
+    expect(postgres).toContain('tenant_isolation_gateway_provider_actions');
+    expect(postgres).toContain('DEFERRABLE INITIALLY IMMEDIATE');
+    expect(sqlite).not.toContain('tenant_id');
+  });
+
+  it('adds typed Discord display activity with non-expiring terminal cleanup', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0090_gateway_provider_activity.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0093_gateway_provider_activity.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('discord_progress');
+      expect(migration).toContain('drop_after');
+      expect(migration).toContain('gateway_provider_actions_shape_check');
+      expect(migration).not.toMatch(/tool_(?:input|arguments)|command|path|url/i);
+      expect(migration).not.toMatch(/message_(?:text|content|body)|raw_(?:error|payload)/i);
+    }
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+    expect(sqlite).toContain('__new_gateway_provider_actions');
+  });
+
+  it('adds a narrow provider probe lease without tokens or provider results', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0091_gateway_provider_probe_lease.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0094_gateway_provider_probe_lease.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('provider_probe_claim_token');
+      expect(migration).toContain('provider_probe_generation');
+      expect(migration).toContain('provider_probe_config_generation');
+      expect(migration).toContain('provider_probe_lease_expires_at');
+      expect(migration).not.toMatch(/bot_token|provider_(?:result|error|payload)|message_content/i);
+    }
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+  });
+
+  it('adds bounded content-free per-chunk delivery checkpoints with dialect parity', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL(
+          '../../drizzle/postgres/0092_gateway_provider_delivery_checkpoints.sql',
+          import.meta.url
+        ),
+        'utf8'
+      ),
+      readFile(
+        new URL(
+          '../../drizzle/sqlite/0095_gateway_provider_delivery_checkpoints.sql',
+          import.meta.url
+        ),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('execution_metadata');
+      expect(migration).toContain('4096');
+      expect(migration).not.toMatch(/message_(?:text|content|body)|attachment_(?:bytes|data)/i);
+      expect(migration).not.toMatch(/raw_(?:error|payload)|bot_token|webhook_secret/i);
+    }
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+  });
+
+  it('adds canonical-event Discord routing notices without arbitrary provider content', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL(
+          '../../drizzle/postgres/0093_gateway_provider_discord_notices.sql',
+          import.meta.url
+        ),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0096_gateway_provider_discord_notices.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('discord_notice');
+      expect(migration).toContain('gateway_inbound_event_id');
+      expect(migration).toContain('execution_metadata');
+      expect(migration).not.toMatch(/message_(?:text|content|body)|raw_(?:error|payload)/i);
+      expect(migration).not.toMatch(/bot_token|webhook_secret|attachment_(?:bytes|data)/i);
+    }
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+    expect(sqlite).toContain('__new_gateway_provider_actions');
+  });
+
+  it('expires Discord routing notices from durable creation time with dialect parity', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0094_gateway_discord_notice_expiry.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0097_gateway_discord_notice_expiry.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('discord_notice');
+      expect(migration).toContain('drop_after');
+      expect(migration).toContain('created_at');
+      expect(migration).not.toMatch(/message_(?:text|content|body)|raw_(?:error|payload)/i);
+    }
+    expect(postgres).toContain("interval '2 minutes'");
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+    expect(sqlite).toContain('120000');
+  });
+
+  it('adds content-free Discord history RPC actions and upload provenance with dialect parity', async () => {
+    const [postgres, sqlite] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/postgres/0095_gateway_discord_thread_history.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/sqlite/0098_gateway_discord_thread_history.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    for (const migration of [postgres, sqlite]) {
+      expect(migration).toContain('discord_thread_history');
+      expect(migration).toContain('mcp-discord');
+      expect(migration).toContain('512');
+      expect(migration).not.toMatch(/message_(?:text|content|body)|attachment_(?:bytes|data)/i);
+      expect(migration).not.toMatch(/raw_(?:error|payload)|bot_token|webhook_secret/i);
+    }
+    expect(postgres).toContain('SET LOCAL lock_timeout');
+    expect(sqlite).toContain('__new_gateway_provider_actions');
+    expect(sqlite).toContain('__new_uploads');
+  });
+
   it('keeps Knowledge pgvector storage out of required base migrations', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0043_kb_embeddings.sql', import.meta.url),

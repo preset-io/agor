@@ -1,0 +1,7 @@
+SET LOCAL lock_timeout = '3s';--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" DROP CONSTRAINT "gateway_provider_actions_execution_bounds";--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" DROP CONSTRAINT "gateway_provider_actions_kind_check";--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" DROP CONSTRAINT "gateway_provider_actions_shape_check";--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" ADD CONSTRAINT "gateway_provider_actions_execution_bounds" CHECK ("execution_metadata" IS NULL OR ("kind" IN ('deliver_message', 'discord_notice') AND octet_length("execution_metadata"::text) <= 4096));--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" ADD CONSTRAINT "gateway_provider_actions_kind_check" CHECK ("kind" IN ('deliver_message', 'discord_progress', 'discord_notice'));--> statement-breakpoint
+ALTER TABLE "gateway_provider_actions" ADD CONSTRAINT "gateway_provider_actions_shape_check" CHECK (("kind" = 'deliver_message' AND "message_id" IS NOT NULL AND "drop_after" IS NULL) OR ("kind" = 'discord_progress' AND "message_id" IS NULL AND ((("params"->>'state') = 'done' AND "drop_after" IS NULL) OR (("params"->>'state') <> 'done' AND "drop_after" IS NOT NULL))) OR ("kind" = 'discord_notice' AND "message_id" IS NULL AND "thread_session_map_id" IS NULL AND "session_id" IS NULL AND "task_id" IS NULL AND ("gateway_inbound_event_id" IS NOT NULL OR "status" IN ('completed', 'dead_letter', 'canceled')) AND "drop_after" IS NULL));

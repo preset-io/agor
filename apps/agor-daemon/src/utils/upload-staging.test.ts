@@ -9,6 +9,7 @@ import {
   getUploadStagingStore,
   resetUploadStagingStoreForTests,
   resolveLocalUploadDirectory,
+  uploadStagingSupportsSharedRpc,
 } from './upload-staging.js';
 
 afterEach(resetUploadStagingStoreForTests);
@@ -24,6 +25,15 @@ describe('upload staging application composition', () => {
     expect(getUploadStagingStore()).toBe(adapter);
     expect(getUploadStagingStore()).toBe(adapter);
     expect(constructions).toBe(1);
+    expect(uploadStagingSupportsSharedRpc()).toBe(false);
+  });
+
+  it('uses an explicit composition capability for Cloud shared staging adapters', () => {
+    const adapter = { stage: async () => ({}) } as UploadStagingStore;
+    configureUploadStagingStore(() => adapter, { sharedAcrossDaemons: true });
+    expect(uploadStagingSupportsSharedRpc()).toBe(true);
+    resetUploadStagingStoreForTests();
+    expect(uploadStagingSupportsSharedRpc()).toBe(false);
   });
 
   it('configures the shared ingress policy from uploads.max_file_size_mb', () => {
@@ -41,6 +51,7 @@ describe('upload staging application composition', () => {
       uploads: { location: 's3://agor-uploads/customer-data' },
     } as AgorConfig);
     expect(getUploadStagingStore()).toBeInstanceOf(S3UploadStagingStore);
+    expect(uploadStagingSupportsSharedRpc()).toBe(true);
   });
 
   it('treats local configuration as a base and appends the managed layout', () => {

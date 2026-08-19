@@ -7,11 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
+  DISCORD_ATTACHMENT_FILE_DEADLINE_MS,
   ingestInboundAttachments,
   isAllowedSlackFileUrl,
   isIngestableFile,
 } from './gateway-attachments.js';
-import { MAX_UPLOAD_FILE_SIZE } from './upload.js';
+import { configureUploadLimits, MAX_UPLOAD_FILE_SIZE } from './upload.js';
 
 function makeFile(overrides: Partial<InboundFile> = {}): InboundFile {
   return {
@@ -30,6 +31,26 @@ function makeImageResponse(body: Uint8Array, headers: Record<string, string> = {
     headers: { 'content-type': 'image/png', ...headers },
   });
 }
+
+const DISCORD_ATTACHMENT_ID = '723456789012345678';
+const DISCORD_CHANNEL_ID = '423456789012345678';
+
+function discordUrl(filename = 'evidence.png', host = 'cdn.discordapp.com'): string {
+  return `https://${host}/attachments/${DISCORD_CHANNEL_ID}/${DISCORD_ATTACHMENT_ID}/${filename}?ex=abcdef12&is=abcdef11&hm=${'a'.repeat(64)}`;
+}
+
+function makeDiscordFile(overrides: Partial<InboundFile> = {}): InboundFile {
+  return {
+    id: DISCORD_ATTACHMENT_ID,
+    name: 'evidence.png',
+    mimetype: 'image/png',
+    size: 12,
+    url_private_download: discordUrl(),
+    ...overrides,
+  };
+}
+
+const VALID_PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
 
 describe('isAllowedSlackFileUrl', () => {
   it('allows https URLs on slack.com and its subdomains', () => {
@@ -82,7 +103,7 @@ describe('buildPromptWithAttachments', () => {
     name: 'error.log',
     mimeType: 'text/plain',
     size: 1024,
-    provenance: 'slack' as const,
+    provenance: 'gateway-slack' as const,
     createdAt: '2026-01-01T00:00:00.000Z',
     expiresAt: null,
   };
@@ -107,6 +128,12 @@ describe('buildPromptWithAttachments', () => {
     expect(buildPromptWithAttachments('', [attachment])).toBe(
       `Attachments — use \`agor_upload_materialize\` to access:\n- [error.log](https://agor.live/_uploads/${uploadRef}) (text/plain, 1.0 KiB)`
     );
+  });
+
+  it('labels Discord attachment handles as untrusted user-supplied context', () => {
+    expect(
+      buildPromptWithAttachments('inspect', [attachment], { untrustedUserContext: true })
+    ).toContain('Untrusted user-supplied attachments');
   });
 });
 
@@ -134,8 +161,184 @@ describe('ingestInboundAttachments', () => {
   }
 
   afterEach(async () => {
+    vi.useRealTimers();
+    configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
     await fs.rm(uploadDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it('downloads Discord bytes without credentials and records Discord provenance', async () => {
+    const fetchImpl = vi.fn(async () => makeImageResponse(VALID_PNG));
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files: [makeDiscordFile()],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+
+    expect(result).toMatchObject({ failed: 0 });
+    expect(result.uploads[0]).toMatchObject({ provenance: 'gateway-discord' });
+    expect(await readStaged(result.uploads[0].ref)).toEqual(Buffer.from(VALID_PNG));
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(init).toMatchObject({ redirect: 'manual', signal: expect.any(AbortSignal) });
+    expect(init).not.toHaveProperty('headers');
+    expect(init).not.toHaveProperty('credentials');
+    expect(init).not.toHaveProperty('referrer');
+  });
+
+  it('rejects a Discord redirect before a lookalike host is fetched', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: discordUrl('evidence.png', 'cdn.discordapp.com.evil.invalid') },
+        })
+    );
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files: [makeDiscordFile()],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('evil.invalid');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('hm=');
+  });
+
+  it('requires matching safe declared and response MIME types for Discord', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response('plain text', { headers: { 'content-type': 'text/plain' } })
+    );
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files: [makeDiscordFile()],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+    expect(result).toEqual({ uploads: [], failed: 1 });
+  });
+
+  it('rejects active content disguised as an allowed Discord text attachment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('<!doctype html><script>bad()</script>', {
+          headers: { 'content-type': 'text/plain' },
+        })
+    );
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files: [
+        makeDiscordFile({
+          name: 'notes.txt',
+          mimetype: 'text/plain',
+          size: 36,
+          url_private_download: discordUrl('notes.txt'),
+        }),
+      ],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 1 });
+  });
+
+  it('never fetches unsupported Discord PDFs and reports degradation', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn();
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files: [
+        makeDiscordFile({
+          name: 'report.pdf',
+          mimetype: 'application/pdf',
+          url_private_download: discordUrl('report.pdf'),
+        }),
+      ],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+    expect(result).toEqual({ uploads: [], failed: 1 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('enforces actual whole-message bytes while streaming Discord files', async () => {
+    configureUploadLimits(6);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response('abcde', { headers: { 'content-type': 'text/plain' } })
+    );
+    const files = Array.from({ length: 3 }, (_, index) =>
+      makeDiscordFile({
+        id: String(BigInt(DISCORD_ATTACHMENT_ID) + BigInt(index)),
+        name: `log${index}.txt`,
+        mimetype: 'text/plain',
+        size: 4,
+        url_private_download: `https://cdn.discordapp.com/attachments/${DISCORD_CHANNEL_ID}/${String(BigInt(DISCORD_ATTACHMENT_ID) + BigInt(index))}/log${index}.txt?ex=abcdef12&is=abcdef11&hm=${'a'.repeat(64)}`,
+      })
+    );
+    const result = await ingestInboundAttachments({
+      provider: 'discord',
+      files,
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+    expect(result.uploads).toHaveLength(2);
+    expect(result.failed).toBe(1);
+  });
+
+  it('aborts a slow Discord file at the explicit wall-clock deadline', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+            once: true,
+          });
+        })
+    );
+    const pending = ingestInboundAttachments({
+      provider: 'discord',
+      files: [makeDiscordFile()],
+      fetchImpl,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+    await vi.advanceTimersByTimeAsync(DISCORD_ATTACHMENT_FILE_DEADLINE_MS + 1);
+    await expect(pending).resolves.toEqual({ uploads: [], failed: 1 });
+    vi.useRealTimers();
   });
 
   it('downloads an image with the bot token and stores it in the upload dir', async () => {

@@ -624,6 +624,62 @@
       "when": 1787184000000,
       "tag": "0090_knowledge_teammate_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1787270400000,
+      "tag": "0091_gateway_provider_installation",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1787356800000,
+      "tag": "0092_gateway_provider_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1787443200000,
+      "tag": "0093_gateway_provider_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1787529600000,
+      "tag": "0094_gateway_provider_probe_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "6",
+      "when": 1787616000000,
+      "tag": "0095_gateway_provider_delivery_checkpoints",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "6",
+      "when": 1787702400000,
+      "tag": "0096_gateway_provider_discord_notices",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1787788800000,
+      "tag": "0097_gateway_discord_notice_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "6",
+      "when": 1787875200000,
+      "tag": "0098_gateway_discord_thread_history",
+      "breakpoints": true
     }
   ]
 }

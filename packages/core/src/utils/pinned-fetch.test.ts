@@ -2,7 +2,12 @@ import type dns from 'node:dns';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createGuardedLookup, createPinnedFetch, isOutboundRefusal } from './pinned-fetch';
+import {
+  createGuardedLookup,
+  createPinnedBinaryFetch,
+  createPinnedFetch,
+  isOutboundRefusal,
+} from './pinned-fetch';
 
 /** Resolve the guarded lookup as a promise, so assertions read as pass/fail. */
 function resolveThrough(
@@ -159,6 +164,18 @@ describe('createPinnedFetch', () => {
           response.write('.');
           return;
         }
+        if (url === '/trickle-hang') {
+          response.writeHead(200, { 'content-type': 'text/plain' });
+          response.write('.');
+          let remaining = 3;
+          const trickle = setInterval(() => {
+            response.write('.');
+            remaining -= 1;
+            if (remaining === 0) clearInterval(trickle);
+          }, 20);
+          response.on('close', () => clearInterval(trickle));
+          return;
+        }
         if (url === '/no-content') {
           response.writeHead(204);
           response.end();
@@ -191,6 +208,64 @@ describe('createPinnedFetch', () => {
 
   const pinned = (overrides: Partial<Parameters<typeof createPinnedFetch>[0]> = {}) =>
     createPinnedFetch({ timeoutMs: 3_000, maxBytes: 1_000, lookup: loopbackLookup, ...overrides });
+
+  async function readBinary(body: NodeJS.ReadableStream): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk as Uint8Array));
+    return Buffer.concat(chunks);
+  }
+
+  it('streams pinned response bytes without decoding them as text', async () => {
+    const response = await createPinnedBinaryFetch({
+      timeoutMs: 3_000,
+      maxBytes: 1_000,
+      lookup: loopbackLookup,
+    })(`${origin}/`);
+    expect(response.status).toBe(200);
+    expect(await readBinary(response.body)).toEqual(Buffer.from('{"ok":true}'));
+  });
+
+  it('fails a streaming pinned response rather than truncating at the cap', async () => {
+    const response = await createPinnedBinaryFetch({
+      timeoutMs: 3_000,
+      maxBytes: 100,
+      lookup: loopbackLookup,
+    })(`${origin}/huge`);
+    await expect(readBinary(response.body)).rejects.toThrow(/byte limit/);
+  });
+
+  it('errors a returned binary stream when the total deadline expires after headers', async () => {
+    const response = await createPinnedBinaryFetch({
+      timeoutMs: 100,
+      maxBytes: 1_000,
+      lookup: loopbackLookup,
+    })(`${origin}/trickle-hang`);
+
+    await expect(readBinary(response.body)).rejects.toThrow(/deadline exceeded/);
+  });
+
+  it('destroys a returned binary stream when the caller aborts after headers', async () => {
+    const controller = new AbortController();
+    const response = await createPinnedBinaryFetch({
+      timeoutMs: 3_000,
+      maxBytes: 1_000,
+      lookup: loopbackLookup,
+    })(`${origin}/hang`, { signal: controller.signal });
+
+    controller.abort();
+    await expect(readBinary(response.body)).rejects.toThrow(/aborted/);
+  });
+
+  it('applies its guarded lookup to binary streams too', async () => {
+    const binary = createPinnedBinaryFetch({
+      timeoutMs: 3_000,
+      maxBytes: 100,
+      lookup: createGuardedLookup(answering('169.254.169.254')),
+    });
+    await expect(binary('http://binary-rebind.example/file')).rejects.toThrow(
+      /Refusing to connect/
+    );
+  });
 
   it('sends the request and returns status, headers, and body', async () => {
     const response = await pinned()(`${origin}/`, {

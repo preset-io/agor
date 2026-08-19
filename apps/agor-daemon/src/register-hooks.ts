@@ -87,6 +87,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
+  isCanonicalFullUuid,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -351,6 +352,14 @@ export function shouldRunSessionPostTurnHooks(
   session: Pick<Session, 'status' | 'ready_for_prompt'>
 ): boolean {
   return sessionCanStartTask(session.status, session.ready_for_prompt);
+}
+
+/** Exact completing task snapshot used by asynchronous gateway terminal callbacks. */
+export function latestCanonicalTaskIdForGatewayProgress(
+  session: Pick<Session, 'tasks'>
+): string | undefined {
+  const latest = session.tasks?.[session.tasks.length - 1];
+  return typeof latest === 'string' && isCanonicalFullUuid(latest) ? latest : undefined;
 }
 
 export function shouldDrainQueueAfterSessionPostTurnPatch(
@@ -2562,6 +2571,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
           if (session && shouldRunSessionPostTurnHooks(session)) {
+            const canonicalCompletingTaskId = latestCanonicalTaskIdForGatewayProgress(session);
             // Flush the gateway outbound buffer (fire-and-forget).
             // When a GitHub/Shortcut-connected session finishes its turn, post
             // the last buffered message as a PR/issue/story comment. Must happen
@@ -2577,6 +2587,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 await gatewayService.updateProgress({
                   session_id: session.session_id,
                   state: 'done',
+                  ...(canonicalCompletingTaskId ? { task_id: canonicalCompletingTaskId } : {}),
                 });
               } catch (error) {
                 console.warn(

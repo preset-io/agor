@@ -32,6 +32,7 @@ import {
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
+  latestCanonicalTaskIdForGatewayProgress,
   PROMPT_FLOW_PATCH_FIELDS,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
@@ -424,6 +425,16 @@ describe('shouldRunSessionPostTurnHooks', () => {
     expect(shouldRunSessionPostTurnHooks({ status: 'running', ready_for_prompt: false })).toBe(
       false
     );
+  });
+});
+
+describe('latestCanonicalTaskIdForGatewayProgress', () => {
+  it('returns only the exact latest canonical task from the session snapshot', () => {
+    const taskA = '01927f9d-1000-7000-8000-000000000004';
+    const taskB = '01927f9d-1000-7000-8000-000000000005';
+    expect(latestCanonicalTaskIdForGatewayProgress({ tasks: [taskA, taskB] as never })).toBe(taskB);
+    expect(latestCanonicalTaskIdForGatewayProgress({ tasks: ['short'] as never })).toBeUndefined();
+    expect(latestCanonicalTaskIdForGatewayProgress({ tasks: [] })).toBeUndefined();
   });
 });
 

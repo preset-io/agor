@@ -16,7 +16,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
-import { eq, like, sql } from 'drizzle-orm';
+import { eq, inArray, like, sql } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId, shortId } from '../../lib/ids';
 import { isValidExecutionHomeKey } from '../../types/user';
@@ -31,6 +31,8 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+
+const FIND_EXISTING_USERS_MAX = 1_000;
 
 /**
  * Users repository implementation
@@ -245,6 +247,23 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       }
       throw error;
     }
+  }
+
+  /**
+   * Resolve a bounded set of full user IDs inside the repository's trusted
+   * tenant scope without materializing credential-bearing user rows.
+   */
+  async findExistingIds(ids: readonly string[]): Promise<Set<string>> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return new Set();
+    if (uniqueIds.length > FIND_EXISTING_USERS_MAX) {
+      throw new RepositoryError('User ID lookup exceeds the bounded limit');
+    }
+    const rows = await select(this.db, { user_id: users.user_id })
+      .from(users)
+      .where(inArray(users.user_id, uniqueIds))
+      .all();
+    return new Set(rows.map((row: { user_id: string }) => row.user_id));
   }
 
   /**

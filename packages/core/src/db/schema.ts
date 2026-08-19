@@ -54,6 +54,7 @@ export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
 export const gatewayOutboundMessages = schema.gatewayOutboundMessages;
 export const gatewayInboundEvents = schema.gatewayInboundEvents;
+export const gatewayProviderActions = schema.gatewayProviderActions;
 export const uploads = schema.uploads;
 export const userApiKeys = schema.userApiKeys;
 export const kbNamespaces = schema.kbNamespaces;

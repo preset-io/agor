@@ -174,7 +174,7 @@ describe('S3UploadStagingStore', () => {
       owner,
       name: 'secret.txt',
       mimeType: 'text/plain',
-      provenance: 'gateway-slack',
+      provenance: 'gateway-discord',
       body: Readable.from('secret'),
     });
     await expect(
@@ -197,6 +197,24 @@ describe('S3UploadStagingStore', () => {
       })
     ).rejects.toMatchObject({ status: 404 });
     expect(client.lastBody?.destroyed).toBe(true);
+  });
+
+  it('round-trips gateway-discord provenance through strict object metadata', async () => {
+    const client = new FakeS3();
+    const store = new S3UploadStagingStore(
+      { bucket: 'uploads', prefix: '' },
+      { client: client as unknown as S3Client }
+    );
+    const metadata = await store.stage({
+      owner,
+      name: 'evidence.txt',
+      mimeType: 'text/plain',
+      provenance: 'gateway-discord',
+      body: Readable.from('untrusted evidence'),
+    });
+    await expect(store.inspect({ ...owner, ref: metadata.ref })).resolves.toMatchObject({
+      provenance: 'gateway-discord',
+    });
   });
 
   it('enforces streamed size and aborts failed multipart work', async () => {

@@ -129,7 +129,9 @@ import {
   GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
 } from './services/gateway-channels.js';
 import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
+import { createGatewayDiscordApplicationSettingsService } from './services/gateway-channels-discord-application-settings.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
+import { createGatewayDiscordProviderOperationsService } from './services/gateway-discord-provider-operations.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
@@ -611,6 +613,42 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     // through the global publisher's `global` scope and broadcast the probe
     // result to every authenticated socket. Publish to no one.
     app.service('gateway-channels/test').publish(() => []);
+
+    // Reviewed Discord current-application mutation. This uses the same
+    // PostgreSQL-only disabled-channel setup lease as Test connection and is
+    // deliberately create-only, admin-only, and never published.
+    app.use(
+      '/gateway-channels/discord-application-settings',
+      createGatewayDiscordApplicationSettingsService(db),
+      { methods: ['create'] }
+    );
+    app.service('gateway-channels/discord-application-settings').hooks({
+      before: {
+        create: [
+          ctx.requireAuth,
+          requireMinimumRole(ROLES.ADMIN, 'apply Discord application settings'),
+        ],
+      },
+    });
+    app.service('gateway-channels/discord-application-settings').publish(() => []);
+
+    // Content-free operational inspection plus audited no-POST repair or
+    // abandonment. This surface is PostgreSQL-only, create-only, admin-only,
+    // and never emits a Feathers event.
+    app.use(
+      '/gateway-channels/discord-provider-operations',
+      createGatewayDiscordProviderOperationsService(db, app),
+      { methods: ['create'] }
+    );
+    app.service('gateway-channels/discord-provider-operations').hooks({
+      before: {
+        create: [
+          ctx.requireAuth,
+          requireMinimumRole(ROLES.ADMIN, 'operate Discord provider deliveries'),
+        ],
+      },
+    });
+    app.service('gateway-channels/discord-provider-operations').publish(() => []);
 
     // Sub-path service resolving the Slack app id behind a channel's stored
     // bot token (auth.test → bots.info). Same gating rationale as /test above:

@@ -14,12 +14,15 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
-import { and, eq, like, lt } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, lt } from 'drizzle-orm';
+import { DISCORD_PRESENCE_ACTIVE_COUNT_CAP } from '../../gateway/connectors/discord-presence';
+import { parseDiscordProgressMetadata } from '../../gateway/connectors/discord-progress';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -304,6 +307,30 @@ export class ThreadSessionMapRepository
   }
 
   /**
+   * Return at most two active mappings for a Session so strict callers can
+   * reject an ambiguous legacy graph without loading an unbounded inventory.
+   * Existing outbound routing keeps its historical findBySession behavior.
+   */
+  async findActiveBySessionBounded(sessionId: string): Promise<ThreadSessionMap[]> {
+    try {
+      const rows = await select(this.db)
+        .from(threadSessionMap)
+        .where(
+          and(eq(threadSessionMap.session_id, sessionId), eq(threadSessionMap.status, 'active'))
+        )
+        .orderBy(asc(threadSessionMap.id))
+        .limit(2)
+        .all();
+      return rows.map((row: ThreadSessionMapRow) => this.rowToMapping(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find active mappings by session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all mappings for a channel, optionally filtered by status
    */
   async findByChannel(channelId: string, status?: ThreadStatus): Promise<ThreadSessionMap[]> {
@@ -322,6 +349,61 @@ export class ThreadSessionMapRepository
     } catch (error) {
       throw new RepositoryError(
         `Failed to find mappings by channel: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Count strictly valid queued/working Discord progress rows for aggregate
+   * presence. The JSON-state prefilter and hard candidate cap keep the query
+   * content-free and bounded; malformed rows fail closed and are excluded.
+   */
+  async countActiveDiscordProgress(
+    channelId: GatewayChannelID,
+    displayCap = DISCORD_PRESENCE_ACTIVE_COUNT_CAP
+  ): Promise<number> {
+    if (
+      !Number.isInteger(displayCap) ||
+      displayCap < 1 ||
+      displayCap > DISCORD_PRESENCE_ACTIVE_COUNT_CAP
+    ) {
+      throw new RepositoryError(
+        `Discord presence display cap must be between 1 and ${DISCORD_PRESENCE_ACTIVE_COUNT_CAP}`
+      );
+    }
+    try {
+      const candidateLimit = displayCap * 4 + 1;
+      const rows = await select(this.db, { metadata: threadSessionMap.metadata })
+        .from(threadSessionMap)
+        .where(
+          and(
+            eq(threadSessionMap.channel_id, channelId),
+            eq(threadSessionMap.status, 'active'),
+            inArray(jsonExtract(this.db, threadSessionMap.metadata, 'discord_progress_state'), [
+              'queued',
+              'working',
+            ])
+          )
+        )
+        .orderBy(asc(threadSessionMap.id))
+        .limit(candidateLimit)
+        .all();
+      let count = 0;
+      for (const row of rows) {
+        const progress = parseDiscordProgressMetadata(
+          (row.metadata as Record<string, unknown> | null) ?? {}
+        );
+        if (progress && (progress.state === 'queued' || progress.state === 'working')) {
+          count += 1;
+          if (count >= displayCap) return displayCap;
+        }
+      }
+      return count;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      throw new RepositoryError(
+        `Failed to count active Discord progress: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -363,10 +445,10 @@ export class ThreadSessionMapRepository
     }
   }
 
-  /** Merge metadata under a short row lock without overwriting concurrent fields. */
-  async mergeMetadata(
+  /** Update metadata from a fresh row snapshot under a short row lock. */
+  async updateMetadataAtomic(
     id: ThreadSessionMapID,
-    patch: Record<string, unknown>
+    updateMetadata: (metadata: Record<string, unknown>) => Record<string, unknown>
   ): Promise<ThreadSessionMap> {
     return runDatabaseTransaction(
       this.db,
@@ -377,8 +459,11 @@ export class ThreadSessionMapRepository
           .where(eq(threadSessionMap.id, id))
           .one();
         if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const metadata = updateMetadata({
+          ...((row.metadata as Record<string, unknown> | null) ?? {}),
+        });
         const updated = await update(txDb, threadSessionMap)
-          .set({ metadata: { ...((row.metadata as Record<string, unknown>) ?? {}), ...patch } })
+          .set({ metadata })
           .where(eq(threadSessionMap.id, id))
           .returning()
           .one();
@@ -386,6 +471,14 @@ export class ThreadSessionMapRepository
       },
       { sqliteImmediate: true }
     );
+  }
+
+  /** Merge metadata under a short row lock without overwriting concurrent fields. */
+  async mergeMetadata(
+    id: ThreadSessionMapID,
+    patch: Record<string, unknown>
+  ): Promise<ThreadSessionMap> {
+    return this.updateMetadataAtomic(id, (metadata) => ({ ...metadata, ...patch }));
   }
 
   /**

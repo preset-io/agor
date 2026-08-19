@@ -37,6 +37,7 @@ import type {
 } from '../../types/gateway';
 import type {
   GatewayConnector,
+  GatewayHistoryCapability,
   GatewayInboundCallback,
   GatewayListenerOptions,
   InboundFile,
@@ -233,6 +234,17 @@ function slackTsToIso(ts: string): string {
   const seconds = Number(ts.split('.')[0]);
   if (!Number.isFinite(seconds)) return new Date().toISOString();
   return new Date(seconds * 1000).toISOString();
+}
+
+/** Provider-owned ordering for Slack's decimal timestamp cursors. */
+export function compareSlackHistoryCursors(a: string, b?: string): number {
+  if (!b) return 1;
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) {
+    return left === right ? 0 : left < right ? -1 : 1;
+  }
+  return a.localeCompare(b);
 }
 
 interface Segment {
@@ -798,6 +810,33 @@ export function isSlackFileSourceAllowed(
 
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
+  readonly history: GatewayHistoryCapability = {
+    fetchConversationHistory: async (req) => {
+      const result = await this.fetchThreadHistory({
+        threadId: req.threadId,
+        ...(req.afterCursor ? { oldestTs: req.afterCursor } : {}),
+        latestTs: req.throughCursor,
+        inclusive: true,
+        limit: req.limit,
+        includeBotMessages: req.includeBotMessages,
+        triggerTs: req.triggerCursor,
+      });
+      return {
+        messages: result.messages.map((message) => ({
+          cursor: message.ts,
+          iso_time: message.iso_time,
+          actor_label: message.actor_label,
+          text: message.text,
+          is_trigger: message.is_trigger,
+          ...(message.files?.length
+            ? { attachment_summary: `${message.files.length} attached file(s)` }
+            : {}),
+        })),
+        has_more: result.has_more === true,
+      };
+    },
+    compareCursors: compareSlackHistoryCursors,
+  };
 
   private web: WebClient;
   private socketMode: SocketModeClient | null = null;

@@ -21,6 +21,7 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   GatewayConnectionTestResult,
+  GatewayDiscordApplicationSettingsApplyResult,
   GatewayEnvVar,
   MCPServer,
   PermissionMode,
@@ -94,6 +95,8 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
+import { DiscordGatewaySetup } from './DiscordGatewaySetup';
+import { discordConfigToFormValues, extractDiscordGatewayConfig } from './discordGatewayForm';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
 
@@ -119,7 +122,7 @@ const CHANNEL_TYPE_OPTIONS: {
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
   { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
-  { value: 'discord', label: 'Discord', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
   { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined />, comingSoon: true },
   { value: 'telegram', label: 'Telegram', icon: <MessageOutlined />, comingSoon: true },
 ];
@@ -378,6 +381,8 @@ function createStepsForType(type: ChannelType): { title: string }[] {
       return [{ title: 'Channel' }, { title: 'Setup' }];
     case 'shortcut':
       return [{ title: 'Channel' }, { title: 'Setup' }];
+    case 'discord':
+      return [{ title: 'Channel' }, { title: 'Configure' }, { title: 'Portal setup' }];
     default:
       return [{ title: 'Channel' }];
   }
@@ -387,21 +392,34 @@ function createStepsForType(type: ChannelType): { title: string }[] {
  * Form fields the create footer validates before leaving a given step. The final
  * step returns `[]` — submission runs a full `validateFields()` instead.
  */
-function createStepFields(type: ChannelType, step: number, alignSlackUsers: boolean): string[] {
+function createStepFields(type: ChannelType, step: number, alignPlatformUsers: boolean): string[] {
   if (step === 0) {
     const fields = ['name', 'target_branch_id', 'channel_type'];
     // Slack and GitHub pick identity inside their platform steps; everyone else
     // chooses it on the universal Channel step.
-    if (type !== 'slack' && type !== 'github' && type !== 'shortcut') fields.push('agor_user_id');
+    if (type !== 'slack' && type !== 'github' && type !== 'shortcut' && type !== 'discord') {
+      fields.push('agor_user_id');
+    }
     return fields;
   }
   if (type === 'slack' && step === 1) {
     const fields = ['slack_app_name'];
-    if (!alignSlackUsers) fields.push('agor_user_id');
+    if (!alignPlatformUsers) fields.push('agor_user_id');
     return fields;
   }
   if (type === 'github' && step === 2) {
     return ['github_app_id', 'github_private_key'];
+  }
+  if (type === 'discord' && step === 1) {
+    const fields = [
+      'discord_application_id',
+      'discord_guild_id',
+      'discord_bot_token',
+      'discord_allowed_channel_ids',
+      'align_discord_users',
+    ];
+    fields.push(alignPlatformUsers ? 'discord_user_map' : 'agor_user_id');
+    return fields;
   }
   return [];
 }
@@ -432,6 +450,12 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'agent_file_download',
   'slack_public_scope',
   'allowed_channel_ids',
+  'discord_application_id',
+  'discord_guild_id',
+  'discord_bot_token',
+  'discord_allowed_channel_ids',
+  'align_discord_users',
+  'discord_user_map',
   // Shortcut probe inputs
   'shortcut_api_token',
   'shortcut_agent_member_id',
@@ -837,8 +861,11 @@ const GatewayAgentConfigurationFields: React.FC<{
   const alignShortcutUsers =
     (Form.useWatch('shortcut_align_users', form) as boolean | undefined) ??
     (form.getFieldValue('shortcut_align_users') as boolean | undefined);
+  const alignDiscordUsers =
+    (Form.useWatch('align_discord_users', form) as boolean | undefined) ??
+    (form.getFieldValue('align_discord_users') as boolean | undefined);
   const usesAlignedExecutionOwner = Boolean(
-    alignSlackUsers || alignGithubUsers || alignShortcutUsers
+    alignSlackUsers || alignGithubUsers || alignShortcutUsers || alignDiscordUsers
   );
   const resolvedExecutionOwnerId =
     executionOwnerId ?? (form.getFieldValue('agor_user_id') as string | undefined);
@@ -1428,6 +1455,11 @@ const ChannelFormFields: React.FC<{
   connectionTestLoading: boolean;
   onSlackTest: () => void;
   onShortcutTest: () => void;
+  onDiscordTest: () => void;
+  discordSetupDirty: boolean;
+  discordApplyLoading: boolean;
+  discordApplyResult: GatewayDiscordApplicationSettingsApplyResult | null;
+  onDiscordApply: () => void;
   /** Slack app identity resolved server-side on edit open (edit mode only). */
   slackAppInfo: SlackAppInfo | null;
 }> = ({
@@ -1451,6 +1483,11 @@ const ChannelFormFields: React.FC<{
   connectionTestLoading,
   onSlackTest,
   onShortcutTest,
+  onDiscordTest,
+  discordSetupDirty,
+  discordApplyLoading,
+  discordApplyResult,
+  onDiscordApply,
   slackAppInfo,
 }) => {
   const { showError } = useThemedMessage();
@@ -1498,6 +1535,7 @@ const ChannelFormFields: React.FC<{
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
   const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
+  const channelEnabled = Boolean(Form.useWatch('enabled', form) ?? editingChannel?.enabled);
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
 
@@ -1646,30 +1684,34 @@ const ChannelFormFields: React.FC<{
           </Form.Item>
 
           {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
-          {channelType !== 'slack' && channelType !== 'github' && channelType !== 'shortcut' && (
-            <Form.Item
-              label="Post messages as"
-              name="agor_user_id"
-              rules={[{ required: true, message: 'Please select a user' }]}
-              tooltip="Sessions from this channel will run as this Agor user"
-            >
-              <UserSelect userById={userById} />
-            </Form.Item>
-          )}
+          {channelType !== 'slack' &&
+            channelType !== 'github' &&
+            channelType !== 'shortcut' &&
+            channelType !== 'discord' && (
+              <Form.Item
+                label="Post messages as"
+                name="agor_user_id"
+                rules={[{ required: true, message: 'Please select a user' }]}
+                tooltip="Sessions from this channel will run as this Agor user"
+              >
+                <UserSelect userById={userById} />
+              </Form.Item>
+            )}
 
           <Form.Item
             label="Enabled"
             name="enabled"
             valuePropName="checked"
-            initialValue={mode === 'create' ? true : undefined}
+            initialValue={mode === 'create' ? channelType !== 'discord' : undefined}
           >
-            <Switch />
+            <Switch disabled={channelType === 'discord' && mode === 'create'} />
           </Form.Item>
 
           {channelType !== 'slack' &&
             channelType !== 'github' &&
             channelType !== 'teams' &&
-            channelType !== 'shortcut' && (
+            channelType !== 'shortcut' &&
+            channelType !== 'discord' && (
               <CompactAlert
                 type="info"
                 heading={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
@@ -1678,6 +1720,71 @@ const ChannelFormFields: React.FC<{
               />
             )}
         </div>
+
+        {/* Discord is configured as a disabled draft first so setup probes and
+            application-setting writes are serialized before enablement. */}
+        {channelType === 'discord' && (mode === 'edit' || createStep >= 1) && (
+          <>
+            <DiscordGatewaySetup
+              form={form}
+              mode={mode}
+              step={mode === 'edit' ? 'edit' : createStep === 1 ? 'configure' : 'portal'}
+              userById={userById}
+              tokenStored={isSecretStored(slackConfig, 'bot_token')}
+              channelEnabled={channelEnabled}
+              setupDirty={discordSetupDirty}
+              testLoading={connectionTestLoading}
+              testResult={connectionTestResult}
+              applyLoading={discordApplyLoading}
+              applyResult={discordApplyResult}
+              onTest={onDiscordTest}
+              onApply={onDiscordApply}
+            />
+            <Collapse
+              ghost
+              destroyOnHidden={false}
+              style={{ marginLeft: -16, marginRight: -16, marginTop: 12 }}
+              items={[
+                {
+                  key: 'agentic-tool-config',
+                  label: (
+                    <SectionLabel
+                      icon={<ThunderboltOutlined />}
+                      title="Agent Configuration"
+                      subtitle={selectedAgent ?? 'Choose a supported tool'}
+                    />
+                  ),
+                  children: (
+                    <GatewayAgentConfigurationFields
+                      client={client}
+                      currentUser={currentUser}
+                      userById={userById}
+                      mcpServerById={mcpServerById}
+                      selectedAgent={selectedAgent}
+                      onAgentChange={onAgentChange}
+                      requiresSupportedToolSelection={requiresSupportedToolSelection}
+                    />
+                  ),
+                },
+                {
+                  key: 'env-vars',
+                  label: (
+                    <SectionLabel
+                      icon={<LockOutlined />}
+                      title="Environment Variables"
+                      subtitle="channel-level secrets"
+                    />
+                  ),
+                  children: (
+                    <Form.Item name="envVars" noStyle>
+                      <GatewayEnvVarsEditor />
+                    </Form.Item>
+                  ),
+                },
+              ]}
+            />
+          </>
+        )}
 
         {/* ── GitHub App Setup (create steps + shared config collapse) ── */}
         {channelType === 'github' && (
@@ -3005,7 +3112,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       const usesAlignedExecutionOwner = Boolean(
         form.getFieldValue('align_slack_users') ||
           form.getFieldValue('github_align_users') ||
-          form.getFieldValue('shortcut_align_users')
+          form.getFieldValue('shortcut_align_users') ||
+          form.getFieldValue('align_discord_users')
       );
       const ownerId = form.getFieldValue('agor_user_id') as string | undefined;
       const executionOwner = !usesAlignedExecutionOwner && ownerId ? userById.get(ownerId) : null;
@@ -3037,6 +3145,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [connectionTestLoading, setConnectionTestLoading] = useState(false);
   const [connectionTestResult, setConnectionTestResult] =
     useState<GatewayConnectionTestResult | null>(null);
+  const [discordApplyLoading, setDiscordApplyLoading] = useState(false);
+  const [discordApplyResult, setDiscordApplyResult] =
+    useState<GatewayDiscordApplicationSettingsApplyResult | null>(null);
+  const [discordSetupDirty, setDiscordSetupDirty] = useState(false);
   // Slack app identity resolved server-side when the edit modal opens (edit mode).
   const [slackAppInfo, setSlackAppInfo] = useState<SlackAppInfo | null>(null);
   // Channel id the in-flight app-info fetch belongs to; a response is dropped
@@ -3123,6 +3235,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setConnectionTestResult(null);
     setSlackAppInfo(null);
     slackAppInfoChannelIdRef.current = null;
+    setDiscordApplyLoading(false);
+    setDiscordApplyResult(null);
+    setDiscordSetupDirty(false);
   }, []);
 
   // Reset the whole create flow back to its universal first step.
@@ -3143,9 +3258,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     (changed: Record<string, unknown>) => {
       if (Object.keys(changed).some((field) => CONNECTION_PROBE_FIELDS.has(field))) {
         invalidateConnectionTest();
+        setDiscordApplyResult(null);
       }
+      if (editModalOpen && channelType === 'discord') setDiscordSetupDirty(true);
     },
-    [invalidateConnectionTest]
+    [channelType, editModalOpen, invalidateConnectionTest]
   );
 
   // Switching channel type changes the step structure, so snap back to the
@@ -3153,9 +3270,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleChannelTypeChange = useCallback(
     (type: ChannelType) => {
       setChannelType(type);
+      if (type === 'discord') createForm.setFieldValue('enabled', false);
       resetCreateFlow();
     },
-    [resetCreateFlow]
+    [createForm, resetCreateFlow]
   );
 
   // Run the connector-agnostic `gateway-channels/test` probe against a supplied
@@ -3258,6 +3376,43 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     await runConnectionProbe('slack', {}, editingChannel.id);
   }, [editingChannel, runConnectionProbe]);
 
+  const handleDiscordTest = useCallback(async () => {
+    if (editingChannel?.channel_type !== 'discord') return;
+    if (discordSetupDirty) {
+      showError('Save the disabled Discord configuration before testing it');
+      return;
+    }
+    await runConnectionProbe('discord', {}, editingChannel.id);
+  }, [discordSetupDirty, editingChannel, runConnectionProbe, showError]);
+
+  const handleDiscordApply = useCallback(async () => {
+    if (!client || !editingChannel || editingChannel.channel_type !== 'discord') return;
+    if (discordSetupDirty) {
+      showError('Save the disabled Discord configuration before applying settings');
+      return;
+    }
+    setDiscordApplyLoading(true);
+    setDiscordApplyResult(null);
+    try {
+      const result = (await client.service('gateway-channels/discord-application-settings').create({
+        gatewayChannelId: editingChannel.id,
+      })) as GatewayDiscordApplicationSettingsApplyResult;
+      setDiscordApplyResult(result);
+      setConnectionTestResult(null);
+      if (!result.ok) {
+        showError('Discord may have accepted the settings. Save and test the connection again.');
+      }
+    } catch (error) {
+      showError(
+        error instanceof Error
+          ? error.message
+          : 'Discord application settings could not be applied safely'
+      );
+    } finally {
+      setDiscordApplyLoading(false);
+    }
+  }, [client, discordSetupDirty, editingChannel, showError]);
+
   const extractFormData = (
     values: Record<string, unknown>,
     existingConfig?: Record<string, unknown>,
@@ -3338,6 +3493,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           // validateJSON rule handles the error display
         }
       }
+    } else if (values.channel_type === 'discord') {
+      for (const key of Object.keys(config)) delete config[key];
+      Object.assign(config, extractDiscordGatewayConfig(values, new Set(userById.keys())));
     } else if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;
@@ -3425,7 +3583,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config,
       agentic_config: agenticConfig,
       mcp_server_ids: (values.mcpServerIds as string[] | undefined) ?? [],
-      enabled: (values.enabled as boolean) ?? true,
+      enabled: (values.enabled as boolean) ?? values.channel_type !== 'discord',
     };
   };
 
@@ -3486,7 +3644,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const fields = createStepFields(
       channelType,
       createStep,
-      createForm.getFieldValue('align_slack_users') ?? false
+      channelType === 'discord'
+        ? (createForm.getFieldValue('align_discord_users') ?? true)
+        : (createForm.getFieldValue('align_slack_users') ?? false)
     );
     if (fields.length > 0) {
       try {
@@ -3609,6 +3769,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (userMap && typeof userMap === 'object' && Object.keys(userMap).length > 0) {
         formValues.shortcut_user_map = JSON.stringify(userMap, null, 2);
       }
+    } else if (channel.channel_type === 'discord') {
+      Object.assign(formValues, discordConfigToFormValues(config));
     }
 
     editForm.setFieldsValue(formValues);
@@ -3911,6 +4073,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             connectionTestLoading={connectionTestLoading}
             onSlackTest={handleSlackTest}
             onShortcutTest={handleShortcutTest}
+            onDiscordTest={handleDiscordTest}
+            discordSetupDirty={discordSetupDirty}
+            discordApplyLoading={discordApplyLoading}
+            discordApplyResult={discordApplyResult}
+            onDiscordApply={handleDiscordApply}
             slackAppInfo={null}
           />
         </Form>
@@ -3971,6 +4138,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             connectionTestLoading={connectionTestLoading}
             onSlackTest={handleSlackEditTest}
             onShortcutTest={handleShortcutTest}
+            onDiscordTest={handleDiscordTest}
+            discordSetupDirty={discordSetupDirty}
+            discordApplyLoading={discordApplyLoading}
+            discordApplyResult={discordApplyResult}
+            onDiscordApply={handleDiscordApply}
             slackAppInfo={slackAppInfo}
           />
         </Form>

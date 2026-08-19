@@ -15,9 +15,10 @@ import type {
 /**
  * File attached to an inbound message (provider-neutral shape).
  *
- * `url_private_download` is a platform URL that requires the channel's
- * credentials to fetch; connectors pass it through verbatim and the gateway
- * decides whether/how to download it.
+ * `url_private_download` is an ephemeral provider URL. It requires channel
+ * credentials for Slack and must be fetched without credentials for Discord;
+ * connectors pass it only for explicitly configured admitted messages and the
+ * gateway applies the provider-specific download policy.
  */
 export interface InboundFile {
   id: string;
@@ -47,6 +48,50 @@ export interface InboundMessage {
   prepareDelivery?: () => Promise<Record<string, unknown> | undefined>;
 }
 
+/** Provider-neutral, agent-visible history item used for summon-time catch-up. */
+export interface GatewayHistoryMessage {
+  cursor: string;
+  iso_time: string;
+  actor_label: string;
+  text: string;
+  is_trigger: boolean;
+  /** Metadata-only summary; ambient history attachments are never downloaded. */
+  attachment_summary?: string;
+}
+
+export interface GatewayHistoryCapability {
+  fetchConversationHistory(req: {
+    threadId: string;
+    afterCursor?: string;
+    throughCursor: string;
+    triggerCursor: string;
+    limit: number;
+    includeBotMessages: false;
+    /**
+     * Summon-time context may return the newest bounded window when the lower
+     * cursor is farther back than the provider scan bound. The result must set
+     * has_more instead of pretending the interval was complete. Read tools do
+     * not set this and continue to fail closed on an incomplete scan.
+     */
+    allowTruncatedLowerBound?: true;
+    /** Prefer the messages nearest the current summon when truncation occurs. */
+    preferLatest?: true;
+    /** Exact owner/action fence invoked immediately before every provider GET. */
+    beforeProviderCall?: () => Promise<void>;
+  }): Promise<{ messages: GatewayHistoryMessage[]; has_more: boolean; next_cursor?: string }>;
+  /** Provider-owned cursor ordering (Slack timestamps, Discord Snowflakes, etc.). */
+  compareCursors(a: string, b?: string): number;
+}
+
+/** Process-local, content-free aggregate presence health. */
+export interface GatewayAggregatePresenceDiagnostic {
+  desiredActiveCount: number | null;
+  lastSentActiveCount: number | null;
+  pending: boolean;
+  retryCount: number;
+  lastErrorCode?: 'discord_presence_send_failed' | 'discord_presence_owner_lost';
+}
+
 /** Durable provider polling checkpoint owned by the current listener lease. */
 export interface GatewayListenerOptions {
   checkpoint?: Record<string, unknown> | null;
@@ -54,6 +99,10 @@ export interface GatewayListenerOptions {
   durableEventIdempotency?: boolean;
   /** False means the listener lost its durable owner fence and must stop. */
   saveCheckpoint?: (checkpoint: Record<string, unknown>) => Promise<boolean>;
+  /** Current-fence assertion around owned provider work. */
+  listenerClaimIsCurrent?: () => Promise<boolean>;
+  /** Receives content-free aggregate presence state for owner diagnostics. */
+  reportAggregatePresenceState?: (state: GatewayAggregatePresenceDiagnostic) => void;
 }
 
 export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<void>;
@@ -88,6 +137,9 @@ export function normalizeOutbound(formatted: string | OutboundPayload): Outbound
  */
 export interface GatewayConnector {
   readonly channelType: ChannelType;
+
+  /** Optional bounded current-conversation history for summon-time catch-up. */
+  readonly history?: GatewayHistoryCapability;
 
   /**
    * Send a message to a platform thread.
@@ -138,6 +190,12 @@ export interface GatewayConnector {
    */
   stopListening?(): Promise<void>;
 
+  /** Best-effort aggregate application presence through an owned transport. */
+  updateAggregatePresence?(activeCount: number): void;
+
+  /** Content-free process-local aggregate presence health. */
+  getAggregatePresenceDiagnostic?(): GatewayAggregatePresenceDiagnostic;
+
   /**
    * Convert markdown to platform-native formatting.
    *
@@ -155,7 +213,7 @@ export interface GatewayConnector {
    * a structured report. `result.notVerifiable` lists what the probe cannot
    * prove, so a green result is never mistaken for full verification.
    */
-  testConnection?(): Promise<GatewayConnectionTestResult>;
+  testConnection?(options?: { signal?: AbortSignal }): Promise<GatewayConnectionTestResult>;
 
   /**
    * Environment variables the connector's platform skills need inside a

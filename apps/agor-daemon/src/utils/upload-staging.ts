@@ -21,11 +21,21 @@ export function resolveLocalUploadDirectory(
 let factory: UploadStagingStoreFactory = () =>
   new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
 let instance: UploadStagingStore | undefined;
+let sharedAcrossDaemons = false;
 
 /** Application composition seam used by local self-hosted and Cloud adapters. */
-export function configureUploadStagingStore(next: UploadStagingStoreFactory): void {
+export function configureUploadStagingStore(
+  next: UploadStagingStoreFactory,
+  options: { sharedAcrossDaemons?: boolean } = {}
+): void {
   factory = next;
   instance = undefined;
+  sharedAcrossDaemons = options.sharedAcrossDaemons === true;
+}
+
+/** Pure composition/config capability guard; never relies on adapter instanceof checks. */
+export function uploadStagingSupportsSharedRpc(): boolean {
+  return sharedAcrossDaemons;
 }
 
 /**
@@ -43,13 +53,16 @@ export function configureUploadStagingStoreFromConfig(
   configureUploadLimits(maxBytes);
   const ttlMs = (config.uploads?.max_age_days ?? 30) * 24 * 60 * 60 * 1000;
   if (/^s3:/i.test(location)) {
-    configureUploadStagingStore(() => {
-      const url = new URL(location);
-      const adapter = s3Factory
-        ? s3Factory(url, config)
-        : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
-      return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
-    });
+    configureUploadStagingStore(
+      () => {
+        const url = new URL(location);
+        const adapter = s3Factory
+          ? s3Factory(url, config)
+          : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
+        return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
+      },
+      { sharedAcrossDaemons: true }
+    );
     return;
   }
   const expanded = expandHomePath(location);
@@ -74,4 +87,5 @@ export function resetUploadStagingStoreForTests(): void {
   configureUploadLimits(50 * 1024 * 1024);
   factory = () => new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
   instance = undefined;
+  sharedAcrossDaemons = false;
 }

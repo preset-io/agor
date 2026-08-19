@@ -32,7 +32,7 @@ let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
 async function seedChannel(
   db: Database,
   tenantId: TenantID,
-  options: { channelType?: ChannelType } = {}
+  options: { channelType?: ChannelType; config?: Record<string, unknown>; enabled?: boolean } = {}
 ) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
@@ -66,8 +66,10 @@ async function seedChannel(
       agor_user_id: user.user_id,
       target_branch_id: branch.branch_id,
       channel_key: generateId(),
-      enabled: true,
-      config: channelType === 'slack' ? { bot_token: 'xoxb-test', app_token: 'xapp-test' } : {},
+      enabled: options.enabled ?? true,
+      config:
+        options.config ??
+        (channelType === 'slack' ? { bot_token: 'xoxb-test', app_token: 'xapp-test' } : {}),
     });
     return { channel, user, branch };
   });
@@ -163,6 +165,230 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
         })
       ).toBe(false);
       expect(await channels.releaseListener(channel.id, winner.lease.claim_token)).toBe(false);
+    });
+  });
+
+  it('enforces provider installation identity globally without disclosing the other tenant', async () => {
+    const tenantA = `gateway-provider-a-${generateId()}` as TenantID;
+    const tenantB = `gateway-provider-b-${generateId()}` as TenantID;
+    const providerInstallationId = String(BigInt(Date.now()) * 1_000_000n + 123_456n);
+    const config = {
+      bot_token: `discord-token-${generateId()}`,
+      application_id: providerInstallationId,
+    };
+    const [{ channel: channelA }, { channel: channelB }] = await Promise.all([
+      seedChannel(db, tenantA, { channelType: 'discord', config, enabled: false }),
+      seedChannel(db, tenantB, { channelType: 'discord', config, enabled: false }),
+    ]);
+    const claim = (tenantId: TenantID, channelId: GatewayChannelID) =>
+      runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+        new GatewayChannelRepository(scoped).claimProviderInstallationIdentity({
+          channelId,
+          channelType: 'discord',
+          providerInstallationId,
+          expectedConfig: config,
+        })
+      );
+
+    await expect(claim(tenantA, channelA.id)).resolves.toBe(true);
+    await expect(claim(tenantB, channelB.id)).rejects.toThrow(
+      'Provider installation is already connected'
+    );
+  });
+
+  it('keeps bounded Discord alignment-user validation inside the tenant RLS scope', async () => {
+    const tenantA = `gateway-users-a-${generateId()}` as TenantID;
+    const tenantB = `gateway-users-b-${generateId()}` as TenantID;
+    const userA = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+      new UsersRepository(scoped).create({
+        email: `gateway-user-${generateId()}@example.com`,
+        name: 'Tenant A Discord user',
+      })
+    );
+
+    await expect(
+      runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+        new UsersRepository(scoped).findExistingIds([userA.user_id])
+      )
+    ).resolves.toEqual(new Set([userA.user_id]));
+    await expect(
+      runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+        new UsersRepository(scoped).findExistingIds([userA.user_id])
+      )
+    ).resolves.toEqual(new Set());
+  });
+
+  it('serializes disabled Discord probes and fences config mutation and cross-tenant access', async () => {
+    const tenantId = `gateway-probe-${generateId()}` as TenantID;
+    const otherTenant = `gateway-probe-other-${generateId()}` as TenantID;
+    const applicationId = String(BigInt(Date.now()) * 1_000_000n + 654_321n);
+    const config = {
+      bot_token: `discord-token-${generateId()}`,
+      application_id: applicationId,
+    };
+    const { channel } = await seedChannel(db, tenantId, {
+      channelType: 'discord',
+      config,
+      enabled: false,
+    });
+    const attempts = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new GatewayChannelRepository(scoped).claimProviderProbe({
+            channelId: channel.id,
+            claimToken: `probe-${index}`,
+            leaseDurationMs: 30_000,
+          })
+        )
+      )
+    );
+    const winner = attempts.find((attempt) => attempt.outcome === 'claimed');
+    expect(attempts.filter((attempt) => attempt.outcome === 'claimed')).toHaveLength(1);
+    if (winner?.outcome !== 'claimed') throw new Error('No provider probe winner');
+
+    await runWithTenantDatabaseScope(db, otherTenant, async (scoped) => {
+      const channels = new GatewayChannelRepository(scoped);
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation,
+          winner.lease.provider_config_generation
+        )
+      ).toBe(false);
+      await expect(
+        channels.renewProviderProbe({
+          channelId: channel.id,
+          claimToken: winner.lease.claim_token,
+          generation: winner.lease.generation,
+          providerConfigGeneration: winner.lease.provider_config_generation,
+          leaseDurationMs: 30_000,
+        })
+      ).resolves.toBeNull();
+      expect(
+        await channels.releaseProviderProbe(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation
+        )
+      ).toBe(false);
+    });
+
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      const channels = new GatewayChannelRepository(scoped);
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation,
+          winner.lease.provider_config_generation
+        )
+      ).toBe(true);
+      const renewed = await channels.renewProviderProbe({
+        channelId: channel.id,
+        claimToken: winner.lease.claim_token,
+        generation: winner.lease.generation,
+        providerConfigGeneration: winner.lease.provider_config_generation,
+        leaseDurationMs: 30_000,
+      });
+      expect(renewed).toMatchObject({
+        claim_token: winner.lease.claim_token,
+        generation: winner.lease.generation,
+        provider_config_generation: winner.lease.provider_config_generation,
+      });
+      await expect(
+        channels.claimProviderProbe({
+          channelId: channel.id,
+          claimToken: 'second-daemon-while-renewed',
+          leaseDurationMs: 30_000,
+        })
+      ).resolves.toMatchObject({ outcome: 'held' });
+      await expect(channels.update(channel.id, { enabled: true })).rejects.toThrow(
+        'Discord connection test is in progress'
+      );
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation,
+          winner.lease.provider_config_generation
+        )
+      ).toBe(true);
+      const changed = await channels.update(channel.id, {
+        config: { bot_token: `${config.bot_token}-rotated` },
+      });
+      expect(changed.provider_config_generation).toBe(winner.lease.provider_config_generation + 1);
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation,
+          winner.lease.provider_config_generation
+        )
+      ).toBe(false);
+      await expect(
+        channels.claimProviderProbe({
+          channelId: channel.id,
+          claimToken: 'probe-overlap-after-config-change',
+          leaseDurationMs: 30_000,
+        })
+      ).resolves.toMatchObject({ outcome: 'held' });
+      expect(
+        await channels.releaseProviderProbe(
+          channel.id,
+          winner.lease.claim_token,
+          winner.lease.generation
+        )
+      ).toBe(true);
+
+      const retry = await channels.claimProviderProbe({
+        channelId: channel.id,
+        claimToken: 'probe-retry',
+        leaseDurationMs: 30_000,
+      });
+      expect(retry.outcome).toBe('claimed');
+      if (retry.outcome !== 'claimed') throw new Error('No retry probe winner');
+      await expect(
+        channels.claimProviderInstallationIdentity({
+          channelId: channel.id,
+          channelType: 'discord',
+          providerInstallationId: applicationId,
+          expectedConfig: {
+            application_id: applicationId,
+            bot_token: `${config.bot_token}-rotated`,
+          },
+          expectedConfigGeneration: retry.lease.provider_config_generation,
+          providerProbe: {
+            claimToken: retry.lease.claim_token,
+            generation: retry.lease.generation,
+          },
+          retainProviderProbeLeaseMs: 30_000,
+        })
+      ).resolves.toBe(true);
+      const retainedGeneration = retry.lease.provider_config_generation + 1;
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          retry.lease.claim_token,
+          retry.lease.generation,
+          retry.lease.provider_config_generation
+        )
+      ).toBe(false);
+      expect(
+        await channels.providerProbeClaimIsCurrent(
+          channel.id,
+          retry.lease.claim_token,
+          retry.lease.generation,
+          retainedGeneration
+        )
+      ).toBe(true);
+      await expect(
+        channels.claimProviderProbe({
+          channelId: channel.id,
+          claimToken: 'probe-after-installation-bind',
+          leaseDurationMs: 30_000,
+        })
+      ).resolves.toMatchObject({ outcome: 'held' });
     });
   });
 
@@ -278,7 +504,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
     await seedChannel(db, tenantB);
-    const unsupported = await seedChannel(db, tenantA, { channelType: 'discord' });
+    const unsupported = await seedChannel(db, tenantA, {
+      channelType: 'teams',
+      config: { app_id: 'teams-app', app_password: 'teams-secret' },
+    });
+    const discordApplicationId = String(BigInt(Date.now()) * 1_000_000n + 777_777n);
+    const discordConfig = {
+      bot_token: `discord-token-${generateId()}`,
+      application_id: discordApplicationId,
+      guild_id: String(BigInt(discordApplicationId) + 1n),
+      allowed_channel_ids: [String(BigInt(discordApplicationId) + 2n)],
+      align_discord_users: false,
+    };
+    const discord = await seedChannel(db, tenantA, {
+      channelType: 'discord',
+      config: discordConfig,
+      enabled: false,
+    });
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      const channels = new GatewayChannelRepository(scoped);
+      expect(
+        await channels.claimProviderInstallationIdentity({
+          channelId: discord.channel.id,
+          channelType: 'discord',
+          providerInstallationId: discordApplicationId,
+          expectedConfig: discordConfig,
+        })
+      ).toBe(true);
+      await channels.update(discord.channel.id, { enabled: true });
+    });
 
     const refs = await runWithSystemDatabaseScope(
       db,
@@ -288,6 +542,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
       { capability: 'gateway_listener_discovery' }
     );
     expect(refs).toContainEqual({ channel_id: a.channel.id, tenant_id: tenantA });
+    expect(refs).toContainEqual({ channel_id: discord.channel.id, tenant_id: tenantA });
     expect(refs.some((ref) => ref.channel_id === unsupported.channel.id)).toBe(false);
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
@@ -295,6 +550,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
         100
       );
       expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
+      expect(candidates.some((channel) => channel.id === discord.channel.id)).toBe(true);
       expect(candidates.some((channel) => channel.id === unsupported.channel.id)).toBe(false);
 
       await new GatewayChannelRepository(scoped).claimListener({

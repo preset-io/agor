@@ -23,6 +23,7 @@ import dns from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
 import type { LookupFunction } from 'node:net';
+import { Transform } from 'node:stream';
 import { isPrivateIpAddress, isPublicHttpUrl } from './url';
 
 /**
@@ -108,6 +109,14 @@ export interface PinnedFetchOptions {
    * recognise a complete answer says so here.
    */
   isBodyComplete?: (text: string) => boolean;
+}
+
+export interface PinnedBinaryResponse {
+  status: number;
+  ok: boolean;
+  headers: Headers;
+  /** Raw bytes; no string decoding is performed at this boundary. */
+  body: NodeJS.ReadableStream;
 }
 
 function toOutgoingHeaders(init: RequestInit['headers']): Record<string, string> {
@@ -228,6 +237,103 @@ export function createPinnedFetch(
 
       request.on('error', (error) => finish(() => reject(error)));
       if (typeof body === 'string') request.write(body);
+      request.end();
+    });
+}
+
+/**
+ * Streaming sibling of {@link createPinnedFetch} for untrusted binary ingress.
+ *
+ * It preserves the same resolve-once/pinned-socket guarantee and never follows
+ * redirects. The response stream fails rather than truncates at the byte or
+ * wall-clock limit, so callers can pipe it directly into bounded staging.
+ */
+export function createPinnedBinaryFetch(
+  options: Pick<PinnedFetchOptions, 'timeoutMs' | 'maxBytes' | 'lookup'>
+): (input: string, init?: RequestInit) => Promise<PinnedBinaryResponse> {
+  const lookup = options.lookup ?? createGuardedLookup();
+  return (input, init) =>
+    new Promise<PinnedBinaryResponse>((resolve, reject) => {
+      if (!isPublicHttpUrl(input)) {
+        reject(refuse('Refusing to fetch non-public URL'));
+        return;
+      }
+      if (init?.body !== undefined && init.body !== null) {
+        reject(new Error('Pinned binary fetch does not send request bodies'));
+        return;
+      }
+      const url = new URL(input);
+      const transport = url.protocol === 'https:' ? https : http;
+      let responseBody: Transform | undefined;
+      let settledHeaders = false;
+      let finished = false;
+      const cleanup = (): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        init?.signal?.removeEventListener('abort', abort);
+      };
+      const fail = (error: Error): void => {
+        if (settledHeaders) responseBody?.destroy(error);
+        else reject(error);
+        cleanup();
+      };
+      const request = transport.request(
+        url,
+        {
+          method: init?.method ?? 'GET',
+          headers: toOutgoingHeaders(init?.headers),
+          lookup,
+          agent: false,
+        },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          if (status < 200 || status > 599) {
+            response.destroy();
+            fail(new Error('Unusable provider response status'));
+            return;
+          }
+          let bytes = 0;
+          responseBody = new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+              bytes += chunk.byteLength;
+              if (bytes > options.maxBytes) {
+                callback(new Error('Provider response exceeded byte limit'));
+                return;
+              }
+              callback(null, chunk);
+            },
+          });
+          response.on('error', (error) => responseBody?.destroy(error));
+          responseBody.on('error', () => {
+            response.destroy();
+            cleanup();
+          });
+          responseBody.on('end', cleanup);
+          responseBody.on('close', cleanup);
+          response.pipe(responseBody);
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) for (const item of value) headers.append(key, item);
+            else if (value !== undefined) headers.set(key, value);
+          }
+          settledHeaders = true;
+          resolve({ status, ok: status >= 200 && status < 300, headers, body: responseBody });
+        }
+      );
+      const abort = (): void => {
+        request.destroy(new Error('Provider fetch aborted'));
+      };
+      const timer = setTimeout(
+        () => request.destroy(new Error('Provider fetch deadline exceeded')),
+        options.timeoutMs
+      );
+      request.on('error', (error) => fail(error));
+      if (init?.signal?.aborted) {
+        abort();
+        return;
+      }
+      init?.signal?.addEventListener('abort', abort, { once: true });
       request.end();
     });
 }

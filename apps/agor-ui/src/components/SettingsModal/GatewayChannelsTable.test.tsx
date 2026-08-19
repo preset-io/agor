@@ -134,6 +134,32 @@ function makeSlackChannel(): GatewayChannel {
   } as unknown as GatewayChannel;
 }
 
+function makeDiscordChannel(userId: string): GatewayChannel {
+  return {
+    id: 'discord-channel-1',
+    name: 'Team Discord',
+    channel_type: 'discord',
+    channel_key: 'discord:team',
+    target_branch_id: 'branch-1',
+    agor_user_id: null,
+    enabled: false,
+    config: {
+      bot_token: '••••••••',
+      application_id: '123456789012345678',
+      guild_id: '223456789012345678',
+      allowed_channel_ids: ['323456789012345678'],
+      align_discord_users: true,
+      user_map: { '423456789012345678': userId },
+      ingest_files: false,
+      thread_mode: 'public_thread_per_summon',
+      agent_tools: { thread_history: true },
+      enable_dms: false,
+    },
+    agentic_config: { agent: 'claude-code' },
+    last_message_at: null,
+  } as unknown as GatewayChannel;
+}
+
 /**
  * Minimal AgorClient stub exposing only the services the table calls. Records
  * the `gateway-channels` create payload, the `gateway-channels/test` probe,
@@ -145,15 +171,38 @@ function makeClient(testResult?: unknown, appInfo?: unknown) {
     .fn()
     .mockResolvedValue(testResult ?? { ok: true, failures: [], notVerifiable: [] });
   const appInfoCreate = vi.fn().mockResolvedValue(appInfo ?? { appId: null, teamId: null });
+  const discordApplicationSettingsCreate = vi.fn().mockResolvedValue({
+    ok: true,
+    ambiguous: false,
+    requiresRetest: true,
+    applicationId: '123456789012345678',
+    installUrl:
+      'https://discord.com/oauth2/authorize?client_id=123456789012345678&scope=bot&permissions=309237746688&guild_id=223456789012345678&disable_guild_select=true',
+    messageContentAccess: true,
+    guildInstallDefaults: true,
+    intentNames: ['Guilds', 'Guild Messages', 'Message Content (privileged)'],
+    permissionNames: ['View Channel'],
+    permissions: '309237746688',
+    code: 'applied',
+  });
   const client = {
     service: (name: string) => {
       if (name === 'gateway-channels') return { create: channelCreate };
       if (name === 'gateway-channels/test') return { create: testCreate };
       if (name === 'gateway-channels/app-info') return { create: appInfoCreate };
+      if (name === 'gateway-channels/discord-application-settings') {
+        return { create: discordApplicationSettingsCreate };
+      }
       return { create: vi.fn(), get: vi.fn() };
     },
   } as unknown as AgorClient;
-  return { client, channelCreate, testCreate, appInfoCreate };
+  return {
+    client,
+    channelCreate,
+    testCreate,
+    appInfoCreate,
+    discordApplicationSettingsCreate,
+  };
 }
 
 function renderTable(client: AgorClient | null) {
@@ -395,6 +444,29 @@ describe('GatewayChannelsTable Slack create wizard', () => {
   });
 });
 
+describe('GatewayChannelsTable Discord create wizard', () => {
+  it('offers Discord and starts with a disabled PostgreSQL setup draft', async () => {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    selectChannelType('Discord');
+
+    expect(screen.getByText('Portal setup')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'Team Discord' },
+    });
+    fireEvent.change(screen.getByLabelText('branch-select'), {
+      target: { value: 'branch-1' },
+    });
+    expect(screen.getByText('Enabled').closest('.ant-form-item')).toHaveTextContent('Enabled');
+    clickButton(/^Continue$/);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('Save and verify before enabling').length).toBeGreaterThan(0)
+    );
+    expect(screen.getAllByText('Application ID').length).toBeGreaterThan(0);
+  });
+});
+
 /**
  * Render the table with a single Slack channel and open its edit modal. The
  * edit Collapse keeps inactive panels mounted (`destroyOnHidden={false}`), but
@@ -405,11 +477,12 @@ function renderEditTable(
   channel: GatewayChannel,
   opts: {
     currentUser?: User;
+    channelOwner?: User;
     onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   } = {}
 ) {
   const branch = makeBranch();
-  const channelOwner = makeUser();
+  const channelOwner = opts.channelOwner ?? makeUser();
   const currentUser = opts.currentUser ?? channelOwner;
   renderWithProviders(
     <GatewayChannelsTable
@@ -825,6 +898,97 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       agentic_config: { agent: 'claude-code' },
       mcp_server_ids: ['mcp-server-1'],
     });
+  });
+});
+
+describe('GatewayChannelsTable Discord staged edit mode', () => {
+  const discordUser = makeUser({
+    user_id: '01990b8e-7ef3-7000-8000-000000000001',
+  });
+
+  it('allows an administrator to enable a saved verified Discord channel', () => {
+    const channel = {
+      ...makeDiscordChannel(discordUser.user_id),
+      provider_installation_id: '123456789012345678',
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn();
+    const branch = makeBranch();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={makeClient().client}
+        gatewayChannelById={new Map([[channel.id, channel]])}
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[discordUser.user_id, discordUser]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={discordUser}
+        onUpdate={onUpdate}
+      />
+    );
+
+    const enable = screen.getByTitle('Enable');
+    expect(enable).not.toBeDisabled();
+    fireEvent.click(enable);
+    expect(onUpdate).toHaveBeenCalledWith(channel.id, { enabled: true });
+  });
+
+  it('shows the reviewed Portal setup and uses only saved-channel setup services', async () => {
+    const { client, testCreate, discordApplicationSettingsCreate } = makeClient();
+    renderEditTable(client, makeDiscordChannel(discordUser.user_id), {
+      channelOwner: discordUser,
+      currentUser: discordUser,
+    });
+
+    expect(screen.getByText('Save and verify before enabling')).toBeInTheDocument();
+    expect(screen.getByText('Create the application in Discord first')).toBeInTheDocument();
+    expect(screen.getByText('Message Content (privileged)')).toBeInTheDocument();
+    expect(screen.getByText('Send Messages in Threads')).toBeInTheDocument();
+    expect(screen.getByText(/no callback URL, redirect URL/i)).toBeInTheDocument();
+    expect(screen.getByText('Stored')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Leave blank to keep current')).toHaveValue('');
+
+    clickButton(/Apply recommended app settings/);
+    await waitFor(() => expect(discordApplicationSettingsCreate).toHaveBeenCalledTimes(1));
+    expect(discordApplicationSettingsCreate).toHaveBeenCalledWith({
+      gatewayChannelId: 'discord-channel-1',
+    });
+    expect(await screen.findByText('Reviewed application settings applied')).toBeInTheDocument();
+
+    clickButton(/^Test connection$/);
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate).toHaveBeenCalledWith({ gatewayChannelId: 'discord-channel-1' });
+  });
+
+  it('does not echo the token on save and blocks setup against unsaved edits', async () => {
+    const { client, testCreate, discordApplicationSettingsCreate } = makeClient();
+    const onUpdate = vi.fn();
+    renderEditTable(client, makeDiscordChannel(discordUser.user_id), {
+      channelOwner: discordUser,
+      currentUser: discordUser,
+      onUpdate,
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('123456789012345678'), {
+      target: { value: '123456789012345679' },
+    });
+    expect(screen.getByText('Save changes before setup')).toBeInTheDocument();
+    expect(getButton(/Apply recommended app settings/)).toBeDisabled();
+    expect(getButton(/^Test connection$/)).toBeDisabled();
+    expect(testCreate).not.toHaveBeenCalled();
+    expect(discordApplicationSettingsCreate).not.toHaveBeenCalled();
+
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      enabled: false,
+      config: {
+        application_id: '123456789012345679',
+        guild_id: '223456789012345678',
+        allowed_channel_ids: ['323456789012345678'],
+        align_discord_users: true,
+        user_map: { '423456789012345678': discordUser.user_id },
+      },
+    });
+    expect(onUpdate.mock.calls[0][1].config).not.toHaveProperty('bot_token');
   });
 });
 

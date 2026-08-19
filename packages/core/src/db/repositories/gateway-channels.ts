@@ -5,6 +5,7 @@
  * Handles encryption/decryption of sensitive platform credentials in the config blob.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ChannelType,
   GatewayChannel,
@@ -14,7 +15,7 @@ import type {
   TenantID,
   UUID,
 } from '@agor/core/types';
-import { and, asc, eq, gt, inArray, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, like, lte, ne, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isAgenticToolDefaultConfigurationReference } from '../../types/agentic-tool-preset';
 import {
@@ -35,7 +36,13 @@ import {
   update,
 } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
-import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
+import { isDatabaseUniqueConstraintError } from '../sanitize-error';
+import {
+  type GatewayChannelInsert,
+  type GatewayChannelRow,
+  gatewayChannels,
+  gatewayProviderActions,
+} from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -76,6 +83,48 @@ export interface GatewayListenerClaimInput {
   leaseDurationMs: number;
   instanceId: string;
   bootId: string;
+}
+
+export interface GatewayProviderInstallationClaimInput {
+  channelId: GatewayChannelID;
+  channelType: ChannelType;
+  providerInstallationId: string;
+  /** Exact token-authenticated config used by the provider probe. */
+  expectedConfig: Record<string, unknown>;
+  expectedConfigGeneration?: number;
+  providerProbe?: {
+    claimToken: string;
+    generation: number;
+  };
+  /** Keep the exact setup owner after binding so it can perform one reviewed mutation. */
+  retainProviderProbeLeaseMs?: number;
+}
+
+export interface GatewayProviderProbeLease {
+  channel_id: GatewayChannelID;
+  claim_token: string;
+  generation: number;
+  provider_config_generation: number;
+  lease_expires_at: string;
+}
+
+export type GatewayProviderProbeClaimResult =
+  | { outcome: 'claimed'; lease: GatewayProviderProbeLease }
+  | { outcome: 'held'; lease_expires_at: string }
+  | { outcome: 'unavailable' };
+
+export class ProviderInstallationConflictError extends RepositoryError {
+  constructor() {
+    super('Provider installation is already connected');
+    this.name = 'ProviderInstallationConflictError';
+  }
+}
+
+export class ProviderProbeInProgressError extends RepositoryError {
+  constructor() {
+    super('Discord connection test is in progress; enable the channel after it completes');
+    this.name = 'ProviderProbeInProgressError';
+  }
 }
 
 /**
@@ -274,6 +323,351 @@ export class GatewayChannelRepository
   }
 
   /**
+   * Materialize a token-verified provider identity without trusting the public
+   * application ID. The row lock proves the probed credentials still match;
+   * the global partial unique index closes cross-tenant/concurrent races.
+   */
+  async claimProviderInstallationIdentity(
+    input: GatewayProviderInstallationClaimInput
+  ): Promise<boolean> {
+    if (!input.providerInstallationId.trim()) {
+      throw new RepositoryError('Verified provider installation identity required');
+    }
+    if (
+      input.channelType === 'discord' &&
+      (input.expectedConfig.application_id !== input.providerInstallationId ||
+        typeof input.expectedConfig.bot_token !== 'string' ||
+        input.expectedConfig.bot_token.length === 0 ||
+        input.expectedConfig.bot_token === GATEWAY_REDACTED_SENTINEL)
+    ) {
+      throw new RepositoryError('Discord provider claim requires verified bot credentials');
+    }
+    if (
+      input.retainProviderProbeLeaseMs !== undefined &&
+      (!input.providerProbe ||
+        !Number.isInteger(input.retainProviderProbeLeaseMs) ||
+        input.retainProviderProbeLeaseMs <= 0 ||
+        input.retainProviderProbeLeaseMs > 60_000)
+    ) {
+      throw new RepositoryError('Retained provider probe lease must be between 1 and 60000ms');
+    }
+    try {
+      return await runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(
+            txDb,
+            this.db,
+            gatewayChannels,
+            eq(gatewayChannels.id, input.channelId)
+          );
+          const row = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, input.channelId))
+            .one();
+          if (!row || row.channel_type !== input.channelType) return false;
+
+          if (
+            input.expectedConfigGeneration !== undefined &&
+            row.provider_config_generation !== input.expectedConfigGeneration
+          ) {
+            return false;
+          }
+          if (input.providerProbe) {
+            const now = await this.mutationNow(txDb, input.channelId);
+            if (
+              row.enabled ||
+              row.provider_probe_claim_token !== input.providerProbe.claimToken ||
+              row.provider_probe_generation !== input.providerProbe.generation ||
+              row.provider_probe_config_generation !== row.provider_config_generation ||
+              !row.provider_probe_lease_expires_at ||
+              new Date(row.provider_probe_lease_expires_at).getTime() <= now.getTime()
+            ) {
+              return false;
+            }
+          }
+
+          const currentConfig = decryptConfig(row.config as Record<string, unknown>);
+          for (const [key, expectedValue] of Object.entries(input.expectedConfig)) {
+            if (currentConfig[key] !== expectedValue) return false;
+          }
+          if (currentConfig.application_id !== input.providerInstallationId) return false;
+          if (row.provider_installation_id === input.providerInstallationId) {
+            if (input.providerProbe) {
+              const retain = input.retainProviderProbeLeaseMs !== undefined;
+              await update(txDb, gatewayChannels)
+                .set({
+                  provider_probe_claim_token: retain ? input.providerProbe.claimToken : null,
+                  provider_probe_lease_expires_at: retain
+                    ? new Date(
+                        (await this.mutationNow(txDb, input.channelId)).getTime() +
+                          input.retainProviderProbeLeaseMs!
+                      )
+                    : null,
+                  provider_probe_config_generation: retain ? row.provider_config_generation : null,
+                  provider_probe_generation: retain
+                    ? row.provider_probe_generation
+                    : sql`${gatewayChannels.provider_probe_generation} + 1`,
+                })
+                .where(eq(gatewayChannels.id, input.channelId))
+                .run();
+            }
+            return true;
+          }
+
+          const nextProviderConfigGeneration = row.provider_config_generation + 1;
+          const retainProbe = input.providerProbe && input.retainProviderProbeLeaseMs !== undefined;
+          const retainedProbeExpiry = retainProbe
+            ? new Date(
+                (await this.mutationNow(txDb, input.channelId)).getTime() +
+                  input.retainProviderProbeLeaseMs!
+              )
+            : null;
+          await update(txDb, gatewayChannels)
+            .set({
+              provider_installation_id: input.providerInstallationId,
+              provider_config_generation: nextProviderConfigGeneration,
+              updated_at: new Date(),
+              listener_claim_token: null,
+              listener_claimed_at: null,
+              listener_lease_expires_at: null,
+              listener_instance_id: null,
+              listener_boot_id: null,
+              listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
+              listener_checkpoint: null,
+              listener_checkpoint_updated_at: null,
+              ...(input.providerProbe
+                ? {
+                    provider_probe_claim_token: retainProbe ? input.providerProbe.claimToken : null,
+                    provider_probe_lease_expires_at: retainedProbeExpiry,
+                    provider_probe_config_generation: retainProbe
+                      ? nextProviderConfigGeneration
+                      : null,
+                    provider_probe_generation: retainProbe
+                      ? row.provider_probe_generation
+                      : sql`${gatewayChannels.provider_probe_generation} + 1`,
+                  }
+                : {}),
+            })
+            .where(eq(gatewayChannels.id, input.channelId))
+            .run();
+          await update(txDb, gatewayProviderActions)
+            .set({
+              status: 'canceled',
+              canceled_at: new Date(),
+              last_error_code: 'provider_configuration_changed',
+              claim_token: null,
+              claim_expires_at: null,
+              claim_listener_token: null,
+              claim_listener_generation: null,
+              claim_instance_id: null,
+              claim_boot_id: null,
+              updated_at: new Date(),
+            })
+            .where(
+              and(
+                eq(gatewayProviderActions.gateway_channel_id, input.channelId),
+                inArray(gatewayProviderActions.status, ['pending', 'processing', 'retry']),
+                ne(gatewayProviderActions.provider_config_generation, nextProviderConfigGeneration)
+              )
+            )
+            .run();
+          return true;
+        },
+        { sqliteImmediate: true }
+      );
+    } catch (error) {
+      if (isDatabaseUniqueConstraintError(error)) {
+        // This is intentionally generic: never expose another tenant/channel.
+        throw new ProviderInstallationConflictError();
+      }
+      throw error;
+    }
+  }
+
+  /** PostgreSQL-only serialized setup ownership for one persisted disabled Discord channel. */
+  async claimProviderProbe(input: {
+    channelId: GatewayChannelID;
+    claimToken: string;
+    leaseDurationMs: number;
+  }): Promise<GatewayProviderProbeClaimResult> {
+    if (!isPostgresDatabase(this.db)) {
+      throw new RepositoryError('Discord setup probes require PostgreSQL');
+    }
+    if (!input.claimToken.trim() || input.claimToken.length > 200) {
+      throw new RepositoryError('Valid provider probe claim token required');
+    }
+    if (
+      !Number.isInteger(input.leaseDurationMs) ||
+      input.leaseDurationMs <= 0 ||
+      input.leaseDurationMs > 60_000
+    ) {
+      throw new RepositoryError('Provider probe lease must be between 1 and 60000 milliseconds');
+    }
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      await lockRowForUpdate(
+        txDb,
+        this.db,
+        gatewayChannels,
+        eq(gatewayChannels.id, input.channelId)
+      );
+      const row = await select(txDb)
+        .from(gatewayChannels)
+        .where(eq(gatewayChannels.id, input.channelId))
+        .one();
+      if (!row || row.enabled || row.channel_type !== 'discord') return { outcome: 'unavailable' };
+      const now = await this.mutationNow(txDb, input.channelId);
+      if (
+        row.provider_probe_claim_token &&
+        row.provider_probe_lease_expires_at &&
+        new Date(row.provider_probe_lease_expires_at).getTime() > now.getTime()
+      ) {
+        return {
+          outcome: 'held',
+          lease_expires_at: new Date(row.provider_probe_lease_expires_at).toISOString(),
+        };
+      }
+      const generation = row.provider_probe_generation + 1;
+      const expiresAt = new Date(now.getTime() + input.leaseDurationMs);
+      await update(txDb, gatewayChannels)
+        .set({
+          provider_probe_claim_token: input.claimToken,
+          provider_probe_lease_expires_at: expiresAt,
+          provider_probe_generation: generation,
+          provider_probe_config_generation: row.provider_config_generation,
+        })
+        .where(eq(gatewayChannels.id, input.channelId))
+        .run();
+      return {
+        outcome: 'claimed',
+        lease: {
+          channel_id: input.channelId,
+          claim_token: input.claimToken,
+          generation,
+          provider_config_generation: row.provider_config_generation,
+          lease_expires_at: expiresAt.toISOString(),
+        },
+      };
+    });
+  }
+
+  async providerProbeClaimIsCurrent(
+    channelId: GatewayChannelID,
+    claimToken: string,
+    generation: number,
+    providerConfigGeneration: number
+  ): Promise<boolean> {
+    if (!isPostgresDatabase(this.db)) return false;
+    const current = await select(this.db, {
+      current: sql<boolean>`${gatewayChannels.provider_probe_lease_expires_at} > CURRENT_TIMESTAMP`,
+    })
+      .from(gatewayChannels)
+      .where(
+        and(
+          eq(gatewayChannels.id, channelId),
+          eq(gatewayChannels.enabled, false),
+          eq(gatewayChannels.channel_type, 'discord'),
+          eq(gatewayChannels.provider_probe_claim_token, claimToken),
+          eq(gatewayChannels.provider_probe_generation, generation),
+          eq(gatewayChannels.provider_probe_config_generation, providerConfigGeneration),
+          eq(gatewayChannels.provider_config_generation, providerConfigGeneration)
+        )
+      )
+      .one();
+    return current?.current === true;
+  }
+
+  /** Renew only the exact unexpired disabled-channel probe/config fence. */
+  async renewProviderProbe(input: {
+    channelId: GatewayChannelID;
+    claimToken: string;
+    generation: number;
+    providerConfigGeneration: number;
+    leaseDurationMs: number;
+  }): Promise<GatewayProviderProbeLease | null> {
+    if (!isPostgresDatabase(this.db)) {
+      throw new RepositoryError('Discord setup probes require PostgreSQL');
+    }
+    if (
+      !input.claimToken.trim() ||
+      !Number.isSafeInteger(input.generation) ||
+      input.generation <= 0 ||
+      !Number.isSafeInteger(input.providerConfigGeneration) ||
+      input.providerConfigGeneration <= 0 ||
+      !Number.isInteger(input.leaseDurationMs) ||
+      input.leaseDurationMs <= 0 ||
+      input.leaseDurationMs > 60_000
+    ) {
+      throw new RepositoryError('Valid provider probe renewal fence required');
+    }
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      await lockRowForUpdate(
+        txDb,
+        this.db,
+        gatewayChannels,
+        eq(gatewayChannels.id, input.channelId)
+      );
+      const row = await select(txDb)
+        .from(gatewayChannels)
+        .where(eq(gatewayChannels.id, input.channelId))
+        .one();
+      if (
+        !row ||
+        row.enabled ||
+        row.channel_type !== 'discord' ||
+        row.provider_probe_claim_token !== input.claimToken ||
+        row.provider_probe_generation !== input.generation ||
+        row.provider_probe_config_generation !== input.providerConfigGeneration ||
+        row.provider_config_generation !== input.providerConfigGeneration
+      ) {
+        return null;
+      }
+      const now = await this.mutationNow(txDb, input.channelId);
+      if (
+        !row.provider_probe_lease_expires_at ||
+        new Date(row.provider_probe_lease_expires_at).getTime() <= now.getTime()
+      ) {
+        return null;
+      }
+      const expiresAt = new Date(now.getTime() + input.leaseDurationMs);
+      await update(txDb, gatewayChannels)
+        .set({ provider_probe_lease_expires_at: expiresAt })
+        .where(eq(gatewayChannels.id, input.channelId))
+        .run();
+      return {
+        channel_id: input.channelId,
+        claim_token: input.claimToken,
+        generation: input.generation,
+        provider_config_generation: input.providerConfigGeneration,
+        lease_expires_at: expiresAt.toISOString(),
+      };
+    });
+  }
+
+  async releaseProviderProbe(
+    channelId: GatewayChannelID,
+    claimToken: string,
+    generation: number
+  ): Promise<boolean> {
+    if (!isPostgresDatabase(this.db)) return false;
+    const result = await update(this.db, gatewayChannels)
+      .set({
+        provider_probe_claim_token: null,
+        provider_probe_lease_expires_at: null,
+        provider_probe_config_generation: null,
+      })
+      .where(
+        and(
+          eq(gatewayChannels.id, channelId),
+          eq(gatewayChannels.provider_probe_claim_token, claimToken),
+          eq(gatewayChannels.provider_probe_generation, generation)
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
+  }
+
+  /**
    * Claim one channel listener with database time and an opaque fence token.
    * The transaction is intentionally limited to one locked row and contains no
    * provider work.
@@ -396,12 +790,22 @@ export class GatewayChannelRepository
   }
 
   /** Current-token check used to fence callbacks and provider checkpoints. */
-  async listenerClaimIsCurrent(channelId: GatewayChannelID, claimToken: string): Promise<boolean> {
+  async listenerClaimIsCurrent(
+    channelId: GatewayChannelID,
+    claimToken: string,
+    expectedGeneration?: number
+  ): Promise<boolean> {
     const row = await select(this.db)
       .from(gatewayChannels)
       .where(eq(gatewayChannels.id, channelId))
       .one();
-    if (!row?.enabled || row.listener_claim_token !== claimToken) return false;
+    if (
+      !row?.enabled ||
+      row.listener_claim_token !== claimToken ||
+      (expectedGeneration !== undefined && row.listener_generation !== expectedGeneration)
+    ) {
+      return false;
+    }
     const now = isPostgresDatabase(this.db) ? null : new Date();
     if (now) {
       return !!row.listener_lease_expires_at && new Date(row.listener_lease_expires_at) > now;
@@ -414,6 +818,9 @@ export class GatewayChannelRepository
         and(
           eq(gatewayChannels.id, channelId),
           eq(gatewayChannels.listener_claim_token, claimToken),
+          ...(expectedGeneration === undefined
+            ? []
+            : [eq(gatewayChannels.listener_generation, expectedGeneration)]),
           eq(gatewayChannels.enabled, true)
         )
       )
@@ -515,6 +922,8 @@ export class GatewayChannelRepository
         target_branch_id: row.target_branch_id as UUID,
         agor_user_id: row.agor_user_id as UUID,
         channel_key: row.channel_key,
+        provider_installation_id: row.provider_installation_id,
+        provider_config_generation: row.provider_config_generation,
         config: decryptConfig(config),
         agentic_config: agenticConfig
           ? ({
@@ -569,6 +978,8 @@ export class GatewayChannelRepository
       target_branch_id: data.target_branch_id ?? '',
       agor_user_id: data.agor_user_id ?? '',
       channel_key: data.channel_key ?? generateId(),
+      provider_installation_id: data.provider_installation_id ?? null,
+      provider_config_generation: data.provider_config_generation ?? 1,
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
@@ -591,6 +1002,9 @@ export class GatewayChannelRepository
     if (channel.enabled === false) return;
 
     const channelType = channel.channel_type ?? 'slack';
+    if (channelType === 'discord' && !isPostgresDatabase(this.db)) {
+      throw new RepositoryError('Cannot enable Discord gateway channel: PostgreSQL is required');
+    }
     const config = channel.config ?? {};
     const missing = getRequiredSecretFields(channelType, config).filter((field) => {
       const value = config[field];
@@ -645,6 +1059,8 @@ export class GatewayChannelRepository
         ...data,
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
+        // Only claimProviderInstallationIdentity may materialize this field.
+        provider_installation_id: null,
       });
 
       this.assertRequiredSecretsWhenEnabled(data);
@@ -713,72 +1129,155 @@ export class GatewayChannelRepository
   async update(id: string, updates: Partial<GatewayChannel>): Promise<GatewayChannel> {
     try {
       const fullId = await this.resolveId(id);
+      return await runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
+          const currentRow = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, fullId))
+            .one();
+          if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+          const current = this.rowToChannel(currentRow);
+          const now = await this.mutationNow(txDb, fullId);
+          const preserveRevokedProbeTombstone =
+            currentRow.channel_type === 'discord' &&
+            !!currentRow.provider_probe_claim_token &&
+            !!currentRow.provider_probe_lease_expires_at &&
+            new Date(currentRow.provider_probe_lease_expires_at).getTime() > now.getTime();
 
-      const current = await this.findById(fullId);
-      if (!current) {
-        throw new EntityNotFoundError('GatewayChannel', id);
-      }
-
-      // Merge updates, but preserve existing encrypted credentials if update has empty values
-      const merged = { ...current, ...updates };
-
-      // Preserve existing credentials if updates contain empty, falsy, or redacted values.
-      // The API redacts sensitive fields to '••••••••' in responses, so if the client
-      // sends that sentinel back it means "no change" — not "set token to bullets".
-      if (updates.config) {
-        const mergedConfig = { ...current.config, ...updates.config };
-        for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-          const updateValue = updates.config[field];
+          // Do not let a disabled-channel setup client overlap a newly enabled
+          // listener. Other config mutations may revoke/fence the probe result,
+          // but enabling waits until the short DB-time probe lease is gone.
           if (
-            (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
-            current.config[field]
+            currentRow.channel_type === 'discord' &&
+            !currentRow.enabled &&
+            updates.enabled === true &&
+            currentRow.provider_probe_claim_token &&
+            currentRow.provider_probe_lease_expires_at &&
+            new Date(currentRow.provider_probe_lease_expires_at).getTime() > now.getTime()
           ) {
-            mergedConfig[field] = current.config[field];
+            throw new ProviderProbeInProgressError();
           }
-        }
-        merged.config = mergedConfig;
-      }
 
-      this.assertRequiredSecretsWhenEnabled(merged);
+          // Merge updates, but preserve existing encrypted credentials if update has empty values.
+          const merged = {
+            ...current,
+            ...updates,
+            // Public/general repository updates cannot self-assert verification.
+            provider_installation_id: current.provider_installation_id,
+          };
 
-      const insertData = this.channelToInsert(merged);
+          // The API redaction sentinel means "no change", never "store bullets".
+          if (updates.config) {
+            const mergedConfig = { ...current.config, ...updates.config };
+            for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
+              const updateValue = updates.config[field];
+              if (
+                (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
+                current.config[field]
+              ) {
+                mergedConfig[field] = current.config[field];
+              }
+            }
+            merged.config = mergedConfig;
+          }
 
-      await update(this.db, gatewayChannels)
-        .set({
-          name: insertData.name,
-          channel_type: insertData.channel_type,
-          target_branch_id: insertData.target_branch_id,
-          agor_user_id: insertData.agor_user_id,
-          enabled: insertData.enabled,
-          config: insertData.config,
-          agentic_config: insertData.agentic_config,
-          agentic_tool_preset_id: insertData.agentic_tool_preset_id,
-          mcp_server_ids: insertData.mcp_server_ids,
-          updated_at: new Date(),
-          // Any configuration mutation immediately revokes the old listener.
-          // Provider callbacks must match the new opaque claim token before a
-          // durable effect can be admitted.
-          listener_claim_token: null,
-          listener_claimed_at: null,
-          listener_lease_expires_at: null,
-          listener_instance_id: null,
-          listener_boot_id: null,
-          listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
-          // A cursor authenticated against old credentials/search scope is not
-          // safe to reuse after mutation. Replacement pollers restart from the
-          // provider-specific bounded overlap.
-          listener_checkpoint: null,
-          listener_checkpoint_updated_at: null,
-        })
-        .where(eq(gatewayChannels.id, fullId))
-        .run();
+          // Verified provider identity is bound to provider type plus the exact
+          // bot credential/application pair and cannot survive their mutation.
+          const providerBindingChanged =
+            (updates.channel_type !== undefined && updates.channel_type !== current.channel_type) ||
+            (updates.config !== undefined &&
+              (merged.config.application_id !== current.config.application_id ||
+                merged.config.bot_token !== current.config.bot_token));
+          if (providerBindingChanged) merged.provider_installation_id = null;
 
-      const updated = await this.findById(fullId);
-      if (!updated) {
-        throw new RepositoryError('Failed to retrieve updated gateway channel');
-      }
+          const providerConfigurationChanged =
+            (updates.channel_type !== undefined && updates.channel_type !== current.channel_type) ||
+            (updates.enabled !== undefined && updates.enabled !== current.enabled) ||
+            (updates.config !== undefined && !isDeepStrictEqual(merged.config, current.config));
+          const providerConfigGeneration =
+            current.provider_config_generation + (providerConfigurationChanged ? 1 : 0);
 
-      return updated;
+          this.assertRequiredSecretsWhenEnabled(merged);
+          const insertData = this.channelToInsert(merged);
+
+          await update(txDb, gatewayChannels)
+            .set({
+              name: insertData.name,
+              channel_type: insertData.channel_type,
+              target_branch_id: insertData.target_branch_id,
+              agor_user_id: insertData.agor_user_id,
+              enabled: insertData.enabled,
+              provider_installation_id: insertData.provider_installation_id,
+              provider_config_generation: providerConfigGeneration,
+              config: insertData.config,
+              agentic_config: insertData.agentic_config,
+              agentic_tool_preset_id: insertData.agentic_tool_preset_id,
+              mcp_server_ids: insertData.mcp_server_ids,
+              updated_at: now,
+              // Every repository update revokes the process-local listener;
+              // provider config generation separately decides action validity.
+              listener_claim_token: null,
+              listener_claimed_at: null,
+              listener_lease_expires_at: null,
+              listener_instance_id: null,
+              listener_boot_id: null,
+              listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
+              listener_checkpoint: null,
+              listener_checkpoint_updated_at: null,
+              // An update invalidates the exact config snapshot immediately,
+              // but retains a live token/expiry as a serialization tombstone
+              // until the old probe tears down and releases it. Otherwise a
+              // second daemon could construct a new REST client during the
+              // heartbeat's bounded fence-loss detection interval.
+              provider_probe_claim_token: preserveRevokedProbeTombstone
+                ? currentRow.provider_probe_claim_token
+                : null,
+              provider_probe_lease_expires_at: preserveRevokedProbeTombstone
+                ? currentRow.provider_probe_lease_expires_at
+                : null,
+              provider_probe_config_generation: null,
+              provider_probe_generation: preserveRevokedProbeTombstone
+                ? currentRow.provider_probe_generation
+                : sql`${gatewayChannels.provider_probe_generation} + 1`,
+            })
+            .where(eq(gatewayChannels.id, fullId))
+            .run();
+
+          if (providerConfigurationChanged) {
+            await update(txDb, gatewayProviderActions)
+              .set({
+                status: 'canceled',
+                canceled_at: now,
+                last_error_code: 'provider_configuration_changed',
+                claim_token: null,
+                claim_expires_at: null,
+                claim_listener_token: null,
+                claim_listener_generation: null,
+                claim_instance_id: null,
+                claim_boot_id: null,
+                updated_at: now,
+              })
+              .where(
+                and(
+                  eq(gatewayProviderActions.gateway_channel_id, fullId),
+                  inArray(gatewayProviderActions.status, ['pending', 'processing', 'retry']),
+                  ne(gatewayProviderActions.provider_config_generation, providerConfigGeneration)
+                )
+              )
+              .run();
+          }
+
+          const updatedRow = await select(txDb)
+            .from(gatewayChannels)
+            .where(eq(gatewayChannels.id, fullId))
+            .one();
+          if (!updatedRow) throw new RepositoryError('Failed to retrieve updated gateway channel');
+          return this.rowToChannel(updatedRow);
+        },
+        { sqliteImmediate: true }
+      );
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;

@@ -68,6 +68,7 @@ import {
   bindMcpRepositoryToTenantUnitOfWork,
   runWithMcpTenantDatabaseScope,
 } from '../tenant-scope.js';
+import { registerGatewayDiscordThreadHistoryTool } from './gateway-discord-thread-history.js';
 
 function requireAdmin(ctx: McpContext, action: string): void {
   if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
@@ -1197,6 +1198,7 @@ async function resolveGatewaySlackToolTarget(
  * daemon-owned file. Branch-relative files are handled by the executor.
  */
 export function registerGatewayChannelTools(server: McpServer, ctx: McpContext): void {
+  registerGatewayDiscordThreadHistoryTool(server, ctx);
   server.registerTool(
     'agor_upload_materialize',
     {

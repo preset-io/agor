@@ -16,7 +16,7 @@ Things working in your favor:
 
 - **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
-- **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. None of them require a public webhook URL.
+- **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. The staged Discord connector uses Gateway WSS plus REST. None of those modes require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
 
 Things that still warrant caution:
@@ -34,7 +34,7 @@ Things that still warrant caution:
 
 The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
 
-> Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord setup can be prepared as a disabled PostgreSQL staging draft, but Discord cannot yet be enabled or receive traffic. WhatsApp and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -233,6 +233,166 @@ Notes:
 
 - `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
+
+## Preparing a Discord Integration (PostgreSQL only)
+
+> Discord gateways require PostgreSQL. SQLite and standalone local mode reject
+> enablement, connection probes, and runtime delivery.
+
+Discord setup is configuration-heavy rather than manifest-based. Discord does
+not provide a Slack-style manifest import or an API that creates an application.
+You create and own the application in Discord. After the disabled channel is
+saved, Agor can apply only the reviewed fields exposed by Discord's
+[Edit Current Application](https://docs.discord.com/developers/resources/application#edit-current-application)
+API: the limited Message Content flag and merged Guild Install defaults.
+
+The launch transport is outbound **Gateway WSS + REST**. It does not use slash
+commands, webhooks, HTTP interactions, or OAuth user linking. No callback URL,
+redirect URL, public webhook, or Interactions endpoint is required.
+
+### 1. Create the Discord application and bot
+
+1. Start with a disposable Discord test server. Open the
+   [Discord Developer Portal](https://discord.com/developers/applications) and
+   choose **Create Application**.
+2. Open **Bot** → **Reset Token**, copy the bot token once, and keep it secret.
+   Agor's token field is write-only and the stored token is encrypted at rest.
+3. Copy the **Application ID**. In the Discord desktop/web client, enable
+   **User Settings → Advanced → Developer Mode**. Then copy the target
+   **Server ID** and each parent text/forum **Channel ID** that the assistant may
+   use.
+
+### 2. Save a disabled Agor channel
+
+In **Settings → Gateway Channels**, create or edit the Discord staging draft:
+
+- **Application ID** and **Server (Guild) ID** must be Discord Snowflakes.
+- Enter the bot token and between 1 and 100 allowed parent channel IDs. An
+  empty allowlist never means every channel.
+- **User alignment** is on by default. Add explicit Discord User ID → Agor User
+  pairs from the current tenant (up to 1,000). If alignment is off, **Run as
+  user** is required; every accepted mention then uses that person's execution
+  and credential context.
+- Choose a target branch and the normal agent, model, permission, MCP, and
+  environment settings. Mapped thread history is on by default.
+- **Ingest attached files** is off by default. When enabled, only safe image,
+  text, and JSON attachments on the current explicitly mentioned message are
+  staged as untrusted user context. Agor does not download ambient catch-up
+  attachments and rejects PDFs, SVG, office/archive/media, and executable
+  formats. Signed Discord CDN URLs are not retained as a file/message mirror.
+- Keep **Enabled** off and save. Test and application-settings actions reject
+  unsaved drafts, enabled channels, and standalone SQLite.
+
+User alignment is the safer multi-user mode. Turning it off delegates one Agor
+user's branch, execution, MCP, environment, and credential authority to every
+Discord sender who can produce an accepted mention in an allowed parent.
+
+### 3. Apply the reviewed application settings
+
+On the saved disabled channel, choose **Apply recommended app settings**. Agor
+first verifies and claims the exact Application ID, then uses a renewable,
+database-fenced setup owner and performs a fresh admission check immediately
+before the external PATCH. It preserves unrelated application flags and
+installation contexts and changes only:
+
+- **Intent flag:** `GATEWAY_MESSAGE_CONTENT_LIMITED`. An already approved full
+  Message Content flag is also accepted by the verification probe. Message
+  Content is required because each explicit summon includes bounded ambient
+  human messages since the previous admitted summon.
+- **Guild Install scope:** `bot`.
+- **Bot permissions:** **View Channel**, **Send Messages**, **Attach Files**,
+  **Read Message History**, **Create Public Threads**, and **Send Messages in
+  Threads** (`309237746688`).
+
+Agor does not request **Administrator**, **Manage Threads**, **Mention
+Everyone**, application descriptions, icons, URLs, interaction configuration,
+or webhook settings. If configuration or ownership changes after Discord may
+have accepted the PATCH, Agor reports an ambiguous result and requires a new
+test; it never authorizes or enables the stale channel.
+
+### 4. Install and test
+
+1. Use the install URL generated from the saved Application ID, Guild ID,
+   `bot` scope, and exact permission integer. The URL fixes the configured
+   server and disables changing the guild during authorization.
+2. Have a person with Discord **Manage Server** access authorize the bot. Do not
+   grant the bot Administrator. Verify that its role and channel overrides grant
+   the listed permissions in every allowed parent.
+   Public threads inherit parent permissions, subject to Discord's normal
+   overwrites.
+3. Choose **Test connection**. The PostgreSQL-only serialized probe validates
+   the bot/application identity, guild, allowed parents, Message Content
+   access, and Guild Install defaults. Apply and Test are disabled until form
+   edits are saved.
+4. After Apply and Test succeed, enable the saved channel. A verified
+   application binding is required, and the PostgreSQL listener owner starts
+   the Gateway connection.
+
+Every prompt will require a structured bot mention and an actual invocation
+mention outside inline/fenced code. A mention in an allowed top-level text
+channel creates a public thread. Later mapped-thread prompts also require a
+mention. Ordinary unmentioned traffic is ignored; on the next mention, Agor
+uses bounded catch-up to include intervening human text. Responses and status
+messages are visible to everyone who can view the Discord parent/thread.
+
+A mention that arrives while Agor's Gateway listener is offline does not run as
+a delayed prompt. Mention the assistant again after it reconnects. The new live
+mention reads the bounded thread interval after the last successfully admitted
+summon, so the missed mention and intervening conversation can still appear as
+untrusted context. Discord's REST pages are newest-first internally; Agor
+renders the selected messages chronologically. If the first observed summon is
+inside an existing supported public/forum thread, its new Session may include a
+bounded recent window from that thread. Earlier messages are context only and
+never become separate Tasks.
+
+### Aggregate application presence
+
+Discord presence is coarse application state, not per-thread detail. Through
+the current listener owner's existing
+Gateway WebSocket manager, Agor sends the
+official [Update Presence](https://docs.discord.com/developers/events/gateway-events#update-presence)
+opcode to every managed shard:
+
+- no active mapped tasks: idle, **Watching for @mentions**;
+- one active mapping: online, **Watching 1 active Agor session**;
+- more: online, **Watching N active Agor sessions**, with a fixed count cap.
+
+The count is reconstructed from durable, strictly valid `queued`/`working`
+mapping progress, so takeover does not wait for another prompt. Discord permits
+only five game-status updates per 20 seconds; Agor uses a conservative
+five-second, latest-value-wins coalescer across initial connection, reconnect,
+and normal changes. Presence failure is cosmetic and never changes a Task,
+reply, progress message, checkpoint, or provider-action result. Agor does not
+request `GUILD_PRESENCES`: it sends its own presence but does not subscribe to
+other users' presence events. Per-thread detail remains typing and one editable
+progress message.
+
+### Mapped thread history tool
+
+A personal assistant running in a mapped Discord Session can call
+`agor_gateway_discord_thread_history_get`. The tool can read only that calling
+Session's own active mapped thread; it accepts no channel, thread, mapping,
+Session, guild, DM, or administrator override. The gateway channel must still
+be enabled, verified, target the same branch, and have **Mapped thread history**
+enabled.
+
+The default page is 50 human messages and the maximum is 200. An optional
+Discord `afterMessageId` Snowflake pages forward. Reads never start before the
+mapping's first admitted summon and are frozen through the conservative lower
+of its latest summon and Task-admission delivery cursors, so ambient chat sent
+afterward is not pulled into the result.
+Returned Discord text is explicitly untrusted external content. Attachments are
+reported only as counts; signed CDN URLs and bytes are neither returned nor
+downloaded.
+
+This is a PostgreSQL/Agor Cloud HA path. The daemon receiving the MCP call may
+not own the Discord listener, so it sends a content-free request through the
+durable owner queue. The listener owner uses its existing Discord REST manager
+and returns one short-lived, tenant/Session/branch-scoped JSON object through
+shared S3 upload staging. The requester verifies and consumes that object
+before returning. Local filesystem staging is rejected. This object is an
+on-demand RPC result with a two-minute TTL, not a Discord message mirror,
+payload inbox, attachment store, or thread index.
 
 ## Setting Up GitHub Integration
 
@@ -497,6 +657,59 @@ The `blocks` field is opaque platform-specific data. Currently only the Slack co
 - **Token rotation.** Slack's automatic token rotation is not used. The manifest disables it. Rotate manually by generating a fresh token and pasting it into the channel.
 - **Multiple workspaces / Enterprise Grid.** Each workspace needs its own Slack app and its own bot + app token pair, configured as a separate Agor channel. One token pair maps to one workspace.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
+
+### Discord staging
+
+- **Apply or Test says the channel must be saved/disabled.** Save the form with
+  **Enabled** off first. Setup probes deliberately refuse unsaved input, enabled
+  channels, and SQLite so they cannot create a second REST owner.
+- **PostgreSQL Cloud ownership path required.** Discord setup and eventual
+  runtime are PostgreSQL-only. A local SQLite daemon cannot probe, apply, enable,
+  or listen for Discord.
+- **Application is already connected.** One verified Discord application may be
+  claimed by only one Agor gateway channel globally. Use a different application
+  or remove the conflicting channel; the error intentionally does not identify
+  another tenant.
+- **Message Content validation fails.** Run **Apply recommended app settings**
+  again, or enable the Message Content privileged intent in Discord's Bot
+  settings. Agor needs it for current mentions and bounded summon-time catch-up.
+- **A mention during an outage received no answer.** This is expected for an
+  unobserved Gateway event. Mention the assistant again in the same thread.
+  Agor does not poll or create a delayed Task, but the retry reads bounded human
+  context since the last admitted summon when Discord still exposes it.
+- **Guild Install settings do not match.** Reapply the reviewed settings and
+  reinstall from Agor's generated URL. Do not add Administrator or Manage
+  Threads to work around channel overwrites.
+- **Application result is ambiguous.** Discord may have accepted the PATCH after
+  Agor lost its setup fence. Save the intended disabled configuration, run Test
+  connection, and reapply only if verification still reports drift.
+- **Token rotation.** Reset the token in Discord, paste it into the saved draft,
+  save, reapply, and retest. Configuration revisioning revokes stale setup and
+  outbound work.
+- **An attachment is omitted.** Attachment ingestion is opt-in and accepts only
+  the bounded image/text/JSON policy on the explicitly mentioned message. The
+  prompt still proceeds with a short degradation note when safe staging fails.
+- **Mapped history is unavailable.** The history tool requires the calling
+  Session's active Discord mapping, matching target branch, enabled capability,
+  PostgreSQL, and shared S3 upload staging. It reads only through the last
+  admitted summon. A very large interval that cannot be proven complete within
+  the bounded provider scan fails closed; mention the assistant again or page
+  from a later known Discord Snowflake rather than widening the read.
+- **A final is partial or nonce recovery is incomplete.** Administrators can
+  use the PostgreSQL-only, no-publish Discord provider operations endpoint.
+  Run content-free `diagnostics`, then `inspect_delivery` with the exact channel
+  and action IDs from the structured dead-letter log. After independently
+  verifying every Discord message Snowflake in frozen chunk order, record the
+  complete coordinate list with the fixed confirmation
+  `RECORD_VERIFIED_DISCORD_MESSAGE_COORDINATES_WITHOUT_POSTING`. If that proof
+  is impossible, abandon with
+  `ABANDON_DISCORD_DELIVERY_AND_CLEAN_UP_PARTIAL_MESSAGES_MANUALLY` and manually
+  remove any partial Discord messages. Neither operation calls Discord, and
+  there is no blind retry control.
+- **Aggregate presence is stale.** Presence is best-effort and reports only a
+  capped count. Check the content-free provider diagnostic for pending/retry
+  state and listener ownership. Do not add Presence or Server Members intents;
+  a healthy takeover reconstructs the count from mapping progress metadata.
 
 ### GitHub
 

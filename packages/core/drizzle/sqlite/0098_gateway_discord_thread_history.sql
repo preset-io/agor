@@ -1,0 +1,114 @@
+-- SQLite schema parity only. Discord history runtime remains PostgreSQL-only.
+PRAGMA foreign_keys=OFF;
+--> statement-breakpoint
+CREATE TABLE `__new_gateway_provider_actions` (
+  `id` text PRIMARY KEY NOT NULL,
+  `created_at` integer NOT NULL,
+  `updated_at` integer NOT NULL,
+  `gateway_channel_id` text NOT NULL REFERENCES `gateway_channels`(`id`) ON DELETE CASCADE,
+  `channel_type` text NOT NULL,
+  `provider_installation_id` text NOT NULL,
+  `provider_config_generation` integer NOT NULL,
+  `kind` text NOT NULL,
+  `idempotency_key` text NOT NULL,
+  `thread_session_map_id` text REFERENCES `thread_session_map`(`id`) ON DELETE SET NULL,
+  `session_id` text REFERENCES `sessions`(`session_id`) ON DELETE SET NULL,
+  `task_id` text REFERENCES `tasks`(`task_id`) ON DELETE SET NULL,
+  `message_id` text REFERENCES `messages`(`message_id`) ON DELETE SET NULL,
+  `gateway_inbound_event_id` text REFERENCES `gateway_inbound_events`(`id`) ON DELETE SET NULL,
+  `params` text NOT NULL,
+  `status` text DEFAULT 'pending' NOT NULL,
+  `attempts` integer DEFAULT 0 NOT NULL,
+  `not_before` integer NOT NULL,
+  `drop_after` integer,
+  `claim_token` text,
+  `claim_generation` integer DEFAULT 0 NOT NULL,
+  `claim_expires_at` integer,
+  `claim_listener_token` text,
+  `claim_listener_generation` integer,
+  `claim_instance_id` text,
+  `claim_boot_id` text,
+  `last_error_code` text,
+  `execution_metadata` text,
+  `result_metadata` text,
+  `completed_at` integer,
+  `dead_lettered_at` integer,
+  `canceled_at` integer,
+  CONSTRAINT `gateway_provider_actions_idempotency_key_bounds` CHECK (length(CAST(`idempotency_key` AS BLOB)) BETWEEN 1 AND 200),
+  CONSTRAINT `gateway_provider_actions_params_bounds` CHECK (length(CAST(`params` AS BLOB)) <= 512),
+  CONSTRAINT `gateway_provider_actions_result_bounds` CHECK (`result_metadata` IS NULL OR length(CAST(`result_metadata` AS BLOB)) <= 512),
+  CONSTRAINT `gateway_provider_actions_execution_bounds` CHECK (`execution_metadata` IS NULL OR (`kind` IN ('deliver_message', 'discord_notice') AND length(CAST(`execution_metadata` AS BLOB)) <= 4096)),
+  CONSTRAINT `gateway_provider_actions_lifecycle_bounds` CHECK (`provider_config_generation` > 0 AND `attempts` >= 0 AND `claim_generation` >= 0),
+  CONSTRAINT `gateway_provider_actions_kind_check` CHECK (`kind` IN ('deliver_message', 'discord_progress', 'discord_notice', 'discord_thread_history')),
+  CONSTRAINT `gateway_provider_actions_shape_check` CHECK ((`kind` = 'deliver_message' AND `message_id` IS NOT NULL AND `drop_after` IS NULL) OR (`kind` = 'discord_progress' AND `message_id` IS NULL AND ((json_extract(`params`, '$.state') = 'done' AND `drop_after` IS NULL) OR (json_extract(`params`, '$.state') <> 'done' AND `drop_after` IS NOT NULL))) OR (`kind` = 'discord_notice' AND `message_id` IS NULL AND `thread_session_map_id` IS NULL AND `session_id` IS NULL AND `task_id` IS NULL AND (`gateway_inbound_event_id` IS NOT NULL OR `status` IN ('completed', 'dead_letter', 'canceled')) AND `drop_after` IS NOT NULL) OR (`kind` = 'discord_thread_history' AND `message_id` IS NULL AND `task_id` IS NULL AND `gateway_inbound_event_id` IS NULL AND ((`thread_session_map_id` IS NOT NULL AND `session_id` IS NOT NULL) OR `status` IN ('completed', 'dead_letter', 'canceled')) AND `drop_after` IS NOT NULL)),
+  CONSTRAINT `gateway_provider_actions_status_check` CHECK (`status` IN ('pending', 'processing', 'retry', 'completed', 'dead_letter', 'canceled'))
+);
+--> statement-breakpoint
+INSERT INTO `__new_gateway_provider_actions` (
+  `id`, `created_at`, `updated_at`, `gateway_channel_id`, `channel_type`,
+  `provider_installation_id`, `provider_config_generation`, `kind`, `idempotency_key`,
+  `thread_session_map_id`, `session_id`, `task_id`, `message_id`, `gateway_inbound_event_id`,
+  `params`, `status`, `attempts`, `not_before`, `drop_after`, `claim_token`,
+  `claim_generation`, `claim_expires_at`, `claim_listener_token`,
+  `claim_listener_generation`, `claim_instance_id`, `claim_boot_id`,
+  `last_error_code`, `execution_metadata`, `result_metadata`, `completed_at`,
+  `dead_lettered_at`, `canceled_at`
+)
+SELECT
+  `id`, `created_at`, `updated_at`, `gateway_channel_id`, `channel_type`,
+  `provider_installation_id`, `provider_config_generation`, `kind`, `idempotency_key`,
+  `thread_session_map_id`, `session_id`, `task_id`, `message_id`, `gateway_inbound_event_id`,
+  `params`, `status`, `attempts`, `not_before`, `drop_after`, `claim_token`,
+  `claim_generation`, `claim_expires_at`, `claim_listener_token`,
+  `claim_listener_generation`, `claim_instance_id`, `claim_boot_id`,
+  `last_error_code`, `execution_metadata`, `result_metadata`, `completed_at`,
+  `dead_lettered_at`, `canceled_at`
+FROM `gateway_provider_actions`;
+--> statement-breakpoint
+DROP TABLE `gateway_provider_actions`;
+--> statement-breakpoint
+ALTER TABLE `__new_gateway_provider_actions` RENAME TO `gateway_provider_actions`;
+--> statement-breakpoint
+CREATE UNIQUE INDEX `gateway_provider_actions_channel_generation_key_unique`
+  ON `gateway_provider_actions` (`gateway_channel_id`, `provider_config_generation`, `idempotency_key`);
+--> statement-breakpoint
+CREATE INDEX `gateway_provider_actions_backlog_idx`
+  ON `gateway_provider_actions` (`gateway_channel_id`, `status`, `not_before`, `id`);
+--> statement-breakpoint
+CREATE INDEX `gateway_provider_actions_claim_idx`
+  ON `gateway_provider_actions` (`gateway_channel_id`, `status`, `claim_expires_at`, `id`);
+--> statement-breakpoint
+CREATE INDEX `gateway_provider_actions_activity_expiry_idx`
+  ON `gateway_provider_actions` (`gateway_channel_id`, `kind`, `drop_after`, `status`);
+--> statement-breakpoint
+CREATE TABLE `__new_uploads` (
+  `upload_ref` text PRIMARY KEY NOT NULL,
+  `created_by` text NOT NULL,
+  `session_id` text NOT NULL,
+  `branch_id` text NOT NULL,
+  `storage_key` text NOT NULL,
+  `original_name` text NOT NULL,
+  `display_name` text NOT NULL,
+  `content_type` text NOT NULL,
+  `size_bytes` integer NOT NULL,
+  `checksum` text,
+  `status` text DEFAULT 'active' NOT NULL,
+  `provenance` text NOT NULL,
+  `created_at` integer NOT NULL,
+  `expires_at` integer,
+  CONSTRAINT `uploads_provenance_check` CHECK (`provenance` IN ('browser', 'gateway-slack', 'gateway-discord', 'mcp-slack', 'mcp-discord'))
+);
+--> statement-breakpoint
+INSERT INTO `__new_uploads` SELECT * FROM `uploads`;
+--> statement-breakpoint
+DROP TABLE `uploads`;
+--> statement-breakpoint
+ALTER TABLE `__new_uploads` RENAME TO `uploads`;
+--> statement-breakpoint
+CREATE INDEX `uploads_owner_idx` ON `uploads` (`created_by`);
+--> statement-breakpoint
+CREATE INDEX `uploads_session_idx` ON `uploads` (`session_id`);
+--> statement-breakpoint
+CREATE INDEX `uploads_expiry_idx` ON `uploads` (`expires_at`);
+--> statement-breakpoint
+PRAGMA foreign_keys=ON;
