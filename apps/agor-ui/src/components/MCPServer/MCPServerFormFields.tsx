@@ -84,6 +84,8 @@ export interface MCPServerFormFieldsProps {
    * `useFormRevision`.
    */
   formRevision?: number;
+  /** Effective catalog-managed policy shown read-only in Settings. */
+  managedOAuthCompatibilityMode?: 'strict' | 'marketplace';
 }
 
 /**
@@ -115,6 +117,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onPrepareOAuthStart,
   // Consumed by re-rendering, not by reading — see `formRevision` above.
   formRevision: _formRevision,
+  managedOAuthCompatibilityMode,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
@@ -255,7 +258,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           showError(data.error || 'JWT authentication failed');
         }
       } else if (currentAuthType === 'oauth') {
-        const requestData = extractOAuthConfigForTesting(values);
+        const requestData = extractOAuthConfigForTesting({
+          ...values,
+          ...(serverId && managedOAuthCompatibilityMode ? { mcp_server_id: serverId } : {}),
+        });
         if (!requestData) {
           showWarning('Please enter MCP URL first to test OAuth authentication');
           return;
@@ -747,8 +753,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     description={
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
-                          Strict MCP OAuth discovery, protected-resource binding, PKCE S256, and
-                          issuer checks are enabled by default.
+                          {managedOAuthCompatibilityMode
+                            ? `The current Marketplace catalog manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
+                            : 'Strict MCP OAuth discovery is enabled by default.'}{' '}
+                          Protected-resource binding, PKCE S256, and issuer checks remain enabled.
                         </li>
                         <li>
                           Set Client ID / Client Secret only for servers that require a
@@ -794,10 +802,22 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="OAuth Compatibility"
                     name="oauth_compatibility_mode"
                     initialValue="strict"
-                    tooltip="Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections."
+                    tooltip={
+                      managedOAuthCompatibilityMode
+                        ? 'This effective policy is managed by the current curated Marketplace entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
+                        : 'Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections.'
+                    }
                   >
-                    <Select>
-                      <Select.Option value="strict">Strict current MCP OAuth</Select.Option>
+                    <Select disabled={!!managedOAuthCompatibilityMode}>
+                      {managedOAuthCompatibilityMode === 'marketplace' && (
+                        <Select.Option value="marketplace">
+                          Marketplace compatibility (catalog managed)
+                        </Select.Option>
+                      )}
+                      <Select.Option value="strict">
+                        Strict current MCP OAuth
+                        {managedOAuthCompatibilityMode === 'strict' ? ' (catalog managed)' : ''}
+                      </Select.Option>
                       <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
                     </Select>
                   </Form.Item>

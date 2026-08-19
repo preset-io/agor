@@ -122,7 +122,7 @@ export interface MCPOAuthStartFailure {
   redirect_uri?: string;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3] as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
@@ -380,6 +380,17 @@ export interface MCPServer {
 
   // Authentication (for HTTP/SSE transports)
   auth?: MCPAuth;
+
+  /**
+   * Read-only effective policy resolved by the daemon for Settings and other
+   * operator surfaces. This is never accepted as persisted MCP server input:
+   * `marketplace` remains an internal runtime policy derived only from the
+   * current curated catalog entry.
+   */
+  oauth_compatibility_policy?: {
+    effective_mode: MCPOAuthRuntimeCompatibilityMode;
+    managed_by_catalog: boolean;
+  };
 
   // Scope
   scope: MCPScope;

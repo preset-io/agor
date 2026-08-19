@@ -1,6 +1,9 @@
 import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { resolveMCPOAuthCompatibilityPolicy } from './mcp-oauth-compatibility.js';
+import {
+  presentMCPOAuthCompatibilityPolicy,
+  resolveMCPOAuthCompatibilityPolicy,
+} from './mcp-oauth-compatibility.js';
 
 const entry = {
   name: 'com.example/provider',
@@ -48,6 +51,18 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
     await expect(
       resolveMCPOAuthCompatibilityPolicy(catalogServer(), [strictEntry])
     ).resolves.toMatchObject({ mode: 'strict', reason: 'current_catalog_strict' });
+  });
+
+  it('projects current catalog policy as managed without making marketplace persisted input', () => {
+    expect(
+      presentMCPOAuthCompatibilityPolicy({
+        mode: 'marketplace',
+        reason: 'current_catalog_marketplace',
+      })
+    ).toEqual({ effective_mode: 'marketplace', managed_by_catalog: true });
+    expect(
+      presentMCPOAuthCompatibilityPolicy({ mode: 'strict', reason: 'explicit_strict' })
+    ).toEqual({ effective_mode: 'strict', managed_by_catalog: false });
   });
 
   it('retains explicit public strict and legacy opt-ins', async () => {

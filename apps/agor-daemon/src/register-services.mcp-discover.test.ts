@@ -85,7 +85,8 @@ describe('register-services /mcp-servers/discover wiring', () => {
     const firstOutboundIdx = discoverBlock.indexOf('oauthFetch(');
     expect(validationIdx).toBeGreaterThan(-1);
     expect(validationIdx).toBeLessThan(firstOutboundIdx);
-    expect(discoverBlock).toMatch(/if\s*\(durableOAuthFlows\)[\s\S]*url:\s*server\.url/);
+    expect(discoverBlock).toMatch(/serverConfig\s*=\s*\{[\s\S]*url:\s*server\.url/);
+    expect(discoverBlock).not.toContain('restoreRedactedMCPAuthSecrets');
     expect(discoverBlock).toMatch(
       /resolveMCPOAuthCompatibilityPolicy\s*\(\s*authoritativeServer\s*\?\?/
     );

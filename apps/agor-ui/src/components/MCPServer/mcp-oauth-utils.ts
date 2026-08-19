@@ -84,6 +84,7 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
 
 export interface TestConfig {
   mcp_url: string;
+  mcp_server_id?: string;
   token_url?: string;
   client_id?: string;
   client_secret?: string;
@@ -105,6 +106,10 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
   const config: TestConfig = {
     mcp_url: values.url,
   };
+
+  if (typeof values.mcp_server_id === 'string') {
+    config.mcp_server_id = values.mcp_server_id;
+  }
 
   // Include token URL even if it's a template (will be resolved server-side or auto-detected)
   if (values.oauth_token_url && typeof values.oauth_token_url === 'string') {
@@ -137,7 +142,12 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
   if (values.oauth_grant_type && typeof values.oauth_grant_type === 'string') {
     config.grant_type = values.oauth_grant_type;
   }
-  config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+  // `marketplace` is a read-only form display value. A saved-row test asks
+  // the daemon to re-derive it from current catalog policy; it is never sent
+  // as caller-selectable public data.
+  if (values.oauth_compatibility_mode !== 'marketplace') {
+    config.compatibility_mode = values.oauth_compatibility_mode === 'legacy' ? 'legacy' : 'strict';
+  }
   config.dcr_mode =
     values.oauth_dcr_mode === 'disabled' || values.oauth_dcr_mode === 'fallback'
       ? values.oauth_dcr_mode
@@ -197,7 +207,11 @@ export function buildAuthFromValues(
     if (options.preserveAbsentDcrMode && values.oauth_dcr_mode === 'advertised') {
       delete auth.oauth_dcr_mode;
     }
-    if (options.preserveAbsentCompatibilityMode && values.oauth_compatibility_mode === 'strict') {
+    if (
+      options.preserveAbsentCompatibilityMode &&
+      (values.oauth_compatibility_mode === 'strict' ||
+        values.oauth_compatibility_mode === 'marketplace')
+    ) {
       delete auth.oauth_compatibility_mode;
     }
     if (options.preserveAbsentGrantType && values.oauth_grant_type === 'client_credentials') {

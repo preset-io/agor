@@ -124,6 +124,9 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.jwt_api_token = server.auth?.api_token;
       formValues.jwt_api_secret = server.auth?.api_secret;
     } else if (serverAuthType === 'oauth') {
+      const managedCompatibilityMode = server.oauth_compatibility_policy?.managed_by_catalog
+        ? server.oauth_compatibility_policy.effective_mode
+        : undefined;
       setPreserveAbsentDcrMode(server.auth?.oauth_dcr_mode === undefined);
       setPreserveAbsentCompatibilityMode(server.auth?.oauth_compatibility_mode === undefined);
       setPreserveAbsentGrantType(server.auth?.oauth_grant_type === undefined);
@@ -134,14 +137,21 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.oauth_scope = server.auth?.oauth_scope;
       formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
       formValues.oauth_mode = server.auth?.oauth_mode || 'per_user';
-      formValues.oauth_compatibility_mode = server.auth?.oauth_compatibility_mode || 'strict';
+      formValues.oauth_compatibility_mode =
+        managedCompatibilityMode ?? server.auth?.oauth_compatibility_mode ?? 'strict';
       formValues.oauth_dcr_mode = server.auth?.oauth_dcr_mode || 'advertised';
     }
 
     form.setFieldsValue(formValues);
     setFormHydrated(true);
     bumpFormRevision();
-  }, [open, server?.mcp_server_id, form]);
+  }, [
+    open,
+    server?.mcp_server_id,
+    server?.oauth_compatibility_policy?.effective_mode,
+    server?.oauth_compatibility_policy?.managed_by_catalog,
+    form,
+  ]);
 
   const closeAndReset = () => {
     form.resetFields();
@@ -344,6 +354,13 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           testResult={testResult}
           onPrepareOAuthStart={prepareOAuthStart}
           formRevision={formRevision}
+          managedOAuthCompatibilityMode={
+            server?.oauth_compatibility_policy?.managed_by_catalog &&
+            (server.oauth_compatibility_policy.effective_mode === 'strict' ||
+              server.oauth_compatibility_policy.effective_mode === 'marketplace')
+              ? server.oauth_compatibility_policy.effective_mode
+              : undefined
+          }
         />
       </Form>
     </Modal>

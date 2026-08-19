@@ -22,6 +22,17 @@ export interface MCPOAuthCompatibilityPolicy {
   catalogEntryName?: string;
 }
 
+/** Public, non-persisted projection used by Settings to show effective policy. */
+export function presentMCPOAuthCompatibilityPolicy(
+  policy: MCPOAuthCompatibilityPolicy
+): NonNullable<MCPServer['oauth_compatibility_policy']> {
+  return {
+    effective_mode: policy.mode,
+    managed_by_catalog:
+      policy.reason === 'current_catalog_marketplace' || policy.reason === 'current_catalog_strict',
+  };
+}
+
 /**
  * Resolve one saved server against the CURRENT curated catalog.
  *

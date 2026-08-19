@@ -15,17 +15,25 @@ import type {
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 
-/** Latest format; only the derived marketplace policy needs the v3 envelope. */
-export const MCP_OAUTH_GRANT_BINDING_VERSION = 3 as const;
+/** Latest format; v4 binds the complete saved remote-server authority. */
+export const MCP_OAUTH_GRANT_BINDING_VERSION = 4 as const;
+
+/**
+ * PostgreSQL requires binding for every row. Standalone keeps historical
+ * unbound grants usable, while every newly issued versioned grant verifies.
+ */
+export function shouldVerifyMCPOAuthGrantBinding(requireAll: boolean, version: unknown): boolean {
+  return requireAll || isMCPOAuthGrantBindingVersion(version);
+}
 
 export function grantBindingVersionForCompatibilityMode(
-  mode: MCPOAuthRuntimeCompatibilityMode
+  _mode: MCPOAuthRuntimeCompatibilityMode
 ): MCPOAuthGrantBindingVersion {
-  // Keeping strict/legacy on v2 preserves every historically valid fingerprint.
-  // New marketplace grants use v3 so their derived policy is explicit in the
-  // envelope. A #2377-era v2 marketplace HMAC can still be verified below;
-  // pre-marketplace v2 strict HMACs cannot silently cross the policy change.
-  return mode === 'marketplace' ? 3 : 2;
+  // Existing v1/v2 strict/legacy and v3 marketplace fingerprints remain
+  // verifiable with their own stored version, so issuing v4 never forces
+  // reauthorization. New grants bind headers and current catalog provenance
+  // in addition to the v3 effective-policy envelope.
+  return MCP_OAUTH_GRANT_BINDING_VERSION;
 }
 
 /**
@@ -84,6 +92,14 @@ function authBinding(
     configuredClientSecret: auth?.oauth_client_secret ?? null,
     scope: auth?.oauth_scope ?? null,
     grantType: auth?.oauth_grant_type ?? null,
+    ...(version >= 4
+      ? {
+          insecure: auth?.insecure ?? false,
+          configuredAccessToken: auth?.oauth_access_token ?? null,
+          configuredAccessTokenExpiresAt: auth?.oauth_token_expires_at ?? null,
+          configuredRefreshToken: auth?.oauth_refresh_token ?? null,
+        }
+      : {}),
   };
 }
 
@@ -92,7 +108,14 @@ export function fingerprintMCPOAuthGrantConfiguration(
   masterSecret: string,
   server: Pick<
     MCPServer,
-    'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
+    | 'mcp_server_id'
+    | 'transport'
+    | 'url'
+    | 'enabled'
+    | 'source'
+    | 'catalog_entry_name'
+    | 'headers'
+    | 'auth'
   >,
   resolved: MCPOAuthResolvedGrantBinding,
   version: MCPOAuthGrantBindingVersion = grantBindingVersionForCompatibilityMode(
@@ -107,6 +130,20 @@ export function fingerprintMCPOAuthGrantConfiguration(
     enabled: server.enabled,
     transport: server.transport,
     serverUrl: server.url ?? null,
+    ...(version >= 4
+      ? {
+          source: server.source,
+          catalogEntryName: server.catalog_entry_name ?? null,
+          // Header names are case-insensitive on the wire. Sorting makes the
+          // fingerprint independent of JSON object insertion order without
+          // accepting any value or duplicate-header change.
+          headers: Object.entries(server.headers ?? {})
+            .map(([name, value]) => [name.toLowerCase(), value] as const)
+            .sort(([aName, aValue], [bName, bValue]) =>
+              aName === bName ? aValue.localeCompare(bValue) : aName.localeCompare(bName)
+            ),
+        }
+      : {}),
     auth: authBinding(server, version, compatibilityMode),
     resolved: version >= 3 ? resolved : historicalResolved,
   });
@@ -123,9 +160,16 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     enabled: server.enabled,
     transport: server.transport,
     url: server.url ?? null,
-    // Mutation invalidation compares public row data, not a catalog-derived
-    // policy. Catalog policy changes are caught by v3 fingerprint checks.
-    auth: authBinding(server, 2, server.auth?.oauth_compatibility_mode ?? 'strict'),
+    source: server.source ?? null,
+    catalogEntryName: server.catalog_entry_name ?? null,
+    headers: Object.entries(server.headers ?? {})
+      .map(([name, value]) => [name.toLowerCase(), value] as const)
+      .sort(([aName, aValue], [bName, bValue]) =>
+        aName === bName ? aValue.localeCompare(bValue) : aName.localeCompare(bName)
+      ),
+    // Mutation invalidation compares public row data. Current catalog policy
+    // is independently re-resolved at start, callback, and grant-use time.
+    auth: authBinding(server, 4, server.auth?.oauth_compatibility_mode ?? 'strict'),
     configuredCompatibility: server.auth?.oauth_compatibility_mode ?? null,
   });
 }
@@ -146,7 +190,14 @@ export function isMCPOAuthGrantBoundToServer(
   masterSecret: string,
   server: Pick<
     MCPServer,
-    'mcp_server_id' | 'transport' | 'url' | 'enabled' | 'source' | 'catalog_entry_name' | 'auth'
+    | 'mcp_server_id'
+    | 'transport'
+    | 'url'
+    | 'enabled'
+    | 'source'
+    | 'catalog_entry_name'
+    | 'headers'
+    | 'auth'
   >,
   grant: UserMCPOAuthToken,
   effectiveMode: MCPOAuthRuntimeCompatibilityMode

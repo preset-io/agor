@@ -169,6 +169,26 @@ describe('extractOAuthConfigForTesting', () => {
     expect(result).not.toBeNull();
     expect(result!.token_url).toBe('{{ env.TOKEN_URL }}');
   });
+
+  it('binds a managed Marketplace test to the saved row without submitting the internal mode', () => {
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).toMatchObject({
+      mcp_url: 'https://mcp.example.com',
+      mcp_server_id: 'saved-server',
+    });
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).not.toHaveProperty('compatibility_mode');
+  });
 });
 
 describe('buildAuthFromValues', () => {
@@ -200,6 +220,19 @@ describe('buildAuthFromValues', () => {
         {
           auth_type: 'oauth',
           oauth_compatibility_mode: 'strict',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('never persists the read-only managed Marketplace display value', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'marketplace',
           oauth_scope: 'unchanged',
         },
         { preserveAbsentCompatibilityMode: true }

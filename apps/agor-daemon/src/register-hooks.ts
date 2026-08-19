@@ -117,8 +117,14 @@ import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
-import { resolveMCPOAuthCompatibilityPolicy } from './services/mcp-oauth-compatibility.js';
-import { isMCPOAuthGrantBoundToServer } from './services/mcp-oauth-grant-binding.js';
+import {
+  presentMCPOAuthCompatibilityPolicy,
+  resolveMCPOAuthCompatibilityPolicy,
+} from './services/mcp-oauth-compatibility.js';
+import {
+  isMCPOAuthGrantBoundToServer,
+  shouldVerifyMCPOAuthGrantBinding,
+} from './services/mcp-oauth-grant-binding.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -1741,14 +1747,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       authPayloadType,
       callerUserId: context.params?.user?.user_id,
     });
-    if (!userId) {
-      return context;
-    }
-
     const injectToken = async (server: MCPServer) => {
       if (server.auth?.type !== 'oauth') {
         return server;
       }
+
+      const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(server);
+      const serverWithPolicy: MCPServer = {
+        ...server,
+        oauth_compatibility_policy: presentMCPOAuthCompatibilityPolicy(compatibilityPolicy),
+      };
+      if (!userId) return serverWithPolicy;
 
       // Tokens for both modes live in user_mcp_oauth_tokens:
       //   - per_user  → row keyed by (userId, serverId)
@@ -1762,11 +1771,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         const row = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
 
         if (!row) {
-          return server;
+          return serverWithPolicy;
         }
-        const compatibilityMode = (await resolveMCPOAuthCompatibilityPolicy(server)).mode;
+        const compatibilityMode = compatibilityPolicy.mode;
         if (
-          isPostgresDatabaseHandle(db) &&
+          shouldVerifyMCPOAuthGrantBinding(
+            isPostgresDatabaseHandle(db),
+            row.grant_binding_version
+          ) &&
           !isMCPOAuthGrantBoundToServer(
             process.env.AGOR_MASTER_SECRET!,
             server,
@@ -1775,7 +1787,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           )
         ) {
           console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
-          return server;
+          return serverWithPolicy;
         }
 
         // Response enrichment is a durable read only. Refresh is coordinated
@@ -1785,13 +1797,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           row.refresh_status !== 'idle' ||
           (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
         ) {
-          return server;
+          return serverWithPolicy;
         }
         const accessToken = row.oauth_access_token;
         const expiresAt = row.oauth_token_expires_at;
 
         return {
-          ...server,
+          ...serverWithPolicy,
           auth: {
             ...server.auth,
             oauth_access_token: accessToken,
@@ -1805,7 +1817,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
       }
 
-      return server;
+      return serverWithPolicy;
     };
 
     // Handle both single result and array/paginated results

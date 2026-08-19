@@ -39,7 +39,9 @@ describe('register-hooks MCP server secret redaction', () => {
     // writes rather than the `all` chain alone. That gate is no longer a role
     // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
     // ownership, which is what lets a member hold a server of their own at all.
-    expect(source).toMatch(/update:\s*\[authorizeMcpServerWriteHook\]/);
+    expect(source).toMatch(
+      /update:\s*\[validateMcpServerOAuthCompatibility,\s*authorizeMcpServerWriteHook\]/
+    );
   });
 
   it('redacts session MCP server route responses that bypass service hooks', () => {

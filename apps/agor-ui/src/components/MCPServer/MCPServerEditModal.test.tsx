@@ -90,6 +90,41 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     expect(showError).not.toHaveBeenCalled();
   });
 
+  it.each(['Save', 'Start OAuth Flow'])(
+    'hydrates and preserves a catalog-managed Marketplace policy during %s',
+    async (action) => {
+      const patch = vi.fn().mockResolvedValue({});
+      const client = {
+        service: vi.fn().mockReturnValue({ patch }),
+        io: { on: vi.fn(), off: vi.fn() },
+      } as unknown as AgorClient;
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000010',
+        name: 'catalog-oauth',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        scope: 'global',
+        source: 'catalog',
+        catalog_entry_name: 'com.example/mcp',
+        enabled: true,
+        auth: { type: 'oauth' },
+        oauth_compatibility_policy: {
+          effective_mode: 'marketplace',
+          managed_by_catalog: true,
+        },
+      } as MCPServer;
+
+      render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+
+      expect(await screen.findByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+      fireEvent.click(screen.getByRole('button', { name: action }));
+
+      await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+      const updates = patch.mock.calls[0]?.[1] as { auth?: Record<string, unknown> };
+      expect(updates.auth).not.toHaveProperty('oauth_compatibility_mode');
+    }
+  );
+
   it('persists edited OAuth client credentials before the first OAuth start', async () => {
     const patch = vi.fn().mockResolvedValue({});
     const onClose = vi.fn();

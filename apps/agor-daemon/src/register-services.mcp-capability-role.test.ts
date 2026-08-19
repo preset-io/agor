@@ -149,15 +149,17 @@ describe('MCP caller floor wiring', () => {
     }
   });
 
-  it('re-checks the flow initiator ahead of the durable-only branch', () => {
+  it('re-checks the flow initiator ahead of SQLite and durable server authority', () => {
     // The callback gap was not the check being absent but unreachable: it sat
     // behind `if (!record) return`, which is every SQLite deployment.
     const guardAt = source.indexOf('const assertPendingFlowStillAuthorized');
-    const body = source.slice(guardAt, guardAt + 1200);
+    const body = source.slice(guardAt, guardAt + 5000);
     const initiatorAt = body.indexOf('assertFlowInitiatorStillEntitled(');
-    const durableReturnAt = body.indexOf('if (!record) return;');
+    const localAuthorityAt = body.indexOf('if (!record) {');
     expect(initiatorAt).toBeGreaterThan(-1);
-    expect(durableReturnAt).toBeGreaterThan(-1);
-    expect(initiatorAt).toBeLessThan(durableReturnAt);
+    expect(localAuthorityAt).toBeGreaterThan(-1);
+    expect(initiatorAt).toBeLessThan(localAuthorityAt);
+    expect(body).toContain('savedServerAuthority');
+    expect(body).toContain('localGrantBinding');
   });
 });

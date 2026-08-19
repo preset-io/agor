@@ -8,13 +8,21 @@ import {
   isMCPOAuthGrantBoundToServer,
   MCP_OAUTH_GRANT_BINDING_VERSION,
   type MCPOAuthResolvedGrantBinding,
+  shouldVerifyMCPOAuthGrantBinding,
 } from './mcp-oauth-grant-binding.js';
 
 const masterSecret = 'test-master-secret-that-is-not-a-provider-secret';
 
 type ServerBinding = Pick<
   MCPServer,
-  'mcp_server_id' | 'enabled' | 'transport' | 'url' | 'source' | 'catalog_entry_name' | 'auth'
+  | 'mcp_server_id'
+  | 'enabled'
+  | 'transport'
+  | 'url'
+  | 'source'
+  | 'catalog_entry_name'
+  | 'headers'
+  | 'auth'
 >;
 
 const server: ServerBinding = {
@@ -51,7 +59,7 @@ const resolved = {
 
 function tokenFor(
   fingerprint: string,
-  version: UserMCPOAuthToken['grant_binding_version'] = 2
+  version: UserMCPOAuthToken['grant_binding_version'] = MCP_OAUTH_GRANT_BINDING_VERSION
 ): UserMCPOAuthToken {
   return {
     user_id: null,
@@ -76,6 +84,11 @@ function tokenFor(
 }
 
 describe('MCP OAuth grant configuration binding', () => {
+  it('grandfathers only historical standalone unbound grants', () => {
+    expect(shouldVerifyMCPOAuthGrantBinding(false, undefined)).toBe(false);
+    expect(shouldVerifyMCPOAuthGrantBinding(false, 4)).toBe(true);
+    expect(shouldVerifyMCPOAuthGrantBinding(true, undefined)).toBe(true);
+  });
   it('records advertised as the effective default while preserving version-1 fingerprints', () => {
     const withoutPolicy: ServerBinding = {
       ...server,
@@ -133,9 +146,9 @@ describe('MCP OAuth grant configuration binding', () => {
       marketplaceResolved
     );
     expect(strictFingerprint).not.toBe(marketplaceFingerprint);
-    expect(grantBindingVersionForCompatibilityMode('strict')).toBe(2);
-    expect(grantBindingVersionForCompatibilityMode('legacy')).toBe(2);
-    expect(grantBindingVersionForCompatibilityMode('marketplace')).toBe(3);
+    expect(grantBindingVersionForCompatibilityMode('strict')).toBe(4);
+    expect(grantBindingVersionForCompatibilityMode('legacy')).toBe(4);
+    expect(grantBindingVersionForCompatibilityMode('marketplace')).toBe(4);
     // A pre-marketplace v2 strict grant cannot silently cross into the new
     // policy even though both formats share the historical version number.
     expect(
@@ -166,11 +179,17 @@ describe('MCP OAuth grant configuration binding', () => {
         'marketplace'
       )
     ).toBe(true);
+    const marketplaceV3Fingerprint = fingerprintMCPOAuthGrantConfiguration(
+      masterSecret,
+      catalogDefault,
+      marketplaceResolved,
+      3
+    );
     expect(
       isMCPOAuthGrantBoundToServer(
         masterSecret,
         catalogDefault,
-        tokenFor(marketplaceFingerprint, 3),
+        tokenFor(marketplaceV3Fingerprint, 3),
         'marketplace'
       )
     ).toBe(true);
@@ -178,7 +197,7 @@ describe('MCP OAuth grant configuration binding', () => {
       isMCPOAuthGrantBoundToServer(
         masterSecret,
         catalogDefault,
-        tokenFor(marketplaceFingerprint, 3),
+        tokenFor(marketplaceV3Fingerprint, 3),
         'strict'
       )
     ).toBe(false);
@@ -192,6 +211,9 @@ describe('MCP OAuth grant configuration binding', () => {
       ['resource URL', { ...server, url: 'https://other-resource.example/mcp' }, resolved],
       ['enabled state', { ...server, enabled: false }, resolved],
       ['transport', { ...server, transport: 'sse' }, resolved],
+      ['custom headers', { ...server, headers: { 'X-Resource': 'other' } }, resolved],
+      ['catalog provenance', { ...server, source: 'catalog' }, resolved],
+      ['insecure auth', { ...server, auth: { ...server.auth, insecure: true } }, resolved],
       ['auth mode', { ...server, auth: { ...server.auth, oauth_mode: 'shared' } }, resolved],
       [
         'compatibility mode',
@@ -239,7 +261,7 @@ describe('MCP OAuth grant configuration binding', () => {
         label
       ).not.toBe(original);
     }
-    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(3);
+    expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(4);
   });
 
   it('revalidates a stored grant and rejects a configuration change', () => {
@@ -310,6 +332,19 @@ describe('MCP OAuth grant configuration binding', () => {
       hasMCPOAuthRelevantServerConfigurationChanged(server, {
         ...server,
         url: 'https://replacement.example/mcp',
+      })
+    ).toBe(true);
+    expect(
+      hasMCPOAuthRelevantServerConfigurationChanged(server, {
+        ...server,
+        headers: { 'X-Resource': 'changed' },
+      })
+    ).toBe(true);
+    expect(
+      hasMCPOAuthRelevantServerConfigurationChanged(server, {
+        ...server,
+        source: 'catalog',
+        catalog_entry_name: 'com.example/provider',
       })
     ).toBe(true);
   });
