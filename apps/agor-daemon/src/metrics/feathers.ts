@@ -9,9 +9,9 @@ interface FeathersMetricsOptions {
   isInternalCall?: (context: HookContext) => boolean;
 }
 
-function normalizeTransport(provider: unknown): 'rest' | 'socketio' | 'other' | undefined {
+function normalizeTransport(provider: unknown): 'rest' | 'socketio' | 'mcp' | 'other' | undefined {
   if (provider === undefined || provider === null) return undefined;
-  if (provider === 'rest' || provider === 'socketio') return provider;
+  if (provider === 'rest' || provider === 'socketio' || provider === 'mcp') return provider;
   return 'other';
 }
 

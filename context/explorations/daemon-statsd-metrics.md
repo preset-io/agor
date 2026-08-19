@@ -83,26 +83,26 @@ parser-generated 4xx responses are included.
 
 The default prefix is `agor.daemon.`. Names below omit that prefix.
 
-| Name                                         | DogStatsD type | Tags                                                       | Semantics                                                |
-| -------------------------------------------- | -------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
-| `http.requests`                              | count          | `method`, `route`, `status_code`, `outcome`                | Completed/aborted instrumented HTTP requests             |
-| `http.request.duration_ms`                   | distribution   | same                                                       | Middleware entry to response finish/close                |
-| `feathers.requests`                          | count          | `service`, `method`, `transport`, `outcome`, `status_code` | External logical service calls only                      |
-| `feathers.request.duration_ms`               | distribution   | same                                                       | Whole external Feathers hook duration                    |
-| `executors.running`                          | gauge          | `mode=local`, `scope=process_group`                        | Absolute local process groups tracked by this daemon     |
-| `executor.dispatches`                        | count          | `mode`, `outcome`                                          | Durable dispatch-claim attempts/results                  |
-| `executor.request_to_dispatch.duration_ms`   | distribution   | `mode`, `outcome=claimed`                                  | Persisted Task `created_at` to DB-authored `started_at`  |
-| `executor.connections`                       | count          | `mode`, `outcome=connected`                                | First authenticated executor claim                       |
-| `executor.dispatch_to_connected.duration_ms` | distribution   | same                                                       | `started_at` to `executor_connected_at`                  |
-| `executor.request_to_connected.duration_ms`  | distribution   | same                                                       | `created_at` to `executor_connected_at`                  |
-| `executor.launches`                          | count          | `mode`                                                     | Local executor child or external launcher child spawned  |
-| `executor.launch.duration_ms`                | distribution   | `mode`                                                     | Execute-handler entry through preparation to child spawn |
-| `executor.process_exits`                     | count          | `mode`, `outcome`                                          | Local executor/templated launcher child exit callback    |
-| `task.settlements`                           | count          | `mode`, `status`                                           | Terminal Task transition observed by the Tasks service   |
-| `task.execution.duration_ms`                 | distribution   | same                                                       | `started_at` to `completed_at`                           |
-| `task.connected.duration_ms`                 | distribution   | same                                                       | `executor_connected_at` to `completed_at`                |
-| `background_job.runs`                        | count          | `job`, `outcome`                                           | Bounded startup post-job completion                      |
-| `background_job.duration_ms`                 | distribution   | same                                                       | Startup post-job wall time                               |
+| Name                                         | DogStatsD type | Tags                                                       | Semantics                                                                               |
+| -------------------------------------------- | -------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `http.requests`                              | count          | `method`, `route`, `status_code`, `outcome`                | Completed/aborted instrumented HTTP requests                                            |
+| `http.request.duration_ms`                   | distribution   | same                                                       | Middleware entry to response finish/close                                               |
+| `feathers.requests`                          | count          | `service`, `method`, `transport`, `outcome`, `status_code` | External logical service calls only; transport is `rest`, `socketio`, `mcp`, or `other` |
+| `feathers.request.duration_ms`               | distribution   | same                                                       | Whole external Feathers hook duration                                                   |
+| `executors.running`                          | gauge          | `mode=local`, `scope=process_group`                        | Absolute local process groups tracked by this daemon                                    |
+| `executor.dispatches`                        | count          | `mode`, `outcome`                                          | Durable dispatch-claim attempts/results                                                 |
+| `executor.request_to_dispatch.duration_ms`   | distribution   | `mode`, `outcome=claimed`                                  | Persisted Task `created_at` to DB-authored `started_at`                                 |
+| `executor.connections`                       | count          | `mode`, `outcome=connected`                                | First authenticated executor claim                                                      |
+| `executor.dispatch_to_connected.duration_ms` | distribution   | same                                                       | `started_at` to `executor_connected_at`                                                 |
+| `executor.request_to_connected.duration_ms`  | distribution   | same                                                       | `created_at` to `executor_connected_at`                                                 |
+| `executor.launches`                          | count          | `mode`                                                     | Local executor child or external launcher child spawned                                 |
+| `executor.launch.duration_ms`                | distribution   | `mode`                                                     | Execute-handler entry through preparation to child spawn                                |
+| `executor.process_exits`                     | count          | `mode`, `outcome`                                          | Local executor/templated launcher child exit callback                                   |
+| `task.settlements`                           | count          | `mode`, `status`                                           | Terminal Task transition observed by the Tasks service                                  |
+| `task.execution.duration_ms`                 | distribution   | same                                                       | `started_at` to `completed_at`                                                          |
+| `task.connected.duration_ms`                 | distribution   | same                                                       | `executor_connected_at` to `completed_at`                                               |
+| `background_job.runs`                        | count          | `job`, `outcome`                                           | Bounded startup post-job completion                                                     |
+| `background_job.duration_ms`                 | distribution   | same                                                       | Startup post-job wall time                                                              |
 
 Configured global tags plus `daemon_instance` and `deployment_mode` accompany
 every metric. Runtime tag keys are allow-listed in code. Tenant/user/session/

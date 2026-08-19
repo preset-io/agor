@@ -97,6 +97,28 @@ describe('Feathers metrics hook', () => {
     expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 403 });
   });
 
+  it('preserves MCP as a distinct low-cardinality transport', async () => {
+    const metrics = new RecordingMetrics();
+    const hook = createFeathersMetricsHook(metrics);
+
+    await hook(
+      {
+        path: 'boards',
+        method: 'find',
+        params: { provider: 'mcp' },
+      } as unknown as HookContext,
+      async () => undefined
+    );
+
+    expect(metrics.calls[0]?.tags).toMatchObject({
+      service: 'boards',
+      method: 'find',
+      transport: 'mcp',
+      outcome: 'success',
+      status_code: 'ok',
+    });
+  });
+
   it('skips excluded services and provider-preserving internal calls', async () => {
     const metrics = new RecordingMetrics();
     const internalParams = { provider: 'socketio', authenticationEntityLookup: true };
