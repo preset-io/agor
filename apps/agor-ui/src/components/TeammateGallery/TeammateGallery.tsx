@@ -364,6 +364,13 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
           gap: token.marginSM,
           // Room for card focus rings at the grid edges.
           padding: token.paddingXXS,
+          // Confine the cards to their own stacking context so a scrolled card can
+          // never paint above the sticky header. antd Cards are `position: relative`
+          // (and z-indexed on hover), so without this the grid shares the scroll
+          // container's stacking context and, in some engines, a card's bottom edge
+          // renders over the pinned controls. `isolation` traps every card below
+          // the grid's context, which sits below the sticky header (z-index 2).
+          isolation: 'isolate',
         }}
       >
         {cards.map((template) =>
