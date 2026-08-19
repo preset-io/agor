@@ -71,6 +71,20 @@ repository can legitimately define a different variant named `full`. Migration m
 specific repo/config identity, or performed by re-rendering known Agor-repo branches after the alias
 ships. Checked-out or running branches must not be silently changed.
 
+### Existing development volumes
+
+The name alias is backward-compatible, but the old `full` overlay also injected fixed development
+JWT and master secrets. Those environment values overrode any different values in the persistent
+config. The first start without the overrides could therefore rotate the effective secrets or fail
+validation when an older config is incomplete. This can invalidate sessions and make encrypted
+development credentials unreadable.
+
+The profile is explicitly disposable, so its supported one-time upgrade is to run its `nuke`
+lifecycle action and recreate the project volumes. This deletes both its PostgreSQL data and Agor
+home. Developers who must retain that data need to materialize the currently effective identity
+and secrets into `config.yaml` before upgrading; they must not rotate the master secret. The
+developer-facing upgrade guidance lives in `docker/README.postgres.md`.
+
 ## Naming rule going forward
 
 Treat `rich` as a documented convenience profile rather than an exhaustive capability claim. Keep

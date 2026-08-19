@@ -285,11 +285,11 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       expect(variant.start).toContain('-p agor-{{branch.name}}');
       expect(variant.start).not.toMatch(/AGOR_(JWT|MASTER)_SECRET/);
     }
-    const richOverlay = fs.readFileSync(
-      path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
-      'utf8'
-    );
-    expect(richOverlay).not.toMatch(/AGOR_(JWT|MASTER)_SECRET/);
+    for (const overlay of ['docker-compose.override.postgres.yml', 'docker-compose.postgres.yml']) {
+      expect(fs.readFileSync(path.join(REPO_ROOT, overlay), 'utf8')).not.toMatch(
+        /AGOR_(JWT|MASTER)_SECRET/
+      );
+    }
   });
 
   it('uses env(1) for UID/GID on Docker variants instead of shell assignments', () => {

@@ -1,7 +1,9 @@
 # PostgreSQL + RBAC Testing Environment
 # Extends base docker-compose.yml with PostgreSQL database and RBAC features
 #
-# Usage: docker compose --profile postgres up
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+#     --profile postgres up postgres agor-dev
 #
 # This profile provides:
 # - PostgreSQL database (instead of SQLite)

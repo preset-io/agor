@@ -11,6 +11,23 @@ creates only the missing deployment config on first boot. Its generated
 project-scoped `agor-home` volume; an existing config is validated and never
 rewritten.
 
+### One-time upgrade from the old `full` profile
+
+The former `full` overlay injected fixed development JWT and master secrets
+instead of relying on the project volume. An existing `full`/`rich` volume can
+therefore contain different or incomplete persisted secrets. Do not preserve
+that volume and simply restart it with this profile: doing so can invalidate
+sessions or make credentials encrypted under the former master secret
+unreadable.
+
+These profiles contain disposable development fixtures, so the supported
+upgrade is to use the branch environment's **Nuke** action (or the explicit
+`down -v` command below) once, then start `rich` with a fresh volume. This
+deletes the profile's PostgreSQL data and Agor home. If its data is not
+disposable, preserve the currently effective identity and secrets in
+`config.yaml` before upgrading rather than rotating them; see the operator
+configuration guide linked below.
+
 ## Start
 
 ```bash
@@ -69,11 +86,14 @@ stamps and are ignored by runtime repositories.
 ## Cleanup
 
 ```bash
-docker compose --profile postgres down
-docker compose --profile postgres down -v
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  --profile postgres down
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  --profile postgres down -v
 ```
 
 See
+[`apps/agor-docs/content/guide/config-yaml.mdx`](../apps/agor-docs/content/guide/config-yaml.mdx),
 [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](../apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx)
 and
 [`context/guides/rbac-and-unix-isolation.md`](../context/guides/rbac-and-unix-isolation.md).
