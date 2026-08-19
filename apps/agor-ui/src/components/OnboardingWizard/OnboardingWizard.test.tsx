@@ -508,6 +508,29 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
   });
 
+  it('workspace step surfaces a board-creation failure as an inline error instead of crashing', async () => {
+    const boardsService = {
+      create: vi.fn(async () => {
+        throw new Error('slug already exists');
+      }),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    };
+
+    renderWizard({ initialStep: 'workspace', client: client as never });
+
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    clickButton(/^continue →/i);
+
+    // The rejection surfaces as an inline Alert, not an uncaught exception —
+    // the wizard stays on step 2 and the user can retry.
+    expect(await screen.findByText('slug already exists')).toBeInTheDocument();
+    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    expect(screen.getByText(/^continue →/i)).toBeInTheDocument();
+  });
+
   it('workspace step renders the template gallery below the name field', () => {
     renderWizard({ initialStep: 'workspace' });
 
@@ -680,7 +703,56 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('requires the workspace + tools steps but lets goals/llm skip, always yielding a board', async () => {
+  it('done step summarizes the teammate name, goal, template, and connected provider', async () => {
+    renderWizard();
+
+    // goals — pick one
+    clickButton('Ship without the busywork');
+    clickButton(/^continue →/i);
+
+    // workspace — name + template
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    const templateCard = screen.getByText('Product Manager').closest('[role="radio"]');
+    fireEvent.click(templateCard as HTMLElement);
+    clickButton(/^continue →/i);
+
+    // llm — connect Claude
+    await findAndClickButton('Claude');
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
+      target: { value: validKey },
+    });
+    clickButton(/^connect →/i);
+
+    // done — recap matches exactly what was entered, not the old
+    // persona/MCP-recommendations checklist.
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText('🧭 Rusty')).toBeInTheDocument();
+    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
+    expect(screen.getByText('Product Manager')).toBeInTheDocument();
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.queryByText('AI connected')).not.toBeInTheDocument();
+    expect(screen.queryByText('MCP tools')).not.toBeInTheDocument();
+  });
+
+  it('done step shows skip hints when goals/template/provider were skipped', async () => {
+    renderWizard();
+
+    clickButton(/skip for now/i); // goals
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    clickButton(/skip for now/i); // workspace — no name, no template
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    clickButton(/skip for now/i); // llm
+
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(screen.getByText('Skipped — add one anytime from your board')).toBeInTheDocument();
+    expect(screen.getByText('Skipped — steer any session directly instead')).toBeInTheDocument();
+    expect(screen.getByText('Skipped — no starter playbook picked')).toBeInTheDocument();
+    expect(screen.getByText('Not connected — add in Settings - AI & Agents')).toBeInTheDocument();
+  });
+
+  it('lets the user skip every step without any confirmation dialog', async () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 

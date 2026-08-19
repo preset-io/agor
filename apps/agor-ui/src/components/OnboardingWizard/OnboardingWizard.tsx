@@ -1092,8 +1092,8 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge(goalsTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
-          Pick up to two — we'll shape your first session around them. Not sure yet? Skip and decide
-          later.
+          Pick up to two — we'll shape your first session around them. Not sure yet? You can skip
+          this.
         </Paragraph>
 
         <div
@@ -1603,7 +1603,7 @@ export function OnboardingWizard({
             </div>
 
             <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block' }}>
-              Start from a template <span style={{ color: TEXT_MUTED }}>(optional)</span>
+              Start from a template
             </Text>
           </div>
         }
@@ -1615,13 +1615,40 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    // The checklist sits under "You're ready to build.", the one place in the
-    // wizard that should sound like a welcome, so it names the teammate. The
-    // wizard itself has only created/confirmed the board here — the teammate is
-    // seeded by the app shell right after this step resolves, best-effort — but
-    // the friendlier word is the deliberate call. The board still gates it:
-    // without one there is nowhere to seed a teammate into.
-    const teammateReady = hasExistingBoard;
+    const providerLabel = selectedAgent
+      ? LLM_OPTIONS.find((option) => option.agent === selectedAgent)?.title
+      : undefined;
+    const goalTitles = selectedGoals
+      .map((id) => GOALS.find((goal) => goal.id === id)?.title)
+      .filter((title): title is string => Boolean(title));
+    // getTeammateTemplate covers the blank starter too (title "Start blank"),
+    // so no separate BLANK_TEMPLATE_ID case is needed here.
+    const templateLabel = getTeammateTemplate(selectedTemplateId)?.title;
+
+    // Recaps exactly what steps 1-3 collected — not a setup checklist, since
+    // there's no in-wizard MCP step anymore to report on.
+    const summaryRows: { label: string; value: string | undefined; hint: string }[] = [
+      {
+        label: 'Teammate',
+        value: teammateName.trim() ? `${teammateEmoji} ${teammateName.trim()}` : undefined,
+        hint: 'Skipped — add one anytime from your board',
+      },
+      {
+        label: 'Goals',
+        value: goalTitles.length ? goalTitles.join(', ') : undefined,
+        hint: 'Skipped — steer any session directly instead',
+      },
+      {
+        label: 'Template',
+        value: templateLabel,
+        hint: 'Skipped — no starter playbook picked',
+      },
+      {
+        label: 'AI provider',
+        value: aiConnected ? providerLabel : undefined,
+        hint: 'Not connected — add in Settings - AI & Agents',
+      },
+    ];
 
     return (
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
@@ -1720,23 +1747,7 @@ export function OnboardingWizard({
             marginBottom: 8,
           }}
         >
-          {[
-            {
-              label: 'AI connected',
-              done: aiConnected,
-              hint: 'Add in Settings - AI & Agents',
-            },
-            {
-              label: 'Teammate ready',
-              done: teammateReady,
-              hint: 'Create a board anytime from the sidebar',
-            },
-            {
-              label: 'MCP tools',
-              done: false,
-              hint: 'Connect anytime via Settings - MCP',
-            },
-          ].map(({ label, done, hint }) => (
+          {summaryRows.map(({ label, value, hint }) => (
             <div
               key={label}
               style={{
@@ -1749,24 +1760,33 @@ export function OnboardingWizard({
               <span
                 style={{
                   fontSize: 14,
-                  color: done ? SUCCESS_GREEN : TEXT_MUTED,
+                  color: value ? SUCCESS_GREEN : TEXT_MUTED,
                   fontWeight: 600,
                   width: 16,
                   textAlign: 'center',
                 }}
               >
-                {done ? '✓' : '·'}
+                {value ? '✓' : '·'}
               </span>
               <Text
                 style={{
-                  color: done ? TEXT_PRIMARY : TEXT_SECONDARY,
+                  color: value ? TEXT_PRIMARY : TEXT_SECONDARY,
                   flex: 1,
                   fontSize: 13,
                 }}
               >
                 {label}
               </Text>
-              {!done && <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{hint}</Text>}
+              <Text
+                style={{
+                  color: value ? TEXT_SECONDARY : TEXT_MUTED,
+                  fontSize: value ? 12 : 11,
+                  maxWidth: 200,
+                  textAlign: 'right',
+                }}
+              >
+                {value ?? hint}
+              </Text>
             </div>
           ))}
         </div>
