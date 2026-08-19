@@ -1,8 +1,11 @@
-import { Card, Flex, Typography, theme } from 'antd';
-import { useMemo } from 'react';
+import { Tag as AntTag, Card, Flex, Typography, theme } from 'antd';
+import { useMemo, useState } from 'react';
 import {
+  type GalleryFilter,
+  galleryCardsForFilter,
+  getCategoryColor,
   recommendedTemplateIds,
-  TEAMMATE_GALLERY_CARDS,
+  TEMPLATE_CATEGORIES,
   type TeammateTemplate,
 } from '../../utils/teammateTemplates';
 import { Tag } from '../Tag';
@@ -28,6 +31,13 @@ interface GalleryCardProps {
 const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommended, onSelect }) => {
   const { token } = theme.useToken();
   const Icon = template.icon;
+
+  // Category accent from the shared avatar palette; blank starter has no category
+  // and falls back to a neutral token. The icon keeps its category color in every
+  // state, so only the card border changes on select (no layout shift).
+  const accent = getCategoryColor(template.category);
+  const iconColor = accent ?? token.colorTextSecondary;
+  const tileBg = accent ? `${accent}22` : token.colorFillTertiary;
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -58,12 +68,20 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
     >
       <Flex vertical gap={token.marginXS}>
         <Flex align="center" justify="space-between" gap={token.marginXXS}>
-          <Icon
+          {/* Colored icon on a soft same-hue tile — the category read at a glance. */}
+          <span
             style={{
-              fontSize: token.fontSizeHeading3,
-              color: selected ? token.colorPrimary : token.colorTextSecondary,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 34,
+              height: 34,
+              borderRadius: token.borderRadius,
+              background: tileBg,
             }}
-          />
+          >
+            <Icon style={{ fontSize: token.fontSizeHeading3, color: iconColor }} />
+          </span>
           {recommended && (
             <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
               Recommended
@@ -84,16 +102,21 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
 };
 
 /**
- * Responsive 2-column grid of teammate starter templates plus a blank card.
+ * Responsive 2-column grid of teammate starter templates plus a blank card,
+ * with category filter chips above it.
+ *
  * Single-select: clicking a card reports its id (blank included). Cards matching
  * the goal-derived recommendations get a "Recommended" badge (up to two; never
- * the blank card).
+ * the blank card) and, in the default "All" view, sort to the front in
+ * recommendation order. Filter chips (All · Grow · Build · Operate, plus a
+ * Recommended chip when goals produced recommendations) narrow the grid to one
+ * category; the blank starter shows only under All and stays last.
  *
- * The grid holds two columns at the modal's width and collapses to one only when
- * the container gets very narrow. Descriptions are shown in full (no truncation);
- * cards in a row share the tallest card's height. It sits inside the modal's own
- * vertically-scrollable content region, so every card is reachable by normal
- * vertical scroll while the wizard footer stays on-screen.
+ * Icons are color-coded per category from the shared avatar palette. The grid
+ * holds two columns at the modal width, collapses to one only when very narrow,
+ * shows full untruncated descriptions, and keeps row-mates equal height. It sits
+ * inside the modal's own vertically-scrollable content region so every card is
+ * reachable while the wizard footer stays on-screen.
  *
  * Standalone and theme-token driven so it renders correctly both on the
  * onboarding wizard's dark-glass surface and on the standard create-teammate
@@ -101,31 +124,68 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
  */
 export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, onChange }) => {
   const { token } = theme.useToken();
-  const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goals ?? [])), [goals]);
+  const goalList = useMemo(() => goals ?? [], [goals]);
+  const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
+  const hasRecommendations = recommendedIds.size > 0;
+
+  const [filter, setFilter] = useState<GalleryFilter>('all');
+  // The Recommended chip only exists while goals produce recommendations; if it
+  // disappears (goals cleared) fall back to All rather than showing an empty grid.
+  const activeFilter: GalleryFilter =
+    filter === 'recommended' && !hasRecommendations ? 'all' : filter;
+
+  const cards = useMemo(
+    () => galleryCardsForFilter(goalList, activeFilter),
+    [goalList, activeFilter]
+  );
+
+  const chips: { key: GalleryFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    ...TEMPLATE_CATEGORIES.map((category) => ({
+      key: category.id as GalleryFilter,
+      label: category.label,
+    })),
+    ...(hasRecommendations ? [{ key: 'recommended' as GalleryFilter, label: 'Recommended' }] : []),
+  ];
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Teammate template"
-      style={{
-        display: 'grid',
-        // Two columns at the ~600px modal width; each column is at least 220px so
-        // the row collapses to a single column only on a very narrow container.
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        gap: token.marginSM,
-        // Room for card focus rings at the grid edges.
-        padding: token.paddingXXS,
-      }}
-    >
-      {TEAMMATE_GALLERY_CARDS.map((template) => (
-        <GalleryCard
-          key={template.id}
-          template={template}
-          selected={value === template.id}
-          recommended={recommendedIds.has(template.id)}
-          onSelect={() => onChange(template.id)}
-        />
-      ))}
-    </div>
+    <Flex vertical gap={token.marginSM}>
+      <Flex role="group" aria-label="Filter templates by category" gap={token.marginXS} wrap="wrap">
+        {chips.map((chip) => (
+          <AntTag.CheckableTag
+            key={chip.key}
+            checked={activeFilter === chip.key}
+            onChange={() => setFilter(chip.key)}
+            style={{ cursor: 'pointer', fontSize: token.fontSize, padding: '2px 12px' }}
+          >
+            {chip.label}
+          </AntTag.CheckableTag>
+        ))}
+      </Flex>
+
+      <div
+        role="radiogroup"
+        aria-label="Teammate template"
+        style={{
+          display: 'grid',
+          // Two columns at the ~600px modal width; each column is at least 220px so
+          // the row collapses to a single column only on a very narrow container.
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: token.marginSM,
+          // Room for card focus rings at the grid edges.
+          padding: token.paddingXXS,
+        }}
+      >
+        {cards.map((template) => (
+          <GalleryCard
+            key={template.id}
+            template={template}
+            selected={value === template.id}
+            recommended={recommendedIds.has(template.id)}
+            onSelect={() => onChange(template.id)}
+          />
+        ))}
+      </div>
+    </Flex>
   );
 };

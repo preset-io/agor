@@ -10,6 +10,7 @@ import {
   SolutionOutlined,
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
+import { AVATAR_PALETTE } from './avatarPalette';
 
 /**
  * Canonical teammate starter templates.
@@ -24,15 +25,48 @@ import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
  * matching branches in `preset-io/agor-teammate`. Use the exact names below.
  */
 
+/** Category buckets a template can belong to. The blank starter has none. */
+export type TeammateCategoryId = 'grow' | 'build' | 'operate';
+
+export interface TeammateCategory {
+  id: TeammateCategoryId;
+  label: string;
+  /**
+   * Icon accent color for the category, sourced from the shared avatar palette
+   * (see AVATAR_COLORS) — never a bespoke hue. Cards tint their icon (and a soft
+   * low-opacity tile behind it) with this so a category reads at a glance.
+   */
+  color: string;
+}
+
 export interface TeammateTemplate {
   id: string;
   title: string;
   description: string;
   icon: React.ComponentType<Partial<AntdIconProps>>;
+  /** Category bucket; omitted for the blank starter (it has no category). */
+  category?: TeammateCategoryId;
   /** Default avatar emoji applied on selection; empty for the blank starter. */
   emoji: string;
   /** Branch in the framework repo the teammate is cut from. */
   sourceBranch: string;
+}
+
+/**
+ * The three category buckets, in display order. Single source of truth for the
+ * filter chips, the per-card icon accent, and the tests. Each `color` is a
+ * specific entry of the shared avatar palette (AVATAR_PALETTE) — reused, never
+ * invented — so categories read in the same muted family as user avatars.
+ */
+export const TEMPLATE_CATEGORIES: TeammateCategory[] = [
+  { id: 'grow', label: 'Grow', color: AVATAR_PALETTE[2] }, // sage
+  { id: 'build', label: 'Build', color: AVATAR_PALETTE[6] }, // dusty blue
+  { id: 'operate', label: 'Operate', color: AVATAR_PALETTE[5] }, // warm sand
+];
+
+/** Accent color for a category id, from the shared avatar palette. */
+export function getCategoryColor(id?: TeammateCategoryId): string | undefined {
+  return id ? TEMPLATE_CATEGORIES.find((category) => category.id === id)?.color : undefined;
 }
 
 /** The blank starter's id — selecting it means "no template" (repo default branch). */
@@ -45,6 +79,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       "Tracks every rival's pricing, launches, and moves, then tells you what it means for the next deal.",
     icon: RadarChartOutlined,
+    category: 'grow',
     emoji: '🔭',
     sourceBranch: 'template/competitive-analyst',
   },
@@ -54,6 +89,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       'Turns scattered feedback into a clean, prioritized backlog and keeps everyone in the loop.',
     icon: ProjectOutlined,
+    category: 'build',
     emoji: '🧭',
     sourceBranch: 'template/product-manager',
   },
@@ -63,6 +99,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       'Keeps your world in order: triages the noise, preps your meetings, and closes the loop on everything you hand off.',
     icon: SolutionOutlined,
+    category: 'operate',
     emoji: '🗂️',
     sourceBranch: 'template/chief-of-staff',
   },
@@ -72,6 +109,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       "Reads the numbers, catches what doesn't add up, and hands you the finding, not a spreadsheet.",
     icon: FundOutlined,
+    category: 'operate',
     emoji: '🧮',
     sourceBranch: 'template/financial-analyst',
   },
@@ -80,6 +118,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     title: 'Deal Desk Analyst',
     description: 'Keeps every deal clean, every renewal on time, and every number ready to report.',
     icon: ReconciliationOutlined,
+    category: 'grow',
     emoji: '📐',
     sourceBranch: 'template/deal-desk-revops-analyst',
   },
@@ -89,6 +128,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       'Builds your target list, researches each prospect, and drafts the outreach. You hit send.',
     icon: AimOutlined,
+    category: 'grow',
     emoji: '🎯',
     sourceBranch: 'template/sales-outbound-analyst',
   },
@@ -98,6 +138,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       'Reads the redline, flags the risk, and tells you what to push back on before it costs you.',
     icon: SafetyOutlined,
+    category: 'operate',
     emoji: '⚖️',
     sourceBranch: 'template/legal-analyst',
   },
@@ -107,6 +148,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     description:
       'Turns your idea into a working app, dashboard, or prototype — live on your board and ready to click.',
     icon: BuildOutlined,
+    category: 'build',
     emoji: '🛠️',
     sourceBranch: 'template/builder',
   },
@@ -192,4 +234,34 @@ export function recommendedTemplateIds(goals: string[]): string[] {
     result.push(id);
   }
   return result;
+}
+
+/** The gallery's active filter: everything, a single category, or the goal recs. */
+export type GalleryFilter = 'all' | TeammateCategoryId | 'recommended';
+
+/**
+ * Cards to render for the given goals + active filter, already ordered:
+ * - `all`      → recommended templates first (in recommendation order) with the
+ *                rest in default order, and the blank starter always last.
+ * - `<category>` → that category's templates in default order (no blank starter).
+ * - `recommended` → just the recommended templates, in recommendation order.
+ *
+ * Ordering lives here (not in the component) so it's a single, unit-tested rule.
+ */
+export function galleryCardsForFilter(goals: string[], filter: GalleryFilter): TeammateTemplate[] {
+  const recommendedCards = recommendedTemplateIds(goals)
+    .map((id) => getTeammateTemplate(id))
+    .filter((template): template is TeammateTemplate => Boolean(template));
+
+  if (filter === 'recommended') return recommendedCards;
+
+  if (filter !== 'all') {
+    // A specific category: default order, blank starter excluded.
+    return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
+  }
+
+  // All: recommended first, then the remaining templates in default order, then blank.
+  const recommendedIds = new Set(recommendedCards.map((template) => template.id));
+  const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
+  return [...recommendedCards, ...rest, BLANK_TEMPLATE];
 }

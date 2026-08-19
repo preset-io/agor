@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { AVATAR_PALETTE } from './avatarPalette';
 import {
   BLANK_TEMPLATE,
   BLANK_TEMPLATE_ID,
+  galleryCardsForFilter,
+  getCategoryColor,
   getTeammateTemplate,
   recommendedTemplateIds,
   resolveTemplateSourceBranch,
   TEAMMATE_GALLERY_CARDS,
   TEAMMATE_TEMPLATES,
+  TEMPLATE_CATEGORIES,
 } from './teammateTemplates';
 
 describe('TEAMMATE_TEMPLATES', () => {
@@ -49,6 +53,73 @@ describe('TEAMMATE_TEMPLATES', () => {
     expect(TEAMMATE_GALLERY_CARDS.at(-1)).toBe(BLANK_TEMPLATE);
     expect(BLANK_TEMPLATE.emoji).toBe('');
     expect(TEAMMATE_TEMPLATES).not.toContain(BLANK_TEMPLATE);
+  });
+});
+
+describe('categories', () => {
+  it('buckets every template into grow/build/operate and leaves blank uncategorized', () => {
+    const byCategory = (id: string) => TEAMMATE_TEMPLATES.find((t) => t.id === id)?.category;
+    expect(byCategory('competitive-analyst')).toBe('grow');
+    expect(byCategory('deal-desk')).toBe('grow');
+    expect(byCategory('sales-outbound')).toBe('grow');
+    expect(byCategory('product-manager')).toBe('build');
+    expect(byCategory('builder')).toBe('build');
+    expect(byCategory('chief-of-staff')).toBe('operate');
+    expect(byCategory('financial-analyst')).toBe('operate');
+    expect(byCategory('legal-analyst')).toBe('operate');
+    // Every real template has a category; the blank starter has none.
+    expect(TEAMMATE_TEMPLATES.every((t) => t.category)).toBe(true);
+    expect(BLANK_TEMPLATE.category).toBeUndefined();
+  });
+
+  it('defines the three categories and colors them from the shared avatar palette', () => {
+    expect(TEMPLATE_CATEGORIES.map((c) => c.id)).toEqual(['grow', 'build', 'operate']);
+    expect(TEMPLATE_CATEGORIES.map((c) => c.label)).toEqual(['Grow', 'Build', 'Operate']);
+    for (const category of TEMPLATE_CATEGORIES) {
+      // Reused, never invented: each color is an entry of AVATAR_PALETTE.
+      expect(AVATAR_PALETTE).toContain(category.color);
+    }
+    // Distinct hue per category.
+    expect(new Set(TEMPLATE_CATEGORIES.map((c) => c.color)).size).toBe(3);
+  });
+
+  it('getCategoryColor resolves a palette color per category and undefined otherwise', () => {
+    expect(getCategoryColor('grow')).toBe(AVATAR_PALETTE[2]);
+    expect(getCategoryColor('build')).toBe(AVATAR_PALETTE[6]);
+    expect(getCategoryColor('operate')).toBe(AVATAR_PALETTE[5]);
+    expect(getCategoryColor(undefined)).toBeUndefined();
+  });
+});
+
+describe('galleryCardsForFilter', () => {
+  it('All view sorts recommended cards to the front (in rec order), blank last', () => {
+    const ids = galleryCardsForFilter(['dig-into-anything'], 'all').map((t) => t.id);
+    // dig-into-anything → competitive-analyst, financial-analyst first, blank last.
+    expect(ids.slice(0, 2)).toEqual(['competitive-analyst', 'financial-analyst']);
+    expect(ids.at(-1)).toBe(BLANK_TEMPLATE_ID);
+    // All nine cards present, no dupes.
+    expect(ids).toHaveLength(9);
+    expect(new Set(ids).size).toBe(9);
+  });
+
+  it('All view keeps default order (blank last) when there are no recommendations', () => {
+    const ids = galleryCardsForFilter([], 'all').map((t) => t.id);
+    expect(ids).toEqual([...TEAMMATE_TEMPLATES.map((t) => t.id), BLANK_TEMPLATE_ID]);
+  });
+
+  it('a category filter returns only that category in default order, no blank', () => {
+    const ids = galleryCardsForFilter(['dig-into-anything'], 'grow').map((t) => t.id);
+    // Recommendations do NOT reorder within a category filter.
+    expect(ids).toEqual(['competitive-analyst', 'deal-desk', 'sales-outbound']);
+    expect(ids).not.toContain(BLANK_TEMPLATE_ID);
+  });
+
+  it('the recommended filter returns just the recommended templates, in order', () => {
+    expect(galleryCardsForFilter(['dig-into-anything'], 'recommended').map((t) => t.id)).toEqual([
+      'competitive-analyst',
+      'financial-analyst',
+    ]);
+    expect(galleryCardsForFilter([], 'recommended')).toEqual([]);
   });
 });
 
