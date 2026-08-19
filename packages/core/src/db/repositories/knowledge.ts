@@ -868,6 +868,16 @@ export class KnowledgeDocumentVersionRepository
     }
   }
 
+  async findByIds(ids: readonly KnowledgeDocumentVersionID[]): Promise<KnowledgeDocumentVersion[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    const rows = await select(this.db)
+      .from(kbDocumentVersions)
+      .where(inArray(kbDocumentVersions.version_id, uniqueIds))
+      .all();
+    return rows.map((row: KBDocumentVersionRow) => this.rowToVersion(row));
+  }
+
   async findAll(filter?: {
     document_id?: KnowledgeDocumentID;
   }): Promise<KnowledgeDocumentVersion[]> {

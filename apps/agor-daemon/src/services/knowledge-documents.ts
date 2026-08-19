@@ -399,23 +399,76 @@ export class KnowledgeDocumentsService extends DrizzleService<
     document: KnowledgeDocument,
     params?: HydrateOptions
   ): Promise<KnowledgeDocument | HydratedKnowledgeDocument> {
+    const wantsHydration = params?.include_content === true || params?.include_links === true;
+    const rawVersion = wantsHydration ? await this.versionFor(document, params?.version) : null;
+    const projected = await this.attribution.attachToDocumentsAndVersions(
+      [document],
+      rawVersion ? [rawVersion] : []
+    );
+    const attributedDocument = projected.documents[0];
+    const version = projected.versions[0] ?? null;
     const withIndexing =
       params?.include_indexing === true || params?.includeIndexing === true
-        ? ((await this.repo.attachIndexingStatus(document)) as KnowledgeDocument)
-        : document;
-    if (params?.include_content !== true && params?.include_links !== true) return withIndexing;
-    const rawVersion = await this.versionFor(document, params?.version);
-    const version = rawVersion ? (await this.attribution.attachToVersions([rawVersion]))[0] : null;
+        ? ((await this.repo.attachIndexingStatus(attributedDocument)) as KnowledgeDocument)
+        : attributedDocument;
+    if (!wantsHydration) return withIndexing;
+    return this.buildHydratedDocument(withIndexing, version, params);
+  }
+
+  private buildHydratedDocument(
+    document: KnowledgeDocument,
+    version: KnowledgeDocumentVersion | null,
+    params?: HydrateOptions
+  ): HydratedKnowledgeDocument {
     return {
-      ...withIndexing,
-      document: withIndexing,
+      ...document,
+      document,
       current_version: version,
       content: version?.content_text ?? null,
-      first_line_is_title: withIndexing.metadata?.title_from_content === true,
+      first_line_is_title: document.metadata?.title_from_content === true,
       ...(params?.include_links
         ? { links: extractKnowledgeLinks(version?.content_text ?? '') }
         : {}),
     };
+  }
+
+  private async versionsForDocuments(
+    documents: readonly KnowledgeDocument[],
+    versionRef?: string | number
+  ): Promise<Array<KnowledgeDocumentVersion | null>> {
+    if (versionRef === undefined || versionRef === null || versionRef === '') {
+      const versions = await this.versions.findByIds(
+        documents.flatMap((document) =>
+          document.current_version_id ? [document.current_version_id] : []
+        )
+      );
+      const byId = new Map(versions.map((version) => [version.version_id, version]));
+      return documents.map((document) =>
+        document.current_version_id ? (byId.get(document.current_version_id) ?? null) : null
+      );
+    }
+    return Promise.all(documents.map((document) => this.versionFor(document, versionRef)));
+  }
+
+  private async hydrateDocuments(
+    documents: readonly KnowledgeDocument[],
+    params: HydrateOptions
+  ): Promise<HydratedKnowledgeDocument[]> {
+    const rawVersions = await this.versionsForDocuments(documents, params.version);
+    const projected = await this.attribution.attachToDocumentsAndVersions(
+      documents,
+      rawVersions.filter((version): version is KnowledgeDocumentVersion => version !== null)
+    );
+    const versionById = new Map(projected.versions.map((version) => [version.version_id, version]));
+    const projectedDocuments =
+      params.include_indexing === true || params.includeIndexing === true
+        ? ((await this.repo.attachIndexingStatus(projected.documents)) as KnowledgeDocument[])
+        : projected.documents;
+    return projectedDocuments.map((document, index) => {
+      const rawVersion = rawVersions[index];
+      const version = rawVersion ? (versionById.get(rawVersion.version_id) ?? null) : null;
+      return this.buildHydratedDocument(document, version, params);
+    });
   }
 
   private async assertExpectedVersion(
@@ -462,24 +515,20 @@ export class KnowledgeDocumentsService extends DrizzleService<
     for (const doc of rows) {
       if (await this.canRead(doc, user)) readable.push(doc);
     }
-    const attributed = await this.attribution.attachToDocuments(readable);
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
+      const attributed = await this.attribution.attachToDocuments(readable);
       if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
         return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
       return attributed;
     }
-    return Promise.all(
-      attributed.map((doc) =>
-        this.hydrateDocument(doc, {
-          include_content: params?.query?.include_content,
-          include_links: params?.query?.include_links,
-          include_indexing: params?.query?.include_indexing,
-          includeIndexing: params?.query?.includeIndexing,
-          version: params?.query?.version,
-        })
-      )
-    );
+    return this.hydrateDocuments(readable, {
+      include_content: params?.query?.include_content,
+      include_links: params?.query?.include_links,
+      include_indexing: params?.query?.include_indexing,
+      includeIndexing: params?.query?.includeIndexing,
+      version: params?.query?.version,
+    });
   }
 
   async get(id: Id, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
@@ -489,8 +538,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    const [attributed] = await this.attribution.attachToDocuments([doc]);
-    return this.hydrateDocument(attributed, params?.query);
+    return this.hydrateDocument(doc, params?.query);
   }
 
   async getDocument(
@@ -503,8 +551,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    const [attributed] = await this.attribution.attachToDocuments([doc]);
-    return this.hydrateDocument(attributed, data);
+    return this.hydrateDocument(doc, data);
   }
 
   async putDocument(

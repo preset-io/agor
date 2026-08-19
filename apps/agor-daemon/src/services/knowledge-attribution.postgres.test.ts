@@ -22,6 +22,7 @@ import { NotFound } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KnowledgeDocumentsService } from './knowledge-documents.js';
+import { KnowledgeSearchService } from './knowledge-search.js';
 import { KnowledgeVersionsService } from './knowledge-versions.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -69,6 +70,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantB = `knowledge-author-b-${generateId()}`;
       const documents = new KnowledgeDocumentsService(db);
       const history = new KnowledgeVersionsService(db);
+      const search = new KnowledgeSearchService(db);
 
       const a = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const users = new UsersRepository(scoped);
@@ -157,7 +159,27 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         created_by_session_id: null,
       });
 
-      const serialized = JSON.stringify(response);
+      const searchResponse = await runWithTenantDatabaseScope(db, tenantA, () =>
+        search.find(params(a.owner, { q: 'Assistant' }))
+      );
+      expect(searchResponse).toHaveLength(1);
+      expect(searchResponse[0]).toMatchObject({
+        document: {
+          updated_by: a.teammate.user_id,
+          updated_by_user: { status: 'resolved', display_name: 'Postgres Teammate' },
+          updated_by_session_id: sessionId,
+          updated_by_agentic_tool: 'codex',
+          updated_by_teammate_name: 'Scout',
+        },
+        current_version: {
+          created_by_user: { status: 'resolved', display_name: 'Postgres Teammate' },
+          created_by_session_id: sessionId,
+          created_by_agentic_tool: 'codex',
+          created_by_teammate_name: 'Scout',
+        },
+      });
+
+      const serialized = JSON.stringify({ response, searchResponse });
       expect(serialized).not.toContain(a.owner.email);
       expect(serialized).not.toContain(a.teammate.email);
       expect(serialized).not.toContain(b.user.name!);
@@ -170,6 +192,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         await expect(
           history.find(params(b.user, { document_id: created.document_id }))
         ).resolves.toEqual([]);
+        await expect(search.find(params(b.user, { q: 'Assistant' }))).resolves.toEqual([]);
       });
     });
 

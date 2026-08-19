@@ -52,10 +52,10 @@ export class KnowledgeAttributionRepository {
     };
   }
 
-  async attachToDocuments(documents: readonly KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
-    const resolvedUsers = await this.usersById(
-      documents.flatMap((document) => [document.created_by, document.updated_by])
-    );
+  private projectDocuments(
+    documents: readonly KnowledgeDocument[],
+    resolvedUsers: ReadonlyMap<string, string | null>
+  ): KnowledgeDocument[] {
     return documents.map((document) => {
       const attribution = this.attributionFor(document.updated_by, resolvedUsers);
       const creatorAttribution = this.attributionFor(document.created_by, resolvedUsers);
@@ -70,10 +70,10 @@ export class KnowledgeAttributionRepository {
     });
   }
 
-  async attachToVersions(
-    versions: readonly KnowledgeDocumentVersion[]
-  ): Promise<KnowledgeDocumentVersion[]> {
-    const resolvedUsers = await this.usersById(versions.map((version) => version.created_by));
+  private projectVersions(
+    versions: readonly KnowledgeDocumentVersion[],
+    resolvedUsers: ReadonlyMap<string, string | null>
+  ): KnowledgeDocumentVersion[] {
     return versions.map((version) => {
       const attribution = this.attributionFor(version.created_by, resolvedUsers);
       return {
@@ -83,5 +83,37 @@ export class KnowledgeAttributionRepository {
         created_by_user: attribution,
       };
     });
+  }
+
+  /**
+   * Project documents and versions with one tenant-scoped User query. Search
+   * and hydrated-list responses use this to keep their nested contract
+   * consistent without an author-query N+1.
+   */
+  async attachToDocumentsAndVersions(
+    documents: readonly KnowledgeDocument[],
+    versions: readonly KnowledgeDocumentVersion[]
+  ): Promise<{
+    documents: KnowledgeDocument[];
+    versions: KnowledgeDocumentVersion[];
+  }> {
+    const resolvedUsers = await this.usersById([
+      ...documents.flatMap((document) => [document.created_by, document.updated_by]),
+      ...versions.map((version) => version.created_by),
+    ]);
+    return {
+      documents: this.projectDocuments(documents, resolvedUsers),
+      versions: this.projectVersions(versions, resolvedUsers),
+    };
+  }
+
+  async attachToDocuments(documents: readonly KnowledgeDocument[]): Promise<KnowledgeDocument[]> {
+    return (await this.attachToDocumentsAndVersions(documents, [])).documents;
+  }
+
+  async attachToVersions(
+    versions: readonly KnowledgeDocumentVersion[]
+  ): Promise<KnowledgeDocumentVersion[]> {
+    return (await this.attachToDocumentsAndVersions([], versions)).versions;
   }
 }

@@ -592,6 +592,50 @@ describe('KnowledgeDocumentsService permissions', () => {
         },
         created_by_session_id: null,
       });
+
+      // Text search is also a document-authorized response surface and feeds
+      // the active Knowledge snapshot directly on cold search navigation.
+      const searchResults = await new KnowledgeSearchService(db).find(
+        params(owner, { q: 'Assistant edit' })
+      );
+      expect(searchResults).toHaveLength(1);
+      expect(searchResults[0]).toMatchObject({
+        document: {
+          updated_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+          updated_by_session_id: assistantSessionId,
+          updated_by_agentic_tool: 'codex',
+          updated_by_teammate_name: 'Scout',
+        },
+        current_version: {
+          created_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+          created_by_session_id: assistantSessionId,
+          created_by_agentic_tool: 'codex',
+          created_by_teammate_name: 'Scout',
+        },
+      });
+
+      const hydratedList = await documents.find(
+        params(owner, { namespace_id: namespace.namespace_id, include_content: true })
+      );
+      expect(hydratedList).toHaveLength(1);
+      expect(hydratedList[0]).toMatchObject({
+        updated_by_user: {
+          status: 'resolved',
+          display_name: 'Attribution Teammate',
+        },
+        current_version: {
+          created_by_user: {
+            status: 'resolved',
+            display_name: 'Attribution Teammate',
+          },
+        },
+      });
     }
   );
 
