@@ -58,8 +58,8 @@ describe('TeammateGallery', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     const group = screen.getByRole('radiogroup', { name: 'Teammate template' });
     expect(group).toHaveStyle({ display: 'grid' });
-    // Two columns at the modal width, collapsing to one only when very narrow.
-    expect(group).toHaveStyle({ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' });
+    // Three columns at the widened modal, stepping down to two/one as it narrows.
+    expect(group).toHaveStyle({ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' });
   });
 
   it('renders each description in full with no ellipsis truncation', () => {

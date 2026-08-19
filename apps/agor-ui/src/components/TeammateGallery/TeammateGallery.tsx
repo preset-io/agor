@@ -254,10 +254,10 @@ const BlankCard: React.FC<{
  *
  * Each card carries a category pill and color-coded icon in a shared avatar-
  * palette hue; selecting a card gives it a quiet same-hue border + background
- * wash (no loud blue outline). The grid holds two columns at the modal width,
- * collapses to one only when very narrow, shows full untruncated descriptions,
- * and keeps row-mates equal height. It sits inside the modal's own vertically-
- * scrollable content region so every card is reachable while the wizard footer
+ * wash (no loud blue outline). The grid holds three columns at the modal width,
+ * stepping down to two (then one) only as the container narrows, shows full
+ * untruncated descriptions, and keeps row-mates equal height. It sits inside the
+ * modal's own vertically-scrollable content region so every card is reachable while the wizard footer
  * stays on-screen; the chips row (plus any `header` content) is pinned as a
  * sticky header so only the grid scrolls under it.
  *
@@ -358,9 +358,11 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
         aria-label="Teammate template"
         style={{
           display: 'grid',
-          // Two columns at the ~600px modal width; each column is at least 220px so
-          // the row collapses to a single column only on a very narrow container.
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          // Three columns at the ~730px modal width; each column floors at 190px so
+          // the row steps down to 2 (then 1) only on a narrower container. 190px is
+          // the widest floor that still packs 3 columns into the step-2 content
+          // width without ever admitting a 4th.
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: token.marginSM,
           // Room for card focus rings at the grid edges.
           padding: token.paddingXXS,
