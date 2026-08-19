@@ -50,7 +50,7 @@ describe('CopilotPromptService MCP identity scoping', () => {
         forUserId: 'task-creator',
         sessionOwnerId: 'session-owner',
       }),
-      { toolFiltering: 'none' }
+      { toolFiltering: 'intercept' }
     );
   });
 });

@@ -21,6 +21,7 @@ import {
   type SessionID,
   shortId,
   type TaskID,
+  type ToolPermission,
   type ToolUse,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
@@ -109,6 +110,11 @@ export type OpenCodeInvocationConfig = {
   mcp: Record<string, unknown>;
   permission?: Record<string, 'ask' | 'allow' | 'deny'>;
   tools?: Record<string, boolean>;
+  /**
+   * Gated MCP tools, keyed by the name OpenCode will report them under. Built
+   * alongside the `mcp` block above so the keys cannot disagree with it.
+   */
+  mcpToolPermissions?: ReadonlyMap<string, ToolPermission>;
   [key: string]: unknown;
 };
 
@@ -215,6 +221,80 @@ interface TurnContext {
   provider: string;
   /** Branch directory path for project-scoped operations. */
   branchPath: string;
+  /**
+   * OpenCode tool key → configured permission, for gated MCP tools only.
+   * Absent when nothing is gated. See `buildOpenCodeMcpToolPermissions`.
+   */
+  mcpToolPermissions?: ReadonlyMap<string, ToolPermission>;
+}
+
+/**
+ * The alphabet OpenCode rewrites a name into before using it as a tool key.
+ * Matches `CP` in the shipped binary exactly; a character we leave in but it
+ * rewrites would make a lookup miss, and a miss reads as "unconfigured".
+ */
+const sanitizeToOpenCodeToolKey = (name: string) => name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+/**
+ * The config key Agor registers an MCP server under.
+ *
+ * Shared with `buildOpenCodeMcpToolPermissions` on purpose: the permission
+ * lookup below is only exact because Agor mints this name itself, so the two
+ * must never be able to drift apart.
+ */
+export function openCodeMcpServerKey(sessionId: string, server: MCPServer): string {
+  const sanitized = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return `agor_${shortId(sessionId)}_${shortId(server.mcp_server_id)}_${sanitized}`;
+}
+
+/**
+ * Map every configured tool to the exact key OpenCode will report it under.
+ *
+ * OpenCode registers MCP tools as `<server key>_<tool>`, both halves put
+ * through its own sanitizer, and asks permission using that same string as the
+ * permission *type* — `ask({permission: <tool key>})` on the tool-execute path.
+ * Because Agor chooses the server key, the composed name is fully determined
+ * here: there is nothing to parse back out, and the single-underscore join is
+ * unambiguous in this direction. Hence a flat exact-match map rather than the
+ * namespaced index the other handlers use.
+ */
+export function buildOpenCodeMcpToolPermissions(
+  sessionId: string,
+  servers: readonly { server: MCPServer }[]
+): ReadonlyMap<string, ToolPermission> {
+  const keys = new Map<string, ToolPermission>();
+  for (const { server } of servers) {
+    const serverKey = sanitizeToOpenCodeToolKey(openCodeMcpServerKey(sessionId, server));
+    for (const [toolName, permission] of Object.entries(server.tool_permissions ?? {})) {
+      keys.set(`${serverKey}_${sanitizeToOpenCodeToolKey(toolName)}`, permission);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Whether `tool_permissions` alone refuses this call, and on which setting.
+ *
+ * Split out so the decision is reachable without standing up a turn, because
+ * the surrounding function is where it is easy to get wrong. It has to run
+ * BEFORE `automaticallyAllowsOpenCodePermission`: that shortcut answers
+ * `once` without ever calling `canUseTool`, so a gate placed after it is
+ * skipped under `bypassPermissions`, `allow-all` and `yolo` — the modes where
+ * nothing else is watching.
+ *
+ * `ask` needs somewhere to ask. Where the mode would auto-allow, or no
+ * approval callback exists at all, it collapses onto `deny` rather than
+ * degrading into `allow` — the same rule the headless handlers apply.
+ */
+export function blockedByOpenCodeToolPermissions(input: {
+  configured: ToolPermission | undefined;
+  modeWouldAutoAllow: boolean;
+  hasApprovalChannel: boolean;
+}): ToolPermission | undefined {
+  const { configured, modeWouldAutoAllow, hasApprovalChannel } = input;
+  if (configured === 'deny') return 'deny';
+  if (configured === 'ask' && (modeWouldAutoAllow || !hasApprovalChannel)) return 'ask';
+  return undefined;
 }
 
 type OpenCodePermissionEffect = Extract<OpenCodeEventEffect, { type: 'permission' }>;
@@ -231,10 +311,30 @@ async function applyPermissionEffect(input: {
   let handledByAgor = false;
   let interactionTimedOut = false;
 
-  if (effect.request.permission === 'question' || effect.request.permission === 'task') {
+  // `tool_permissions` is resolved before anything else can answer.
+  const configuredToolPermission = context.mcpToolPermissions?.get(effect.request.permission);
+  const modeWouldAutoAllow = automaticallyAllowsOpenCodePermission(
+    turn.permissionMode,
+    effect.request.permission
+  );
+  const blocking = blockedByOpenCodeToolPermissions({
+    configured: configuredToolPermission,
+    modeWouldAutoAllow,
+    hasApprovalChannel: Boolean(canUseTool),
+  });
+
+  if (blocking) {
+    console.warn(
+      `🛑 [OpenCode] MCP tool "${effect.request.permission}" blocked by tool_permissions (${blocking})`
+    );
+    handledByAgor = true;
+    response = 'reject';
+  } else if (effect.request.permission === 'question' || effect.request.permission === 'task') {
     handledByAgor = true;
   } else if (canUseTool) {
-    if (automaticallyAllowsOpenCodePermission(turn.permissionMode, effect.request.permission)) {
+    // An `ask` tool must reach the prompt rather than be waved through by the
+    // session's permission mode.
+    if (modeWouldAutoAllow && configuredToolPermission !== 'ask') {
       response = 'once';
     } else {
       handledByAgor = true;
@@ -496,6 +596,13 @@ export class OpenCodeTool {
   }
 
   private protectedInvocationConfig(resolved: OpenCodeInvocationConfig): OpenCodeInvocationConfig {
+    // `mcpToolPermissions` is Agor-side state read by `applyPermissionEffect`;
+    // this return value is serialised into OPENCODE_CONFIG_CONTENT, which the
+    // OpenCode process parses. Dropping it here keeps a key OpenCode has no
+    // schema for out of its config — and a Map would serialise to `{}` anyway,
+    // so leaving it in would be a confusing no-op rather than a useful one.
+    const { mcpToolPermissions: _agorOnly, ...serialisable } = resolved;
+    resolved = serialisable as OpenCodeInvocationConfig;
     const configuredAgents =
       typeof resolved.agent === 'object' && resolved.agent !== null
         ? (resolved.agent as Record<string, unknown>)
@@ -661,6 +768,7 @@ export class OpenCodeTool {
           model,
           provider,
           branchPath: input.directory,
+          mcpToolPermissions: resolvedInvocationConfig.mcpToolPermissions,
         },
         streamingCallbacks,
         (stop) => {
@@ -825,8 +933,7 @@ export class OpenCodeTool {
     const servers = await this.dependencies.resolveMcpServers(sessionId as SessionID);
 
     for (const { server } of servers) {
-      const sanitizedName = server.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-      const name = `agor_${shortId(sessionId)}_${shortId(server.mcp_server_id)}_${sanitizedName}`;
+      const name = openCodeMcpServerKey(sessionId, server);
       if (server.transport === 'stdio') {
         if (!server.command) {
           throw new Error(`Attached MCP server ${server.name} is missing its command`);
@@ -872,7 +979,11 @@ export class OpenCodeTool {
         );
       }
     }
-    return { mcp, permission: AGOR_PERMISSION_INTERCEPTION };
+    return {
+      mcp,
+      permission: AGOR_PERMISSION_INTERCEPTION,
+      mcpToolPermissions: buildOpenCodeMcpToolPermissions(sessionId, servers),
+    };
   }
 
   /** Create a new OpenCode session on the invocation's managed runtime. */

@@ -104,10 +104,13 @@ export async function executeOpenCodeTask(params: {
             sessionOwnerId: targetSession.created_by,
             onServerWithheld: reporter.onServerWithheld,
           },
-          // OpenCode's invocation config carries no per-tool filter, so a server
-          // with gated tools cannot be honoured and is withheld whole. This is
-          // the only enforcement point on this path.
-          { toolFiltering: 'none' }
+          // OpenCode's invocation config still carries no per-tool filter, but
+          // every MCP tool call comes back through Agor before it runs: the
+          // managed server asks permission using the tool's own key as the
+          // permission type, and Agor mints that key when it registers the
+          // server, so the match is exact. Enforcement happens there
+          // (`applyPermissionEffect`) instead of by withholding the server.
+          { toolFiltering: 'intercept' }
         );
         await reportWithheldMcpServers(repos.messages, {
           sessionId: targetSessionId,
@@ -127,8 +130,12 @@ export async function executeOpenCodeTask(params: {
           permissionLocks,
           mcpServerRepo: repos.mcpServers,
           sessionMCPRepo: repos.sessionMCP,
-          // Gated servers never reach this handler, so nothing here can be
-          // configured; the admission gate above already withheld them.
+          // Deliberately empty. This callback only ever sees OpenCode's own
+          // permission keys (`<server key>_<tool>`), which the namespaced
+          // `mcp__server__tool` resolver cannot match -- and a miss would read
+          // as "unconfigured", i.e. allow. The per-tool gate for this handler
+          // lives in `applyPermissionEffect`, keyed the way OpenCode names
+          // things, and runs before this callback is reached.
           mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
         }),
       cancelPendingPermissions: (targetSessionId) =>
