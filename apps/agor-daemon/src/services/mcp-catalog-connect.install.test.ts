@@ -57,6 +57,12 @@ const CURATED = {
   permission_disclosure: 'Reads public GitHub repository content only.',
 } as unknown as MCPCatalogEntry;
 
+/**
+ * A caller who holds no OAuth grant anywhere, for the tests about installing
+ * rather than about reuse. Reuse asks this first and stops when it says so.
+ */
+const NO_GRANTS = { readGrantResourceUri: async () => undefined };
+
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
   branch_id: 'branch-1',
@@ -115,7 +121,10 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
     }) as unknown as AuthenticatedParams;
 
   const connectAs = (caller: User, callerRole: UserRole) =>
-    createMCPCatalogConnectService(app).create(CONNECT_REQUEST, paramsFor(caller, callerRole));
+    createMCPCatalogConnectService(app, NO_GRANTS).create(
+      CONNECT_REQUEST,
+      paramsFor(caller, callerRole)
+    );
   const connect = () => connectAs(user, role);
   const installedServers = () => new MCPServerRepository(rawDb).findAll({});
   const addUser = (email: string, addedRole: UserRole) =>
@@ -451,15 +460,22 @@ function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase) {
  * puts the row squarely inside Bob's reach and asks whether Alice's *credential*
  * on it can be borrowed.
  */
-describe('credential reuse cannot cross users', () => {
-  const OAUTH_ENTRY = {
-    ...CURATED,
-    auth_type: 'oauth',
-  } as unknown as MCPCatalogEntry;
-
+describe('credential reuse, against real grants', () => {
+  const OAUTH_ENTRY = { ...CURATED, auth_type: 'oauth' } as unknown as MCPCatalogEntry;
   const SHARED_ROW = '00000000-0000-7000-8000-0000000005ee' as MCPServer['mcp_server_id'];
+  const RESOURCE = 'https://mcp.deepwiki.com/mcp';
 
-  async function buildTwoUserDaemon() {
+  /**
+   * Two members, one unowned OAuth row both can see, and a real grant on it
+   * belonging to exactly one of them.
+   *
+   * The row is deliberately unowned: an owned one would be filtered out of the
+   * other user's `find` by `usableByUserId` before reuse ever looked at it, so
+   * passing that would prove only that the ownership filter works. This puts
+   * the row squarely inside both users' reach and asks whether one's
+   * *credential* on it can be borrowed by the other.
+   */
+  async function buildTwoUserDaemon(grantResourceUri: string | undefined = RESOURCE) {
     const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
     const db = rawDb as unknown as TenantScopeAwareDatabase;
     await runMigrations(rawDb);
@@ -477,13 +493,11 @@ describe('credential reuse cannot cross users', () => {
       role: 'member',
     })) as User;
 
-    // An unowned OAuth server at the entry's endpoint: every member can see it,
-    // nobody's credential is implied by it.
     await new MCPServerRepository(rawDb).create({
       mcp_server_id: SHARED_ROW,
       name: 'deepwiki-shared',
       transport: 'http',
-      url: 'https://mcp.deepwiki.com/mcp',
+      url: RESOURCE,
       auth: { type: 'oauth', oauth_mode: 'per_user' },
       scope: 'session',
       source: 'user',
@@ -493,9 +507,13 @@ describe('credential reuse cannot cross users', () => {
     } as never);
 
     // Alice signs in. Hers, keyed `(alice, row)`, and nothing else changes.
-    await new UserMCPOAuthTokenRepository(rawDb).saveToken(alice.user_id, SHARED_ROW, {
+    // No `grantBinding` — that is not a simplification, it is what a SQLite
+    // grant is. See the dialect note below.
+    const tokens = new UserMCPOAuthTokenRepository(rawDb);
+    await tokens.saveToken(alice.user_id, SHARED_ROW, {
       accessToken: 'alice-grant-not-a-real-token',
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      ...(grantResourceUri ? { resourceUri: grantResourceUri } : {}),
     });
 
     const hooks = captureRegisteredMcpServerHooks(db);
@@ -526,13 +544,25 @@ describe('credential reuse cannot cross users', () => {
     } as never);
     app.use('/mcp-servers/oauth-refresh', {
       async create() {
-        // Nothing here has a refresh token; the honest answer is "sign in again".
         return { success: false, error: 'needs_reauth' };
       },
     } as never);
 
+    // The real read the daemon injects, against the real table — so "whose
+    // grant" is decided by the same key the production wiring uses.
+    const deps = {
+      async readGrantResourceUri(
+        serverId: MCPServer['mcp_server_id'],
+        params: AuthenticatedParams
+      ) {
+        const userId = params.user?.user_id as User['user_id'] | undefined;
+        if (!userId) return undefined;
+        return (await tokens.getToken(userId, serverId))?.oauth_resource_uri ?? undefined;
+      },
+    };
+
     const connectAs = (caller: User) =>
-      createMCPCatalogConnectService(app).create(CONNECT_REQUEST, {
+      createMCPCatalogConnectService(app, deps).create(CONNECT_REQUEST, {
         provider: 'rest',
         authenticated: true,
         user: { user_id: caller.user_id, role: 'member' },
@@ -547,7 +577,7 @@ describe('credential reuse cannot cross users', () => {
   });
 
   it('reuses the grant for the user who holds it', async () => {
-    // The positive control. Without it the negative below would also pass if
+    // The positive control. Without it the negatives below would also pass if
     // reuse were simply broken, and would keep passing after it was removed.
     const { alice, connectAs } = await buildTwoUserDaemon();
 
@@ -582,5 +612,42 @@ describe('credential reuse cannot cross users', () => {
     const result = await connectAs(bob);
 
     expect(JSON.stringify(result)).not.toContain('alice-grant-not-a-real-token');
+  });
+
+  /**
+   * The dialect divergence, pinned in both directions.
+   *
+   * `injectPerUserOAuthTokens` re-checks `grant_binding_fingerprint` only under
+   * `isPostgresDatabaseHandle`. That is structural, not an oversight: bindings
+   * come from a pending-flow durable record, that authority exists only on
+   * PostgreSQL, and so `persistOAuthToken` passes `grantBinding` only when one
+   * exists. A SQLite grant has no fingerprint to check — the grants below are
+   * saved exactly the way the SQLite flow saves them, and carry none.
+   *
+   * So these two say plainly what standalone Agor does: it reuses a grant it
+   * cannot cryptographically bind to the row (first test), and it is stopped
+   * instead by the resource the grant records, which every dialect writes
+   * (second test). If someone makes the fingerprint check dialect-independent,
+   * the first fails and should be deleted with the note above. If someone drops
+   * the resource comparison, the second fails and standalone loses its only
+   * check here.
+   */
+  it('reuses an unbound SQLite grant — standalone has no fingerprint to check', async () => {
+    const { alice, connectAs, rawDb } = await buildTwoUserDaemon();
+
+    const grant = await new UserMCPOAuthTokenRepository(rawDb).getToken(alice.user_id, SHARED_ROW);
+    expect(grant?.grant_binding_fingerprint).toBeUndefined();
+
+    await expect(connectAs(alice)).resolves.toMatchObject({ reused_existing_server: true });
+  });
+
+  it('still refuses a SQLite grant minted for a different resource', async () => {
+    // The row points at the entry's endpoint; the credential on it does not.
+    const { alice, connectAs } = await buildTwoUserDaemon('https://mcp.deepwiki.com/some-other');
+
+    const result = await connectAs(alice);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe(SHARED_ROW);
   });
 });
