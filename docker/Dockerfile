@@ -28,21 +28,11 @@ RUN apt-get update && apt-get install -y \
   jq \
   less \
   tree \
-  openssh-server \
-  acl \
+  openssh-client \
   ripgrep \
   bubblewrap \
   && rm -rf /var/lib/apt/lists/*
 # bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
-
-# Configure SSH server for multi-user testing (used in postgres profile)
-RUN mkdir -p /run/sshd && \
-  # Enable password authentication
-  sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-  # Disable root login
-  sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
-  # Allow all users to login
-  echo 'AllowUsers agor alice bob' >> /etc/ssh/sshd_config
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility

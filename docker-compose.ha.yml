@@ -38,7 +38,7 @@ x-daemon-common: &daemon-common
       AGOR_BUILD_SHA: ${AGOR_BUILD_SHA:-dev}
   environment: *daemon-environment
   volumes:
-    # The smoke profile has one shared Unix execution identity. Mount its
+    # The smoke profile has one shared container execution identity. Mount its
     # complete home so short-lived auth helpers and Tasks on either daemon see
     # the same CLI-native credential files. Keep Agor's own state/workspaces
     # on the separately named historical volume: existing managed HA projects

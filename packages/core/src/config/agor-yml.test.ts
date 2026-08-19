@@ -281,9 +281,9 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       .sort();
 
     expect(uidGidVariants).toEqual([
-      'full',
       'postgres',
       'postgres-demo',
+      'rich',
       'sandbox',
       'sandbox-peruser',
       'sqlite',
@@ -298,6 +298,26 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       expect(start, `${name}.start`).toMatch(/^env UID=\$\(id -u\) GID=/);
       expect(start, `${name}.start`).not.toMatch(/^UID=/);
     }
+  });
+
+  it('keeps full as a deprecated compatibility alias for rich', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    expect(env!.variants.full.extends).toBe('rich');
+    expect(env!.variants.full.description).toMatch(/Deprecated compatibility alias/);
+
+    const rich = resolveVariant(env!, 'rich');
+    const full = resolveVariant(env!, 'full');
+    if (rich === null || full === null) throw new Error('rich/full variants must resolve');
+    expect(full).toMatchObject({
+      start: rich.start,
+      stop: rich.stop,
+      nuke: rich.nuke,
+      logs: rich.logs,
+      health: rich.health,
+      app: rich.app,
+    });
   });
 
   it('resolves sqlite-demo / postgres-demo with LOAD_FIXTURES and required start/stop', () => {
