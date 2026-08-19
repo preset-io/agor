@@ -1538,5 +1538,19 @@
     "rationale": "Cleans up only the uniquely named same-directory temporary config inode after explicit installation/development bootstrap.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-209",
+    "class": "A",
+    "file": "packages/core/src/config/config-manager.ts",
+    "import": "node:fs/promises",
+    "symbol": "open",
+    "local": "fs",
+    "operation": "call:fs.open@syncContainingDirectory#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Opens only the fixed operator config directory so its new atomic config entry can be flushed after explicit installation/development bootstrap.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

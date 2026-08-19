@@ -5,6 +5,12 @@ creates it once with mode `0600`. After initialization Agor does not silently re
 comments, formatting, key order, YAML anchors, read-only ConfigMaps, and infrastructure-as-code
 ownership.
 
+Initialization atomically publishes `config.yaml` without replacing an existing file. The
+filesystem containing `~/.agor` must support same-directory hard links (as normal local
+filesystems do). On an unsupported filesystem, Agor fails with migration guidance rather than
+falling back to a racy or destructive write; provision `config.yaml` through configuration
+management or run Agor with a home directory on a compatible filesystem.
+
 Every deployment must have a stable UUID in the daemon block:
 
 ```yaml

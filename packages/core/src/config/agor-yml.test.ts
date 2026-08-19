@@ -271,6 +271,27 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
   });
 
+  it('keeps persisted deployment secrets stable when switching postgres variants', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const postgres = resolveVariant(env!, 'postgres');
+    const rich = resolveVariant(env!, 'rich');
+    if (postgres === null || rich === null) throw new Error('postgres/rich variants must resolve');
+
+    // Both variants use the same Compose project and project-scoped agor-home
+    // volume. Neither command nor overlay may replace its persisted secrets.
+    for (const variant of [postgres, rich]) {
+      expect(variant.start).toContain('-p agor-{{branch.name}}');
+      expect(variant.start).not.toMatch(/AGOR_(JWT|MASTER)_SECRET/);
+    }
+    const richOverlay = fs.readFileSync(
+      path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
+      'utf8'
+    );
+    expect(richOverlay).not.toMatch(/AGOR_(JWT|MASTER)_SECRET/);
+  });
+
   it('uses env(1) for UID/GID on Docker variants instead of shell assignments', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
