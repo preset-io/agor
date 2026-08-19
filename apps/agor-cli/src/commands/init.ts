@@ -214,16 +214,39 @@ export default class Init extends Command {
     // Use the same environment/config resolution and health probe as
     // `agor daemon status` so re-init cannot drift from the CLI's canonical
     // answer about which daemon endpoint is active.
-    const configuredUrl = await getDaemonUrl();
+    //
+    // Only consider daemons that belong to *this* Agor home. A daemon this home
+    // manages (PID file present) always counts. The configured URL counts only once
+    // a config exists here — otherwise `getDaemonUrl()` hands back the global
+    // default and initializing a brand-new home fails because some unrelated
+    // deployment happens to occupy that port. That false positive also made the
+    // `agor init` test suite dependent on no daemon running on 3030.
     const managedUrl = getDaemonPid() !== null ? getManagedDaemonIdentity()?.daemonUrl : undefined;
-    const urls = [...new Set([managedUrl, configuredUrl].filter((url): url is string => !!url))];
-    for (const daemonUrl of urls) {
-      if ((await probeAgorDaemon(daemonUrl)).running) {
-        throw new Error(
-          `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
-        );
-      }
+
+    // A daemon this home manages is unambiguously ours, whatever it answers with.
+    if (managedUrl && (await probeAgorDaemon(managedUrl)).running) {
+      throw new Error(this.daemonRunningMessage(managedUrl));
     }
+
+    if (!(await this.pathExists(getConfigPath()))) return;
+
+    const configuredUrl = await getDaemonUrl();
+    if (!configuredUrl || configuredUrl === managedUrl) return;
+
+    const probe = await probeAgorDaemon(configuredUrl);
+    if (!probe.running) return;
+
+    // Something is answering on our configured port, but a port is not ownership.
+    // Only block when it is demonstrably the same deployment; otherwise this is an
+    // unrelated daemon and re-initializing here cannot disturb it.
+    const ourDeploymentId = (await loadConfig().catch(() => undefined))?.daemon?.deployment_id;
+    if (ourDeploymentId && probe.deploymentId && probe.deploymentId !== ourDeploymentId) return;
+
+    throw new Error(this.daemonRunningMessage(configuredUrl));
+  }
+
+  private daemonRunningMessage(daemonUrl: string): string {
+    return `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`;
   }
 
   /**
