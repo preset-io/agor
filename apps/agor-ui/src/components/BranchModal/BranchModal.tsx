@@ -14,6 +14,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -53,6 +54,13 @@ export interface BranchModalProps {
   onSessionClick?: (sessionId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   defaultTab?: BranchModalTab; // Open modal to a specific tab
+  /**
+   * Render the body as an in-place drill-in (no outer Modal) for the Workspace
+   * Settings shell: the shared drill footer drives Save/Cancel and the
+   * unsaved-changes guard. Default false → the standalone Modal used everywhere
+   * else is unchanged.
+   */
+  embedded?: boolean;
 }
 
 export const BranchModal: React.FC<BranchModalProps> = ({
@@ -71,6 +79,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   onSessionClick,
   onExecuteScheduleNow,
   defaultTab,
+  embedded = false,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -292,6 +301,38 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Space>
   );
 
+  const tabs = (
+    <Tabs
+      activeKey={activeTab}
+      onChange={(key) => setActiveTab(key as BranchModalTab)}
+      items={tabItems}
+    />
+  );
+
+  // Drill-in mode: no outer Modal. The shared shell footer renders Save/Cancel
+  // (Save only when there is something saveable) and runs the unsaved-changes
+  // guard from `dirty`; Reset moves to the header's extra slot.
+  if (embedded) {
+    return (
+      <DrillInFrame
+        title={title}
+        dirty={form.hasChanges}
+        saving={form.saving}
+        saveLabel="Save Changes"
+        onSave={canSave ? handleSave : undefined}
+        extra={
+          form.hasChanges ? (
+            <Button onClick={form.reset} disabled={form.saving} aria-label="Reset changes">
+              Reset
+            </Button>
+          ) : null
+        }
+      >
+        {tabs}
+      </DrillInFrame>
+    );
+  }
+
   return (
     <Modal
       title={title}
@@ -304,11 +345,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
       }}
     >
-      <Tabs
-        activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as BranchModalTab)}
-        items={tabItems}
-      />
+      {tabs}
     </Modal>
   );
 };

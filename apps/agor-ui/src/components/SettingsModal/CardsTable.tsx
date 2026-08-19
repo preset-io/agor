@@ -14,10 +14,10 @@ import {
   Form,
   Input,
   Layout,
-  Modal,
   Popconfirm,
   Space,
   Table,
+  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -33,7 +33,9 @@ import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MetaRow } from '../MetaRow';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 const { Sider, Content } = Layout;
 
@@ -57,14 +59,20 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   const branchById = useAgorStore(selectBranchById);
 
   // State
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
-  const [createTypeModalOpen, setCreateTypeModalOpen] = useState(false);
-  const [createTypeModalMounted, setCreateTypeModalMounted] = useState(false);
-  const [editTypeModalOpen, setEditTypeModalOpen] = useState(false);
-  const [editingType, setEditingType] = useState<CardType | null>(null);
   const [cardModalCard, setCardModalCard] = useState<CardWithType | null>(null);
   const [cardModalOpen, setCardModalOpen] = useState(false);
+  const [typeDirty, setTypeDirty] = useState(false);
   const [typeSearchTerm, setTypeSearchTerm] = useState('');
+
+  // Card-TYPE create/edit is a drill-in (the two-pane list stays as the base
+  // view). Card INSTANCE detail still uses the shared CardModal.
+  const editingType =
+    drill?.kind === 'cards' && drill.mode === 'edit' && drill.recordId
+      ? (cardTypeById.get(drill.recordId) ?? null)
+      : null;
+  const isCreatingType = drill?.kind === 'cards' && drill.mode === 'create';
   const [cardSearchTerm, setCardSearchTerm] = useState('');
   const [form] = Form.useForm();
 
@@ -138,7 +146,8 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         color: colorValue || undefined,
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
-      setCreateTypeModalOpen(false);
+      setTypeDirty(false);
+      closeDrill();
       showSuccess('Card type created');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return; // validation error
@@ -161,7 +170,8 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         color: colorValue || undefined,
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
-      setEditTypeModalOpen(false);
+      setTypeDirty(false);
+      closeDrill();
       showSuccess('Card type updated');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
@@ -183,14 +193,20 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   };
 
   const openEditType = (ct: CardType) => {
-    setEditingType(ct);
     form.setFieldsValue({
       name: ct.name,
       emoji: ct.emoji,
       color: ct.color,
       json_schema: ct.json_schema ? JSON.stringify(ct.json_schema, null, 2) : '',
     });
-    setEditTypeModalOpen(true);
+    setTypeDirty(false);
+    openDrill({ kind: 'cards', mode: 'edit', recordId: ct.card_type_id });
+  };
+
+  const openCreateType = () => {
+    form.resetFields();
+    setTypeDirty(false);
+    openDrill({ kind: 'cards', mode: 'create' });
   };
 
   // Card table columns
@@ -202,9 +218,16 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       render: (title: string, record: CardWithType) => (
         <Space>
           {record.effective_emoji && <span>{record.effective_emoji}</span>}
-          <Typography.Text>
+          <Typography.Link
+            ellipsis
+            title={title}
+            onClick={() => {
+              setCardModalCard(record);
+              setCardModalOpen(true);
+            }}
+          >
             <HighlightMatch text={title} query={cardSearchTerm} />
-          </Typography.Text>
+          </Typography.Link>
         </Space>
       ),
     },
@@ -262,7 +285,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 
   // Type form content (shared between create and edit modals)
   const typeFormContent = (
-    <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ marginTop: 16, maxWidth: 520 }}
+      onValuesChange={() => setTypeDirty(true)}
+    >
       <Form.Item label="Name" style={{ marginBottom: 24 }}>
         <Flex gap={8}>
           <Form.Item name="emoji" noStyle>
@@ -287,38 +315,32 @@ export const CardsTable: React.FC<CardsTableProps> = ({
     </Form>
   );
 
+  if (isCreatingType || editingType) {
+    return (
+      <DrillInFrame
+        title={editingType ? 'Edit Card Type' : 'Create Card Type'}
+        dirty={typeDirty}
+        saveLabel={editingType ? 'Save' : 'Create'}
+        onSave={editingType ? handleUpdateType : handleCreateType}
+      >
+        {typeFormContent}
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Space>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            Cards
-          </Typography.Title>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              padding: '1px 6px',
-              borderRadius: 4,
-              background: token.colorWarningBg,
-              color: token.colorWarningText,
-              border: `1px solid ${token.colorWarningBorder}`,
-            }}
-          >
-            Beta
-          </span>
-        </Space>
-        <Typography.Text type="secondary">
-          Manage card types and view cards across all boards
-        </Typography.Text>
-      </div>
+      <ListPanelHeader
+        title={
+          <Space>
+            <span>Cards</span>
+            <Tag color="warning" style={{ fontSize: token.fontSizeSM }}>
+              Beta
+            </Tag>
+          </Space>
+        }
+        description="Manage card types and view cards across all boards"
+      />
 
       <Layout
         style={{
@@ -348,16 +370,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
             }}
           >
             <Typography.Text strong>Card Types</Typography.Text>
-            <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                form.resetFields();
-                setCreateTypeModalMounted(true);
-                setCreateTypeModalOpen(true);
-              }}
-            >
+            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreateType}>
               New
             </Button>
           </div>
@@ -471,13 +484,6 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                 rowKey="card_id"
                 size="small"
                 pagination={{ defaultPageSize: 20, hideOnSinglePage: true }}
-                onRow={(record) => ({
-                  onClick: () => {
-                    setCardModalCard(record);
-                    setCardModalOpen(true);
-                  },
-                  style: { cursor: 'pointer' },
-                })}
                 locale={{
                   emptyText: (
                     <Empty
@@ -510,44 +516,6 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           )}
         </Content>
       </Layout>
-
-      {/* Create CardType Modal */}
-      {createTypeModalMounted && (
-        <Modal
-          title="Create Card Type"
-          open={createTypeModalOpen}
-          onOk={handleCreateType}
-          onCancel={() => {
-            setCreateTypeModalOpen(false);
-          }}
-          afterClose={() => {
-            form.resetFields();
-            setCreateTypeModalMounted(false);
-          }}
-          okText="Create"
-        >
-          {typeFormContent}
-        </Modal>
-      )}
-
-      {/* Edit CardType Modal */}
-      {editingType && (
-        <Modal
-          title="Edit Card Type"
-          open={editTypeModalOpen}
-          onOk={handleUpdateType}
-          onCancel={() => {
-            setEditTypeModalOpen(false);
-          }}
-          afterClose={() => {
-            form.resetFields();
-            setEditingType(null);
-          }}
-          okText="Save"
-        >
-          {typeFormContent}
-        </Modal>
-      )}
 
       {/* Card Detail Modal (reuse Phase 2 component) */}
       {cardModalCard && (

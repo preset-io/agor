@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { MCPServersTable } from './MCPServersTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 const ADMIN: User = {
   user_id: 'user-admin',
@@ -103,12 +104,14 @@ function renderTable(options: {
   );
   render(
     <AntdApp>
-      <MCPServersTable
-        mcpServerById={mcpServerById}
-        client={client}
-        userById={USER_BY_ID}
-        currentUser={options.currentUser}
-      />
+      <StandaloneSettingsDrillProvider>
+        <MCPServersTable
+          mcpServerById={mcpServerById}
+          client={client}
+          userById={USER_BY_ID}
+          currentUser={options.currentUser}
+        />
+      </StandaloneSettingsDrillProvider>
     </AntdApp>
   );
   return { find, patch };
@@ -123,26 +126,24 @@ const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
 /**
- * Switch to the policy pane; the servers are what the tab opens on.
- *
- * A pane is mounted on first visit and kept hidden thereafter, so an assertion
- * that the policy is absent holds only before the reader has been there — it is
- * not yet mounted, rather than torn down on the way out.
+ * The policy is no longer behind a tab: it is a sub-section mounted below the
+ * servers table, so it is always present. Kept as a named no-op so the tests
+ * still read as "now look at the policy" at the point the reader would.
  */
-const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
+const openPolicyPane = () => undefined;
 
 describe('MCPServersTable member policy', () => {
-  it('opens on the servers, with the policy a pane away', async () => {
+  it('shows the servers first, with the policy as a sub-section below them', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    // The table is what the tab is opened for, so nothing about the policy
-    // stands between the reader and it.
-    expect(screen.getByRole('tab', { name: 'Servers' })).toHaveAttribute('aria-selected', 'true');
+    // The servers table leads; the policy follows in the same pane rather than
+    // sitting behind a tab bar above it.
     expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeInTheDocument();
-    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-    expect(screen.queryByText(/One setting for the whole workspace/i)).not.toBeInTheDocument();
+    // An admin sees the policy control right there, below the table.
+    expect(screen.getByText(/One setting for the whole workspace, not per user/i)).toBeVisible();
+    expect(policyRadio(/Use existing servers only/)).toBeChecked();
   });
 
   it('lets an admin read the policy in plain language and change it', async () => {

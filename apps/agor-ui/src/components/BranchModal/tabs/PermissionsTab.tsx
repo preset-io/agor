@@ -122,7 +122,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      <Form layout="horizontal" colon={false}>
+      <Form layout="vertical" colon={false}>
         <Form.Item
           label="Permission Mode"
           labelCol={{ span: 8 }}

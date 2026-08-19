@@ -49,6 +49,7 @@ vi.mock('../MCPServer', () => ({
 }));
 
 import { MCPServersTable } from './MCPServersTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 const ADMIN = {
   user_id: 'user-admin',
@@ -80,14 +81,16 @@ describe('MCPServersTable OAuth creation', () => {
     } as unknown as AgorClient;
 
     render(
-      <MCPServersTable
-        mcpServerById={new Map()}
-        client={client}
-        userById={new Map([[ADMIN.user_id, ADMIN]])}
-        currentUser={ADMIN}
-        onCreate={vi.fn()}
-        onDelete={vi.fn()}
-      />
+      <StandaloneSettingsDrillProvider>
+        <MCPServersTable
+          mcpServerById={new Map()}
+          client={client}
+          userById={new Map([[ADMIN.user_id, ADMIN]])}
+          currentUser={ADMIN}
+          onCreate={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </StandaloneSettingsDrillProvider>
     );
 
     await waitFor(() =>
@@ -103,8 +106,11 @@ describe('MCPServersTable OAuth creation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare OAuth' }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('server-1', expect.any(Object)));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/ }));
+    // The drill-in publishes Cancel to the shell footer; its own header carries
+    // the Back affordance that leaves and resets the create flow. The guarded
+    // close resolves on a microtask, so wait for the list before reopening.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(await screen.findByRole('button', { name: /New MCP Server/ }));
     expect(await screen.findByTestId('prepared-server-id')).toHaveTextContent('none');
 
     fireEvent.click(screen.getByRole('button', { name: 'Configure OAuth' }));

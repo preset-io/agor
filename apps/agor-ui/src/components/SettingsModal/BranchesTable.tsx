@@ -39,6 +39,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
@@ -329,13 +330,14 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               <BranchesOutlined />
             )}
             <Space orientation="vertical" size={0} style={{ minWidth: 0, flex: 1 }}>
-              <Typography.Text
-                strong
-                ellipsis={{ tooltip: name }}
+              <Typography.Link
+                ellipsis
+                title={name}
+                onClick={() => onRowClick?.(record)}
                 style={{ display: 'block', maxWidth: '100%' }}
               >
                 <HighlightMatch text={name} query={searchTerm} />
-              </Typography.Text>
+              </Typography.Link>
               {!nameMatchesRef && (
                 <Typography.Text
                   code
@@ -454,27 +456,31 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               setArchiveDeleteModalOpen(true);
             }}
           />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRowClick?.(record);
-            }}
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<DeleteOutlined />}
-            danger
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedBranch(record);
-              setInitialArchiveDeleteAction('delete');
-              setArchiveDeleteModalOpen(true);
-            }}
-          />
+          <Tooltip title="Edit branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRowClick?.(record);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Delete branch">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedBranch(record);
+                setInitialArchiveDeleteAction('delete');
+                setArchiveDeleteModalOpen(true);
+              }}
+            />
+          </Tooltip>
         </SettingsActionGroup>
       ),
     },
@@ -535,15 +541,10 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Manage git branches for isolated development contexts across sessions.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
+      <ListPanelHeader
+        title="Branches"
+        description="Manage git branches for isolated development contexts across sessions."
+        search={
           <Space>
             <Input
               allowClear
@@ -565,6 +566,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               ]}
             />
           </Space>
+        }
+        actions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -573,8 +576,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           >
             Create Branch
           </Button>
-        </Space>
-      </Space>
+        }
+      />
 
       {repos.length === 0 && (
         <div
@@ -617,10 +620,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"
-          onRow={(record) => ({
-            onClick: () => onRowClick?.(record),
-            style: { cursor: onRowClick ? 'pointer' : 'default' },
-          })}
         />
       )}
 

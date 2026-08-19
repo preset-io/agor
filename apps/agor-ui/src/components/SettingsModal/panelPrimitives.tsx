@@ -4,6 +4,58 @@ import type { CSSProperties, ReactNode } from 'react';
 
 const { Title } = Typography;
 
+export interface ListPanelHeaderProps {
+  /** Persistent panel title — always shown, even though the nav highlights it. */
+  title: ReactNode;
+  /** One-line description, rendered on its own line directly under the title. */
+  description?: ReactNode;
+  /** Search input; sits at the left of the toolbar row. */
+  search?: ReactNode;
+  /** Create/import actions; sit at the right of the toolbar row. */
+  actions?: ReactNode;
+}
+
+/**
+ * Standard header for a Workspace Settings list panel: a persistent title, the
+ * description on its own line below it, then a separate toolbar row with search
+ * on the left and actions on the right. Mirrors the mockup's PanelHeader +
+ * TableToolbar so every list panel reads the same.
+ */
+export const ListPanelHeader: React.FC<ListPanelHeaderProps> = ({
+  title,
+  description,
+  search,
+  actions,
+}) => {
+  const { token } = theme.useToken();
+  return (
+    <div style={{ marginBottom: token.marginMD }}>
+      <Title level={4} style={{ margin: 0, fontWeight: 500 }}>
+        {title}
+      </Title>
+      {description && (
+        <Typography.Paragraph
+          type="secondary"
+          style={{ marginTop: token.marginXXS, marginBottom: 0 }}
+        >
+          {description}
+        </Typography.Paragraph>
+      )}
+      {(search || actions) && (
+        <Flex
+          align="center"
+          justify="space-between"
+          gap={token.marginSM}
+          style={{ marginTop: token.marginMD }}
+        >
+          <div>{search}</div>
+          {actions && <Space>{actions}</Space>}
+        </Flex>
+      )}
+    </div>
+  );
+};
+
 /**
  * Shared presentational primitives for the settings panels. Output mirrors the
  * app-standard (master) form styling; the panels only rely on these so the
@@ -22,7 +74,8 @@ export interface PanelHeaderProps {
 export const PanelHeader: React.FC<PanelHeaderProps> = ({ title, icon, extra }) => (
   <Flex align="center" gap={12} style={{ marginBottom: 20 }}>
     {icon}
-    <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined }}>
+    {/* Size, not boldness, carries hierarchy: regular/medium weight. */}
+    <Title level={4} style={{ margin: 0, flex: icon || extra ? 1 : undefined, fontWeight: 500 }}>
       {title}
     </Title>
     {extra}

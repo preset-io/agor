@@ -13,24 +13,28 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
   Checkbox,
+  Flex,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
+import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -54,13 +58,36 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [createDirty, setCreateDirty] = useState(false);
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+
+  // Editing / creating swaps this section's Content pane for a drill-in instead
+  // of stacking a second modal (Edit previously popped the whole UserSettingsModal
+  // on top of Workspace Settings).
+  const editingUser =
+    drill?.kind === 'users' && drill.mode === 'edit' && drill.recordId
+      ? (userById.get(drill.recordId) ?? null)
+      : null;
+  const isCreating = drill?.kind === 'users' && drill.mode === 'create';
+
+  const openEdit = useCallback(
+    (user: User) => openDrill({ kind: 'users', mode: 'edit', recordId: user.user_id }),
+    [openDrill]
+  );
+  const openCreate = useCallback(() => openDrill({ kind: 'users', mode: 'create' }), [openDrill]);
+
+  // Reset the create form each time the create drill-in opens.
+  useEffect(() => {
+    if (isCreating) {
+      form.resetFields();
+      setCreateDirty(false);
+    }
+  }, [isCreating, form]);
 
   const loadGroups = useCallback(async () => {
     if (!client || !isAdmin) {
@@ -128,12 +155,14 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           email: values.email,
           password: values.password,
           name: values.name,
+          emoji: values.emoji || '👤',
           role: values.role || ROLES.MEMBER,
           unix_username: values.unix_username,
           must_change_password: values.must_change_password || false,
         });
         form.resetFields();
-        setCreateModalOpen(false);
+        setCreateDirty(false);
+        closeDrill();
       })
       .catch(() => {
         // Form validation failed - Ant Design will show field errors automatically
@@ -163,9 +192,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       render: (email: string, user: User) => (
         <Space>
           <UserIdentityAvatar user={user} size={28} fontSize="20px" />
-          <span>
+          <Typography.Link ellipsis title={email} onClick={() => openEdit(user)}>
             <HighlightMatch text={email} query={searchTerm} />
-          </span>
+          </Typography.Link>
         </Space>
       ),
     },
@@ -217,12 +246,14 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       width: 88,
       render: (_: unknown, user: User) => (
         <SettingsActionGroup>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => setEditingUser(user)}
-          />
+          <Tooltip title="Edit user">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEdit(user)}
+            />
+          </Tooltip>
           <Popconfirm
             title="Delete user?"
             description={`Are you sure you want to delete user "${user.email}"?`}
@@ -240,16 +271,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
   const usersTable = (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">Manage user accounts and permissions.</Typography.Text>
-        <Space>
+      <ListPanelHeader
+        title="Users"
+        description="Manage user accounts and permissions."
+        search={
           <Input
             allowClear
             placeholder="Search name, email, username, role, or groups"
@@ -257,11 +282,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 320 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+        }
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New User
           </Button>
-        </Space>
-      </div>
+        }
+      />
 
       <Table
         dataSource={users}
@@ -270,88 +297,97 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         pagination={false}
         size="small"
       />
+    </div>
+  );
 
-      {/* Create User Modal */}
-      <Modal
-        title="Create User"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={() => {
-          form.resetFields();
-          setCreateModalOpen(false);
-        }}
-        okText="Create"
-        width={800}
+  const createFields = (
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ maxWidth: 520 }}
+      onValuesChange={() => setCreateDirty(true)}
+    >
+      <Form.Item label="Name" style={{ marginBottom: 24 }}>
+        <Flex gap={8}>
+          <Form.Item name="emoji" initialValue="👤" noStyle>
+            <FormEmojiPickerInput fieldName="emoji" defaultEmoji="👤" />
+          </Form.Item>
+          <Form.Item name="name" noStyle style={{ flex: 1 }}>
+            <Input placeholder="John Doe" style={{ flex: 1 }} />
+          </Form.Item>
+        </Flex>
+      </Form.Item>
+
+      <Form.Item
+        label="Email"
+        name="email"
+        rules={[
+          { required: true, message: 'Please enter an email' },
+          { type: 'email', message: 'Please enter a valid email' },
+        ]}
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
-            <Input placeholder="John Doe" />
-          </Form.Item>
+        <Input placeholder="user@example.com" />
+      </Form.Item>
 
-          <Form.Item
-            label="Email"
-            name="email"
-            rules={[
-              { required: true, message: 'Please enter an email' },
-              { type: 'email', message: 'Please enter a valid email' },
-            ]}
-          >
-            <Input placeholder="user@example.com" />
-          </Form.Item>
+      <Form.Item
+        label="Execution Home Key"
+        name="unix_username"
+        help="Optional transitional home key for delegated execution"
+        rules={[
+          {
+            pattern: EXECUTION_HOME_KEY_PATTERN,
+            message:
+              'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
+          },
+          { max: 32, message: 'Execution home key must be 32 characters or less' },
+        ]}
+      >
+        <Input placeholder="johnsmith" maxLength={32} />
+      </Form.Item>
 
-          <Form.Item
-            label="Execution Home Key"
-            name="unix_username"
-            help="Optional transitional home key for delegated execution"
-            rules={[
-              {
-                pattern: EXECUTION_HOME_KEY_PATTERN,
-                message:
-                  'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
-              },
-              { max: 32, message: 'Execution home key must be 32 characters or less' },
-            ]}
-          >
-            <Input placeholder="johnsmith" maxLength={32} />
-          </Form.Item>
+      <Form.Item
+        label="Password"
+        name="password"
+        rules={[
+          { required: true, message: 'Please enter a password' },
+          { min: 8, message: 'Password must be at least 8 characters' },
+        ]}
+      >
+        <Input.Password placeholder="••••••••" />
+      </Form.Item>
 
-          <Form.Item
-            label="Password"
-            name="password"
-            rules={[
-              { required: true, message: 'Please enter a password' },
-              { min: 8, message: 'Password must be at least 8 characters' },
-            ]}
-          >
-            <Input.Password placeholder="••••••••" />
-          </Form.Item>
+      <Form.Item
+        label="Role"
+        name="role"
+        initialValue={ROLES.MEMBER}
+        rules={[{ required: true, message: 'Please select a role' }]}
+      >
+        <Select
+          options={ROLE_OPTIONS.map((opt) => ({
+            value: opt.value,
+            label: opt.label,
+            title: opt.description,
+          }))}
+        />
+      </Form.Item>
 
-          <Form.Item
-            label="Role"
-            name="role"
-            initialValue={ROLES.MEMBER}
-            rules={[{ required: true, message: 'Please select a role' }]}
-          >
-            <Select
-              options={ROLE_OPTIONS.map((opt) => ({
-                value: opt.value,
-                label: opt.label,
-                title: opt.description,
-              }))}
-            />
-          </Form.Item>
+      <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+        <Checkbox>Force password change on first login</Checkbox>
+      </Form.Item>
+    </Form>
+  );
 
-          <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
-            <Checkbox>Force password change on first login</Checkbox>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* Edit User Modal - reuses UserSettingsModal */}
+  // Edit reuses the full UserSettingsModal (embedded) so self-vs-other gating —
+  // Force-password-change only when an admin edits someone else; own API
+  // Tokens/Uploads only when editing yourself — is preserved exactly.
+  if (editingUser) {
+    return (
       <UserSettingsModal
-        open={!!editingUser}
+        embedded
+        backLabel="Back to Users"
+        open
         onClose={() => {
-          setEditingUser(null);
+          closeDrill();
           void loadGroups();
         }}
         user={editingUser}
@@ -359,8 +395,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         currentUser={currentUser}
         onUpdate={onUpdate}
       />
-    </div>
-  );
+    );
+  }
+
+  if (isCreating) {
+    return (
+      <DrillInFrame title="New User" dirty={createDirty} saveLabel="Create" onSave={handleCreate}>
+        {createFields}
+      </DrillInFrame>
+    );
+  }
 
   return (
     <Tabs

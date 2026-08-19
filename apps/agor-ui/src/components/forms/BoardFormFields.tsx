@@ -157,7 +157,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   };
 
   const permissionsFields = (
-    <Form layout="horizontal" colon={false} component={false}>
+    <Form layout="vertical" colon={false} component={false}>
       <Alert
         type="info"
         showIcon

@@ -16,6 +16,7 @@ import type {
 } from '@agor-live/client';
 import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
+  ArrowLeftOutlined,
   BellOutlined,
   CheckCircleFilled,
   CloseOutlined,
@@ -36,6 +37,7 @@ import {
   Checkbox,
   ConfigProvider,
   Divider,
+  Flex,
   Form,
   Input,
   Layout,
@@ -241,6 +243,14 @@ export interface UserSettingsModalProps {
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
   initialTab?: string;
+  /**
+   * Render inline (no outer Modal) as a drill-in inside the Workspace Settings
+   * shell, with a "Back" affordance instead of a modal close. Default false →
+   * the standalone Modal used elsewhere is unchanged.
+   */
+  embedded?: boolean;
+  /** Label for the embedded back button (e.g. "Back to Users"). */
+  backLabel?: string;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -252,6 +262,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   onUpdate,
   onRestartOnboarding,
   initialTab,
+  embedded = false,
+  backLabel = 'Back',
 }) => {
   const { token } = theme.useToken();
 
@@ -1944,9 +1956,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       </Typography.Text>
     </Space>
   ) : (
-    <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
-      User Settings
-    </Typography.Text>
+    // Icon + label mirrors Workspace Settings' header so the two surfaces read
+    // as a matched pair — a person glyph for the personal surface, an org glyph
+    // for the workspace one — recognizable at a glance without reading the text.
+    <Space size={8} align="center">
+      <UserOutlined style={{ fontSize: token.fontSizeLG, color: token.colorText }} />
+      <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+        User Settings
+      </Typography.Text>
+    </Space>
   );
 
   const footer = isInlineSavePanel
@@ -1970,6 +1988,163 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           Save
         </Button>,
       ];
+
+  // Keep inactive form instances connected to Ant Form. Without these
+  // lightweight hidden connectors, calling form methods while switching panels
+  // can produce noisy "useForm is not connected" console warnings.
+  const hiddenForms = (
+    <div hidden aria-hidden="true">
+      {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
+        <Form component={false} form={form} />
+      )}
+      {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
+      {visibleAgenticToolTabs.map((tool) =>
+        activeTool === tool ? null : (
+          <Form key={tool} component={false} form={agenticFormByTool[tool]} />
+        )
+      )}
+    </div>
+  );
+
+  const layoutBody = (
+    <ConfigProvider theme={scopedTheme}>
+      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Sider
+          width={220}
+          style={{
+            background: token.colorBgElevated,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            overflow: 'auto',
+            padding: '20px 0',
+          }}
+        >
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>{siderTitle}</div>
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
+            <Input
+              allowClear
+              placeholder="Search settings"
+              prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          {searchActive ? (
+            searchResults.length === 0 ? (
+              <div style={{ padding: '8px 16px' }}>
+                <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+              </div>
+            ) : (
+              <Menu
+                mode="inline"
+                selectedKeys={[]}
+                onClick={({ key }) => handleSearchResultClick(key)}
+                items={searchMenuItems}
+                style={{ borderInlineEnd: 'none', background: 'transparent' }}
+              />
+            )
+          ) : (
+            <Menu
+              mode="inline"
+              selectedKeys={activeInNav ? [activeKey] : []}
+              onClick={({ key }) => setActiveKey(key)}
+              items={menuItems}
+              style={{ borderInlineEnd: 'none', background: 'transparent' }}
+            />
+          )}
+        </Sider>
+        <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+      </Layout>
+    </ConfigProvider>
+  );
+
+  // Embedded nav is a horizontal Tabs bar, not a second Sider+Menu — otherwise
+  // drilling in from Workspace Settings stacks three nav columns on screen. The
+  // section list (and its isEditingOther tab-hiding) comes from the same
+  // navGroups the Sider uses; groups are flattened and overflow into Tabs' own
+  // "more" dropdown when there are many providers.
+  const embeddedTabItems = navGroups.flatMap((group) =>
+    group.children.map((child) => ({
+      key: child.key,
+      label: child.provider ? (
+        <AgenticToolReadinessSlot
+          tool={child.provider.tool}
+          client={client}
+          canLoadReadiness={isSelf}
+          fallback={child.provider.fallbackStatus}
+        >
+          {(status) => (
+            <Space size={6}>
+              {child.icon}
+              <Badge color={statusDotColor[status.tone]} />
+              <span>{child.title}</span>
+              <span style={SR_ONLY_STYLE}>{status.label}</span>
+            </Space>
+          )}
+        </AgenticToolReadinessSlot>
+      ) : (
+        <Space size={6}>
+          {child.icon}
+          <span>{child.title}</span>
+        </Space>
+      ),
+    }))
+  );
+
+  // Drill-in mode: no outer Modal. A Back affordance replaces the modal close,
+  // and this component keeps its own footer (its inline-save caption differs
+  // per panel) rendered as a bottom bar.
+  if (embedded) {
+    return (
+      <Flex vertical style={{ height: '100%', background: token.colorBgContainer }}>
+        <div
+          style={{
+            padding: '10px 16px',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          }}
+        >
+          <Button type="text" icon={<ArrowLeftOutlined />} onClick={handleClose}>
+            {backLabel}
+          </Button>
+        </div>
+        {hiddenForms}
+        {/* Persistent, non-dismissible banner so you never lose track of whose
+            account you're editing (only when editing someone else). */}
+        {isEditingOther && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<UserOutlined />}
+            message={`You are editing ${user?.name || user?.email || 'this user'}'s account settings`}
+            style={{ borderRadius: 0 }}
+          />
+        )}
+        <ConfigProvider theme={scopedTheme}>
+          <Tabs
+            activeKey={activeInNav ? activeKey : undefined}
+            onChange={setActiveKey}
+            items={embeddedTabItems}
+            tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
+          />
+        </ConfigProvider>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 24px' }}>
+          {renderContent()}
+        </div>
+        <div
+          style={{
+            padding: '12px 24px',
+            background: token.colorBgContainer,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: token.marginXS,
+          }}
+        >
+          {footer}
+        </div>
+      </Flex>
+    );
+  }
 
   return (
     <Modal
@@ -2008,70 +2183,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         },
       }}
     >
-      {/* Keep inactive form instances connected to Ant Form. Without these
-          lightweight hidden connectors, calling form methods while switching
-          panels can produce noisy "useForm is not connected" console warnings. */}
-      <div hidden aria-hidden="true">
-        {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
-          <Form component={false} form={form} />
-        )}
-        {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
-        {visibleAgenticToolTabs.map((tool) =>
-          activeTool === tool ? null : (
-            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
-          )
-        )}
-      </div>
-      <ConfigProvider theme={scopedTheme}>
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-          <Sider
-            width={220}
-            style={{
-              background: token.colorBgElevated,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
-              overflow: 'auto',
-              padding: `20px ${token.marginSM}px`,
-            }}
-          >
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>
-              {siderTitle}
-            </div>
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
-              <Input
-                allowClear
-                placeholder="Search settings"
-                prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            {searchActive ? (
-              searchResults.length === 0 ? (
-                <div style={{ padding: '8px 16px' }}>
-                  <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
-                </div>
-              ) : (
-                <Menu
-                  mode="inline"
-                  selectedKeys={[]}
-                  onClick={({ key }) => handleSearchResultClick(key)}
-                  items={searchMenuItems}
-                  style={{ borderInlineEnd: 'none', background: 'transparent' }}
-                />
-              )
-            ) : (
-              <Menu
-                mode="inline"
-                selectedKeys={activeInNav ? [activeKey] : []}
-                onClick={({ key }) => setActiveKey(key)}
-                items={menuItems}
-                style={{ borderInlineEnd: 'none', background: 'transparent' }}
-              />
-            )}
-          </Sider>
-          <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderContent()}</Content>
-        </Layout>
-      </ConfigProvider>
+      {hiddenForms}
+      {layoutBody}
     </Modal>
   );
 };

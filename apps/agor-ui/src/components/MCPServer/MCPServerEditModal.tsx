@@ -8,6 +8,7 @@ import type {
 import { Button, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
   describeMissingForSave,
@@ -31,6 +32,12 @@ export interface MCPServerEditModalProps {
   /** The scopes this editor may switch to, on the same terms. */
   offeredScopes?: MCPScope[];
   onClose: () => void;
+  /**
+   * Render inline (no outer Modal) as a Workspace Settings drill-in; the shared
+   * shell footer drives Save/Cancel. Default false → standalone Modal (used by
+   * MCPServerPill) is unchanged.
+   */
+  embedded?: boolean;
 }
 
 interface TestResult {
@@ -58,6 +65,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   offeredTransports,
   offeredScopes,
   onClose,
+  embedded = false,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
@@ -65,6 +73,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
   // The form is filled in an effect, so its fields read blank on the first
   // render. Gating on this keeps Save from flashing disabled while the modal
@@ -133,6 +143,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     }
 
     form.setFieldsValue(formValues);
+    setDirty(false);
     setFormHydrated(true);
     bumpFormRevision();
   }, [open, server?.mcp_server_id, form]);
@@ -228,6 +239,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const saveFormValues = async (): Promise<boolean> => {
     if (!server || !client) return false;
 
+    setSaving(true);
     try {
       await form.validateFields();
       const values = form.getFieldsValue(true);
@@ -267,9 +279,14 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   };
 
   const handleSave = async () => {
-    if (await saveFormValues()) {
-      showSuccess('MCP server updated successfully');
-      closeAndReset();
+    setSaving(true);
+    try {
+      if (await saveFormValues()) {
+        showSuccess('MCP server updated successfully');
+        closeAndReset();
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -277,6 +294,44 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     if (!(await saveFormValues())) return null;
     return server?.mcp_server_id ?? null;
   };
+
+  const formBody = (
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ marginTop: embedded ? 0 : 16, maxWidth: embedded ? 560 : undefined }}
+      onValuesChange={() => setDirty(true)}
+    >
+      <MCPServerFormFields
+        mode="edit"
+        transport={transport}
+        onTransportChange={setTransport}
+        authType={authType}
+        onAuthTypeChange={setAuthType}
+        form={form}
+        client={client}
+        serverId={server?.mcp_server_id}
+        onTestConnection={handleTestConnection}
+        testing={testing}
+        testResult={testResult}
+        onPrepareOAuthStart={prepareOAuthStart}
+      />
+    </Form>
+  );
+
+  if (embedded) {
+    return (
+      <DrillInFrame
+        title="Edit MCP Server"
+        dirty={dirty}
+        saving={saving}
+        saveDisabled={saveBlocked}
+        onSave={handleSave}
+      >
+        {formBody}
+      </DrillInFrame>
+    );
+  }
 
   return (
     <Modal

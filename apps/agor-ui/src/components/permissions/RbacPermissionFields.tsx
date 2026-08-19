@@ -152,9 +152,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       {showVisibility && (
         <Form.Item
           label={visibilityLabel}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          help={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
+          tooltip={isShared ? 'Group and fallback access.' : 'Owner-only access.'}
         >
           <Radio.Group
             value={value.visibility}
@@ -169,7 +167,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       )}
 
       {isShared && (
-        <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
+        <Form.Item label="Owners" tooltip={ownerHelp}>
           <Select
             key={selectKey}
             mode="multiple"
@@ -212,12 +210,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
 
       {isShared && (
         <>
-          <Form.Item
-            label="Groups"
-            labelCol={{ span: 8 }}
-            wrapperCol={{ span: 16 }}
-            help={groupsHelp}
-          >
+          <Form.Item label="Groups" tooltip={groupsHelp}>
             <Space direction="vertical" style={{ width: '100%' }}>
               {groupGrantsUnavailable && (
                 <Alert
@@ -310,7 +303,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           </Form.Item>
 
           {value.othersCan === 'prompt' && (
-            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+            <Form.Item>
               <Alert
                 type="warning"
                 showIcon
@@ -323,9 +316,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
 
           <Form.Item
             label={othersFsAccessLabel}
-            labelCol={{ span: 8 }}
-            wrapperCol={{ span: 16 }}
-            help={fsAccessDescriptions[value.othersFsAccess]}
+            tooltip={fsAccessDescriptions[value.othersFsAccess]}
           >
             <Select
               value={value.othersFsAccess}
@@ -342,9 +333,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           {showLegacySessionSharing && (
             <Form.Item
               label="Allow legacy session sharing"
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              help="When on, spawned/forked sessions keep the original creator's identity."
+              tooltip="When on, spawned/forked sessions keep the original creator's identity."
             >
               <Switch
                 checked={value.allowSessionSharing}
@@ -357,7 +346,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           )}
 
           {showLegacySessionSharing && value.allowSessionSharing && (
-            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
+            <Form.Item>
               <Alert
                 type="error"
                 showIcon
@@ -370,12 +359,7 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
         </>
       )}
 
-      <Form.Item
-        label={othersCanLabel}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        help={permissionLevelDescriptions[value.othersCan]}
-      >
+      <Form.Item label={othersCanLabel} tooltip={permissionLevelDescriptions[value.othersCan]}>
         <Select
           aria-label={othersCanLabel}
           virtual={false}

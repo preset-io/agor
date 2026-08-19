@@ -21,20 +21,16 @@ import {
   Badge,
   Button,
   Descriptions,
-  Flex,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Space,
   Table,
-  Tabs,
   Tag,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -43,7 +39,6 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import {
-  describeMissingForSave,
   firstFormErrorMessage,
   missingMCPFieldLabels,
   useFormRevision,
@@ -60,7 +55,9 @@ import {
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
+import { ListPanelHeader, SectionDivider } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -124,7 +121,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const { token } = theme.useToken();
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -137,11 +134,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     () => allowedMcpScopes({ isAdmin, policy: memberPolicy.policy }),
     [isAdmin, memberPolicy.policy]
   );
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
-  const [viewingServer, setViewingServer] = useState<MCPServer | null>(null);
   const [createForm] = Form.useForm();
   // Null means "whatever this user's first offered transport is" — held as a
   // derivation rather than a mount-time snapshot, so the field and the payload
@@ -152,31 +144,34 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   const [testing, setTesting] = useState(false);
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [createDirty, setCreateDirty] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
+  // Create / edit / view swap the Content pane for a drill-in instead of
+  // stacking a modal. Edit and view resolve the record live from the store, so
+  // they stay in sync with real-time updates automatically.
+  const editingServer =
+    drill?.kind === 'mcp' && drill.mode === 'edit' && drill.recordId
+      ? (mcpServerById.get(drill.recordId) ?? null)
+      : null;
+  const viewingServer =
+    drill?.kind === 'mcp' && drill.mode === 'view' && drill.recordId
+      ? (mcpServerById.get(drill.recordId) ?? null)
+      : null;
+  const isCreating = drill?.kind === 'mcp' && drill.mode === 'create';
+
   const [formRevision, bumpFormRevision] = useFormRevision();
-  // Only ask the form once it is rendered — an unmounted instance warns.
-  const missingRequiredFields = createModalOpen
+  // Only ask the form once the create drill-in is open — an unmounted instance
+  // warns. Once the row exists the button only dismisses, so nothing about the
+  // form should trap the user behind it.
+  const missingRequiredFields = isCreating
     ? missingMCPFieldLabels(createForm.getFieldsValue(true), {
         mode: 'create',
         transport,
         authType,
       })
     : [];
-  // Once the row exists the button only dismisses the modal, so nothing about
-  // the form should be able to trap the user behind it.
   const createBlocked = !createdServerId && missingRequiredFields.length > 0;
-
-  // Sync editing server when mcpServerById updates (real-time WebSocket updates).
-  // Also keeps the open edit modal in sync if the underlying record changes.
-  useEffect(() => {
-    if (editingServer && mcpServerById.has(editingServer.mcp_server_id)) {
-      const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
-      if (updatedServer && updatedServer !== editingServer) {
-        setEditingServer(updatedServer);
-      }
-    }
-  }, [mcpServerById, editingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
     const data: CreateMCPServerInput = {
@@ -236,18 +231,28 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     }
   };
 
-  const resetCreateModal = () => {
+  const resetCreate = () => {
     createForm.resetFields();
-    setCreateModalOpen(false);
     setChosenTransport(null);
     setAuthType('none');
     setTestResult(null);
     setCreatedServerId(null);
+    setCreateDirty(false);
+  };
+
+  const openView = (server: MCPServer) =>
+    openDrill({ kind: 'mcp', mode: 'view', recordId: server.mcp_server_id });
+  const openEdit = (server: MCPServer) =>
+    openDrill({ kind: 'mcp', mode: 'edit', recordId: server.mcp_server_id });
+  const openCreate = () => {
+    resetCreate();
+    openDrill({ kind: 'mcp', mode: 'create' });
   };
 
   const handleCreate = () => {
     if (createdServerId) {
-      resetCreateModal();
+      resetCreate();
+      closeDrill();
       return;
     }
 
@@ -256,7 +261,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       .then(() => {
         const data = buildCreateData(createForm.getFieldsValue(true));
         onCreate?.(data);
-        resetCreateModal();
+        resetCreate();
+        closeDrill();
       })
       .catch((error) => {
         console.error('Form validation failed:', error);
@@ -264,7 +270,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       });
   };
 
-  // Test connection from create modal (always inline config, no persistence).
+  // Test connection from create drill-in (always inline config, no persistence).
   const handleCreateTestConnection = async () => {
     if (!client) {
       showError('Client not available');
@@ -339,27 +345,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     }
   };
 
-  const handleEdit = useCallback((server: MCPServer) => {
-    setEditingServer(server);
-    setEditModalOpen(true);
-  }, []);
-
-  const handleEditClose = () => {
-    setEditModalOpen(false);
-    setEditingServer(null);
+  const handleDelete = (serverId: string) => {
+    onDelete?.(serverId);
   };
-
-  const handleView = useCallback((server: MCPServer) => {
-    setViewingServer(server);
-    setViewModalOpen(true);
-  }, []);
-
-  const handleDelete = useCallback(
-    (serverId: string) => {
-      onDelete?.(serverId);
-    },
-    [onDelete]
-  );
 
   // Until the policy is known the table offers nothing and says only that. The
   // restrictive value it falls back to — while loading, or when the read failed
@@ -413,185 +401,171 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     [userById, currentUser?.user_id]
   );
 
-  const columns = useMemo(
-    () => [
-      {
-        title: 'Name',
-        dataIndex: 'name',
-        key: 'name',
-        width: 180,
-        render: (_: string, server: MCPServer) => (
-          <div>
-            <div>
-              <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
-            </div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              <HighlightMatch text={server.name} query={searchTerm} />
-            </Typography.Text>
-          </div>
-        ),
-      },
-      {
-        title: 'Transport',
-        dataIndex: 'transport',
-        key: 'transport',
-        width: 100,
-        render: (transport: string) => (
-          <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
-        ),
-      },
-      {
-        title: 'Scope',
-        dataIndex: 'scope',
-        key: 'scope',
-        width: 100,
-        render: (scope: string) => {
-          const colors: Record<string, string> = {
-            global: 'purple',
-            repo: 'cyan',
-            session: 'magenta',
-          };
-          return <Tag color={colors[scope]}>{scope}</Tag>;
-        },
-      },
-      {
-        title: 'Status',
-        dataIndex: 'enabled',
-        key: 'enabled',
-        width: 80,
-        render: (enabled: boolean) =>
-          enabled ? (
-            <Badge status="success" text="Enabled" />
-          ) : (
-            <Badge status="default" text="Disabled" />
-          ),
-      },
-      {
-        title: 'Health',
-        key: 'health',
-        width: 120,
-        render: (_: unknown, server: MCPServer) => {
-          const health = getServerHealth(server);
-          return <Badge status={health.status} text={health.text} />;
-        },
-      },
-      {
-        title: 'Owner',
-        dataIndex: 'owner_user_id',
-        key: 'owner',
-        width: 170,
-        render: (_: string | undefined, server: MCPServer) => {
-          const owner = describeOwner(server);
-          return (
-            <Tooltip title={owner.hint}>
-              <Tag
-                icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
-                color={owner.shared ? 'default' : 'geekblue'}
-              >
-                <HighlightMatch text={owner.text} query={searchTerm} />
-              </Tag>
-            </Tooltip>
-          );
-        },
-      },
-      {
-        title: 'Source',
-        dataIndex: 'source',
-        key: 'source',
-        width: 100,
-        render: (source: string) => (
-          <Typography.Text type="secondary">
-            <HighlightMatch text={source} query={searchTerm} />
+  const columns = [
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      width: 180,
+      render: (_: string, server: MCPServer) => (
+        <div>
+          <Typography.Link
+            ellipsis
+            title={server.display_name || server.name}
+            onClick={() => openEdit(server)}
+          >
+            <HighlightMatch text={server.display_name || server.name} query={searchTerm} />
+          </Typography.Link>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+            <HighlightMatch text={server.name} query={searchTerm} />
           </Typography.Text>
-        ),
+        </div>
+      ),
+    },
+    {
+      title: 'Transport',
+      dataIndex: 'transport',
+      key: 'transport',
+      width: 100,
+      render: (transport: string) => (
+        <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
+      ),
+    },
+    {
+      title: 'Scope',
+      dataIndex: 'scope',
+      key: 'scope',
+      width: 100,
+      render: (scope: string) => {
+        const colors: Record<string, string> = {
+          global: 'purple',
+          repo: 'cyan',
+          session: 'magenta',
+        };
+        return <Tag color={colors[scope]}>{scope}</Tag>;
       },
-      {
-        title: 'Actions',
-        key: 'actions',
-        width: 96,
-        render: (_: unknown, server: MCPServer) => {
-          const editable = canEditMcpServer(server, capability);
-          const deletable = canDeleteMcpServer(server, capability);
-          const restriction = policyPending
-            ? policyPendingHint
-            : explainManageRestriction(capability);
-          return (
-            <SettingsActionGroup>
+    },
+    {
+      title: 'Status',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 80,
+      render: (enabled: boolean) =>
+        enabled ? (
+          <Badge status="success" text="Enabled" />
+        ) : (
+          <Badge status="default" text="Disabled" />
+        ),
+    },
+    {
+      title: 'Health',
+      key: 'health',
+      width: 120,
+      render: (_: unknown, server: MCPServer) => {
+        const health = getServerHealth(server);
+        return <Badge status={health.status} text={health.text} />;
+      },
+    },
+    {
+      title: 'Owner',
+      dataIndex: 'owner_user_id',
+      key: 'owner',
+      width: 170,
+      render: (_: string | undefined, server: MCPServer) => {
+        const owner = describeOwner(server);
+        return (
+          <Tooltip title={owner.hint}>
+            <Tag
+              icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
+              color={owner.shared ? 'default' : 'geekblue'}
+            >
+              <HighlightMatch text={owner.text} query={searchTerm} />
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Source',
+      dataIndex: 'source',
+      key: 'source',
+      width: 100,
+      render: (source: string) => (
+        <Typography.Text type="secondary">
+          <HighlightMatch text={source} query={searchTerm} />
+        </Typography.Text>
+      ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 96,
+      render: (_: unknown, server: MCPServer) => {
+        const editable = canEditMcpServer(server, capability);
+        const deletable = canDeleteMcpServer(server, capability);
+        const restriction = policyPending
+          ? policyPendingHint
+          : explainManageRestriction(capability);
+        return (
+          <SettingsActionGroup>
+            <Button
+              type="text"
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => openView(server)}
+              title="View details"
+            />
+            {editable ? (
               <Button
                 type="text"
                 size="small"
-                icon={<EyeOutlined />}
-                onClick={() => handleView(server)}
-                title="View details"
+                icon={<EditOutlined />}
+                onClick={() => openEdit(server)}
+                title="Edit"
               />
-              {editable ? (
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={() => handleEdit(server)}
-                  title="Edit"
-                />
-              ) : (
-                <Tooltip title={restriction}>
-                  <span>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      aria-label="Edit"
-                      disabled
-                    />
-                  </span>
-                </Tooltip>
-              )}
-              {deletable ? (
-                <Popconfirm
-                  title="Delete MCP server?"
-                  description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
-                  onConfirm={() => handleDelete(server.mcp_server_id)}
-                  okText="Delete"
-                  cancelText="Cancel"
-                  okButtonProps={{ danger: true }}
-                >
+            ) : (
+              <Tooltip title={restriction}>
+                <span>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    aria-label="Edit"
+                    disabled
+                  />
+                </span>
+              </Tooltip>
+            )}
+            {deletable ? (
+              <Popconfirm
+                title="Delete MCP server?"
+                description={`Are you sure you want to delete "${server.display_name || server.name}"?`}
+                onConfirm={() => handleDelete(server.mcp_server_id)}
+                okText="Delete"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+              >
+                <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
+              </Popconfirm>
+            ) : (
+              <Tooltip title={restriction}>
+                <span>
                   <Button
                     type="text"
                     size="small"
                     icon={<DeleteOutlined />}
+                    aria-label="Delete"
                     danger
-                    title="Delete"
+                    disabled
                   />
-                </Popconfirm>
-              ) : (
-                <Tooltip title={restriction}>
-                  <span>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      aria-label="Delete"
-                      danger
-                      disabled
-                    />
-                  </span>
-                </Tooltip>
-              )}
-            </SettingsActionGroup>
-          );
-        },
+                </span>
+              </Tooltip>
+            )}
+          </SettingsActionGroup>
+        );
       },
-    ],
-    [
-      capability,
-      describeOwner,
-      handleDelete,
-      handleEdit,
-      handleView,
-      policyPending,
-      policyPendingHint,
-      searchTerm,
-    ]
-  );
+    },
+  ];
 
   const servers = useMemo(() => {
     const sorted = mapToSortedArray(mcpServerById, (a, b) =>
@@ -615,76 +589,136 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const canAdd = !policyPending && canAddMcpServer(capability);
 
-  const serversPane = (
-    <>
-      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
-        <Typography.Text type="secondary">
-          Configure Model Context Protocol servers for enhanced AI capabilities.
-        </Typography.Text>
-        {/* Search and add take the ends of their own row, so the caption above
-            keeps its full width instead of being squeezed into four lines by a
-            search box that cannot shrink. The input's cap leaves the slack
-            between them as the gap. */}
-        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
-          <Input
-            allowClear
-            placeholder="Search name, owner, URL, command, tools, transport, or scope"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ flex: '1 1 220px', maxWidth: 360 }}
-          />
-          {canAdd ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-              New MCP Server
-            </Button>
-          ) : (
-            <Tooltip title={policyPending ? policyPendingHint : explainAddRestriction(capability)}>
-              <span>
-                <Button type="primary" icon={<PlusOutlined />} disabled>
-                  New MCP Server
-                </Button>
-              </span>
-            </Tooltip>
-          )}
-        </Flex>
-      </Flex>
-
-      <Table
-        dataSource={servers}
-        columns={columns}
-        rowKey="mcp_server_id"
-        pagination={{ defaultPageSize: 10, showSizeChanger: true }}
-        size="small"
+  // Edit reuses the shared editor inline (embedded) so its DCR/OAuth handling
+  // stays in one place; the drill-in footer drives Save/Cancel.
+  if (editingServer) {
+    return (
+      <MCPServerEditModal
+        embedded
+        server={editingServer}
+        open
+        client={client}
+        offeredTransports={offeredTransports}
+        offeredScopes={editableScopes}
+        onClose={closeDrill}
       />
+    );
+  }
 
-      {/* Create MCP Server Modal */}
-      <Modal
+  if (viewingServer) {
+    return (
+      <DrillInFrame title="MCP Server Details">
+        <Descriptions bordered column={1} size="small" style={{ maxWidth: 720 }}>
+          <Descriptions.Item label="ID">
+            {shortId(viewingServer.mcp_server_id as string)}
+          </Descriptions.Item>
+          <Descriptions.Item label="Name">{viewingServer.name}</Descriptions.Item>
+          {viewingServer.display_name && (
+            <Descriptions.Item label="Display Name">{viewingServer.display_name}</Descriptions.Item>
+          )}
+          {viewingServer.description && (
+            <Descriptions.Item label="Description">{viewingServer.description}</Descriptions.Item>
+          )}
+          <Descriptions.Item label="Transport">
+            <Tag color={viewingServer.transport === 'stdio' ? 'blue' : 'green'}>
+              {viewingServer.transport.toUpperCase()}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Scope">
+            <Tag>{viewingServer.scope}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Owner">
+            <Space orientation="vertical" size={0}>
+              <span>{describeOwner(viewingServer).text}</span>
+              <Typography.Text type="secondary">
+                {describeOwner(viewingServer).hint}
+              </Typography.Text>
+            </Space>
+          </Descriptions.Item>
+          <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
+          <Descriptions.Item label="Status">
+            {viewingServer.enabled ? (
+              <Badge status="success" text="Enabled" />
+            ) : (
+              <Badge status="default" text="Disabled" />
+            )}
+          </Descriptions.Item>
+          {viewingServer.command && (
+            <Descriptions.Item label="Command">{viewingServer.command}</Descriptions.Item>
+          )}
+          {viewingServer.args && viewingServer.args.length > 0 && (
+            <Descriptions.Item label="Arguments">{viewingServer.args.join(', ')}</Descriptions.Item>
+          )}
+          {viewingServer.url && (
+            <Descriptions.Item label="URL">{viewingServer.url}</Descriptions.Item>
+          )}
+          {viewingServer.headers && Object.keys(viewingServer.headers).length > 0 && (
+            <Descriptions.Item label="Custom HTTP Headers">
+              <pre style={{ margin: 0, fontSize: 12 }}>
+                {JSON.stringify(viewingServer.headers, null, 2)}
+              </pre>
+            </Descriptions.Item>
+          )}
+          {/*
+            Header and auth values arrive redacted from the API; environment
+            values do not, and a server's env routinely holds its credentials.
+            Printing them only for the people who may change the server is a
+            narrowing, not a boundary — the redaction belongs beside the one
+            the other secret fields already get.
+          */}
+          {canEditMcpServer(viewingServer, capability) &&
+            viewingServer.env &&
+            Object.keys(viewingServer.env).length > 0 && (
+              <Descriptions.Item label="Environment Variables">
+                <pre style={{ margin: 0, fontSize: 12 }}>
+                  {JSON.stringify(viewingServer.env, null, 2)}
+                </pre>
+              </Descriptions.Item>
+            )}
+          {viewingServer.tools && viewingServer.tools.length > 0 && (
+            <Descriptions.Item label="Tools">{viewingServer.tools.length} tools</Descriptions.Item>
+          )}
+          {viewingServer.resources && viewingServer.resources.length > 0 && (
+            <Descriptions.Item label="Resources">
+              {viewingServer.resources.length} resources
+            </Descriptions.Item>
+          )}
+          {viewingServer.prompts && viewingServer.prompts.length > 0 && (
+            <Descriptions.Item label="Prompts">
+              {viewingServer.prompts.length} prompts
+            </Descriptions.Item>
+          )}
+          <Descriptions.Item label="Created">
+            {new Date(viewingServer.created_at).toLocaleString()}
+          </Descriptions.Item>
+          {viewingServer.updated_at && (
+            <Descriptions.Item label="Updated">
+              {new Date(viewingServer.updated_at).toLocaleString()}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+      </DrillInFrame>
+    );
+  }
+
+  if (isCreating) {
+    return (
+      <DrillInFrame
         title="Add MCP Server"
-        open={createModalOpen}
-        onCancel={resetCreateModal}
-        width={600}
-        destroyOnHidden
-        footer={
-          <Space>
-            <Button onClick={resetCreateModal}>Cancel</Button>
-            {/* A disabled button can't host a tooltip of its own — hence the span. */}
-            <Tooltip
-              title={createBlocked ? describeMissingForSave(missingRequiredFields) : undefined}
-            >
-              <span>
-                <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
-                  {createdServerId ? 'Done' : 'Create'}
-                </Button>
-              </span>
-            </Tooltip>
-          </Space>
-        }
+        dirty={createDirty}
+        saving={testing}
+        saveDisabled={createBlocked}
+        saveLabel={createdServerId ? 'Done' : 'Create'}
+        onSave={handleCreate}
       >
         <Form
           form={createForm}
           layout="vertical"
-          style={{ marginTop: 16 }}
-          onValuesChange={bumpFormRevision}
+          style={{ maxWidth: 560 }}
+          onValuesChange={() => {
+            setCreateDirty(true);
+            bumpFormRevision();
+          }}
         >
           <MCPServerFormFields
             mode="create"
@@ -704,164 +738,61 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             formRevision={formRevision}
           />
         </Form>
-      </Modal>
-
-      {/* Edit MCP Server Modal — self-contained */}
-      <MCPServerEditModal
-        server={editingServer}
-        open={editModalOpen}
-        client={client}
-        offeredTransports={offeredTransports}
-        offeredScopes={editableScopes}
-        onClose={handleEditClose}
-      />
-
-      {/* View MCP Server Modal */}
-      <Modal
-        title="MCP Server Details"
-        open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setViewingServer(null);
-        }}
-        footer={[
-          <Button key="close" onClick={() => setViewModalOpen(false)}>
-            Close
-          </Button>,
-        ]}
-        width={700}
-      >
-        {viewingServer && (
-          <Descriptions bordered column={1} size="small" style={{ marginTop: 16 }}>
-            <Descriptions.Item label="ID">
-              {shortId(viewingServer.mcp_server_id as string)}
-            </Descriptions.Item>
-            <Descriptions.Item label="Name">{viewingServer.name}</Descriptions.Item>
-            {viewingServer.display_name && (
-              <Descriptions.Item label="Display Name">
-                {viewingServer.display_name}
-              </Descriptions.Item>
-            )}
-            {viewingServer.description && (
-              <Descriptions.Item label="Description">{viewingServer.description}</Descriptions.Item>
-            )}
-            <Descriptions.Item label="Transport">
-              <Tag color={viewingServer.transport === 'stdio' ? 'blue' : 'green'}>
-                {viewingServer.transport.toUpperCase()}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Scope">
-              <Tag>{viewingServer.scope}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Owner">
-              <Space orientation="vertical" size={0}>
-                <span>{describeOwner(viewingServer).text}</span>
-                <Typography.Text type="secondary">
-                  {describeOwner(viewingServer).hint}
-                </Typography.Text>
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
-            <Descriptions.Item label="Status">
-              {viewingServer.enabled ? (
-                <Badge status="success" text="Enabled" />
-              ) : (
-                <Badge status="default" text="Disabled" />
-              )}
-            </Descriptions.Item>
-
-            {viewingServer.command && (
-              <Descriptions.Item label="Command">{viewingServer.command}</Descriptions.Item>
-            )}
-            {viewingServer.args && viewingServer.args.length > 0 && (
-              <Descriptions.Item label="Arguments">
-                {viewingServer.args.join(', ')}
-              </Descriptions.Item>
-            )}
-            {viewingServer.url && (
-              <Descriptions.Item label="URL">{viewingServer.url}</Descriptions.Item>
-            )}
-
-            {viewingServer.headers && Object.keys(viewingServer.headers).length > 0 && (
-              <Descriptions.Item label="Custom HTTP Headers">
-                <pre style={{ margin: 0, fontSize: 12 }}>
-                  {JSON.stringify(viewingServer.headers, null, 2)}
-                </pre>
-              </Descriptions.Item>
-            )}
-
-            {/*
-              Header and auth values arrive redacted from the API; environment
-              values do not, and a server's env routinely holds its credentials.
-              Printing them only for the people who may change the server is a
-              narrowing, not a boundary — the redaction belongs beside the one
-              the other secret fields already get.
-            */}
-            {canEditMcpServer(viewingServer, capability) &&
-              viewingServer.env &&
-              Object.keys(viewingServer.env).length > 0 && (
-                <Descriptions.Item label="Environment Variables">
-                  <pre style={{ margin: 0, fontSize: 12 }}>
-                    {JSON.stringify(viewingServer.env, null, 2)}
-                  </pre>
-                </Descriptions.Item>
-              )}
-
-            {viewingServer.tools && viewingServer.tools.length > 0 && (
-              <Descriptions.Item label="Tools">
-                {viewingServer.tools.length} tools
-              </Descriptions.Item>
-            )}
-            {viewingServer.resources && viewingServer.resources.length > 0 && (
-              <Descriptions.Item label="Resources">
-                {viewingServer.resources.length} resources
-              </Descriptions.Item>
-            )}
-            {viewingServer.prompts && viewingServer.prompts.length > 0 && (
-              <Descriptions.Item label="Prompts">
-                {viewingServer.prompts.length} prompts
-              </Descriptions.Item>
-            )}
-
-            <Descriptions.Item label="Created">
-              {new Date(viewingServer.created_at).toLocaleString()}
-            </Descriptions.Item>
-            {viewingServer.updated_at && (
-              <Descriptions.Item label="Updated">
-                {new Date(viewingServer.updated_at).toLocaleString()}
-              </Descriptions.Item>
-            )}
-          </Descriptions>
-        )}
-      </Modal>
-    </>
-  );
+      </DrillInFrame>
+    );
+  }
 
   return (
-    <Tabs
-      // The servers are what the tab is opened for; the policy that governs them
-      // is a pane away rather than a band above them.
-      defaultActiveKey="servers"
-      items={[
-        { key: 'servers', label: 'Servers', children: serversPane },
-        {
-          key: 'policy',
-          // Ungated on purpose: this is the answer to "why is New MCP Server
-          // greyed out for me?", and the member who is refused is the reader who
-          // needs it.
-          label: 'Member policy',
-          children: (
-            <MCPMemberPolicySetting
-              policy={memberPolicy.policy}
-              loading={memberPolicy.loading}
-              saving={memberPolicy.saving}
-              error={memberPolicy.error}
-              editable={capability.isAdmin}
-              onChange={memberPolicy.save}
-            />
-          ),
-        },
-      ]}
-    />
+    <div>
+      <ListPanelHeader
+        title="MCP Servers"
+        description="Configure Model Context Protocol servers for enhanced AI capabilities."
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, owner, URL, command, tools, transport, or scope"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: 360 }}
+          />
+        }
+        actions={
+          canAdd ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              New MCP Server
+            </Button>
+          ) : (
+            <Tooltip title={policyPending ? policyPendingHint : explainAddRestriction(capability)}>
+              <span>
+                <Button type="primary" icon={<PlusOutlined />} disabled>
+                  New MCP Server
+                </Button>
+              </span>
+            </Tooltip>
+          )
+        }
+      />
+
+      <Table
+        dataSource={servers}
+        columns={columns}
+        rowKey="mcp_server_id"
+        pagination={{ pageSize: 10, showSizeChanger: true }}
+        size="small"
+      />
+
+      {/* Member policy is what governs the disabled "New MCP Server" button above,
+          so it lives one pane down as a sub-section rather than behind a Tabs bar
+          that would push the servers — the reason this panel is opened — aside. */}
+      <SectionDivider label="Member policy" />
+      <MCPMemberPolicySetting
+        policy={memberPolicy.policy}
+        loading={memberPolicy.loading}
+        saving={memberPolicy.saving}
+        error={memberPolicy.error}
+        editable={capability.isAdmin}
+        onChange={memberPolicy.save}
+      />
+    </div>
   );
 };
