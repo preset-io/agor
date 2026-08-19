@@ -194,6 +194,26 @@ describe('TeammateGallery', () => {
     expect(selectedStyle).not.toContain('border-width: 2px');
   });
 
+  it('renders Start blank as a full-width dashed footer card, last in the All view', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
+    // Spans both columns of the auto-fit grid → full-width footer.
+    expect(blankStyle).toContain('grid-column: 1 / -1');
+    // Understated "build your own" affordance: dashed border.
+    expect(blankStyle).toContain('border-style: dashed');
+    // Stays last; the eight templates keep their normal (non-spanning) cells.
+    expect(cardOrder().at(-1)).toBe('Start blank');
+    expect(cardFor('Competitive Analyst').getAttribute('style') ?? '').not.toContain('grid-column');
+  });
+
+  it('keeps Start blank a dashed 1px card when selected (no layout shift)', () => {
+    render(<TeammateGallery value="blank" onChange={vi.fn()} />);
+    const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
+    expect(blankStyle).toContain('border-style: dashed');
+    expect(blankStyle).toContain('border-width: 1px');
+    expect(blankStyle).not.toContain('border-width: 2px');
+  });
+
   it('shows the ghost Clear filters button only when filtered, and it resets to All', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     // All is the default → no Clear filters button.

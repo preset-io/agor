@@ -168,7 +168,8 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
 export const BLANK_TEMPLATE: TeammateTemplate = {
   id: BLANK_TEMPLATE_ID,
   title: 'Start blank',
-  description: 'A clean teammate with no starter playbook. Shape it yourself.',
+  description:
+    'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.',
   icon: PlusOutlined,
   emoji: '',
   sourceBranch: 'main',

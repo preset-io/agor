@@ -52,6 +52,9 @@ describe('TEAMMATE_TEMPLATES', () => {
     expect(TEAMMATE_GALLERY_CARDS).toHaveLength(9);
     expect(TEAMMATE_GALLERY_CARDS.at(-1)).toBe(BLANK_TEMPLATE);
     expect(BLANK_TEMPLATE.emoji).toBe('');
+    expect(BLANK_TEMPLATE.description).toBe(
+      'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.'
+    );
     expect(TEAMMATE_TEMPLATES).not.toContain(BLANK_TEMPLATE);
   });
 });

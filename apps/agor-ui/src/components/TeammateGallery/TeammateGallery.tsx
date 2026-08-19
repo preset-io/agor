@@ -1,6 +1,7 @@
 import { Tag as AntTag, Button, Card, Flex, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import {
+  BLANK_TEMPLATE_ID,
   type GalleryFilter,
   galleryCardsForFilter,
   getCategory,
@@ -127,6 +128,82 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
 };
 
 /**
+ * The blank starter, rendered as a full-width footer card spanning both grid
+ * columns (so the eight templates stay a clean 4×2 grid with no orphan). It's a
+ * deliberately understated "build your own" affordance — dashed neutral border,
+ * no category color/pill, no Recommended badge — laid out horizontally (icon +
+ * copy) since it's wide. Still single-selectable with the same softened,
+ * no-layout-shift selected state (constant 1px dashed border, only its color
+ * changes, plus a faint neutral wash).
+ */
+const BlankCard: React.FC<{
+  template: TeammateTemplate;
+  selected: boolean;
+  onSelect: () => void;
+}> = ({ template, selected, onSelect }) => {
+  const { token } = theme.useToken();
+  const Icon = template.icon;
+
+  const borderColor = selected ? token.colorText : token.colorBorderSecondary;
+  const background = selected ? token.colorFillQuaternary : undefined;
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onSelect();
+  };
+
+  return (
+    <Card
+      hoverable
+      role="radio"
+      aria-checked={selected}
+      aria-label={template.title}
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      style={{
+        // Span every column of the auto-fit grid → full-width footer card.
+        gridColumn: '1 / -1',
+        // Constant 1px dashed border in both states — only the color changes on
+        // select, so no layout shift. Dashed + neutral reads as "build your own".
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor,
+        background,
+        cursor: 'pointer',
+      }}
+      styles={{ body: { padding: token.paddingSM } }}
+    >
+      <Flex align="center" gap={token.margin}>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 34,
+            height: 34,
+            borderRadius: token.borderRadius,
+            background: token.colorFillTertiary,
+            flex: '0 0 auto',
+          }}
+        >
+          <Icon style={{ fontSize: token.fontSizeHeading3, color: token.colorTextSecondary }} />
+        </span>
+        <Flex vertical gap={token.marginXXS}>
+          <Text strong style={{ fontSize: token.fontSize }}>
+            {template.title}
+          </Text>
+          <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
+            {template.description}
+          </Paragraph>
+        </Flex>
+      </Flex>
+    </Card>
+  );
+};
+
+/**
  * Responsive 2-column grid of teammate starter templates plus a blank card,
  * with category filter chips above it.
  *
@@ -221,15 +298,24 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
           padding: token.paddingXXS,
         }}
       >
-        {cards.map((template) => (
-          <GalleryCard
-            key={template.id}
-            template={template}
-            selected={value === template.id}
-            recommended={recommendedIds.has(template.id)}
-            onSelect={() => onChange(template.id)}
-          />
-        ))}
+        {cards.map((template) =>
+          template.id === BLANK_TEMPLATE_ID ? (
+            <BlankCard
+              key={template.id}
+              template={template}
+              selected={value === template.id}
+              onSelect={() => onChange(template.id)}
+            />
+          ) : (
+            <GalleryCard
+              key={template.id}
+              template={template}
+              selected={value === template.id}
+              recommended={recommendedIds.has(template.id)}
+              onSelect={() => onChange(template.id)}
+            />
+          )
+        )}
       </div>
     </Flex>
   );
