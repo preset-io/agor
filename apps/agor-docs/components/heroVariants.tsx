@@ -67,7 +67,7 @@ export interface HeroVariant {
 export const HERO_VARIANTS: Record<HeroVariantKey, HeroVariant> = {
   'technical-collaboration': {
     headline: 'Raise a team\nof [AI teammates]',
-    subheadline: '{Build} together on one [multiplayer canvas]. No lonely {terminals}.',
+    subheadline: '{Build} together on a shared [multiplayer canvas]. No lonely {terminals}.',
     ctaLabel: 'Start building together',
   },
   // Exp 2 framing variant — problem-sell counterpart to
