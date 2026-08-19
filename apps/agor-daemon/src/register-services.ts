@@ -511,6 +511,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     setupBranchGroupGrantsService(app, db, new BranchRepository(db));
   }
 
+  // `createBranch` is deliberately NOT a transport method: it takes `(id, data)`,
+  // which is not the Feathers custom-method contract, and it is already exposed as
+  // the RBAC-guarded `/repos/:id/branches` route that the UI and CLI both use.
   app.use('/repos', createReposService(db, app), {
     methods: ['find', 'get', 'create', 'update', 'patch', 'remove'],
   });
