@@ -995,8 +995,16 @@ export async function migrateConfigDeploymentId(
   return { config: parsed, deploymentId, backupPath };
 }
 
+/** Raised when immutable deployment config has already been published. */
+export class ConfigAlreadyExistsError extends Error {
+  constructor(public readonly configPath: string) {
+    super(`Refusing to overwrite existing config: ${configPath}`);
+    this.name = 'ConfigAlreadyExistsError';
+  }
+}
+
 /**
- * Save config to ~/.agor/config.yaml
+ * Save config to ~/.agor/config.yaml without replacing an existing file.
  *
  * Invalidates the in-memory cache so the next load reflects the fresh value.
  */
@@ -1015,21 +1023,26 @@ export async function createInitialConfig(config: AgorConfig = getDefaultConfig(
     yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true }),
   ].join('\n');
 
+  // Node has no portable rename-without-replace primitive. Publish a fully
+  // written same-directory inode with link(2): the hard-link creation is atomic
+  // and fails with EEXIST rather than replacing operator-owned configuration.
+  const tempPath = `${configPath}.create-${process.pid}-${randomUUID()}`;
   let handle: fs.FileHandle | undefined;
   try {
-    // `wx` is the important part of the config ownership contract: two initializers
-    // may race, but neither can replace a file created by the other (or by an
-    // operator/config-management system).
-    handle = await fs.open(configPath, 'wx', 0o600);
+    handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(content, 'utf-8');
     await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.link(tempPath, configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`Refusing to overwrite existing config: ${configPath}`);
+      throw new ConfigAlreadyExistsError(configPath);
     }
     throw error;
   } finally {
     await handle?.close();
+    await fs.rm(tempPath, { force: true });
   }
   invalidateConfigCache();
 }
@@ -1084,8 +1097,7 @@ export async function saveConfigForTests(config: AgorConfig): Promise<void> {
   try {
     await createInitialConfig(config);
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.startsWith('Refusing to overwrite'))
-      throw error;
+    if (!(error instanceof ConfigAlreadyExistsError)) throw error;
     await rewriteConfigFile(config, { acknowledgedFormattingLoss: true });
   }
 }

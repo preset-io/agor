@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
   assertValidEffectiveExecutionConfig,
+  ConfigAlreadyExistsError,
   createInitialConfig,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
@@ -1242,7 +1243,8 @@ describe('initConfig', () => {
       createInitialConfig({ daemon: { port: 3002 } }),
     ]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected?.reason).toBeInstanceOf(ConfigAlreadyExistsError);
     expect([3001, 3002]).toContain((await loadConfig()).daemon?.port);
   });
 

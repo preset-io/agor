@@ -20,11 +20,12 @@ PostgreSQL, ephemeral Redis, two daemon processes, and nginx affinity, with bran
 
 All source-mode PostgreSQL variants (`postgres`, `postgres-demo`, `rich`, and the `full` alias) skip
 `agor init` so that they do not create an unrelated SQLite database. They therefore need a separate
-config-only bootstrap for the required `daemon.deployment_id`. The source entrypoint now creates a
-random deployment identity only when `config.yaml` is absent, persists it in the project-scoped
-`agor-home` volume, and validates rather than rewriting an existing config. SQLite variants continue
-to get their identity from `agor init`. The HA smoke stack already supplies one checked-in identity
-shared by its two replicas; the docs-only variant has no daemon.
+config-only bootstrap for the required deployment identity and secrets. The source entrypoint now
+creates a random `daemon.deployment_id`, JWT secret, and master secret only when `config.yaml` is
+absent, persists them in the project-scoped `agor-home` volume, and validates rather than rewriting
+an existing config. SQLite variants continue to get these values from `agor init`. The HA smoke
+stack already supplies one checked-in identity shared by its two replicas; the docs-only variant has
+no daemon.
 
 `full` was introduced by PR #1042 as PostgreSQL + RBAC + `strict` Unix-user impersonation. PR #1665
 moved it onto the richer PostgreSQL/RBAC overlay, PR #2260 repaired its strict-mode bootstrap, and

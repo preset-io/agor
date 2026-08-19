@@ -5,7 +5,7 @@
  * Safe to run multiple times (idempotent).
  */
 
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,6 +18,7 @@ import {
   getDaemonUrl,
   getDefaultConfig,
   loadConfig,
+  prepareInitialDeploymentConfig,
 } from '@agor/core/config';
 import {
   createDatabaseAsync,
@@ -181,12 +182,10 @@ export default class Init extends Command {
 
   /** Init owns config creation until this command returns; no other flow may use this helper. */
   private async persistDuringInitialCreation(config: AgorConfig): Promise<void> {
-    config.daemon = {
-      ...config.daemon,
-      ...this.initialDaemonConfig,
-      jwtSecret: config.daemon?.jwtSecret ?? randomBytes(32).toString('hex'),
-      masterSecret: config.daemon?.masterSecret ?? randomBytes(32).toString('hex'),
-    };
+    config = prepareInitialDeploymentConfig(
+      { ...config, daemon: { ...config.daemon, ...this.initialDaemonConfig } },
+      { deploymentId: this.deploymentId }
+    );
     if (await this.pathExists(getConfigPath())) return;
     await createInitialConfig(config);
   }

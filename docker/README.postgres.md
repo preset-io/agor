@@ -7,8 +7,9 @@ profile by itself only activates the database service; it does not enable RBAC.
 
 Because `agor init` is the SQLite bootstrap, source-mode PostgreSQL startup
 creates only the missing deployment config on first boot. Its generated
-`daemon.deployment_id` persists in the project-scoped `agor-home` volume; an
-existing config is validated and never rewritten.
+`daemon.deployment_id`, JWT secret, and master secret persist in the
+project-scoped `agor-home` volume; an existing config is validated and never
+rewritten.
 
 ## Start
 

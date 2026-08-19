@@ -15,6 +15,7 @@ export * from './env-validation';
 export * from './env-vars';
 export * from './executor-credential-storage';
 export * from './executor-heartbeat';
+export * from './initial-deployment-config';
 export * from './key-resolver';
 export * from './multitenancy';
 export * from './repo-list';

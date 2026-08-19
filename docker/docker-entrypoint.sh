@@ -217,8 +217,8 @@ echo "✅ Watch modes started (git, core, agentic tools, executor, and client wi
 # `agor init` is the SQLite installation bootstrap and intentionally creates
 # ~/.agor/agor.db. PostgreSQL deployments get their database state from the
 # migrations and daemon bootstrap below, but still need the deployment-owned
-# config identity that `agor init` normally creates. Generate a config-only
-# development identity on first start and persist it in the agor-home volume.
+# identity and secrets that `agor init` normally creates. Generate a complete
+# config on first start and persist it in the agor-home volume.
 if [ "${AGOR_DB_DIALECT:-sqlite}" = "postgresql" ]; then
   echo "🪪 Ensuring PostgreSQL development deployment config exists..."
   pnpm tsx scripts/ensure-development-config.ts

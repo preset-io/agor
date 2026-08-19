@@ -163,6 +163,10 @@ services:
       # persistent private home inside the sandbox. Default (unset/shared) uses
       # the daemon user's home.
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+      # Optional PostgreSQL/RBAC development fixtures. This must be forwarded
+      # explicitly: --env-file supplies Compose interpolation values but does
+      # not inject arbitrary variables into the container by itself.
+      - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-}
 
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}

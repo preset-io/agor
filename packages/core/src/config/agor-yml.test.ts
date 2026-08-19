@@ -10,10 +10,8 @@ import { describe, expect, it } from 'vitest';
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
 
-const REPO_ROOT_AGOR_YML = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../../.agor.yml'
-);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const REPO_ROOT_AGOR_YML = path.join(REPO_ROOT, '.agor.yml');
 
 function withTmpFile<T>(fn: (filePath: string) => T): T {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-yml-test-'));
@@ -268,6 +266,11 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('forwards the RBAC fixture flag used by .env.postgres', () => {
+    const compose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
+  });
+
   it('uses env(1) for UID/GID on Docker variants instead of shell assignments', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
