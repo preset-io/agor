@@ -13,7 +13,9 @@ import type {
 import {
   BranchesOutlined,
   ClockCircleOutlined,
+  CloseOutlined,
   EllipsisOutlined,
+  ExclamationCircleOutlined,
   ForkOutlined,
   IdcardOutlined,
   LockOutlined,
@@ -31,10 +33,10 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import {
-  Alert,
   Badge,
   Button,
   Divider,
+  Flex,
   Popover,
   Space,
   Spin,
@@ -44,6 +46,7 @@ import {
 } from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { EffortSelector } from '../EffortSelector';
 import type { ModelConfig } from '../ModelSelector';
@@ -219,6 +222,29 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     );
   }, [latestContextWindow]);
   const contextWarning = contextPct > 0.8;
+
+  // Signature of the currently-disconnected servers. Dismissal is keyed by it,
+  // so hiding the notice sticks — until a *different* server disconnects, which
+  // changes the signature and surfaces the nudge again.
+  const unauthedSignature = React.useMemo(
+    () =>
+      unauthedMcpServers
+        .map((s) => s.mcp_server_id)
+        .sort()
+        .join(','),
+    [unauthedMcpServers]
+  );
+  const [dismissedMcpSignature, setDismissedMcpSignature] = useLocalStorage<string | null>(
+    `agor-mcp-banner-dismissed:${session.session_id}`,
+    null
+  );
+  const showMcpNotice =
+    unauthedMcpServers.length > 0 && dismissedMcpSignature !== unauthedSignature;
+  const mcpNoticeMessage =
+    unauthedMcpServers.length === 1
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
+      : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`;
+
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
   const composerUploadTooltip = 'Uploading files...';
   const uploadDisabled = connectionDisabled || composerAttachmentUploading;
@@ -1500,19 +1526,36 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </div>
         )}
 
-        {/* Unauthorized MCP servers block their tools silently — surface it as an
-            error the user must fix, right above the composer. */}
-        {unauthedMcpServers.length > 0 && (
-          <Alert
-            type="error"
-            showIcon
-            message={
-              unauthedMcpServers.length === 1
-                ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
-                : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`
-            }
-            style={{ marginBottom: token.sizeUnit * 2, borderRadius: token.borderRadius }}
-          />
+        {/* Unauthorized MCP servers block their tools silently. Surface it as a
+            gentle, dismissable warning note above the composer — not an alarm. */}
+        {showMcpNotice && (
+          <Flex
+            align="center"
+            gap={token.sizeXXS}
+            style={{ marginBottom: token.sizeUnit * 2 }}
+            data-testid="mcp-disconnected-notice"
+          >
+            <ExclamationCircleOutlined
+              style={{ fontSize: 12, color: token.colorWarning, flexShrink: 0 }}
+            />
+            <Typography.Text type="warning" style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
+              {mcpNoticeMessage}
+            </Typography.Text>
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined style={{ fontSize: 11 }} />}
+              aria-label="Dismiss MCP connection notice"
+              onClick={() => setDismissedMcpSignature(unauthedSignature)}
+              style={{
+                flexShrink: 0,
+                width: 20,
+                minWidth: 20,
+                height: 20,
+                color: token.colorTextTertiary,
+              }}
+            />
+          </Flex>
         )}
 
         {/* Row 2 — Prompt textarea */}

@@ -285,6 +285,60 @@ describe('SessionFooter', () => {
     expect(screen.queryByText('Open session settings')).not.toBeInTheDocument();
   });
 
+  const mcpServer = (id: string, displayName: string) =>
+    ({
+      mcp_server_id: id,
+      name: id,
+      display_name: displayName,
+    }) as unknown as (typeof baseProps)['unauthedMcpServers'][number];
+
+  it('shows a dismissable warning notice when MCP servers are disconnected', () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        unauthedMcpServers={[mcpServer('a', 'Alpha'), mcpServer('b', 'Beta')]}
+      />,
+      { wrapper: Wrapper }
+    );
+    const notice = screen.getByTestId('mcp-disconnected-notice');
+    expect(notice).toHaveTextContent(/2 MCP servers aren.t connected/);
+    expect(
+      screen.getByRole('button', { name: 'Dismiss MCP connection notice' })
+    ).toBeInTheDocument();
+  });
+
+  it('hides the notice after dismissal and keeps it hidden across re-renders', () => {
+    const props = {
+      ...baseProps,
+      unauthedMcpServers: [mcpServer('a', 'Alpha'), mcpServer('b', 'Beta')],
+    };
+    const { rerender } = render(<SessionFooter {...props} />, { wrapper: Wrapper });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss MCP connection notice' }));
+    expect(screen.queryByTestId('mcp-disconnected-notice')).not.toBeInTheDocument();
+
+    rerender(<SessionFooter {...props} />);
+    expect(screen.queryByTestId('mcp-disconnected-notice')).not.toBeInTheDocument();
+  });
+
+  it('re-surfaces the notice when a different server disconnects after dismissal', () => {
+    const { rerender } = render(
+      <SessionFooter {...baseProps} unauthedMcpServers={[mcpServer('a', 'Alpha')]} />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss MCP connection notice' }));
+    expect(screen.queryByTestId('mcp-disconnected-notice')).not.toBeInTheDocument();
+
+    rerender(
+      <SessionFooter
+        {...baseProps}
+        unauthedMcpServers={[mcpServer('a', 'Alpha'), mcpServer('c', 'Gamma')]}
+      />
+    );
+    expect(screen.getByTestId('mcp-disconnected-notice')).toBeInTheDocument();
+  });
+
   it('shows inherited reasoning effort for Codex in session settings', async () => {
     render(
       <SessionFooter
