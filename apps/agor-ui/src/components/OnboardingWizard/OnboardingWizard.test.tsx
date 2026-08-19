@@ -214,6 +214,18 @@ describe('OnboardingWizard', () => {
     expect(card).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('shows no checkmark on a selected goal card — border + highlight only', () => {
+    renderWizard({ initialStep: 'goals' });
+    const card = screen
+      .getByText('Ship without the busywork')
+      .closest('button') as HTMLButtonElement;
+    fireEvent.click(card);
+    expect(card).toHaveAttribute('aria-pressed', 'true');
+    // The redundant selected-state checkmark is gone; selection is communicated
+    // by the border + background highlight alone.
+    expect(card.querySelector('.anticon-check')).toBeNull();
+  });
+
   it('does not change a goal card border width on selection (no layout shift)', () => {
     renderWizard({ initialStep: 'goals' });
     const card = screen

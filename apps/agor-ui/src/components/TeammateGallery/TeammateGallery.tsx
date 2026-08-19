@@ -120,13 +120,15 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 34,
-                height: 34,
-                borderRadius: token.borderRadius,
+                // Match the category pill's height so icon + pill + badge form one
+                // clean, equal-height row (the tile used to be noticeably taller).
+                width: 22,
+                height: 22,
+                borderRadius: token.borderRadiusSM,
                 background: tileBg,
               }}
             >
-              <Icon style={{ fontSize: token.fontSizeHeading3, color: iconColor }} />
+              <Icon style={{ fontSize: token.fontSize, color: iconColor }} />
             </span>
             {category && accent && (
               // Category pill in the same hue as the icon. Fills solid when the

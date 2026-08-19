@@ -1138,25 +1138,8 @@ export function OnboardingWizard({
                     width: '100%',
                   }}
                 >
-                  {isSelected && (
-                    <div
-                      className="onb-check"
-                      style={{
-                        position: 'absolute',
-                        top: 12,
-                        right: 12,
-                        width: 20,
-                        height: 20,
-                        borderRadius: '50%',
-                        background: PRIMARY,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 10 }} />
-                    </div>
-                  )}
+                  {/* Selection is shown by the border + background highlight alone
+                      (no checkmark) — the border/highlight already read clearly. */}
                   {/* Title flows at its natural height (one or two lines) with a
                       single consistent gap to the description below. No min-height:
                       reserving a blank second line made one-line-title cards show a
@@ -1169,7 +1152,6 @@ export function OnboardingWizard({
                       fontSize: 14,
                       lineHeight: 1.3,
                       marginBottom: 5,
-                      paddingRight: 20,
                     }}
                   >
                     {goal.title}
