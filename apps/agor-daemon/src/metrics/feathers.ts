@@ -4,6 +4,11 @@ import type { DaemonMetrics } from './types.js';
 
 type AroundNext = () => Promise<void>;
 
+interface FeathersMetricsOptions {
+  excludedServicePaths?: readonly string[];
+  isInternalCall?: (context: HookContext) => boolean;
+}
+
 function normalizeTransport(provider: unknown): 'rest' | 'socketio' | 'other' | undefined {
   if (provider === undefined || provider === null) return undefined;
   if (provider === 'rest' || provider === 'socketio') return provider;
@@ -27,15 +32,23 @@ function errorStatus(error: unknown): string | number {
 }
 
 /**
- * External Feathers call instrumentation. Internal service calls have no
- * provider and are skipped so one user request is not recursively counted.
+ * External Feathers call instrumentation. Most internal service calls have no
+ * provider; callers can also classify framework internals that deliberately
+ * preserve an external provider (for example, authentication entity lookup).
  */
-export function createFeathersMetricsHook(metrics: DaemonMetrics) {
+export function createFeathersMetricsHook(
+  metrics: DaemonMetrics,
+  options: FeathersMetricsOptions = {}
+) {
   if (!metrics.enabled) return async (_context: HookContext, next: AroundNext) => next();
 
   return async (context: HookContext, next: AroundNext): Promise<void> => {
     const transport = normalizeTransport(context.params?.provider);
-    if (!transport) {
+    if (
+      !transport ||
+      options.excludedServicePaths?.includes(context.path) ||
+      options.isInternalCall?.(context)
+    ) {
       await next();
       return;
     }

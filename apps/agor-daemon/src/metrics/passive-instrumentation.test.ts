@@ -96,6 +96,26 @@ describe('Feathers metrics hook', () => {
     ).rejects.toBe(failure);
     expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 403 });
   });
+
+  it('skips excluded services and provider-preserving internal calls', async () => {
+    const metrics = new RecordingMetrics();
+    const internalParams = { provider: 'socketio', authenticationEntityLookup: true };
+    const hook = createFeathersMetricsHook(metrics, {
+      excludedServicePaths: ['health'],
+      isInternalCall: (context) =>
+        (context.params as typeof internalParams).authenticationEntityLookup === true,
+    });
+    const next = vi.fn(async () => undefined);
+
+    await hook(
+      { path: 'health', method: 'find', params: { provider: 'rest' } } as HookContext,
+      next
+    );
+    await hook({ path: 'users', method: 'get', params: internalParams } as HookContext, next);
+
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(metrics.calls).toEqual([]);
+  });
 });
 
 describe('HTTP metrics middleware', () => {

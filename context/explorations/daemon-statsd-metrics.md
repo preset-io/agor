@@ -67,10 +67,13 @@ Both passive boundaries are needed:
   Feathers service templates and otherwise emits `/_unmatched`; raw paths are
   never tags.
 - The global Feathers around hook observes logical service/method/result for
-  REST and Socket.IO. Calls without `params.provider` are internal and skipped,
-  preventing recursive double-counting. A REST request intentionally produces
-  one HTTP signal and one Feathers signal because they describe different
-  layers.
+  REST and Socket.IO. Calls without `params.provider` are internal and skipped;
+  authentication entity lookups are also skipped using their existing internal
+  marker because Feathers deliberately preserves their provider. A REST request
+  intentionally produces one HTTP signal and one Feathers signal because they
+  describe different layers. The high-frequency `/health` service is the one
+  exception: its HTTP signal is retained and its duplicate Feathers signal is
+  suppressed.
 
 Static/UI traffic, CSP reports, and the OAuth callback are intentionally
 outside the first metric set. The middleware runs before API body parsing, so
