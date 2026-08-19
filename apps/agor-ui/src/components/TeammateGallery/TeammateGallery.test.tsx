@@ -27,6 +27,13 @@ function chipRow(): HTMLElement {
   return screen.getByRole('group', { name: 'Filter templates by category' });
 }
 
+/** jsdom serializes inline colors as rgb(...); convert a palette hex to match. */
+function rgbOf(hex: string): string {
+  const n = Number.parseInt(hex.replace('#', ''), 16);
+  // biome-ignore lint/plugin/noHardcodedColorLiteral: builds an rgb() string from a palette hex to assert against jsdom's serialized color — not a UI color literal
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
 describe('TeammateGallery', () => {
   it('renders all eight templates plus the blank starter as a single-select radiogroup', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
@@ -148,12 +155,6 @@ describe('TeammateGallery', () => {
 
   it('color-codes each card icon with its category palette color', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    // jsdom serializes the inline color as rgb(...), so compare against rgb.
-    const rgbOf = (hex: string): string => {
-      const n = Number.parseInt(hex.replace('#', ''), 16);
-      // biome-ignore lint/plugin/noHardcodedColorLiteral: builds an rgb() string from a palette hex to assert against jsdom's serialized color — not a UI color literal
-      return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-    };
     const growRgb = rgbOf(getCategoryColor('grow') ?? '');
     const operateRgb = rgbOf(getCategoryColor('operate') ?? '');
 
@@ -165,5 +166,48 @@ describe('TeammateGallery', () => {
     expect(operateIcon?.getAttribute('style')).toContain(operateRgb);
     // Different categories render different icon colors.
     expect(growRgb).not.toBe(operateRgb);
+  });
+
+  it('shows a category pill per card in the category color; blank has none', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    const growRgb = rgbOf(getCategoryColor('grow') ?? '');
+
+    // Grow card carries a "Grow" pill tinted the grow accent.
+    const pill = within(cardFor('Competitive Analyst')).getByText('Grow');
+    expect(pill.getAttribute('style')).toContain(growRgb);
+
+    // The blank starter has no category → no category pill.
+    const blank = cardFor('Start blank');
+    for (const label of ['Grow', 'Build', 'Operate']) {
+      expect(within(blank).queryByText(label)).not.toBeInTheDocument();
+    }
+  });
+
+  it('uses a quiet category-colored selected state, not a bold blue 2px border', () => {
+    render(<TeammateGallery value="competitive-analyst" onChange={vi.fn()} />);
+    const growRgb = rgbOf(getCategoryColor('grow') ?? '');
+
+    const selectedStyle = cardFor('Competitive Analyst').getAttribute('style') ?? '';
+    // Category accent, thin border, faint wash — not the old loud 2px blue.
+    expect(selectedStyle).toContain(growRgb);
+    expect(selectedStyle).toContain('border-width: 1px');
+    expect(selectedStyle).not.toContain('border-width: 2px');
+  });
+
+  it('shows the ghost Clear filters button only when filtered, and it resets to All', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    // All is the default → no Clear filters button.
+    expect(within(chipRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
+
+    fireEvent.click(within(chipRow()).getByText('Operate'));
+    const clear = within(chipRow()).getByRole('button', { name: 'Clear filters' });
+    expect(clear).toBeInTheDocument();
+    // Filtered: blank hidden.
+    expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
+
+    fireEvent.click(clear);
+    // Reset to All: every card back (blank last) and the button is gone.
+    expect(screen.getByText('Start blank')).toBeInTheDocument();
+    expect(within(chipRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 });

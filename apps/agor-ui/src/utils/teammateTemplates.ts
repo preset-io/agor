@@ -64,9 +64,14 @@ export const TEMPLATE_CATEGORIES: TeammateCategory[] = [
   { id: 'operate', label: 'Operate', color: AVATAR_PALETTE[5] }, // warm sand
 ];
 
+/** The full category record (id, label, color) for an id, or undefined. */
+export function getCategory(id?: TeammateCategoryId): TeammateCategory | undefined {
+  return id ? TEMPLATE_CATEGORIES.find((category) => category.id === id) : undefined;
+}
+
 /** Accent color for a category id, from the shared avatar palette. */
 export function getCategoryColor(id?: TeammateCategoryId): string | undefined {
-  return id ? TEMPLATE_CATEGORIES.find((category) => category.id === id)?.color : undefined;
+  return getCategory(id)?.color;
 }
 
 /** The blank starter's id — selecting it means "no template" (repo default branch). */

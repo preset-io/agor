@@ -1,9 +1,9 @@
-import { Tag as AntTag, Card, Flex, Typography, theme } from 'antd';
+import { Tag as AntTag, Button, Card, Flex, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import {
   type GalleryFilter,
   galleryCardsForFilter,
-  getCategoryColor,
+  getCategory,
   recommendedTemplateIds,
   TEMPLATE_CATEGORIES,
   type TeammateTemplate,
@@ -32,12 +32,19 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
   const { token } = theme.useToken();
   const Icon = template.icon;
 
-  // Category accent from the shared avatar palette; blank starter has no category
-  // and falls back to a neutral token. The icon keeps its category color in every
-  // state, so only the card border changes on select (no layout shift).
-  const accent = getCategoryColor(template.category);
+  // Category accent from the shared avatar palette; the blank starter has no
+  // category and falls back to neutral tokens.
+  const category = getCategory(template.category);
+  const accent = category?.color;
   const iconColor = accent ?? token.colorTextSecondary;
   const tileBg = accent ? `${accent}22` : token.colorFillTertiary;
+
+  // Softened, category-colored selection: a 1px accent border (constant width in
+  // both states → no layout shift) plus a faint same-hue background wash. No loud
+  // blue outline. Blank has no accent, so it uses a quiet neutral treatment.
+  const selectedBorder = accent ?? token.colorText;
+  const borderColor = selected ? selectedBorder : token.colorBorderSecondary;
+  const background = selected ? (accent ? `${accent}14` : token.colorFillQuaternary) : undefined;
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -55,33 +62,51 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
       onClick={onSelect}
       onKeyDown={handleKeyDown}
       style={{
-        // Fill the grid cell so cards in the same row are equal height, aligned
-        // to the tallest in that row.
+        // Fill the grid cell so cards in the same row are equal height.
         height: '100%',
-        // Constant 2px border in both states — only the color changes on select,
-        // so the card never resizes and the row never shifts (no re-click bait).
-        borderWidth: 2,
-        borderColor: selected ? token.colorPrimary : token.colorBorderSecondary,
+        // Constant 1px border in both states — only its color changes on select,
+        // so the card never resizes and the row never shifts.
+        borderWidth: 1,
+        borderColor,
+        background,
         cursor: 'pointer',
       }}
       styles={{ body: { padding: token.paddingSM } }}
     >
       <Flex vertical gap={token.marginXS}>
+        {/* Tidy top row: colored icon tile + category pill on the left, the
+            distinct Recommended badge (blue "processing") on the right. */}
         <Flex align="center" justify="space-between" gap={token.marginXXS}>
-          {/* Colored icon on a soft same-hue tile — the category read at a glance. */}
-          <span
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 34,
-              height: 34,
-              borderRadius: token.borderRadius,
-              background: tileBg,
-            }}
-          >
-            <Icon style={{ fontSize: token.fontSizeHeading3, color: iconColor }} />
-          </span>
+          <Flex align="center" gap={token.marginXS}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 34,
+                height: 34,
+                borderRadius: token.borderRadius,
+                background: tileBg,
+              }}
+            >
+              <Icon style={{ fontSize: token.fontSizeHeading3, color: iconColor }} />
+            </span>
+            {category && accent && (
+              // Category pill in the same hue as the icon. Fills solid when the
+              // card is selected (an extra, quiet selection cue).
+              <Tag
+                style={{
+                  margin: 0,
+                  fontSize: token.fontSizeSM,
+                  color: selected ? token.colorTextLightSolid : accent,
+                  background: selected ? accent : `${accent}22`,
+                  borderColor: selected ? accent : `${accent}55`,
+                }}
+              >
+                {category.label}
+              </Tag>
+            )}
+          </Flex>
           {recommended && (
             <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
               Recommended
@@ -110,13 +135,16 @@ const GalleryCard: React.FC<GalleryCardProps> = ({ template, selected, recommend
  * the blank card) and, in the default "All" view, sort to the front in
  * recommendation order. Filter chips (All · Grow · Build · Operate, plus a
  * Recommended chip when goals produced recommendations) narrow the grid to one
- * category; the blank starter shows only under All and stays last.
+ * category; a ghost "Clear filters" button (shown only when a non-All chip is
+ * active) resets to All. The blank starter shows only under All and stays last.
  *
- * Icons are color-coded per category from the shared avatar palette. The grid
- * holds two columns at the modal width, collapses to one only when very narrow,
- * shows full untruncated descriptions, and keeps row-mates equal height. It sits
- * inside the modal's own vertically-scrollable content region so every card is
- * reachable while the wizard footer stays on-screen.
+ * Each card carries a category pill and color-coded icon in a shared avatar-
+ * palette hue; selecting a card gives it a quiet same-hue border + background
+ * wash (no loud blue outline). The grid holds two columns at the modal width,
+ * collapses to one only when very narrow, shows full untruncated descriptions,
+ * and keeps row-mates equal height. It sits inside the modal's own vertically-
+ * scrollable content region so every card is reachable while the wizard footer
+ * stays on-screen.
  *
  * Standalone and theme-token driven so it renders correctly both on the
  * onboarding wizard's dark-glass surface and on the standard create-teammate
@@ -150,7 +178,13 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
 
   return (
     <Flex vertical gap={token.marginSM}>
-      <Flex role="group" aria-label="Filter templates by category" gap={token.marginXS} wrap="wrap">
+      <Flex
+        role="group"
+        aria-label="Filter templates by category"
+        align="center"
+        gap={token.marginXS}
+        wrap="wrap"
+      >
         {chips.map((chip) => (
           <AntTag.CheckableTag
             key={chip.key}
@@ -161,6 +195,17 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({ goals, value, 
             {chip.label}
           </AntTag.CheckableTag>
         ))}
+        {activeFilter !== 'all' && (
+          // Ghost, understated, trailing the chips — clears back to All.
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setFilter('all')}
+            style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
+          >
+            Clear filters
+          </Button>
+        )}
       </Flex>
 
       <div
