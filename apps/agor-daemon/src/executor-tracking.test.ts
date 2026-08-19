@@ -18,6 +18,7 @@ import {
   untrackExecutorProcess,
   verifyExecutorContainmentFence,
 } from './executor-tracking.js';
+import { NOOP_METRICS } from './metrics/noop.js';
 
 describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
   'executor process-group containment',
@@ -52,8 +53,8 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
         get: (name: string) =>
           name === 'metrics'
             ? {
+                ...NOOP_METRICS,
                 enabled: true,
-                increment: () => undefined,
                 gauge,
               }
             : undefined,
