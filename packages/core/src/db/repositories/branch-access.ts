@@ -155,20 +155,13 @@ export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
  * is shared, or at least one of its branches / primary teammate branch is
  * visible through the branch RBAC predicate. All branch-derived checks are
  * EXISTS-based so the outer row is never multiplied and no DISTINCT is needed.
+ * Keep the two ways a branch can reference a board inside one EXISTS. Besides
+ * being logically equivalent to two EXISTS clauses, this lets PostgreSQL plan
+ * the full branch RBAC predicate once instead of duplicating all of its grant
+ * and board-inheritance subplans.
  */
 export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
-  const accessibleBranchExists = exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(branches)
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
-      .where(and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(db, userId)))
-  );
-  const accessiblePrimaryTeammateExists = exists(
+  const accessibleBoardReferenceExists = exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
     (db as any)
       .select({ _: sql`1` })
@@ -179,7 +172,10 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
       )
       .where(
         and(
-          eq(branches.branch_id, boards.primary_teammate_id),
+          or(
+            eq(branches.board_id, boards.board_id),
+            eq(branches.branch_id, boards.primary_teammate_id)
+          ),
           visibleBranchAccessCondition(db, userId)
         )
       )
@@ -196,8 +192,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
           .where(and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId)))
       ),
       eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
-      accessibleBranchExists,
-      accessiblePrimaryTeammateExists
+      accessibleBoardReferenceExists
     ) ?? sql`false`
   );
 }
