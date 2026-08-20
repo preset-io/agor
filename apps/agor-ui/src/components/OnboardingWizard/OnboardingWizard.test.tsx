@@ -181,7 +181,7 @@ describe('OnboardingWizard', () => {
     // The description reserves a single line (not two): every goal description now
     // fits on one line at the 2-col modal width, so a 2-line floor only added dead
     // space and clipped the bottom card row. Row-mates equalize via grid stretch.
-    const shortDesc = screen.getByText('PRs, bug triage, release notes — handled.');
+    const shortDesc = screen.getByText('PRs, bug triage, and release notes, all handled.');
     expect(shortDesc).toHaveStyle({ minHeight: '1.4em' });
     // The title flows at its natural height with a single consistent gap below.
     // It must NOT reserve a blank second line — doing so made one-line-title
@@ -244,7 +244,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'goals' });
     // What to do (pick up to two) AND why (it shapes the first session).
     expect(
-      screen.getByText(/pick up to two — we'll shape your first session around them/i)
+      screen.getByText(/pick up to two, and we'll shape your first session around them/i)
     ).toBeInTheDocument();
   });
 
@@ -693,7 +693,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
     expect(
       screen.getByText(
-        "Rusty is all yours. Start a chat and tell them what you need — you'll shape how they work as you go."
+        "Rusty is all yours. Start a chat and tell them what you need. You'll shape how they work as you go."
       )
     ).toBeInTheDocument();
     // The single primary action is verb-first + named into the first session.

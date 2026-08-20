@@ -60,7 +60,7 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     name: 'Linear',
     emoji: '🎯',
     description:
-      "See what's in progress, what's blocked, and what shipped — without chasing updates.",
+      "See what's in progress, what's blocked, and what shipped, without chasing updates.",
   },
   shortcut: {
     id: 'shortcut',
@@ -92,7 +92,7 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     id: 'hubspot',
     name: 'HubSpot',
     emoji: '🟠',
-    description: "Pull customer context into sessions — your AI knows who you're building for.",
+    description: "Pull customer context into sessions, so your AI knows who you're building for.",
   },
   figma: {
     id: 'figma',
@@ -146,7 +146,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'ship-without-busywork',
     title: 'Ship without the busywork',
-    description: 'PRs, bug triage, release notes — handled.',
+    description: 'PRs, bug triage, and release notes, all handled.',
     icon: RocketOutlined,
     mcpRecs: ['github', 'sentry', 'datadog'],
     bootstrapLine:
@@ -279,7 +279,7 @@ export function buildGoalBootstrapGuidance(goalIds: string[]): string[] {
 
   if (goals.length === 0) {
     return [
-      'The user skipped picking a goal. Ask what they are working on right now and follow their lead — do not assume a goal.',
+      'The user skipped picking a goal. Ask what they are working on right now and follow their lead. Do not assume a goal.',
     ];
   }
 

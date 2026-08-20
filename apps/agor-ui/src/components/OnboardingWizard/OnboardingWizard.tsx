@@ -1065,7 +1065,7 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge(goalsTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
-          Pick up to two — we'll shape your first session around them. You can skip this.
+          Pick up to two, and we'll shape your first session around them. You can skip this.
         </Paragraph>
 
         <div
@@ -1180,7 +1180,8 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge('Connect your AI')}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Choose a model and connect it — it powers your teammate. Change it anytime in Settings.
+          Choose a model and connect it. It powers your teammate, and you can change it anytime in
+          Settings.
         </Paragraph>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
@@ -1362,7 +1363,7 @@ export function OnboardingWizard({
                         type="warning"
                         message={
                           subscriptionBroken
-                            ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
+                            ? 'Codex login no longer found on this server. Sign in with ChatGPT or import it again.'
                             : 'Key stored but not working - enter a new one.'
                         }
                         showIcon
@@ -1557,7 +1558,7 @@ export function OnboardingWizard({
           <>
             {renderStepBadge('Build your teammate')}
             <Paragraph style={{ color: TEXT_SECONDARY, margin: 0 }}>
-              Name your teammate and pick a starter template to shape what they do — or start blank.
+              Name your teammate and pick a starter template to shape what they do, or start blank.
               Change anything later.
             </Paragraph>
           </>
@@ -1626,7 +1627,7 @@ export function OnboardingWizard({
       // and the role pill already carry the specifics, so the subline just lands
       // "the teammate is yours; shape it by talking to it." No goal-listing.
       headline = `${name} is ready.`;
-      subline = `${name} is all yours. Start a chat and tell them what you need — you'll shape how they work as you go.`;
+      subline = `${name} is all yours. Start a chat and tell them what you need. You'll shape how they work as you go.`;
     }
 
     return (
