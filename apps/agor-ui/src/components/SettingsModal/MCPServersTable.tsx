@@ -32,6 +32,7 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
@@ -141,7 +142,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // Same set the session panel and the picker read, so an install is
   // "unfinished" in exactly one sense across all three.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
-  const memberPolicy = useMcpMemberPolicy(client);
+  const { connected, connecting, authGeneration } = useConnectionState();
+  const connectionReady = connected && !connecting;
+  const memberPolicy = useMcpMemberPolicy(client, {
+    connectionReady,
+    currentUser,
+    authGeneration,
+  });
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
   // before the policy fetch settles. The first entry is the default the create
@@ -387,12 +394,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     () => ({
       role: currentUser?.role,
       isAdmin,
+      connectionReady,
       policy: memberPolicy.policy,
       userId: currentUser?.user_id,
       canConfigure: memberPolicy.canConfigure,
     }),
     [
       isAdmin,
+      connectionReady,
       currentUser?.role,
       currentUser?.user_id,
       memberPolicy.policy,

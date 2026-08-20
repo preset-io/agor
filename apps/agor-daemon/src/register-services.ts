@@ -80,6 +80,7 @@ import {
   assertPublicMCPOAuthCompatibilityMode,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
+  MCP_MEMBER_POLICY_CHANGED_EVENT,
   ROLES,
   TaskStatus,
 } from '@agor/core/types';
@@ -2593,7 +2594,12 @@ export async function registerMCPServices(
     }
   };
 
-  app.use('/mcp-servers', createMCPServersService(db));
+  app.use('/mcp-servers', createMCPServersService(db), {
+    // The policy endpoint is RPC-shaped and does not publish its caller-shaped
+    // response. It invalidates through this already tenant-scoped service
+    // instead; browsers then refetch their own `can_configure` answer.
+    events: [MCP_MEMBER_POLICY_CHANGED_EVENT],
+  });
   const invalidateOAuthGrantsAfterServerChange = async (
     context: HookContext,
     next: () => Promise<void>

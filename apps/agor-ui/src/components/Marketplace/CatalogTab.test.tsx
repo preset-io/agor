@@ -16,6 +16,11 @@ vi.mock('react-router-dom', async () => {
 
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
 const CURRENT_USER_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d7';
+const DEFAULT_ADMIN = {
+  user_id: CURRENT_USER_ID,
+  email: 'admin@agor.live',
+  role: 'admin',
+} as User;
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -90,6 +95,9 @@ function makeClient(): AgorClient {
     if (path === 'mcp-member-policy') {
       return { find: async () => memberPolicyAnswer };
     }
+    if (path === 'mcp-servers') {
+      return { on: vi.fn(), removeListener: vi.fn() };
+    }
     throw new Error(`unexpected service: ${path}`);
   };
   return { service } as unknown as AgorClient;
@@ -97,14 +105,24 @@ function makeClient(): AgorClient {
 
 function renderTab({
   connected = true,
-  currentUser = { user_id: CURRENT_USER_ID, email: 'admin@agor.live', role: 'admin' } as User,
+  connecting = false,
+  authGeneration = 1,
+  currentUser = DEFAULT_ADMIN,
 }: {
   connected?: boolean;
+  connecting?: boolean;
+  authGeneration?: number;
   currentUser?: User | null;
 } = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} connected={connected} currentUser={currentUser} />
+      <CatalogTab
+        client={makeClient()}
+        connected={connected}
+        connecting={connecting}
+        authGeneration={authGeneration}
+        currentUser={currentUser}
+      />
     </MemoryRouter>
   );
 }
@@ -199,14 +217,14 @@ describe('catalog browsing', () => {
     const client = makeClient();
     const { rerender } = render(
       <MemoryRouter>
-        <CatalogTab client={client} connected={false} />
+        <CatalogTab client={client} connected={false} connecting={false} authGeneration={0} />
       </MemoryRouter>
     );
     expect(catalogReads).toHaveLength(0);
 
     rerender(
       <MemoryRouter>
-        <CatalogTab client={client} connected={true} />
+        <CatalogTab client={client} connected={true} connecting={false} authGeneration={1} />
       </MemoryRouter>
     );
 

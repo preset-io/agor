@@ -396,6 +396,7 @@ function AppContent() {
     client,
     connected,
     connecting,
+    authGeneration,
     error: connectionError,
     retryConnection,
   } = useAgorClient({
@@ -447,12 +448,13 @@ function AppContent() {
   // Referentially stable context value: without the memo, every App render
   // hands consumers a fresh object and defeats their own memoization.
   const connectionContextValue = useMemo(
-    () => ({ connected, connecting, outOfSync, capturedSha, currentSha }),
-    [connected, connecting, outOfSync, capturedSha, currentSha]
+    () => ({ connected, connecting, authGeneration, outOfSync, capturedSha, currentSha }),
+    [connected, connecting, authGeneration, outOfSync, capturedSha, currentSha]
   );
 
   const directSessionIdFromPath =
     location.pathname.match(/^\/(?:s|m\/session)\/([^/]+)\/?$/)?.[1] ?? null;
+  const authenticatedUserCanListUsers = hasMinimumRole(user?.role, ROLES.MEMBER);
 
   // Pass the stable client lifetime, not `connected ? client : null`:
   // useAgorData owns reconnect refetches and `null` is reserved for logout /
@@ -468,6 +470,7 @@ function AppContent() {
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
+    authenticatedUserRole: user?.role,
   });
 
   // Entity maps are NOT subscribed here. Each surface that needs a whole map
@@ -551,7 +554,13 @@ function AppContent() {
   const storedCurrentUser = useAgorStore((s) =>
     user ? (s.userById.get(user.user_id) ?? null) : null
   );
-  const currentUser = user ? storedCurrentUser || user : null;
+  // A viewer cannot refresh the directory, so never let a row retained from a
+  // prior member identity/role override the current authentication response.
+  const currentUser = user
+    ? authenticatedUserCanListUsers
+      ? storedCurrentUser || user
+      : user
+    : null;
   const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
@@ -1947,6 +1956,8 @@ function AppContent() {
     <MarketplacePage
       client={client}
       connected={connected}
+      connecting={connecting}
+      authGeneration={authGeneration}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}

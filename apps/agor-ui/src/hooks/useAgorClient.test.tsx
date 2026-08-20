@@ -127,7 +127,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     const { client, create } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
-    renderHook(() =>
+    const { result } = renderHook(() =>
       useAgorClient({
         url: 'http://daemon.test',
         accessToken: 'access-token',
@@ -139,13 +139,14 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     expect(create).toHaveBeenCalledWith({ capability: true });
     expect(client.authenticate).not.toHaveBeenCalled();
     expect(client.hooks).not.toHaveBeenCalled();
+    expect(result.current.authGeneration).toBe(1);
   });
 
   it('re-announces socket-scoped capability after a normal transport reconnect', async () => {
     const { client, create, fireIo, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
-    renderHook(() =>
+    const { result } = renderHook(() =>
       useAgorClient({
         url: 'http://daemon.test',
         accessToken: 'access-token',
@@ -153,6 +154,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
       })
     );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(result.current.authGeneration).toBe(1);
 
     act(() => {
       io.connected = false;
@@ -163,6 +165,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create).toHaveBeenLastCalledWith({ capability: true });
     expect(client.authenticate).not.toHaveBeenCalled();
+    expect(result.current.authGeneration).toBe(2);
   });
 
   it('updates the next handshake token without replacing a same-authority socket', async () => {

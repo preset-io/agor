@@ -3,6 +3,7 @@ import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/cl
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { MCPServersTable } from './MCPServersTable';
 
 const ADMIN: User = {
@@ -75,6 +76,7 @@ function makeClient(
     io: { on: vi.fn(), off: vi.fn() },
     service: (path: string) => {
       if (path === 'mcp-member-policy') return { find, patch };
+      if (path === 'mcp-servers') return { on: vi.fn(), removeListener: vi.fn() };
       return {};
     },
   } as unknown as AgorClient;
@@ -103,12 +105,23 @@ function renderTable(options: {
   );
   render(
     <AntdApp>
-      <MCPServersTable
-        mcpServerById={mcpServerById}
-        client={client}
-        userById={USER_BY_ID}
-        currentUser={options.currentUser}
-      />
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={mcpServerById}
+          client={client}
+          userById={USER_BY_ID}
+          currentUser={options.currentUser}
+        />
+      </ConnectionProvider>
     </AntdApp>
   );
   return { find, patch };

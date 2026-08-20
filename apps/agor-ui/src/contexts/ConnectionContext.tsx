@@ -15,6 +15,8 @@ import { createContext, useContext } from 'react';
 interface ConnectionContextValue {
   connected: boolean;
   connecting: boolean;
+  /** Successful socket-auth generation; changes even when the client does not. */
+  authGeneration: number;
   outOfSync: boolean;
   capturedSha: string | null;
   currentSha: string | null;
@@ -23,6 +25,7 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue>({
   connected: false,
   connecting: false,
+  authGeneration: 0,
   outOfSync: false,
   capturedSha: null,
   currentSha: null,

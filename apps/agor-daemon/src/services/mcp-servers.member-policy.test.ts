@@ -237,6 +237,7 @@ describe('member policy, as it lands in mcp_servers', () => {
  */
 describe('the MCP member policy endpoint, as it is registered', () => {
   const source = readFileSync(join(__dirname, '..', 'register-routes.ts'), 'utf8');
+  const servicesSource = readFileSync(join(__dirname, '..', 'register-services.ts'), 'utf8');
   const registration = source.slice(
     source.indexOf("'/mcp-member-policy'"),
     source.indexOf('MCP marketplace connect')
@@ -256,5 +257,22 @@ describe('the MCP member policy endpoint, as it is registered', () => {
 
   it('answers the caller their own capability, not only the tenant value', () => {
     expect(registration).toContain('can_configure: canConfigureMcpServers(params.user?.role');
+  });
+
+  it('emits an empty tenant-scoped invalidation after a policy write', () => {
+    expect(registration).toContain("path: 'mcp-servers'");
+    expect(registration).toContain('event: MCP_MEMBER_POLICY_CHANGED_EVENT');
+    expect(registration).toContain('data: {}');
+    // Request params carry the trusted tenant context into emitServiceEvent;
+    // without them a post-commit publish could cross or miss tenant channels.
+    expect(registration).toContain('params,');
+  });
+
+  it('registers the invalidation at the mcp-servers transport boundary', () => {
+    const serviceRegistration = servicesSource.slice(
+      servicesSource.indexOf("app.use('/mcp-servers', createMCPServersService(db)"),
+      servicesSource.indexOf('const invalidateOAuthGrantsAfterServerChange')
+    );
+    expect(serviceRegistration).toContain('events: [MCP_MEMBER_POLICY_CHANGED_EVENT]');
   });
 });

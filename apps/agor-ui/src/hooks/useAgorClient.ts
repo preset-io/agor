@@ -21,6 +21,8 @@ interface UseAgorClientResult {
   client: AgorClient | null;
   connected: boolean;
   connecting: boolean;
+  /** Monotonic generation of successful authenticated socket handshakes. */
+  authGeneration: number;
   error: string | null;
   retryConnection: () => void;
 }
@@ -49,6 +51,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
   const { url = getDaemonUrl(), accessToken, authorityGeneration } = options;
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(!!accessToken);
+  const [authGeneration, setAuthGeneration] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const clientBindingRef = useRef<BoundAgorClient | null>(null);
   const hasToken = !!accessToken;
@@ -236,6 +239,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         // Socket.IO emits `connect` only after the daemon has verified the
         // handshake and installed immutable user/tenant authority.
         announceSessionStreamsCapability(socketClient);
+        setAuthGeneration((generation) => generation + 1);
         setConnected(true);
         setConnecting(false);
         setError(null);
@@ -430,6 +434,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
     client: visibleBinding?.client ?? null,
     connected: !!visibleBinding && connected,
     connecting: hasToken ? !visibleBinding || connecting : false,
+    authGeneration,
     error: hasToken && !visibleBinding ? null : error,
     retryConnection,
   };

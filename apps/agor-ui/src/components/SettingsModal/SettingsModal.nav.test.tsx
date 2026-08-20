@@ -10,7 +10,9 @@
 
 import type { User } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { type SettingsSection, useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { SettingsModal } from './SettingsModal';
 
 vi.mock('./BoardsTable', () => ({ BoardsTable: () => <div data-testid="boards-table" /> }));
@@ -28,6 +30,29 @@ function renderNav(role: string, activeTab = 'boards') {
       currentUser={makeUser(role)}
       activeTab={activeTab}
     />
+  );
+}
+
+function RoutedSettings({ role }: { role: string }) {
+  const settingsRoute = useSettingsRoute();
+  return (
+    <SettingsModal
+      open={settingsRoute.isOpen}
+      onClose={settingsRoute.closeSettings}
+      client={null}
+      currentUser={makeUser(role)}
+      activeTab={settingsRoute.section}
+      onTabChange={(section) => settingsRoute.setSection(section as SettingsSection)}
+    />
+  );
+}
+
+/** Drive the same URL parser and section prop seam App uses in production. */
+function renderDeepLink(role: string, section: string) {
+  return render(
+    <MemoryRouter initialEntries={[`/settings/${section}/`]}>
+      <RoutedSettings role={role} />
+    </MemoryRouter>
   );
 }
 
@@ -88,7 +113,7 @@ describe('SettingsModal deep-linked sections', () => {
   const contentPane = () => document.querySelector('.ant-layout-content');
 
   it('renders nothing for a viewer deep-linked to users', () => {
-    renderNav('viewer', 'users');
+    renderDeepLink('viewer', 'users');
 
     expect(contentPane()).toBeEmptyDOMElement();
   });
@@ -97,7 +122,7 @@ describe('SettingsModal deep-linked sections', () => {
     // `groups`, `gateway` and `agentic-tools` already had this shape before the
     // users entry was gated; one predicate now covers all four.
     for (const section of ['groups', 'gateway', 'agentic-tools']) {
-      const { unmount } = renderNav('member', section);
+      const { unmount } = renderDeepLink('member', section);
       expect(contentPane(), `${section} should not render for a member`).toBeEmptyDOMElement();
       unmount();
     }
@@ -105,11 +130,11 @@ describe('SettingsModal deep-linked sections', () => {
 
   it('still renders the sections each role may open', () => {
     // The positive control: without it, a guard that hid everything would pass.
-    const { unmount } = renderNav('member', 'users');
+    const { unmount } = renderDeepLink('member', 'users');
     expect(contentPane()).not.toBeEmptyDOMElement();
     unmount();
 
-    renderNav('admin', 'groups');
+    renderDeepLink('admin', 'groups');
     expect(contentPane()).not.toBeEmptyDOMElement();
   });
 });

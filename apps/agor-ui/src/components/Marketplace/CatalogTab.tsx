@@ -91,11 +91,21 @@ export interface CatalogTabProps {
   client: AgorClient | null;
   /** The socket has connected and authenticated, so reads will be answered. */
   connected: boolean;
+  /** Disconnect grace or in-place token authentication is underway. */
+  connecting: boolean;
+  /** Successful socket-auth generation; stable client identity is insufficient. */
+  authGeneration: number;
   /** Whose server-provided capability decides whether Connect is offered. */
   currentUser?: User | null;
 }
 
-export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, currentUser }) => {
+export const CatalogTab: React.FC<CatalogTabProps> = ({
+  client,
+  connected,
+  connecting: connectionPending,
+  authGeneration,
+  currentUser,
+}) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   // Same set the session panel reads, so "is this install finished?" is one
@@ -130,20 +140,33 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, curre
     loading: branchesLoading,
     error: branchesError,
   } = useConnectTargets(client, connected && selected !== null);
-  // The standalone surface renders before socket authentication completes.
-  // Give the policy hook no client until reads can actually be answered so a
-  // pre-auth refusal cannot become the final capability state for this mount.
-  const memberPolicy = useMcpMemberPolicy(connected ? client : null);
+  // `connected` deliberately stays true during disconnect grace, while a token
+  // replacement keeps the same client object. Neither may preserve an enabled
+  // action: capability reads are scoped to the authenticated generation and
+  // connectionReady closes synchronously for both transitions.
+  const connectionReady = connected && !connectionPending;
+  const memberPolicy = useMcpMemberPolicy(client, {
+    connectionReady,
+    currentUser,
+    authGeneration,
+  });
   const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
   const connectCapability = useMemo<MCPServerCapabilityContext>(
     () => ({
       role: currentUser?.role,
       isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
+      connectionReady,
       policy: memberPolicy.policy,
       userId: currentUser?.user_id,
       canConfigure: memberPolicy.canConfigure,
     }),
-    [currentUser?.role, currentUser?.user_id, memberPolicy.policy, memberPolicy.canConfigure]
+    [
+      connectionReady,
+      currentUser?.role,
+      currentUser?.user_id,
+      memberPolicy.policy,
+      memberPolicy.canConfigure,
+    ]
   );
 
   // Any narrowing invalidates the current offset — page 4 of an unfiltered

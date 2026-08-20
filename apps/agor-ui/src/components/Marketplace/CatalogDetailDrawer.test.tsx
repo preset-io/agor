@@ -16,6 +16,7 @@ import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServ
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 
 const ALLOWED: MCPServerCapabilityContext = {
+  connectionReady: true,
   role: 'admin',
   isAdmin: true,
   policy: 'allow_crud',
@@ -138,6 +139,7 @@ describe('CatalogDetailDrawer consent', () => {
 
 describe('CatalogDetailDrawer connect capability', () => {
   const VIEWER: MCPServerCapabilityContext = {
+    connectionReady: true,
     role: 'viewer',
     isAdmin: false,
     policy: 'allow_crud',
@@ -145,6 +147,7 @@ describe('CatalogDetailDrawer connect capability', () => {
     canConfigure: false,
   };
   const RESTRICTED_MEMBER: MCPServerCapabilityContext = {
+    connectionReady: true,
     role: 'member',
     isAdmin: false,
     policy: 'use_existing_only',
@@ -175,6 +178,20 @@ describe('CatalogDetailDrawer connect capability', () => {
     fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeEnabled();
+  });
+
+  it('fails closed during disconnect grace even with a previously granted capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: {
+        ...RESTRICTED_MEMBER,
+        connectionReady: false,
+        policy: 'allow_crud',
+        canConfigure: true,
+      },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
   });
 
   it('fails closed without inventing a workspace policy while the read is pending', () => {

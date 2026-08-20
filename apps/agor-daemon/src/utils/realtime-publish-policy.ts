@@ -160,7 +160,7 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-servers': {
     audience: 'tenant',
-    why: 'useAgorData tracks server rows. Secrets are stripped from context.dispatch unconditionally by redactMCPServerSecretFields — the audience is tenant-wide, so the payload must never carry credentials.',
+    why: 'useAgorData tracks server rows, and useMcpMemberPolicy refetches its caller-specific capability on the empty member-policy invalidation. Secrets are stripped from context.dispatch unconditionally by redactMCPServerSecretFields — the audience is tenant-wide, so row payloads must never carry credentials.',
   },
   'gateway-channels': {
     audience: 'tenant',

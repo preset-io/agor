@@ -203,6 +203,16 @@ export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
 
 /**
+ * Realtime invalidation emitted on the tenant-scoped `mcp-servers` service
+ * after an administrator changes the member policy.
+ *
+ * The event deliberately carries no policy value: `can_configure` is derived
+ * for the authenticated caller, so every browser must refetch its own answer
+ * from `mcp-member-policy` rather than accepting another caller's payload.
+ */
+export const MCP_MEMBER_POLICY_CHANGED_EVENT = 'member-policy:changed' as const;
+
+/**
  * The payload of the `mcp-member-policy` endpoint, read and written.
  *
  * A wrapper rather than the bare value so the setting can gain a field — who

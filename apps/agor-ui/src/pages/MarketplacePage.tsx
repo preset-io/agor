@@ -34,6 +34,10 @@ export interface MarketplacePageProps {
    * surface renders immediately and has to carry the distinction itself.
    */
   connected: boolean;
+  /** True during disconnect grace and in-place token authentication. */
+  connecting: boolean;
+  /** Successful socket-auth generation from useAgorClient. */
+  authGeneration: number;
   currentUser?: User | null;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
@@ -42,6 +46,8 @@ export interface MarketplacePageProps {
 export const MarketplacePage: React.FC<MarketplacePageProps> = ({
   client,
   connected,
+  connecting,
+  authGeneration,
   currentUser,
   onUserSettingsClick,
   onLogout,
@@ -99,7 +105,13 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
-          <CatalogTab client={client} connected={connected} currentUser={currentUser} />
+          <CatalogTab
+            client={client}
+            connected={connected}
+            connecting={connecting}
+            authGeneration={authGeneration}
+            currentUser={currentUser}
+          />
         </div>
       </Content>
     </Layout>

@@ -372,7 +372,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('saves a new password from the Security panel and closes from the footer', async () => {
-    const user = makeUser();
+    const user = makeUser({ role: 'member', unix_username: 'member-home' });
     const onUpdate = vi.fn(async () => {});
     const onClose = vi.fn();
 
@@ -400,6 +400,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         expect.objectContaining({ password: 'new-secure-password' })
       );
     }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    // This is a dirty Security-panel save, not a Profile-only false positive:
+    // the stored admin-owned field is present in the form but must not cross
+    // the self-edit request boundary for a member.
+    expect(updates).not.toHaveProperty('unix_username');
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });

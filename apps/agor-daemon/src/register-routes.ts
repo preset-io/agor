@@ -89,6 +89,7 @@ import {
   isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
+  MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -4508,6 +4509,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
         }
         await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+        // Do not publish the caller-shaped endpoint response: `can_configure`
+        // differs by role. An empty tenant-scoped invalidation makes every
+        // connected browser refetch its own authoritative answer. The event is
+        // queued until the tenant DB unit of work commits by emitServiceEvent.
+        emitServiceEvent(app, {
+          path: 'mcp-servers',
+          event: MCP_MEMBER_POLICY_CHANGED_EVENT,
+          data: {},
+          params,
+          method: 'patch',
+        });
         return {
           policy: data.policy,
           can_configure: canConfigureMcpServers(params.user?.role, data.policy),

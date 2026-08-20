@@ -31,7 +31,9 @@ import {
   ARTIFACT_METADATA_LIST_FIELDS,
   ENTITY_PATH_SEGMENTS,
   findByShortIdPrefix,
+  hasMinimumRole,
   PAGINATION,
+  ROLES,
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -247,10 +249,27 @@ function hasIdMatchingPrefix<T>(
  */
 export function useAgorData(
   client: AgorClient | null,
-  options?: { enabled?: boolean; directSessionId?: string | null }
+  options?: {
+    enabled?: boolean;
+    directSessionId?: string | null;
+    /**
+     * Role from the authenticated user response, not from the optional users
+     * directory. Viewer bootstrap must decide whether member-only workspace
+     * requests exist before attempting them; otherwise one expected 403 hides
+     * the authenticated header and viewer-safe routes such as Marketplace.
+     */
+    authenticatedUserRole?: string;
+  }
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
   const directSessionId = options?.directSessionId ?? null;
+  // Preserve the hook's historical standalone-test/default behavior when the
+  // caller does not provide role context. App always provides the property,
+  // including `undefined` before auth resolves, and therefore fails closed.
+  const hasAuthenticatedRoleContext = Object.hasOwn(options ?? {}, 'authenticatedUserRole');
+  const canUseMemberWorkspaceServices =
+    !hasAuthenticatedRoleContext || hasMinimumRole(options?.authenticatedUserRole, ROLES.MEMBER);
+  const canListUsers = canUseMemberWorkspaceServices;
 
   // Reset the shared singleton store once per hook (re)mount, synchronously
   // BEFORE the first store-subscription read below. This mirrors the old per-mount
@@ -513,7 +532,9 @@ export function useAgorData(
           ),
           track(
             'users',
-            client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            canListUsers
+              ? client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+              : Promise.resolve([])
           ),
         ]);
 
@@ -664,12 +685,19 @@ export function useAgorData(
             : Promise.resolve([] as Session[]),
           track(
             'board-objects',
-            client.service('board-objects').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                ...(boardScope ? { board_id: boardScope } : {}),
-              },
-            })
+            // The daemon intentionally keeps the whole board-objects service at
+            // the MEMBER floor (the rows carry editable canvas layout). A global
+            // viewer can still read the workspace shell and Marketplace, so an
+            // expected authorization failure here is not an essential bootstrap
+            // failure. Keep the collection empty and don't subscribe below.
+            canUseMemberWorkspaceServices
+              ? client.service('board-objects').findAll({
+                  query: {
+                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    ...(boardScope ? { board_id: boardScope } : {}),
+                  },
+                })
+              : Promise.resolve([])
           ),
           track(
             'board-comments',
@@ -904,25 +932,27 @@ export function useAgorData(
         // global snapshot is a superset of its board-scoped first-paint slice, so
         // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
         if (boardScope) {
-          void runHydration(
-            'board-objects',
-            ['boardObjects'],
-            () =>
-              client
-                .service('board-objects')
-                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allBoardObjects) =>
-              agorStore.getState().applyMaps((prev) => {
-                const base = buildBoardObjectMaps(allBoardObjects);
-                return {
-                  ...prev,
-                  boardObjectById: base.boardObjectById,
-                  boardObjectsByBoardId: base.boardObjectsByBoardId,
-                  boardObjectByBranchId: base.boardObjectByBranchId,
-                  boardObjectByCardId: base.boardObjectByCardId,
-                };
-              })
-          );
+          if (canUseMemberWorkspaceServices) {
+            void runHydration(
+              'board-objects',
+              ['boardObjects'],
+              () =>
+                client
+                  .service('board-objects')
+                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allBoardObjects) =>
+                agorStore.getState().applyMaps((prev) => {
+                  const base = buildBoardObjectMaps(allBoardObjects);
+                  return {
+                    ...prev,
+                    boardObjectById: base.boardObjectById,
+                    boardObjectsByBoardId: base.boardObjectsByBoardId,
+                    boardObjectByBranchId: base.boardObjectByBranchId,
+                    boardObjectByCardId: base.boardObjectByCardId,
+                  };
+                })
+            );
+          }
           void runHydration(
             'cards',
             ['cards'],
@@ -998,8 +1028,39 @@ export function useAgorData(
         }
       }
     },
-    [client, directSessionId, enabled]
+    [canListUsers, canUseMemberWorkspaceServices, client, directSessionId, enabled]
   );
+
+  // A role replacement can leave the long-lived client and hook mounted. Drop
+  // member-only data the new viewer is no longer allowed to read immediately;
+  // then resync every caller-readable collection under the replacement role.
+  // This is deliberately keyed to the authenticated role rather than a row
+  // from userById, because that directory is itself privileged data.
+  const previousCanUseMemberWorkspaceServicesRef = useRef(canUseMemberWorkspaceServices);
+  useEffect(() => {
+    const previous = previousCanUseMemberWorkspaceServicesRef.current;
+    previousCanUseMemberWorkspaceServicesRef.current = canUseMemberWorkspaceServices;
+    if (previous === canUseMemberWorkspaceServices) return;
+
+    if (!canUseMemberWorkspaceServices) {
+      // Cancel a member-authenticated board-object snapshot before clearing it;
+      // otherwise an in-flight hydration could repopulate the forbidden rows.
+      // The silent resync below restarts every viewer-readable hydration.
+      cancelAllHydrations();
+      bumpRevision('boardObjects');
+      agorStore.getState().applyMaps((previousMaps) => ({
+        ...previousMaps,
+        userById: new Map(),
+        boardObjectById: new Map(),
+        boardObjectsByBoardId: new Map(),
+        boardObjectByBranchId: new Map(),
+        boardObjectByCardId: new Map(),
+      }));
+    }
+    if (client && enabled && hasInitiallyFetched) {
+      void fetchData({ silent: true });
+    }
+  }, [canUseMemberWorkspaceServices, client, enabled, fetchData, hasInitiallyFetched]);
 
   // Clear all data when client goes away (logout / token revocation).
   //
@@ -1158,11 +1219,13 @@ export function useAgorData(
     boardsService.on('removed', realtime.boardRemoved);
 
     // Subscribe to board object events
-    const boardObjectsService = client.service('board-objects');
-    boardObjectsService.on('created', realtime.boardObjectCreated);
-    boardObjectsService.on('patched', realtime.boardObjectPatched);
-    boardObjectsService.on('updated', realtime.boardObjectPatched);
-    boardObjectsService.on('removed', realtime.boardObjectRemoved);
+    const boardObjectsService = canUseMemberWorkspaceServices
+      ? client.service('board-objects')
+      : null;
+    boardObjectsService?.on('created', realtime.boardObjectCreated);
+    boardObjectsService?.on('patched', realtime.boardObjectPatched);
+    boardObjectsService?.on('updated', realtime.boardObjectPatched);
+    boardObjectsService?.on('removed', realtime.boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
@@ -1198,11 +1261,11 @@ export function useAgorData(
     branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
-    const usersService = client.service('users');
-    usersService.on('created', realtime.userCreated);
-    usersService.on('patched', realtime.userPatched);
-    usersService.on('updated', realtime.userPatched);
-    usersService.on('removed', realtime.userRemoved);
+    const usersService = canListUsers ? client.service('users') : null;
+    usersService?.on('created', realtime.userCreated);
+    usersService?.on('patched', realtime.userPatched);
+    usersService?.on('updated', realtime.userPatched);
+    usersService?.on('removed', realtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
     // A single-row realtime event is an INCREMENTAL upsert, not a complete
@@ -1382,10 +1445,10 @@ export function useAgorData(
       boardsService.removeListener('updated', realtime.boardPatched);
       boardsService.removeListener('removed', realtime.boardRemoved);
 
-      boardObjectsService.removeListener('created', realtime.boardObjectCreated);
-      boardObjectsService.removeListener('patched', realtime.boardObjectPatched);
-      boardObjectsService.removeListener('updated', realtime.boardObjectPatched);
-      boardObjectsService.removeListener('removed', realtime.boardObjectRemoved);
+      boardObjectsService?.removeListener('created', realtime.boardObjectCreated);
+      boardObjectsService?.removeListener('patched', realtime.boardObjectPatched);
+      boardObjectsService?.removeListener('updated', realtime.boardObjectPatched);
+      boardObjectsService?.removeListener('removed', realtime.boardObjectRemoved);
 
       reposService.removeListener('created', realtime.repoCreated);
       reposService.removeListener('patched', realtime.repoPatched);
@@ -1397,10 +1460,10 @@ export function useAgorData(
       branchesService.removeListener('updated', realtime.branchPatched);
       branchesService.removeListener('removed', branchRemovedSync);
 
-      usersService.removeListener('created', realtime.userCreated);
-      usersService.removeListener('patched', realtime.userPatched);
-      usersService.removeListener('updated', realtime.userPatched);
-      usersService.removeListener('removed', realtime.userRemoved);
+      usersService?.removeListener('created', realtime.userCreated);
+      usersService?.removeListener('patched', realtime.userPatched);
+      usersService?.removeListener('updated', realtime.userPatched);
+      usersService?.removeListener('removed', realtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
       agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
@@ -1439,7 +1502,14 @@ export function useAgorData(
       artifactsService.removeListener('removed', realtime.artifactRemoved);
       artifactsService.removeListener('agor-query', handleAgorQuery);
     };
-  }, [client, enabled, fetchData, hasInitiallyFetched]);
+  }, [
+    canListUsers,
+    canUseMemberWorkspaceServices,
+    client,
+    enabled,
+    fetchData,
+    hasInitiallyFetched,
+  ]);
 
   // Derived render model for the loading checklist. Memoized so the array
   // identity is stable across renders where no per-item count changed.
