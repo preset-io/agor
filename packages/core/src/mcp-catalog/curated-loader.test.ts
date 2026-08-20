@@ -392,6 +392,8 @@ describe('the shipped catalog', () => {
       'write actions',
       'user-generated-content tools',
       'all non-beta toolsets',
+      'send, or clone campaigns',
+      'create, update, or delete flows',
       'delete lists and segments',
       'add or remove list members',
       'profile deletion requests',
