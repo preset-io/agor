@@ -21,6 +21,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GroupsTableProps {
@@ -179,28 +180,23 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   );
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">Manage groups and user memberships.</Typography.Text>
-        <Space>
-          <Input
-            allowClear
-            placeholder="Search name, slug, description, or members"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 'min(100%, 320px)' }}
-          />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-            New Group
-          </Button>
-        </Space>
-      </div>
+      <ResponsiveSettingsHeader
+        description="Manage groups and user memberships."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, slug, description, or members"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 320, flex: compact ? '1 1 100%' : undefined }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+              New Group
+            </Button>
+          </Space>
+        )}
+      />
 
       <Table
         rowKey="group_id"

@@ -30,6 +30,7 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BoardsTableProps {
@@ -321,52 +322,45 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Create and manage boards for organizing sessions.
-        </Typography.Text>
-        <Space>
-          <Select
-            value={archiveFilter}
-            onChange={(value) => setArchiveFilter(value)}
-            style={{ width: 120 }}
-            options={[
-              { value: 'active', label: 'Active' },
-              { value: 'all', label: 'All' },
-              { value: 'archived', label: 'Archived' },
-            ]}
-          />
-          <Input
-            allowClear
-            placeholder="Search name, slug, description, or ID"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 300 }}
-          />
-          <Button icon={<UploadOutlined />} onClick={handleImportClick}>
-            Import Board
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              // New boards start on the theme-aware default (no persisted
-              // background); the editor's Default mode reflects this.
-              form.resetFields();
-              setCreateModalOpen(true);
-            }}
-          >
-            New Board
-          </Button>
-        </Space>
-      </div>
+      <ResponsiveSettingsHeader
+        description="Create and manage boards for organizing sessions."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Select
+              value={archiveFilter}
+              onChange={(value) => setArchiveFilter(value)}
+              style={{ width: 120 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'all', label: 'All' },
+                { value: 'archived', label: 'Archived' },
+              ]}
+            />
+            <Input
+              allowClear
+              placeholder="Search name, slug, description, or ID"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 300, flex: compact ? '1 1 100%' : undefined }}
+            />
+            <Button icon={<UploadOutlined />} onClick={handleImportClick}>
+              Import Board
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                // New boards start on the theme-aware default (no persisted
+                // background); the editor's Default mode reflects this.
+                form.resetFields();
+                setCreateModalOpen(true);
+              }}
+            >
+              New Board
+            </Button>
+          </Space>
+        )}
+      />
 
       <Table
         dataSource={boards}

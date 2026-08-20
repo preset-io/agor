@@ -25,6 +25,7 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface ArtifactsTableProps {
@@ -281,25 +282,18 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Live web application artifacts created by agents via MCP tools.
-        </Typography.Text>
-        <Input
-          allowClear
-          placeholder="Search name, description, template, branch, or board"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 'min(100%, 360px)' }}
-        />
-      </div>
+      <ResponsiveSettingsHeader
+        description="Live web application artifacts created by agents via MCP tools."
+        actions={(compact) => (
+          <Input
+            allowClear
+            placeholder="Search name, description, template, branch, or board"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: compact ? '100%' : 360 }}
+          />
+        )}
+      />
 
       {dataSource.length === 0 ? (
         <div

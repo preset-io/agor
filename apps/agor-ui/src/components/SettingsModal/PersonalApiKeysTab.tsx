@@ -6,6 +6,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ApiKeyEntry {
   id: string;
@@ -156,18 +157,26 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Input
-          allowClear
-          placeholder="Search name, prefix, or dates"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 'min(100%, 300px)' }}
-        />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
-          Create New Key
-        </Button>
-      </Space>
+      <ResponsiveSettingsHeader
+        description="Manage personal API keys."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, prefix, or dates"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{
+                width: compact ? '100%' : 300,
+                flex: compact ? '1 1 100%' : undefined,
+              }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+              Create New Key
+            </Button>
+          </Space>
+        )}
+      />
 
       <Table
         dataSource={filteredKeys}

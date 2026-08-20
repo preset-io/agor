@@ -94,6 +94,7 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
 
@@ -3781,38 +3782,31 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Route messages from Slack, GitHub, Microsoft Teams, and other platforms to Agor sessions.
-        </Typography.Text>
-        <Space>
-          <Input
-            allowClear
-            placeholder="Search name, type, target branch, key, or config"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 'min(100%, 360px)' }}
-          />
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              resetConnectionTest();
-              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
-              setCreateModalOpen(true);
-            }}
-          >
-            Add Channel
-          </Button>
-        </Space>
-      </div>
+      <ResponsiveSettingsHeader
+        description="Route messages from Slack, GitHub, Microsoft Teams, and other platforms to Agor sessions."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, type, target branch, key, or config"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+            />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                resetConnectionTest();
+                createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+                setCreateModalOpen(true);
+              }}
+            >
+              Add Channel
+            </Button>
+          </Space>
+        )}
+      />
 
       <CompactAlert
         type="warning"

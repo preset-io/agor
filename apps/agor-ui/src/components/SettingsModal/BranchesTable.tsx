@@ -39,6 +39,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
@@ -535,22 +536,19 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Manage git branches for isolated development contexts across sessions.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
-          <Space>
+      <ResponsiveSettingsHeader
+        description="Manage git branches for isolated development contexts across sessions."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
               allowClear
               placeholder="Search by name, repo, slug, path, or ID"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ maxWidth: token.sizeUnit * 40 }}
+              style={{
+                width: compact ? '100%' : token.sizeUnit * 40,
+                flex: compact ? '1 1 100%' : undefined,
+              }}
             />
             <Select
               value={archiveFilter}
@@ -564,17 +562,17 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                 { value: 'archived', label: 'Archived' },
               ]}
             />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreateModalOpen(true)}
+              disabled={repos.length === 0}
+            >
+              Create Branch
+            </Button>
           </Space>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
-            disabled={repos.length === 0}
-          >
-            Create Branch
-          </Button>
-        </Space>
-      </Space>
+        )}
+      />
 
       {repos.length === 0 && (
         <div

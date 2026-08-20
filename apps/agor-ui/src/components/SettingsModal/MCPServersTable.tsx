@@ -21,7 +21,6 @@ import {
   Badge,
   Button,
   Descriptions,
-  Flex,
   Form,
   Input,
   Modal,
@@ -32,7 +31,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
@@ -63,6 +61,7 @@ import {
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -639,37 +638,40 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const serversPane = (
     <>
-      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
-        <Typography.Text type="secondary">
-          Configure Model Context Protocol servers for enhanced AI capabilities.
-        </Typography.Text>
-        {/* Search and add take the ends of their own row, so the caption above
-            keeps its full width instead of being squeezed into four lines by a
-            search box that cannot shrink. The input's cap leaves the slack
-            between them as the gap. */}
-        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
-          <Input
-            allowClear
-            placeholder="Search name, owner, URL, command, tools, transport, or scope"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ flex: '1 1 220px', maxWidth: 360 }}
-          />
-          {canAdd ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-              New MCP Server
-            </Button>
-          ) : (
-            <Tooltip title={policyPending ? policyPendingHint : explainAddRestriction(capability)}>
-              <span>
-                <Button type="primary" icon={<PlusOutlined />} disabled>
-                  New MCP Server
-                </Button>
-              </span>
-            </Tooltip>
-          )}
-        </Flex>
-      </Flex>
+      <ResponsiveSettingsHeader
+        description="Configure Model Context Protocol servers for enhanced AI capabilities."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, owner, URL, command, tools, transport, or scope"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+            />
+            {canAdd ? (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateModalOpen(true)}
+              >
+                New MCP Server
+              </Button>
+            ) : (
+              <Tooltip
+                title={policyPending ? policyPendingHint : explainAddRestriction(capability)}
+              >
+                <span>
+                  <Button type="primary" icon={<PlusOutlined />} disabled>
+                    New MCP Server
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+          </Space>
+        )}
+      />
+
 
       <Table
         dataSource={servers}
