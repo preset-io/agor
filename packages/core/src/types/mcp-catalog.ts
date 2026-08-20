@@ -382,4 +382,12 @@ export interface MCPCatalogConnectResult {
   starter_prompt?: string;
   /** True when an existing install was reused rather than a second row created. */
   reused_existing_server: boolean;
+  /** Why this server row was selected. Credential peers retain their own lifecycle. */
+  reuse_kind:
+    | 'new_catalog_install'
+    | 'catalog_install'
+    | 'credential_peer'
+    | 'refreshed_credential_peer';
+  /** Effective, secret-free OAuth compatibility policy for the attached row. */
+  effective_oauth_policy?: NonNullable<MCPServer['oauth_compatibility_policy']>;
 }

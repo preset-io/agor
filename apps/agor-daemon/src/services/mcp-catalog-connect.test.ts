@@ -62,6 +62,7 @@ function authenticated(overrides: Record<string, unknown> = {}) {
     auth: {
       type: 'oauth',
       oauth_mode: 'per_user',
+      oauth_compatibility_mode: 'strict',
       oauth_access_token: '••••••••',
       oauth_token_expires_at: 4102444800000,
     },
@@ -89,6 +90,7 @@ function buildApp(
 ) {
   const created: Record<string, unknown[]> = { mcpServers: [], sessions: [], attachments: [] };
   const removed: string[] = [];
+  const removedSessions: string[] = [];
   const refreshed: string[] = [];
   const resourceLookups: string[] = [];
   const services: Record<string, unknown> = {
@@ -123,6 +125,10 @@ function buildApp(
         created.sessions.push(data);
         return { ...data, session_id: 'session-1' };
       }),
+      remove: vi.fn(async (id: string) => {
+        removedSessions.push(id);
+        return { session_id: id };
+      }),
     },
     '/sessions/:id/mcp-servers': {
       create: vi.fn(async (data: unknown, params: { route?: { id?: string } }) => {
@@ -146,6 +152,7 @@ function buildApp(
     services,
     created,
     removed,
+    removedSessions,
     refreshed,
     resourceLookups,
     deps,
@@ -627,7 +634,7 @@ describe('mcp-catalog/connect', () => {
   });
 
   it('takes back the server it created when the attach is refused', async () => {
-    const { app, services, removed, deps } = buildApp(CURATED);
+    const { app, services, removed, removedSessions, deps } = buildApp(CURATED);
     (
       services['/sessions/:id/mcp-servers'] as { create: ReturnType<typeof vi.fn> }
     ).create.mockRejectedValue(new Error('forbidden'));
@@ -636,6 +643,7 @@ describe('mcp-catalog/connect', () => {
       /forbidden/
     );
     expect(removed).toEqual(['server-1']);
+    expect(removedSessions).toEqual(['session-1']);
   });
 
   it('leaves a reused install alone when a later step fails', async () => {
@@ -929,7 +937,11 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
  * grant here", and one without is standing in for "it said they do not".
  */
 describe('credential reuse', () => {
-  const OAUTH_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'oauth' };
+  const OAUTH_ENTRY: MCPCatalogEntry = {
+    ...CURATED,
+    auth_type: 'oauth',
+    oauth: { compatibility_mode: 'strict' },
+  };
 
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
@@ -963,6 +975,58 @@ describe('credential reuse', () => {
     expect(result.mcp_server.auth?.oauth_access_token).toBeTruthy();
     expect(result.mcp_server.auth?.oauth_token_expires_at).toBeGreaterThan(Date.now());
     expect(result.starter_prompt).toBe('List the issues assigned to me this cycle.');
+    expect(result.reuse_kind).toBe('credential_peer');
+    expect(result.effective_oauth_policy).toEqual({
+      effective_mode: 'strict',
+      managed_by_catalog: false,
+    });
+  });
+
+  it('refuses a legacy peer when the catalog is strict', async () => {
+    const mode = 'legacy' as const;
+    const peer = authenticated({
+      source: mode ? 'user' : 'catalog',
+      catalog_entry_name: mode ? undefined : 'removed/catalog-entry',
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        ...(mode ? { oauth_compatibility_mode: mode } : {}),
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 4102444800000,
+      },
+    });
+    const built = buildApp(OAUTH_ENTRY, [peer]);
+    const result = await connect(built);
+    expect(result.reuse_kind).toBe('new_catalog_install');
+    expect(result.mcp_server.mcp_server_id).not.toBe('server-signed-in');
+  });
+
+  it('treats a removed catalog stamp as strict rather than retaining marketplace policy', async () => {
+    const peer = authenticated({
+      source: 'catalog',
+      catalog_entry_name: 'removed/catalog-entry',
+    });
+    const built = buildApp(OAUTH_ENTRY, [peer]);
+    const result = await connect(built);
+    expect(result.reuse_kind).toBe('credential_peer');
+    expect(result.effective_oauth_policy?.effective_mode).toBe('strict');
+  });
+
+  it('refuses a peer when catalog DCR or client identity differs', async () => {
+    const entry = {
+      ...OAUTH_ENTRY,
+      oauth: {
+        compatibility_mode: 'strict' as const,
+        dcr_mode: 'fallback' as const,
+        client_id: 'catalog-client',
+      },
+    };
+    const built = buildApp(entry, [authenticated()]);
+    const result = await createMCPCatalogConnectService(built.app, built.deps).create(
+      request,
+      params
+    );
+    expect(result.reuse_kind).toBe('new_catalog_install');
   });
 
   it('installs fresh for a caller who has never signed in', async () => {
@@ -1166,6 +1230,26 @@ describe('credential reuse', () => {
       expect(result.reused_existing_server).toBe(true);
       expect(result.mcp_server.mcp_server_id).toBe('server-b');
       expect(built.created.mcpServers).toHaveLength(0);
+    });
+
+    it('continues when a refreshed candidate disappears before its re-read', async () => {
+      const servers = [
+        expired({ mcp_server_id: 'server-a' }),
+        expired({ mcp_server_id: 'server-b' }),
+      ];
+      const built = buildApp(OAUTH_ENTRY, servers, async (id) => {
+        if (id === 'server-b') servers[1] = authenticated({ mcp_server_id: 'server-b' });
+        return { success: true };
+      });
+      const get = (built.services['mcp-servers'] as { get: ReturnType<typeof vi.fn> }).get;
+      get.mockImplementation(async (id: string) => {
+        if (id === 'server-a') throw new Error('concurrently deleted');
+        return servers.find((server) => server.mcp_server_id === id);
+      });
+      const result = await connect(built);
+      expect(built.refreshed).toEqual(['server-a', 'server-b']);
+      expect(result.mcp_server.mcp_server_id).toBe('server-b');
+      expect(result.reuse_kind).toBe('refreshed_credential_peer');
     });
 
     it('tries candidates in a deterministic order', async () => {

@@ -461,7 +461,11 @@ function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase) {
  * on it can be borrowed.
  */
 describe('credential reuse, against real grants', () => {
-  const OAUTH_ENTRY = { ...CURATED, auth_type: 'oauth' } as unknown as MCPCatalogEntry;
+  const OAUTH_ENTRY = {
+    ...CURATED,
+    auth_type: 'oauth',
+    oauth: { compatibility_mode: 'strict' },
+  } as unknown as MCPCatalogEntry;
   const SHARED_ROW = '00000000-0000-7000-8000-0000000005ee' as MCPServer['mcp_server_id'];
   const RESOURCE = 'https://mcp.deepwiki.com/mcp';
 
@@ -498,7 +502,7 @@ describe('credential reuse, against real grants', () => {
       name: 'deepwiki-shared',
       transport: 'http',
       url: RESOURCE,
-      auth: { type: 'oauth', oauth_mode: 'per_user' },
+      auth: { type: 'oauth', oauth_mode: 'per_user', oauth_compatibility_mode: 'strict' },
       scope: 'session',
       source: 'user',
       enabled: true,
@@ -507,8 +511,8 @@ describe('credential reuse, against real grants', () => {
     } as never);
 
     // Alice signs in. Hers, keyed `(alice, row)`, and nothing else changes.
-    // No `grantBinding` — that is not a simplification, it is what a SQLite
-    // grant is. See the dialect note below.
+    // Intentionally omit `grantBinding` to model a legacy SQLite grant created
+    // before versioned fingerprints were introduced.
     const tokens = new UserMCPOAuthTokenRepository(rawDb);
     await tokens.saveToken(alice.user_id, SHARED_ROW, {
       accessToken: 'alice-grant-not-a-real-token',
@@ -615,24 +619,16 @@ describe('credential reuse, against real grants', () => {
   });
 
   /**
-   * The dialect divergence, pinned in both directions.
-   *
-   * `injectPerUserOAuthTokens` re-checks `grant_binding_fingerprint` only under
-   * `isPostgresDatabaseHandle`. That is structural, not an oversight: bindings
-   * come from a pending-flow durable record, that authority exists only on
-   * PostgreSQL, and so `persistOAuthToken` passes `grantBinding` only when one
-   * exists. A SQLite grant has no fingerprint to check — the grants below are
-   * saved exactly the way the SQLite flow saves them, and carry none.
-   *
-   * So these two say plainly what standalone Agor does: it reuses a grant it
-   * cannot cryptographically bind to the row (first test), and it is stopped
+   * Legacy SQLite compatibility, pinned in both directions. Current SQLite
+   * OAuth flows create versioned fingerprints; these fixtures deliberately
+   * model historical unbound grants. Such a grant is stopped
    * instead by the resource the grant records, which every dialect writes
    * (second test). If someone makes the fingerprint check dialect-independent,
    * the first fails and should be deleted with the note above. If someone drops
    * the resource comparison, the second fails and standalone loses its only
    * check here.
    */
-  it('reuses an unbound SQLite grant — standalone has no fingerprint to check', async () => {
+  it('reuses a legacy unbound SQLite grant when its protected resource still matches', async () => {
     const { alice, connectAs, rawDb } = await buildTwoUserDaemon();
 
     const grant = await new UserMCPOAuthTokenRepository(rawDb).getToken(alice.user_id, SHARED_ROW);
