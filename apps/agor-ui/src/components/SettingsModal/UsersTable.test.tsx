@@ -1,7 +1,8 @@
 import type { User } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { UsersTable } from './UsersTable';
 
 function user(user_id: string, role: User['role']): User {
@@ -33,6 +34,12 @@ function renderTable(currentUser: User, users: User[]) {
 }
 
 describe('UsersTable role authority', () => {
+  beforeEach(() => {
+    // Legacy/local authority is permissive; individual tests override this
+    // retained health snapshot when exercising delegated capabilities.
+    __setAuthConfigForTests({ requireAuth: true });
+  });
+
   it('hides superadmin mutation actions from admins but keeps member actions', () => {
     const admin = user('admin', 'admin');
     const superadmin = user('superadmin', 'superadmin');
@@ -58,5 +65,37 @@ describe('UsersTable role authority', () => {
 
     expect(await screen.findByText('Admin')).toBeInTheDocument();
     expect(screen.queryByText('Superadmin')).not.toBeInTheDocument();
+  });
+
+  it('composes external lifecycle capabilities with role authority', () => {
+    __setAuthConfigForTests({
+      requireAuth: true,
+      identity: {
+        contractVersion: 1,
+        userLifecycle: 'external',
+        roleAuthority: 'claims',
+        localAuth: 'disabled',
+        external: { provider: 'external_launch', provisioning: 'jit' },
+        capabilities: {
+          users: {
+            create: false,
+            delete: false,
+            identityWrite: false,
+            roleWrite: false,
+            passwordWrite: false,
+            avatarSettingsWrite: false,
+            selfConfigurationWrite: true,
+          },
+        },
+      },
+    });
+    const admin = user('admin', 'admin');
+    const member = user('member', 'member');
+    renderTable(admin, [admin, member]);
+
+    expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Edit admin@example.test')).toBeInTheDocument();
+    expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Delete member@example.test')).not.toBeInTheDocument();
   });
 });

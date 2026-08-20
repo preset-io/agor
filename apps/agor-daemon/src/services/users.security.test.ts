@@ -9,7 +9,7 @@
 
 import type { AgorConfig } from '@agor/core/config';
 import { AgenticToolPresetRepository } from '@agor/core/db';
-import type { Params, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, Params, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markLocalAuthenticationLookup, UsersService } from './users';
@@ -223,6 +223,46 @@ describe('UsersService — external identity authority', () => {
     expect(updated.onboarding_completed).toBe(true);
     expect(updated.preferences).toEqual({ audio: { enabled: false } });
     expect(updated.default_mcp_server_ids).toEqual([]);
+  });
+
+  dbTest('composes external capabilities with actor role authority', async ({ db }) => {
+    const local = new UsersService(db);
+    const superadmin = await local.create({
+      email: 'external-superadmin@test.local',
+      password: 'test-password-1234',
+      role: 'superadmin',
+    });
+    const member = await local.create({
+      email: 'external-member@test.local',
+      password: 'test-password-1234',
+      role: 'member',
+    });
+    const params = {
+      provider: 'rest',
+      user: {
+        user_id: superadmin.user_id,
+        email: superadmin.email,
+        role: superadmin.role,
+      },
+    } as AuthenticatedParams;
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+
+    await expect(
+      external.create(
+        { email: 'external-created@test.local', password: 'test-password-1234' },
+        params
+      )
+    ).rejects.toMatchObject({ data: { capability: 'users.create' } });
+    await expect(
+      external.patch(member.user_id as UserID, { role: 'admin' }, params)
+    ).rejects.toMatchObject({ data: { capability: 'users.role.write' } });
+    await expect(external.remove(member.user_id as UserID, params)).rejects.toMatchObject({
+      data: { capability: 'users.delete' },
+    });
+
+    await expect(
+      external.patch(member.user_id as UserID, { preferences: { theme: 'dark' } }, params)
+    ).resolves.toMatchObject({ preferences: { theme: 'dark' } });
   });
 
   dbTest('disables local password lookup and avatar mutation surfaces', async ({ db }) => {

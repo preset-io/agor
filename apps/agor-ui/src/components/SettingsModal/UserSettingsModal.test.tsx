@@ -453,6 +453,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
     expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
     expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+    const useSlackAvatar = screen.getByRole('switch');
+    expect(useSlackAvatar).toBeEnabled();
+    fireEvent.click(useSlackAvatar);
 
     fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
     await screen.findByRole('heading', { name: 'Preferences' });
@@ -466,6 +469,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
     const patch = onUpdate.mock.calls[0][1];
     expect(patch.preferences?.audio?.enabled).toBe(true);
+    expect(patch.preferences?.use_slack_avatar).toBe(false);
     expect(patch).not.toHaveProperty('email');
     expect(patch).not.toHaveProperty('name');
     expect(patch).not.toHaveProperty('role');
