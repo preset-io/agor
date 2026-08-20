@@ -2,6 +2,8 @@ import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import {
   type AgorConfig,
+  AgorRoleAuthority,
+  AgorUserLifecycleAuthority,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveTenantContext,
@@ -269,9 +271,9 @@ function mapRole(
   settings: ResolvedLaunchSettings,
   allowSuperadmin: boolean | undefined,
   existingRole?: UserRole,
-  roleAuthority: 'internal' | 'claims' = 'internal'
+  roleAuthority: AgorRoleAuthority = AgorRoleAuthority.INTERNAL
 ): UserRole {
-  if (roleAuthority === 'claims') {
+  if (roleAuthority === AgorRoleAuthority.CLAIMS) {
     if (
       typeof claimedRole !== 'string' ||
       !['viewer', 'member', 'admin', 'superadmin', 'owner'].includes(claimedRole)
@@ -359,7 +361,11 @@ async function upsertLaunchUser(
   const now = new Date();
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
-  if (identityAuthority.userLifecycle === 'external' && claims.email !== undefined && !email) {
+  if (
+    identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+    claims.email !== undefined &&
+    !email
+  ) {
     throw new NotAuthenticated('Invalid one-time launch assertion email');
   }
   const name = claims.name?.trim() || undefined;
@@ -398,13 +404,15 @@ async function upsertLaunchUser(
     await update(db, users)
       .set({
         email:
-          identityAuthority.userLifecycle === 'external' && email !== undefined
+          identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+          email !== undefined
             ? email
             : existing.email,
         name: name ?? existing.name,
         role,
         unix_username:
-          identityAuthority.userLifecycle === 'external' && claims.unix_username !== undefined
+          identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+          claims.unix_username !== undefined
             ? unixUsername
             : (unixUsername ?? existing.unix_username),
         updated_at: now,

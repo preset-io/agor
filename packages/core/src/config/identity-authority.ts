@@ -1,35 +1,20 @@
-import type { AgorConfig } from './types';
-
-export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 1 as const;
-
-export interface ResolvedIdentityAuthority {
-  contractVersion: typeof IDENTITY_AUTHORITY_CONTRACT_VERSION;
-  userLifecycle: 'internal' | 'external';
-  roleAuthority: 'internal' | 'claims';
-  localAuth: 'enabled' | 'disabled';
-  external?: {
-    provider: 'external_launch';
-    provisioning: 'jit';
-  };
-  capabilities: {
-    users: {
-      create: boolean;
-      delete: boolean;
-      identityWrite: boolean;
-      roleWrite: boolean;
-      passwordWrite: boolean;
-      avatarSettingsWrite: boolean;
-      selfConfigurationWrite: true;
-    };
-  };
-}
+import {
+  type AgorConfig,
+  AgorExternalIdentityProvider,
+  AgorExternalIdentityProvisioning,
+  AgorLocalAuthMode,
+  AgorRoleAuthority,
+  AgorUserLifecycleAuthority,
+  IDENTITY_AUTHORITY_CONTRACT_VERSION,
+  type ResolvedIdentityAuthority,
+} from './types';
 
 /** Resolve the omitted-config local default into one transport-neutral policy. */
 export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAuthority {
-  const userLifecycle = config.identity?.user_lifecycle ?? 'internal';
-  const roleAuthority = config.identity?.role_authority ?? 'internal';
-  const localAuth = config.identity?.local_auth ?? 'enabled';
-  const externallyManaged = userLifecycle === 'external';
+  const userLifecycle = config.identity?.user_lifecycle ?? AgorUserLifecycleAuthority.INTERNAL;
+  const roleAuthority = config.identity?.role_authority ?? AgorRoleAuthority.INTERNAL;
+  const localAuth = config.identity?.local_auth ?? AgorLocalAuthMode.ENABLED;
+  const externallyManaged = userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
   const external = config.identity?.external;
 
   return {
@@ -37,7 +22,8 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
     userLifecycle,
     roleAuthority,
     localAuth,
-    ...(external?.provider === 'external_launch' && external.provisioning === 'jit'
+    ...(external?.provider === AgorExternalIdentityProvider.EXTERNAL_LAUNCH &&
+    external.provisioning === AgorExternalIdentityProvisioning.JIT
       ? {
           external: {
             provider: external.provider,
@@ -50,8 +36,8 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
         create: !externallyManaged,
         delete: !externallyManaged,
         identityWrite: !externallyManaged,
-        roleWrite: roleAuthority === 'internal',
-        passwordWrite: localAuth === 'enabled' && !externallyManaged,
+        roleWrite: roleAuthority === AgorRoleAuthority.INTERNAL,
+        passwordWrite: localAuth === AgorLocalAuthMode.ENABLED && !externallyManaged,
         avatarSettingsWrite: !externallyManaged,
         selfConfigurationWrite: true,
       },
@@ -80,13 +66,13 @@ export function assertValidEffectiveIdentityConfig(
   if (!identity) return;
 
   const resolved = resolveIdentityAuthority(config);
-  if (resolved.userLifecycle === 'internal') {
-    if (resolved.roleAuthority !== 'internal') {
+  if (resolved.userLifecycle === AgorUserLifecycleAuthority.INTERNAL) {
+    if (resolved.roleAuthority !== AgorRoleAuthority.INTERNAL) {
       throw new Error(
         "identity.role_authority 'claims' requires identity.user_lifecycle 'external'"
       );
     }
-    if (resolved.localAuth !== 'enabled') {
+    if (resolved.localAuth !== AgorLocalAuthMode.ENABLED) {
       throw new Error("identity.local_auth 'disabled' requires identity.user_lifecycle 'external'");
     }
     if (identity.external !== undefined) {
@@ -95,15 +81,15 @@ export function assertValidEffectiveIdentityConfig(
     return;
   }
 
-  if (resolved.roleAuthority !== 'claims') {
+  if (resolved.roleAuthority !== AgorRoleAuthority.CLAIMS) {
     throw new Error("identity.user_lifecycle 'external' requires identity.role_authority 'claims'");
   }
-  if (resolved.localAuth !== 'disabled') {
+  if (resolved.localAuth !== AgorLocalAuthMode.DISABLED) {
     throw new Error("identity.user_lifecycle 'external' requires identity.local_auth 'disabled'");
   }
   if (
-    identity.external?.provider !== 'external_launch' ||
-    identity.external.provisioning !== 'jit'
+    identity.external?.provider !== AgorExternalIdentityProvider.EXTERNAL_LAUNCH ||
+    identity.external.provisioning !== AgorExternalIdentityProvisioning.JIT
   ) {
     throw new Error(
       "identity.user_lifecycle 'external' requires identity.external.provider 'external_launch' and provisioning 'jit'"

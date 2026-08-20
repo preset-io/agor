@@ -1,3 +1,4 @@
+import { AgorLocalAuthMode } from '@agor/core/config/browser';
 import type {
   AgenticToolName,
   AgorClient,
@@ -894,7 +895,7 @@ function AppContent() {
             ? authConfig.externalLaunch.returnHostParam
             : undefined
         }
-        localLoginEnabled={authConfig?.identity?.localAuth !== 'disabled'}
+        localLoginEnabled={authConfig?.identity?.localAuth !== AgorLocalAuthMode.DISABLED}
       />
     );
   }

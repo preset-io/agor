@@ -26,7 +26,12 @@ import { resolveExecutorResponseConfig } from './executor-response';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
+  AgorExternalIdentityProvider,
+  AgorExternalIdentityProvisioning,
+  AgorLocalAuthMode,
+  AgorRoleAuthority,
   type AgorStatsDSettings,
+  AgorUserLifecycleAuthority,
   BRANCH_STORAGE_MODES,
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
@@ -673,31 +678,31 @@ function validateConfig(config: AgorConfig): void {
   only(config.identity?.external, 'identity.external', ['provider', 'provisioning']);
   if (
     config.identity?.user_lifecycle !== undefined &&
-    !['internal', 'external'].includes(config.identity.user_lifecycle)
+    !Object.values(AgorUserLifecycleAuthority).includes(config.identity.user_lifecycle)
   ) {
     throw new Error('Config error: identity.user_lifecycle must be internal or external');
   }
   if (
     config.identity?.role_authority !== undefined &&
-    !['internal', 'claims'].includes(config.identity.role_authority)
+    !Object.values(AgorRoleAuthority).includes(config.identity.role_authority)
   ) {
     throw new Error('Config error: identity.role_authority must be internal or claims');
   }
   if (
     config.identity?.local_auth !== undefined &&
-    !['enabled', 'disabled'].includes(config.identity.local_auth)
+    !Object.values(AgorLocalAuthMode).includes(config.identity.local_auth)
   ) {
     throw new Error('Config error: identity.local_auth must be enabled or disabled');
   }
   if (
     config.identity?.external?.provider !== undefined &&
-    config.identity.external.provider !== 'external_launch'
+    config.identity.external.provider !== AgorExternalIdentityProvider.EXTERNAL_LAUNCH
   ) {
     throw new Error('Config error: identity.external.provider must be external_launch');
   }
   if (
     config.identity?.external?.provisioning !== undefined &&
-    config.identity.external.provisioning !== 'jit'
+    config.identity.external.provisioning !== AgorExternalIdentityProvisioning.JIT
   ) {
     throw new Error('Config error: identity.external.provisioning must be jit');
   }

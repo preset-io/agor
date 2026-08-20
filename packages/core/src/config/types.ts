@@ -257,20 +257,47 @@ export interface AgorExternalLaunchSettings {
 }
 
 /** Which system may create and remove user projections in this daemon. */
-export type AgorUserLifecycleAuthority = 'internal' | 'external';
+export const AgorUserLifecycleAuthority = {
+  INTERNAL: 'internal',
+  EXTERNAL: 'external',
+} as const;
+export type AgorUserLifecycleAuthority =
+  (typeof AgorUserLifecycleAuthority)[keyof typeof AgorUserLifecycleAuthority];
 
 /** Which system owns the effective Agor role. */
-export type AgorRoleAuthority = 'internal' | 'claims';
+export const AgorRoleAuthority = {
+  INTERNAL: 'internal',
+  CLAIMS: 'claims',
+} as const;
+export type AgorRoleAuthority = (typeof AgorRoleAuthority)[keyof typeof AgorRoleAuthority];
 
 /** Whether password-based authentication is available on this daemon. */
-export type AgorLocalAuthMode = 'enabled' | 'disabled';
+export const AgorLocalAuthMode = {
+  ENABLED: 'enabled',
+  DISABLED: 'disabled',
+} as const;
+export type AgorLocalAuthMode = (typeof AgorLocalAuthMode)[keyof typeof AgorLocalAuthMode];
+
+/** Supported external projection providers. */
+export const AgorExternalIdentityProvider = {
+  EXTERNAL_LAUNCH: 'external_launch',
+} as const;
+export type AgorExternalIdentityProvider =
+  (typeof AgorExternalIdentityProvider)[keyof typeof AgorExternalIdentityProvider];
+
+/** Supported external projection provisioning strategies. */
+export const AgorExternalIdentityProvisioning = {
+  JIT: 'jit',
+} as const;
+export type AgorExternalIdentityProvisioning =
+  (typeof AgorExternalIdentityProvisioning)[keyof typeof AgorExternalIdentityProvisioning];
 
 /** External identity provisioning settings. */
 export interface AgorExternalIdentitySettings {
   /** Verified authentication handoff that provisions users. */
-  provider?: 'external_launch';
+  provider?: AgorExternalIdentityProvider;
   /** Create/update a local projection when a verified external login succeeds. */
-  provisioning?: 'jit';
+  provisioning?: AgorExternalIdentityProvisioning;
 }
 
 /**
@@ -286,6 +313,31 @@ export interface AgorIdentitySettings {
   role_authority?: AgorRoleAuthority;
   local_auth?: AgorLocalAuthMode;
   external?: AgorExternalIdentitySettings;
+}
+
+export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 1 as const;
+
+/** Resolved identity policy and client capability contract exposed by the daemon. */
+export interface ResolvedIdentityAuthority {
+  contractVersion: typeof IDENTITY_AUTHORITY_CONTRACT_VERSION;
+  userLifecycle: AgorUserLifecycleAuthority;
+  roleAuthority: AgorRoleAuthority;
+  localAuth: AgorLocalAuthMode;
+  external?: {
+    provider: AgorExternalIdentityProvider;
+    provisioning: AgorExternalIdentityProvisioning;
+  };
+  capabilities: {
+    users: {
+      create: boolean;
+      delete: boolean;
+      identityWrite: boolean;
+      roleWrite: boolean;
+      passwordWrite: boolean;
+      avatarSettingsWrite: boolean;
+      selfConfigurationWrite: true;
+    };
+  };
 }
 
 /**

@@ -5,33 +5,16 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
+import type { ResolvedIdentityAuthority } from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
 import type { UploadIngressPolicy } from '@agor/core/types';
 import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import type { BranchStorageConfig } from '../utils/branchStorage';
 
-export interface IdentityAuthorityConfig {
-  contractVersion: 1;
-  userLifecycle: 'internal' | 'external';
-  roleAuthority: 'internal' | 'claims';
-  localAuth: 'enabled' | 'disabled';
-  capabilities: {
-    users: {
-      create: boolean;
-      delete: boolean;
-      identityWrite: boolean;
-      roleWrite: boolean;
-      passwordWrite: boolean;
-      avatarSettingsWrite: boolean;
-      selfConfigurationWrite: boolean;
-    };
-  };
-}
-
 export interface AuthConfig {
   requireAuth: boolean;
-  identity?: IdentityAuthorityConfig;
+  identity?: ResolvedIdentityAuthority;
   externalLaunch?: {
     enabled?: boolean;
     loginRedirectUrl?: string;
