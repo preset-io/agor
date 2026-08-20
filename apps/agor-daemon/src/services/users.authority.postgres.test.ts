@@ -8,6 +8,7 @@ import {
   createTenantScopedDatabaseProxy,
   type Database,
   executeRaw,
+  GroupRepository,
   generateId,
   initializeDatabase,
   isPostgresDatabase,
@@ -18,6 +19,7 @@ import {
 } from '@agor/core/db';
 import type { AuthenticatedParams, User, UserID, UserRole } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createGroupMembershipsService } from './groups.js';
 import { UsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -154,6 +156,63 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const remaining = await new UsersRepository(scoped).findAll();
         expect(remaining.filter((user) => user.role === 'superadmin')).toHaveLength(1);
+      });
+    });
+
+    it('enforces membership target authority for transport and direct calls under RLS', async () => {
+      const tenantId = `membership-authority-${generateId()}`;
+      const otherTenantId = `membership-authority-other-${generateId()}`;
+      const superadmin = await seed(tenantId, 'superadmin', 'membership-superadmin');
+      const admin = await seed(tenantId, 'admin', 'membership-admin');
+      const member = await seed(tenantId, 'member', 'membership-member');
+      const otherSuperadmin = await seed(
+        otherTenantId,
+        'superadmin',
+        'membership-other-superadmin'
+      );
+      const memberships = createGroupMembershipsService(db);
+
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const group = await new GroupRepository(scoped).create({ name: 'Membership authority' });
+        const adminParams = params(admin, tenantId);
+        const directAdminParams = {
+          ...adminParams,
+          provider: undefined,
+        } as AuthenticatedParams;
+
+        await expect(
+          memberships.create({ group_id: group.group_id, user_id: superadmin.user_id }, adminParams)
+        ).rejects.toMatchObject({ code: 403 });
+        await expect(
+          memberships.create(
+            { group_id: group.group_id, user_id: superadmin.user_id },
+            directAdminParams
+          )
+        ).rejects.toMatchObject({ code: 403 });
+        await expect(
+          memberships.create(
+            { group_id: group.group_id, user_id: otherSuperadmin.user_id },
+            adminParams
+          )
+        ).rejects.toMatchObject({ code: 403 });
+
+        await memberships.create({ group_id: group.group_id, user_id: superadmin.user_id });
+        await expect(
+          memberships.remove(superadmin.user_id, {
+            ...directAdminParams,
+            query: { group_id: group.group_id },
+          })
+        ).rejects.toMatchObject({ code: 403 });
+
+        await expect(
+          memberships.create(
+            { group_id: group.group_id, user_id: admin.user_id },
+            params(superadmin, tenantId)
+          )
+        ).resolves.toMatchObject({ user_id: admin.user_id });
+        await expect(
+          memberships.create({ group_id: group.group_id, user_id: member.user_id }, adminParams)
+        ).resolves.toMatchObject({ user_id: member.user_id });
       });
     });
   }

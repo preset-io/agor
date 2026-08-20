@@ -4,6 +4,7 @@ import {
   isPostgresDatabaseHandle,
   sql,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { AuthenticatedParams, Params } from '@agor/core/types';
 
@@ -15,10 +16,11 @@ const USER_AUTHORITY_LOCK_NAMESPACE = 'agor:user-role-authority:v1';
  * Callers must already be inside the request's tenant transaction. Sharing
  * this lock between user CRUD and related access mutations prevents a role
  * demotion from racing an operation authorized by the actor's previous role.
- * SQLite's write transaction supplies the equivalent serialization.
+ * SQLite callers obtain equivalent serialization by running the complete
+ * authority decision and write in an immediate tenant database transaction.
  */
 export async function lockUserAuthorityMutation(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   params?: Params
 ): Promise<void> {
   const user = (params as AuthenticatedParams | undefined)?.user;

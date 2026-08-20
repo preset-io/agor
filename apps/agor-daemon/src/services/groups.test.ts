@@ -1,4 +1,8 @@
-import { type BranchRepository, GroupRepository } from '@agor/core/db';
+import {
+  type BranchRepository,
+  GroupRepository,
+  getCurrentTenantDatabaseScope,
+} from '@agor/core/db';
 import type { AuthenticatedParams, HookContext, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -100,15 +104,31 @@ describe('group membership target authority', () => {
       provider: 'rest',
       user: { user_id: actor.user_id, email: actor.email, role: actor.role },
     });
+    const directParams = (actor: User): AuthenticatedParams =>
+      ({
+        user: { user_id: actor.user_id, email: actor.email, role: actor.role },
+      }) as AuthenticatedParams;
 
     await expect(
       memberships.create({ group_id: group.group_id, user_id: superadmin.user_id }, params(admin))
+    ).rejects.toMatchObject({ code: 403 });
+    await expect(
+      memberships.create(
+        { group_id: group.group_id, user_id: superadmin.user_id },
+        directParams(admin)
+      )
     ).rejects.toMatchObject({ code: 403 });
 
     await memberships.create({ group_id: group.group_id, user_id: superadmin.user_id });
     await expect(
       memberships.remove(superadmin.user_id, {
         ...params(admin),
+        query: { group_id: group.group_id },
+      })
+    ).rejects.toMatchObject({ code: 403 });
+    await expect(
+      memberships.remove(superadmin.user_id, {
+        ...directParams(admin),
         query: { group_id: group.group_id },
       })
     ).rejects.toMatchObject({ code: 403 });
@@ -120,6 +140,43 @@ describe('group membership target authority', () => {
       memberships.create({ group_id: group.group_id, user_id: member.user_id }, params(admin))
     ).resolves.toMatchObject({ user_id: member.user_id });
   });
+
+  dbTest(
+    'keeps the authority decision and membership write in one SQLite transaction',
+    async ({ db }) => {
+      const users = new UsersService(db);
+      const memberships = createGroupMembershipsService(db);
+      const group = await new GroupRepository(db).create({ name: 'Atomic authority group' });
+      const admin = await users.create({
+        email: 'atomic-group-admin@example.test',
+        password: 'password-1234',
+        role: 'admin',
+      });
+      const member = await users.create({
+        email: 'atomic-group-member@example.test',
+        password: 'password-1234',
+        role: 'member',
+      });
+      const addMember = GroupRepository.prototype.addMember;
+      const transactionStates: Array<boolean | undefined> = [];
+      const addMemberSpy = vi
+        .spyOn(GroupRepository.prototype, 'addMember')
+        .mockImplementation(function (...args) {
+          transactionStates.push(getCurrentTenantDatabaseScope()?.transactionActive);
+          return addMember.apply(this, args);
+        });
+
+      try {
+        await memberships.create({ group_id: group.group_id, user_id: member.user_id }, {
+          user: { user_id: admin.user_id, email: admin.email, role: admin.role },
+        } as AuthenticatedParams);
+      } finally {
+        addMemberSpy.mockRestore();
+      }
+
+      expect(transactionStates).toEqual([true]);
+    }
+  );
 });
 
 describe('branch group grant permission validation', () => {
