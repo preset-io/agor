@@ -8,6 +8,7 @@
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
 import {
+  backfillUserPrimaryTeammates,
   checkMigrationStatus,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
@@ -152,6 +153,18 @@ export async function initializeDatabase(
     } else {
       const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
       logFirstRunAdminBootstrap(bootstrapResult);
+    }
+
+    // This idempotent data backfill is safe when initialization is already in
+    // a concrete tenant scope (SQLite's single tenant or static Postgres).
+    // Dynamic multi-tenant deployments intentionally do not enumerate tenant
+    // data from system scope; their tenant provisioning path can call the same
+    // exported helper within its trusted tenant scope.
+    if (dialect === 'sqlite' || options.tenantId) {
+      const backfill = await backfillUserPrimaryTeammates(scopedDb);
+      console.log(
+        `[database] primary assistant backfill assigned=${backfill.assigned} already_set=${backfill.alreadySet} skipped=${backfill.skipped}`
+      );
     }
   };
 

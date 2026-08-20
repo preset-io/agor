@@ -1,10 +1,14 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp } from 'antd';
+import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { NewSessionCreationOutcome } from '../NewSessionModal';
+import type {
+  InitialContentDeliveryResult,
+  InitialContentRetry,
+  NewSessionCreationResult,
+} from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -58,6 +62,9 @@ vi.mock('../AgenticConfigChipRow', () => ({
         >
           invalidate
         </button>
+        <Form.Item name="mcpServerIds" noStyle>
+          <Checkbox.Group options={[{ label: 'Edited MCP', value: 'edited-mcp' }]} />
+        </Form.Item>
       </div>
     );
   },
@@ -183,7 +190,11 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
 }
 
 const primaryBranch = makeBranch();
-const pickedBranch = makeBranch({ branch_id: 'branch-picked', board_id: 'board-primary' });
+const pickedBranch = makeBranch({
+  branch_id: 'branch-picked',
+  board_id: 'board-primary',
+  mcp_server_ids: ['picked-mcp'],
+});
 
 function makeClient(primary: Branch | null): AgorClient {
   return {
@@ -197,9 +208,18 @@ function renderCompose(opts: {
   pathname?: string;
   currentUser?: User | null;
   disabled?: boolean;
-  onCreateSession?: (config: unknown, boardId: string) => Promise<NewSessionCreationOutcome | null>;
+  onCreateSession?: (config: unknown, boardId: string) => Promise<NewSessionCreationResult | null>;
+  onRetryInitialContent?: (
+    sessionId: string,
+    retry: InitialContentRetry
+  ) => Promise<InitialContentDeliveryResult>;
 }) {
-  const onCreateSession = opts.onCreateSession ?? vi.fn().mockResolvedValue('session-new');
+  const onCreateSession =
+    opts.onCreateSession ??
+    vi.fn().mockResolvedValue({
+      sessionId: 'session-new',
+      delivery: { prompt: 'not-requested', attachments: 'not-requested' },
+    });
   const result = render(
     <MemoryRouter initialEntries={[opts.pathname ?? '/b/x/']}>
       <AntApp>
@@ -208,6 +228,7 @@ function renderCompose(opts: {
           currentUser={opts.currentUser ?? null}
           currentBoardId={opts.currentBoardId ?? 'board-current'}
           onCreateSession={onCreateSession as never}
+          onRetryInitialContent={opts.onRetryInitialContent}
           disabled={opts.disabled}
         />
       </AntApp>
@@ -477,11 +498,15 @@ describe('NavbarComposeButton', () => {
   });
 
   it('preserves the draft and avoids a false success when initial delivery fails', async () => {
+    const retry = { prompt: 'do not lose me' };
     const onCreateSession = vi.fn().mockResolvedValue({
       sessionId: 'session-undelivered',
-      initialContentDelivered: false,
+      delivery: { prompt: 'failed', attachments: 'not-requested', retry },
     });
-    renderCompose({ primary: primaryBranch, onCreateSession });
+    const onRetryInitialContent = vi
+      .fn()
+      .mockResolvedValue({ prompt: 'delivered', attachments: 'not-requested' });
+    renderCompose({ primary: primaryBranch, onCreateSession, onRetryInitialContent });
     openPopover();
     const prompt = await screen.findByTestId('compose-prompt');
     fireEvent.change(prompt, { target: { value: 'do not lose me' } });
@@ -494,8 +519,16 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByRole('button', { name: 'Send in Background' })).toBeDisabled();
     expect(goToSession).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open session' }));
-    expect(goToSession).toHaveBeenCalledWith('session-undelivered');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    await waitFor(() =>
+      expect(onRetryInitialContent).toHaveBeenCalledWith('session-undelivered', retry)
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Session created, but some content was not sent')
+      ).not.toBeInTheDocument()
+    );
+    expect(goToSession).not.toHaveBeenCalled();
   });
 
   it('disables the compose mutation surface while the connection is unavailable', () => {
@@ -522,7 +555,20 @@ describe('NavbarComposeButton', () => {
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({
       branch_id: 'branch-picked',
       initialPrompt: 'keep me',
+      mcpServerIds: ['picked-mcp'],
     });
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
+  });
+
+  it('does not overwrite MCP edits made before choosing a primary assistant', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'keep me' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Edited MCP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByTestId('pick-teammate'));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['edited-mcp'] });
   });
 });

@@ -97,6 +97,21 @@ describe('backfillUserPrimaryTeammates', () => {
     expect(await primaryTeammates.getBranchId(user.user_id)).toBeNull();
   });
 
+  dbTest('does not persist an inactive or non-teammate board default', async ({ db }) => {
+    const { boardId, branchId } = await createBoardWithTeammate(db);
+    await new BranchRepository(db).update(branchId, { archived: true });
+    const user = await new UsersRepository(db).create({
+      email: 'invalid-board-default@example.com',
+      role: 'member',
+      preferences: { mainBoardId: boardId },
+    });
+
+    const result = await backfillUserPrimaryTeammates(db);
+
+    expect(result).toMatchObject({ assigned: 0, skipped: 1 });
+    expect(await new UserPrimaryTeammateRepository(db).getBranchId(user.user_id)).toBeNull();
+  });
+
   dbTest('does not overwrite a primary teammate that is already set', async ({ db }) => {
     const { boardId } = await createBoardWithTeammate(db);
     const user = await new UsersRepository(db).create({

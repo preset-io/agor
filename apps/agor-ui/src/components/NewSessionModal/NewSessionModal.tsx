@@ -12,6 +12,10 @@ import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import type { NewSessionConfig } from '../../domain/sessionCreation';
+
+export type { NewSessionConfig } from '../../domain/sessionCreation';
+
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -32,7 +36,6 @@ import {
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -42,51 +45,6 @@ const PASTE_SHORTCUT =
   /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '')
     ? '⌘V'
     : 'Ctrl+V';
-
-export interface NewSessionConfig {
-  branch_id: string; // Required - sessions are always created from a branch
-  agent: string;
-  agenticToolPresetId?: string;
-  title?: string;
-  initialPrompt?: string;
-
-  // Advanced configuration
-  modelConfig?: ModelConfig;
-  effort?: EffortLevel;
-  mcpServerIds?: string[];
-  permissionMode?: PermissionMode;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
-  /**
-   * Session-scope env var names (belonging to the creator) to export into this
-   * session's executor process once it is created.
-   */
-  envVarNames?: string[];
-  /**
-   * Raw files pasted/dropped into the initial prompt before the session
-   * exists. Uploaded to the new session after creation, then folded into the
-   * initial prompt. Never included in the session-create REST payload.
-   */
-  attachmentFiles?: File[];
-}
-
-export interface NewSessionCreationResult {
-  sessionId: string;
-  /** False when the session exists but its initial prompt or attachments were not delivered. */
-  initialContentDelivered: boolean;
-}
-
-/** String remains accepted for lightweight callers/tests that create an empty session. */
-export type NewSessionCreationOutcome = string | NewSessionCreationResult;
-
-export function normalizeNewSessionCreationOutcome(
-  outcome: NewSessionCreationOutcome
-): NewSessionCreationResult {
-  return typeof outcome === 'string'
-    ? { sessionId: outcome, initialContentDelivered: true }
-    : outcome;
-}
 
 export interface NewSessionModalProps {
   open: boolean;

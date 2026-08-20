@@ -1,4 +1,5 @@
 import type { ActiveUser, AgorClient, Board, BoardID, Branch, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { BulbOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
@@ -7,6 +8,11 @@ import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import type {
+  InitialContentDeliveryResult,
+  InitialContentRetry,
+  NewSessionCreationResult,
+} from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -17,7 +23,7 @@ import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import type { NewSessionConfig, NewSessionCreationOutcome } from '../NewSessionModal';
+import type { NewSessionConfig } from '../NewSessionModal';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -61,7 +67,11 @@ export interface AppHeaderProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationOutcome | null>;
+  ) => Promise<NewSessionCreationResult | null>;
+  onRetryInitialContent?: (
+    sessionId: string,
+    retry: InitialContentRetry
+  ) => Promise<InitialContentDeliveryResult>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -139,6 +149,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   instanceLabel,
   instanceDescription,
   onCreateSession,
+  onRetryInitialContent,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -297,12 +308,14 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           staticActiveUsers={staticActiveUsers}
           maxVisible={presenceMaxVisible}
         />
-        {onCreateSession && (
+        {onCreateSession && hasMinimumRole(user?.role, ROLES.MEMBER) && (
           <NavbarComposeButton
+            key={user?.user_id ?? 'anonymous'}
             client={presenceClient}
             currentUser={user}
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
+            onRetryInitialContent={onRetryInitialContent}
             disabled={mutationDisabled}
           />
         )}

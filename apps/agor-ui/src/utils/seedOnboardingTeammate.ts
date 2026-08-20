@@ -1,4 +1,5 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session } from '@agor-live/client';
+import type { NewSessionConfig } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
@@ -15,7 +16,7 @@ export interface SeedOnboardingTeammateInput {
   teammateName?: string;
   teammateEmoji?: string;
   /**
-Framework source branch from the chosen gallery template. Undefined falls
+   * Framework source branch from the chosen gallery template. Undefined falls
    * back to the framework repo's default branch (createTeammateBranch). A
    * missing template branch on the remote surfaces as a non-fatal warning
    * rather than blocking completion.
@@ -41,7 +42,7 @@ Framework source branch from the chosen gallery template. Undefined falls
   existingSessionId?: string;
   onCreateBranch: TeammateCreationDeps['onCreateBranch'];
   onUpdateBranch: TeammateCreationDeps['onUpdateBranch'];
-  onCreateSession: (config: unknown, boardId: string) => Promise<string | null>;
+  onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
   onWarn: (message: string) => void;
 }

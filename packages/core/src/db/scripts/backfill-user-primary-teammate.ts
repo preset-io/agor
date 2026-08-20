@@ -60,6 +60,15 @@ export async function backfillUserPrimaryTeammates(
       continue;
     }
 
+    const eligible = await primaryTeammates.findEligiblePrimaryTeammate(
+      teammateBranchId as BranchID,
+      user.user_id
+    );
+    if (!eligible) {
+      result.skipped++;
+      continue;
+    }
+
     const assigned = await primaryTeammates.setPrimaryTeammateIfUnset(
       user.user_id,
       teammateBranchId as BranchID,

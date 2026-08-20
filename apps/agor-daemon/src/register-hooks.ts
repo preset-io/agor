@@ -27,6 +27,7 @@ import {
   type BranchRepository,
   getCurrentTenantDatabaseScope,
   isPostgresDatabaseHandle,
+  isTenantWriteMethodName,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -920,13 +921,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // Enforce the per-tenant write gate on request-driven writes. Runs after
   // scopeTenantBefore has resolved the trusted tenant. Reads are never gated;
-  // only create/update/patch/remove are blocked while a freeze is held. This is
+  // custom mutators as well as CRUD writes are blocked while a freeze is held. This is
   // the request-traffic enforcement point for the generic write gate; deferred
   // operators (scheduler/gateway/executor/queue) enforce at their own entry
   // points. Fails closed with 503 so an orchestrator sees a transient block.
-  const WRITE_METHODS = new Set(['create', 'update', 'patch', 'remove']);
   const writeGateBefore = async (context: HookContext): Promise<HookContext> => {
-    if (!WRITE_METHODS.has(context.method)) return context;
+    if (!isTenantWriteMethodName(context.method)) return context;
     const tenantId = context.params.tenant?.tenant_id;
     if (!tenantId) return context;
     // Only enforce inside an active tenant database scope — the one the around

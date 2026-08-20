@@ -32,6 +32,11 @@ import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
+import type {
+  InitialContentDeliveryResult,
+  InitialContentRetry,
+  NewSessionCreationResult,
+} from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
@@ -86,12 +91,7 @@ import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
 import { NewSessionButton } from '../NewSessionButton';
-import {
-  type NewSessionConfig,
-  type NewSessionCreationOutcome,
-  NewSessionModal,
-  normalizeNewSessionCreationOutcome,
-} from '../NewSessionModal';
+import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
@@ -176,7 +176,11 @@ export interface AppProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationOutcome | null>;
+  ) => Promise<NewSessionCreationResult | null>;
+  onRetryInitialContent?: (
+    sessionId: string,
+    retry: InitialContentRetry
+  ) => Promise<InitialContentDeliveryResult>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -311,6 +315,7 @@ export const App: React.FC<AppProps> = ({
   suppressLeftPanel = false,
   topBanner,
   onCreateSession,
+  onRetryInitialContent,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -853,7 +858,7 @@ export const App: React.FC<AppProps> = ({
 
   const handleCreateSession = async (config: NewSessionConfig) => {
     const outcome = await onCreateSession?.(config, currentBoardId);
-    const sessionId = outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
+    const sessionId = outcome?.sessionId ?? null;
     setNewSessionBranchId(null);
 
     // Select synchronously, then let the URL catch up. The create seam inserts
@@ -897,7 +902,7 @@ export const App: React.FC<AppProps> = ({
         currentBoardId
       );
       if (!outcome) return null;
-      const sessionId = normalizeNewSessionCreationOutcome(outcome).sessionId;
+      const sessionId = outcome.sessionId;
 
       // Select the new session synchronously, in the same render that clears
       // the picker, so the drawer never has a frame with neither target set.
@@ -1068,7 +1073,7 @@ export const App: React.FC<AppProps> = ({
         sessionConfig,
         onCreateSession: async (config, boardId) => {
           const outcome = await onCreateSession(config, boardId);
-          return outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
+          return outcome?.sessionId ?? null;
         },
         onStatusChange: progress?.onStatusChange,
       });
@@ -1424,6 +1429,7 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
   const stableOnCreateSession = useStableCallback(onCreateSession);
+  const stableOnRetryInitialContent = useStableCallback(onRetryInitialContent);
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1458,6 +1464,7 @@ export const App: React.FC<AppProps> = ({
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
           onCreateSession={stableOnCreateSession}
+          onRetryInitialContent={stableOnRetryInitialContent}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>

@@ -12,7 +12,7 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { createUsersService } from './users';
 
 const CALLER = 'caller-user' as UUID;
-const CALLER_PARAMS = { user: { user_id: CALLER } } as never;
+const CALLER_PARAMS = { user: { user_id: CALLER, role: 'member' } } as never;
 
 let uniqueId = 9_000;
 
@@ -111,6 +111,35 @@ describe('UsersService primary teammate', () => {
     ).rejects.toThrow(/create sessions/);
   });
 
+  dbTest('getPrimaryTeammateCandidates uses session eligibility', async ({ db }) => {
+    await ensureCaller(db);
+    const eligible = await createBranch(db);
+    await createBranch(db, {
+      created_by: generateId() as UUID,
+      others_can: 'view',
+    });
+    await createBranch(db, { teammate: false });
+    await createBranch(db, { archived: true });
+
+    await expect(
+      createUsersService(db).getPrimaryTeammateCandidates(undefined, CALLER_PARAMS)
+    ).resolves.toEqual([expect.objectContaining({ branch_id: eligible })]);
+  });
+
+  dbTest('viewers cannot list or set primary teammate choices', async ({ db }) => {
+    await ensureCaller(db);
+    const branchId = await createBranch(db);
+    const viewerParams = { user: { user_id: CALLER, role: 'viewer' } } as never;
+    const service = createUsersService(db);
+
+    await expect(service.getPrimaryTeammateCandidates(undefined, viewerParams)).rejects.toThrow(
+      /Member role/
+    );
+    await expect(service.setPrimaryTeammate({ branchId }, viewerParams)).rejects.toThrow(
+      /Member role/
+    );
+  });
+
   dbTest('setPrimaryTeammate rejects non-teammate and archived branches', async ({ db }) => {
     await ensureCaller(db);
     const ordinaryBranch = await createBranch(db, { teammate: false });
@@ -148,6 +177,7 @@ describe('UsersService primary teammate', () => {
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();
+    await expect(service.getPrimaryTeammateCandidates(undefined, {} as never)).rejects.toThrow();
     await expect(
       service.setPrimaryTeammate({ branchId: generateId() }, {} as never)
     ).rejects.toThrow();

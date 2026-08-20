@@ -852,6 +852,7 @@ describe('createClient', () => {
         'updateAvatarSettings',
         'syncAvatars',
         'getPrimaryTeammate',
+        'getPrimaryTeammateCandidates',
         'setPrimaryTeammate'
       );
     });

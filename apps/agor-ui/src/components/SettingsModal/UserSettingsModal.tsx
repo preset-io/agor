@@ -1648,7 +1648,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.preferences.title} />
 
-      {!isEditingOther && (
+      {!isEditingOther && hasMinimumRole(currentUser?.role, ROLES.MEMBER) && (
         <SettingsSection title="Assistant">
           <Typography.Text strong>Primary assistant</Typography.Text>
           <Typography.Paragraph
@@ -1657,7 +1657,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           >
             Choose the teammate Agor uses by default for personal and ambient work.
           </Typography.Paragraph>
-          <PrimaryTeammatePicker client={client} compact />
+          <PrimaryTeammatePicker
+            key={currentUser?.user_id ?? 'anonymous'}
+            client={client}
+            currentUserId={currentUser?.user_id}
+            compact
+          />
         </SettingsSection>
       )}
 

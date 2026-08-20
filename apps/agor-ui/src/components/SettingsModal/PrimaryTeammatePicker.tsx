@@ -5,10 +5,12 @@ import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById, selectBranchById, selectRepoById } from '../../store/selectors';
+import { selectBoardById, selectRepoById } from '../../store/selectors';
 
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
+  /** Caller identity; changing it invalidates all caller-scoped cached data. */
+  currentUserId?: string;
   /** Drop the heading/description chrome for embedding in a tight surface (e.g. a popover). */
   compact?: boolean;
   disabled?: boolean;
@@ -46,35 +48,43 @@ function teammateContext(
  */
 export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   client,
+  currentUserId,
   compact = false,
   disabled = false,
   onPicked,
 }) => {
   const { message } = AntApp.useApp();
-  const branchById = useAgorStore(selectBranchById);
   const boardById = useAgorStore(selectBoardById);
   const repoById = useAgorStore(selectRepoById);
 
   const [current, setCurrent] = useState<Branch | null>(null);
+  const [candidates, setCandidates] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: caller identity invalidates caller-scoped RPC results even when the client instance is reused
   useEffect(() => {
     if (!client) {
+      setCurrent(null);
+      setCandidates([]);
       setLoading(false);
       setLoadFailed(true);
       return;
     }
     let cancelled = false;
+    setCurrent(null);
+    setCandidates([]);
     setLoading(true);
     setLoadFailed(false);
-    client
-      .service('users')
-      .getPrimaryTeammate()
-      .then((branch) => {
+    Promise.all([
+      client.service('users').getPrimaryTeammate(),
+      client.service('users').getPrimaryTeammateCandidates(),
+    ])
+      .then(([branch, eligibleCandidates]) => {
         if (!cancelled) {
           setCurrent(branch && isTeammate(branch) && !branch.archived ? branch : null);
+          setCandidates(eligibleCandidates);
         }
       })
       .catch(() => {
@@ -86,12 +96,10 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, currentUserId]);
 
   const options = useMemo<TeammateOption[]>(() => {
-    const teammates = Array.from(branchById.values()).filter(
-      (branch) => isTeammate(branch) && !branch.archived
-    );
+    const teammates = candidates.slice();
     // The resolved primary may live on a board this list doesn't otherwise
     // surface; keep it selectable so its label renders instead of a raw id.
     if (current && !teammates.some((branch) => branch.branch_id === current.branch_id)) {
@@ -109,7 +117,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
           searchText: `${label} ${branch.name} ${context}`,
         };
       });
-  }, [branchById, boardById, repoById, current]);
+  }, [candidates, boardById, repoById, current]);
 
   const handleChange = async (branchId: string) => {
     if (!client) return;

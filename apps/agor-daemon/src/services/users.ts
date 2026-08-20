@@ -137,6 +137,7 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'updateAvatarSettings',
   'syncAvatars',
   'getPrimaryTeammate',
+  'getPrimaryTeammateCandidates',
   'setPrimaryTeammate',
 ] as const;
 
@@ -1315,11 +1316,19 @@ export class UsersService {
     if (execution?.branch_rbac !== true) return false;
     if (
       execution.allow_superadmin === true &&
-      hasMinimumRole(params?.user?.role, ROLES.SUPERADMIN)
+      hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.SUPERADMIN)
     ) {
       return false;
     }
     return true;
+  }
+
+  /** List active teammates the caller is allowed to start sessions on. */
+  async getPrimaryTeammateCandidates(_data: unknown, params?: Params): Promise<Branch[]> {
+    const userId = this.requirePrimaryTeammateMember(params);
+    return new UserPrimaryTeammateRepository(this.db).findEligiblePrimaryTeammates(userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
   }
 
   /**
@@ -1329,7 +1338,7 @@ export class UsersService {
    * that would immediately resolve back to null.
    */
   async setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null> {
-    const userId = requireCallerId(params);
+    const userId = this.requirePrimaryTeammateMember(params);
     const branchId = data?.branchId as BranchID | undefined;
     if (!branchId) {
       throw new Forbidden('A branchId is required to set a primary teammate');
@@ -1350,6 +1359,15 @@ export class UsersService {
       updatedBy: userId,
     });
     return branch;
+  }
+
+  private requirePrimaryTeammateMember(params?: Params): UserID {
+    const userId = requireCallerId(params);
+    const caller = (params as AuthenticatedParams | undefined)?.user;
+    if (!hasMinimumRole(caller?.role, ROLES.MEMBER)) {
+      throw new Forbidden('Member role or higher is required to create assistant sessions');
+    }
+    return userId;
   }
 
   /**

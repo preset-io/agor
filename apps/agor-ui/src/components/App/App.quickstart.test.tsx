@@ -77,8 +77,6 @@ vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
 vi.mock('../NewSessionModal', () => ({
   NewSessionModal: () => null,
-  normalizeNewSessionCreationOutcome: (outcome: string | { sessionId: string }) =>
-    typeof outcome === 'string' ? { sessionId: outcome, initialContentDelivered: true } : outcome,
 }));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({ TerminalModal: () => null, WEB_TERMINAL_MIN_ROLE: 'member' }));
@@ -170,7 +168,10 @@ function optimisticCreate(...ids: string[]) {
     const id = ids[Math.min(call, ids.length - 1)];
     call += 1;
     insertSession(id);
-    return id;
+    return {
+      sessionId: id,
+      delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
+    };
   });
 }
 
@@ -194,7 +195,10 @@ function NavProbe() {
 
 function renderShell(
   user: User,
-  onCreateSession = vi.fn(async () => 'new-session-id'),
+  onCreateSession = vi.fn(async () => ({
+    sessionId: 'new-session-id',
+    delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
+  })),
   client: unknown = null
 ) {
   // Mirror the real router: the same App element is mounted at the board,

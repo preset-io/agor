@@ -92,6 +92,29 @@ export class UserPrimaryTeammateRepository {
     return branch;
   }
 
+  /**
+   * List the active teammates a user can actually start a session on. Keeping
+   * this beside the point lookup ensures settings choices and assignment use
+   * one eligibility policy.
+   */
+  async findEligiblePrimaryTeammates(
+    userId: UserID,
+    options: ResolvePrimaryTeammateOptions = {}
+  ): Promise<Branch[]> {
+    const candidates = await this.branches.findTeammateBranches({
+      archived: false,
+      ...(options.enforceAccess === false ? {} : { userId }),
+    });
+    if (options.enforceAccess === false) return candidates;
+
+    const eligible = await Promise.all(
+      candidates.map((branch) =>
+        this.findEligiblePrimaryTeammate(branch.branch_id, userId, options)
+      )
+    );
+    return eligible.filter((branch): branch is Branch => branch !== null);
+  }
+
   /** Set the user's primary teammate branch and emit the assignment event. */
   async setPrimaryTeammate(
     userId: UserID,

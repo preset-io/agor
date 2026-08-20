@@ -40,7 +40,7 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
-import { normalizeNewSessionCreationOutcome } from './components/NewSessionModal';
+import type { NewSessionConfig } from './components/NewSessionModal';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -49,6 +49,12 @@ import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import type {
+  InitialContentDeliveryResult,
+  InitialContentRetry,
+  NewSessionCreationResult,
+} from './domain/sessionCreation';
+import { deliverInitialSessionContent } from './domain/sessionCreation';
 import {
   IdentityContractState,
   useAgorClient,
@@ -790,7 +796,7 @@ function AppContent() {
         handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
       onCreateSession: async (config, boardId) => {
         const outcome = await handleCreateSession(config, boardId);
-        return outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
+        return outcome?.sessionId ?? null;
       },
       onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
     });
@@ -999,9 +1005,35 @@ function AppContent() {
     );
   }
 
+  const deliverInitialContent = async (
+    sessionId: string,
+    content: InitialContentRetry
+  ): Promise<InitialContentDeliveryResult> => {
+    return deliverInitialSessionContent(sessionId, content, {
+      uploadAttachments: async (targetSessionId, prompt, files) => {
+        const uploaded = await uploadFilesToSession({
+          sessionId: targetSessionId,
+          daemonUrl: getDaemonUrl(),
+          files,
+          notifyAgent: false,
+        });
+        return buildPromptWithAttachments(prompt, uploaded.files);
+      },
+      sendPrompt: (targetSessionId, prompt, permissionMode) =>
+        handleSendPrompt(targetSessionId, prompt, permissionMode),
+      onAttachmentUploadError: (error) => {
+        showError(
+          `Failed to upload attachments: ${error instanceof Error ? error.message : String(error)}`
+        );
+      },
+    });
+  };
+
   // Handle session creation
-  // biome-ignore lint/suspicious/noExplicitAny: Config type from AgorApp component props
-  const handleCreateSession = async (config: any, boardId: string) => {
+  const handleCreateSession = async (
+    config: NewSessionConfig,
+    boardId: string
+  ): Promise<NewSessionCreationResult | null> => {
     try {
       const branch_id = config.branch_id;
 
@@ -1049,57 +1081,13 @@ function AppContent() {
 
         showSuccess('Session created!');
 
-        // Upload any pasted/dropped files to the freshly created session, then
-        // fold their server paths into the initial prompt. A screenshot with no
-        // typed text is valid — the attachment block becomes the message — so we
-        // send whenever there is prompt text OR at least one attachment.
-        const trimmedPrompt = config.initialPrompt?.trim() ?? '';
-        let initialContentDelivered = true;
-        if (attachmentFiles?.length) {
-          try {
-            const uploaded = await uploadFilesToSession({
-              sessionId: session.session_id,
-              daemonUrl: getDaemonUrl(),
-              files: attachmentFiles,
-              notifyAgent: false,
-            });
-            const finalPrompt = buildPromptWithAttachments(
-              config.initialPrompt ?? '',
-              uploaded.files
-            );
-            if (finalPrompt.trim()) {
-              initialContentDelivered = await handleSendPrompt(
-                session.session_id,
-                finalPrompt,
-                config.permissionMode
-              );
-            }
-          } catch (error) {
-            // Never silently drop the user's words: surface the upload failure
-            // but still send the text-only prompt so their typing isn't lost.
-            showError(
-              `Failed to upload attachments: ${
-                error instanceof Error ? error.message : String(error)
-              }`
-            );
-            initialContentDelivered = false;
-            if (trimmedPrompt) {
-              await handleSendPrompt(
-                session.session_id,
-                config.initialPrompt,
-                config.permissionMode
-              );
-            }
-          }
-        } else if (trimmedPrompt) {
-          initialContentDelivered = await handleSendPrompt(
-            session.session_id,
-            config.initialPrompt,
-            config.permissionMode
-          );
-        }
+        const delivery = await deliverInitialContent(session.session_id, {
+          prompt: config.initialPrompt ?? '',
+          attachmentFiles,
+          permissionMode: config.permissionMode,
+        });
 
-        return { sessionId: session.session_id, initialContentDelivered };
+        return { sessionId: session.session_id, delivery };
       } else {
         showError('Failed to create session');
         return null;
@@ -1896,6 +1884,7 @@ function AppContent() {
         />
       }
       onCreateSession={handleCreateSession}
+      onRetryInitialContent={deliverInitialContent}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}

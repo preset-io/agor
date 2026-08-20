@@ -32,16 +32,21 @@ function seedStore(branches: Branch[]) {
 
 function createClient(current: Branch | null) {
   const getPrimaryTeammate = vi.fn().mockResolvedValue(current);
+  const getPrimaryTeammateCandidates = vi
+    .fn()
+    .mockResolvedValue(Array.from(agorStore.getState().branchById.values()));
   const setPrimaryTeammate = vi.fn((data: { branchId: string }) =>
     Promise.resolve(teammate(data.branchId, data.branchId))
   );
   const client = {
     service: (name: string) => {
-      if (name === 'users') return { getPrimaryTeammate, setPrimaryTeammate };
+      if (name === 'users') {
+        return { getPrimaryTeammate, getPrimaryTeammateCandidates, setPrimaryTeammate };
+      }
       throw new Error(`unexpected service ${name}`);
     },
   } as unknown as AgorClient;
-  return { client, getPrimaryTeammate, setPrimaryTeammate };
+  return { client, getPrimaryTeammate, getPrimaryTeammateCandidates, setPrimaryTeammate };
 }
 
 function renderPicker(client: AgorClient) {
@@ -94,6 +99,35 @@ describe('PrimaryTeammatePicker', () => {
 
     expect(await screen.findByText(/No primary assistant set/)).toBeInTheDocument();
     expect(screen.queryByText(/Currently/)).not.toBeInTheDocument();
+  });
+
+  it('invalidates caller-scoped results when identity changes on the same client', async () => {
+    const ada = teammate('branch-1', 'Ada');
+    const grace = teammate('branch-2', 'Grace');
+    const getPrimaryTeammate = vi.fn().mockResolvedValueOnce(ada).mockResolvedValueOnce(grace);
+    const getPrimaryTeammateCandidates = vi.fn().mockResolvedValue([ada, grace]);
+    const client = {
+      service: () => ({
+        getPrimaryTeammate,
+        getPrimaryTeammateCandidates,
+        setPrimaryTeammate: vi.fn(),
+      }),
+    } as unknown as AgorClient;
+
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId="user-1" />
+      </AntApp>
+    );
+    expect(await screen.findByText(/Currently/)).toHaveTextContent('Ada');
+
+    view.rerender(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId="user-2" />
+      </AntApp>
+    );
+    await waitFor(() => expect(screen.getByText(/Currently/)).toHaveTextContent('Grace'));
+    expect(getPrimaryTeammate).toHaveBeenCalledTimes(2);
   });
 
   it('writes the picked teammate as an explicit change', async () => {

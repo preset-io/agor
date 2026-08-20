@@ -29,8 +29,14 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import type {
+  InitialContentDeliveryResult,
+  InitialContentRetry,
+  NewSessionCreationResult,
+} from '../../domain/sessionCreation';
+import { isInitialContentDelivered } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
@@ -44,11 +50,7 @@ import {
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import {
-  type NewSessionConfig,
-  type NewSessionCreationOutcome,
-  normalizeNewSessionCreationOutcome,
-} from '../NewSessionModal';
+import type { NewSessionConfig } from '../NewSessionModal';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -67,7 +69,11 @@ export interface NavbarComposeButtonProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationOutcome | null>;
+  ) => Promise<NewSessionCreationResult | null>;
+  onRetryInitialContent?: (
+    sessionId: string,
+    retry: InitialContentRetry
+  ) => Promise<InitialContentDeliveryResult>;
   disabled?: boolean;
 }
 
@@ -96,6 +102,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   currentUser,
   currentBoardId,
   onCreateSession,
+  onRetryInitialContent,
   disabled = false,
 }) => {
   const { token } = theme.useToken();
@@ -122,6 +129,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [deliveryFailure, setDeliveryFailure] = useState<{
     sessionId: string;
     branch: Branch;
+    mode: SendMode;
+    retry: InitialContentRetry;
   } | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
@@ -129,6 +138,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [hintDismissed, setHintDismissed] = useLocalStorage<boolean>(HINT_DISMISSED_KEY, false);
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({ sessionId: null, showError: (msg) => message.error(msg) });
+  const mcpEditedRef = useRef(false);
+  const mcpInitializedBranchIdRef = useRef<string | null>(null);
 
   const onBoardSurface = !!currentBoardId && !isKnowledgePath(location.pathname);
 
@@ -139,6 +150,23 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     border: `1px solid ${token.colorBorderSecondary}`,
     borderRadius: token.borderRadius,
   };
+
+  const initializeMcpForBranch = useCallback(
+    (branch: Branch) => {
+      if (mcpInitializedBranchIdRef.current === branch.branch_id) return;
+      if (!mcpEditedRef.current) {
+        const branchMcpIds = branch.mcp_server_ids;
+        form.setFieldValue(
+          'mcpServerIds',
+          branchMcpIds && branchMcpIds.length > 0
+            ? branchMcpIds
+            : currentUser?.default_mcp_server_ids
+        );
+      }
+      mcpInitializedBranchIdRef.current = branch.branch_id;
+    },
+    [currentUser?.default_mcp_server_ids, form]
+  );
 
   // Resolve eagerly once the client exists (so the collapsed trigger shows the
   // teammate's emoji before first open) and re-resolve on open to catch changes
@@ -174,6 +202,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on open
   useEffect(() => {
     if (!open) return;
+    mcpEditedRef.current = false;
+    mcpInitializedBranchIdRef.current = null;
     setSelectedAgent(DEFAULT_TOOL);
     const agentDefaults = getUserAgenticToolDefault(currentUser, DEFAULT_TOOL).configuration;
     form.resetFields();
@@ -184,17 +214,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     });
   }, [open, form]);
 
-  // Apply branch MCP inheritance after the primary resolves. Depending only on
-  // the branch id avoids wiping edits when live branch objects refresh.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: branch identity is the reset boundary
+  // Initialize branch inheritance once. Later branch resolution must not wipe
+  // a value the caller already edited while choosing an assistant.
   useEffect(() => {
     if (!open || !primaryBranch) return;
-    const branchMcpIds = primaryBranch.mcp_server_ids;
-    form.setFieldValue(
-      'mcpServerIds',
-      branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : currentUser?.default_mcp_server_ids
-    );
-  }, [open, primaryBranch?.branch_id, form]);
+    initializeMcpForBranch(primaryBranch);
+  }, [open, primaryBranch, initializeMcpForBranch]);
 
   // Re-seed config defaults when the picked tool changes (mirrors NewSessionModal).
   useEffect(() => {
@@ -292,30 +317,49 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         branch.board_id ?? currentBoardId ?? ''
       );
       if (!outcome) return; // onCreateSession already surfaced the failure
-      const { sessionId, initialContentDelivered } = normalizeNewSessionCreationOutcome(outcome);
-      if (!initialContentDelivered) {
-        setDeliveryFailure({ sessionId, branch });
+      const { sessionId, delivery } = outcome;
+      if (!isInitialContentDelivered(delivery) && delivery.retry) {
+        setDeliveryFailure({ sessionId, branch, mode, retry: delivery.retry });
         return;
       }
+      finishSuccessfulSend(mode, branch, sessionId);
+    } finally {
+      setSubmitting(null);
+    }
+  };
 
-      if (mode === 'background') {
-        message.success(`Sent to ${teammateName(branch)} in the background`);
-        closeAndReset();
+  const finishSuccessfulSend = (mode: SendMode, branch: Branch, sessionId: string) => {
+    if (mode === 'background') {
+      message.success(`Sent to ${teammateName(branch)} in the background`);
+      closeAndReset();
+      return;
+    }
+
+    if (onBoardSurface) {
+      closeAndReset();
+      navigation.goToSession(sessionId);
+    } else {
+      setOpen(false);
+      setPrompt('');
+      setPendingSend(null);
+      setDeliveryFailure(null);
+      clearAttachments();
+      setInPlaceResult({ sessionId, branch });
+    }
+  };
+
+  const retryInitialContent = async () => {
+    if (!deliveryFailure || !onRetryInitialContent) return;
+    const failure = deliveryFailure;
+    setSubmitting(failure.mode);
+    try {
+      const delivery = await onRetryInitialContent(failure.sessionId, failure.retry);
+      if (delivery.retry) {
+        setDeliveryFailure({ ...failure, retry: delivery.retry });
         return;
       }
-
-      if (onBoardSurface) {
-        // Case 1 / same-board: full navigation to the new session.
-        closeAndReset();
-        navigation.goToSession(sessionId);
-      } else {
-        // Case 2: non-board surface — stay put, surface an in-place panel.
-        setOpen(false);
-        setPrompt('');
-        setPendingSend(null);
-        clearAttachments();
-        setInPlaceResult({ sessionId, branch });
-      }
+      setDeliveryFailure(null);
+      finishSuccessfulSend(failure.mode, failure.branch, failure.sessionId);
     } finally {
       setSubmitting(null);
     }
@@ -338,6 +382,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   };
 
   const handlePicked = (branch: Branch) => {
+    initializeMcpForBranch(branch);
     setPrimaryBranch(branch);
     if (pendingSend) {
       const mode = pendingSend;
@@ -423,7 +468,14 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           description="Check the connection and reopen this composer to retry."
         />
       ) : (
-        <Form form={form} layout="vertical" requiredMark={false}>
+        <Form
+          form={form}
+          layout="vertical"
+          requiredMark={false}
+          onValuesChange={(changedValues) => {
+            if (Object.hasOwn(changedValues, 'mcpServerIds')) mcpEditedRef.current = true;
+          }}
+        >
           {!primaryBranch && (
             <div style={{ marginBottom: token.marginSM }}>
               <div style={{ ...bannerBox, marginBottom: token.marginSM }}>
@@ -434,7 +486,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                 </Typography.Text>
               </div>
               <PrimaryTeammatePicker
+                key={currentUser?.user_id ?? 'anonymous'}
                 client={client}
+                currentUserId={currentUser?.user_id}
                 compact
                 disabled={disabled}
                 onPicked={handlePicked}
@@ -515,18 +569,23 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               type="warning"
               showIcon
               message="Session created, but some content was not sent"
-              description="Your draft is still here. Open the session to retry without creating a duplicate."
+              description="Your complete draft is still here. Retry it against the session that was already created."
               action={
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const sessionId = deliveryFailure.sessionId;
-                    setOpen(false);
-                    navigation.goToSession(sessionId);
-                  }}
-                >
-                  Open session
-                </Button>
+                <Space>
+                  <Button size="small" onClick={() => void retryInitialContent()}>
+                    Retry delivery
+                  </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => {
+                      setOpen(false);
+                      navigation.goToSession(deliveryFailure.sessionId);
+                    }}
+                  >
+                    Open session
+                  </Button>
+                </Space>
               }
               style={{ marginBottom: token.marginXS }}
             />
