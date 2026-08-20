@@ -396,6 +396,73 @@ describe('tenant-owned service registration', () => {
   });
 });
 
+describe('registered board admin authority', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'patch', RegisteredHook[]>>;
+  };
+
+  const captureBoardHooks = (allowSuperadmin: boolean): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'boards') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: true },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    return registrations;
+  };
+
+  it('preserves ordinary board-admin authority for superadmins when bypass is disabled', async () => {
+    const context = {
+      path: 'boards',
+      method: 'patch',
+      id: 'board-1',
+      data: { name: 'Renamed' },
+      params: {
+        provider: 'rest',
+        user: { user_id: 'super-1', role: 'superadmin' },
+      },
+    } as HookContext;
+
+    const registrations = captureBoardHooks(false);
+    expect(registrations).not.toHaveLength(0);
+    for (const registration of registrations) {
+      for (const hook of registration.before?.patch ?? []) {
+        await hook(context);
+      }
+    }
+
+    expect(context).toBeDefined();
+  });
+});
+
 describe('shouldValidateRepoEnvironmentPayload', () => {
   it('skips absent repo environment payloads', () => {
     expect(shouldValidateRepoEnvironmentPayload(undefined)).toBe(false);

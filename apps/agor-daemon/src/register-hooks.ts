@@ -968,9 +968,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  // Helper to get usersService from app
-  const usersService = app.service('users');
-
   /**
    * Authorization chain shared by the two externally-initiated prompt writes,
    * `messages.create` and `tasks.create`.
@@ -2263,115 +2260,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       get: [authorizeUsersGet],
-      create: [
-        (context) => protectFilesystemHomeWrite(context, config),
-        async (context: HookContext<Board>) => {
-          const params = context.params as AuthenticatedParams;
-
-          if (!params.provider) {
-            return context;
-          }
-
-          const existing = (await usersService.find({ query: { $limit: 1 } })) as Paginated<User>;
-          if (existing.total > 0) {
-            ensureMinimumRole(params, ROLES.ADMIN, 'create users');
-          }
-
-          // Only superadmins can create superadmin users
-          // Guard both 'superadmin' and legacy 'owner' to prevent bypass
-          // Cast to include 'owner' for legacy client compatibility (UserRole excludes 'owner')
-          const data = context.data as Partial<Omit<User, 'role'> & { role?: string }>;
-          if (hasMinimumRole(data?.role, ROLES.SUPERADMIN)) {
-            const callerRole = params.user?.role;
-            if (!hasMinimumRole(callerRole, ROLES.SUPERADMIN)) {
-              throw new Forbidden('Only superadmins can create superadmin users');
-            }
-          }
-
-          return context;
-        },
-      ],
-      patch: [
-        (context) => protectFilesystemHomeWrite(context, config),
-        async (context) => {
-          const params = context.params as AuthenticatedParams;
-          const userId = context.id as string;
-          const callerRole = params.user?.role;
-          const callerIsAdmin = hasMinimumRole(callerRole, ROLES.ADMIN);
-
-          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password.
-          // filesystem_home is protected and validated by the preceding hook.
-          if (!Array.isArray(context.data)) {
-            if (context.data?.unix_username !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can modify unix_username');
-              }
-            }
-            if (context.data?.role !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can modify user roles');
-              }
-              // Only superadmins can assign the superadmin role
-              // Guard both 'superadmin' and legacy 'owner' to prevent bypass
-              if (
-                hasMinimumRole(context.data.role, ROLES.SUPERADMIN) &&
-                !hasMinimumRole(callerRole, ROLES.SUPERADMIN)
-              ) {
-                // Bootstrap: allow first superadmin promotion if none exist yet
-                // Note: usersService.find() doesn't filter by role, so filter in JS
-                const allUsers = (await usersService.find({})) as Paginated<User>;
-                const hasSuperadmin = allUsers.data.some((u) => u.role === ROLES.SUPERADMIN);
-                if (hasSuperadmin) {
-                  throw new Forbidden('Only superadmins can assign the superadmin role');
-                }
-              }
-            }
-            if (context.data?.must_change_password !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can force password changes');
-              }
-            }
-          }
-
-          // General authorization: admins can patch any user
-          if (callerIsAdmin) {
-            return context;
-          }
-
-          // Any authenticated user can update their own profile (except unix_username and role, checked above)
-          if (params.user && params.user.user_id === userId) {
-            return context;
-          }
-
-          // Env-var-specific trusted write escape hatch. Set ONLY by the widget
-          // submit path, which has already authorized the caller via
-          // `canResolveWidget` (session-creator OR prompt-tier branch RBAC)
-          // before calling users.patch on the session creator's behalf.
-          //
-          // Deliberately narrow: only allows `env_vars` + `env_var_scopes`
-          // fields — any attempt to slip in other fields (e.g. role, unix_username)
-          // throws immediately. Field-level admin gates above run first and are
-          // NOT bypassed regardless.
-          //
-          // Grep for: trustedEnvVarWrite — to audit every site that sets it.
-          if (
-            !context.params.provider &&
-            (params as { trustedEnvVarWrite?: boolean }).trustedEnvVarWrite === true
-          ) {
-            const keys = Object.keys(context.data ?? {});
-            if (!keys.every((k) => k === 'env_vars' || k === 'env_var_scopes')) {
-              throw new Forbidden(
-                'trustedEnvVarWrite only permits env_vars and env_var_scopes updates'
-              );
-            }
-            return context;
-          }
-
-          // Otherwise forbidden
-          throw new Forbidden('You can only update your own profile');
-        },
-      ],
-      remove: [requireMinimumRole(ROLES.ADMIN, 'delete users')],
+      // UsersService owns target-aware role authorization. Keeping it in the
+      // mutation methods means REST, Socket.IO, MCP, and direct Feathers calls
+      // all compare the fresh actor role with both the target's current role
+      // and any requested role. Hooks remain responsible for transport
+      // validation only and cannot accidentally become an alternate bypass.
+      create: [(context) => protectFilesystemHomeWrite(context, config)],
+      patch: [(context) => protectFilesystemHomeWrite(context, config)],
     },
     after: {
       // Refresh derived profile presentation after user creation or update.
@@ -2851,8 +2746,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
       if (user._isServiceAccount) return context;
-      const allowSuperadmin = superadminOpts?.allowSuperadmin ?? true;
-      if (user.role === ROLES.ADMIN || (allowSuperadmin && user.role === ROLES.SUPERADMIN)) {
+      // `allow_superadmin` controls the exceptional branch/board RBAC bypass;
+      // it must never strip ordinary admin authority from a superadmin.
+      if (hasMinimumRole(user.role, ROLES.ADMIN)) {
         return context;
       }
 

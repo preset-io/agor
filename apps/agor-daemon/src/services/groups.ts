@@ -5,9 +5,17 @@
  */
 
 import type { BranchRepository } from '@agor/core/db';
-import { BoardRepository, GroupRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  BoardRepository,
+  eq,
+  GroupRepository,
+  select,
+  type TenantScopeAwareDatabase,
+  users,
+} from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
+  AuthenticatedParams,
   BoardGroupGrantWithGroup,
   BoardID,
   Branch,
@@ -22,8 +30,14 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  BRANCH_PERMISSION_LEVELS,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLES,
+} from '@agor/core/types';
 import { PERMISSION_RANK } from '../utils/branch-authorization.js';
+import { lockUserAuthorityMutation } from './user-authority-lock.js';
 
 function requireMember(context: HookContext): HookContext {
   if (!context.params.provider) return context;
@@ -125,6 +139,33 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
 
 export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
+
+  const assertCanManageMembershipTarget = async (userId: string, params?: Params) => {
+    if (!params?.provider) return;
+    const authenticated = params as AuthenticatedParams;
+    if (authenticated.user?._isServiceAccount) return;
+    const actorId = authenticated.user?.user_id;
+    if (!actorId) throw new NotAuthenticated('Authentication required');
+
+    await lockUserAuthorityMutation(db, params);
+
+    // Load both sides under the active tenant/RLS scope. Missing and
+    // cross-tenant targets intentionally produce the same response as an
+    // authority failure so this write path cannot enumerate identities.
+    const [actor, target] = await Promise.all([
+      select(db).from(users).where(eq(users.user_id, actorId)).one(),
+      select(db).from(users).where(eq(users.user_id, userId)).one(),
+    ]);
+    if (
+      !actor ||
+      !target ||
+      !hasMinimumRole(actor.role, ROLES.ADMIN) ||
+      !hasRoleAuthorityOver(actor.role, target.role)
+    ) {
+      throw new Forbidden('You do not have authority to manage this user');
+    }
+  };
+
   return {
     async find(params?: Params): Promise<GroupMembership[]> {
       return repo.listMemberships({
@@ -138,6 +179,7 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
     ): Promise<GroupMembership> {
       if (!data.group_id || !data.user_id)
         throw new BadRequest('group_id and user_id are required');
+      await assertCanManageMembershipTarget(data.user_id, params);
       return repo.addMember(
         data.group_id,
         data.user_id,
@@ -150,6 +192,7 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
         (paramsRoute(params)?.groupId as string | undefined);
       const userId = (params?.query?.user_id as string | undefined) || id;
       if (!groupId || !userId) throw new BadRequest('group_id and user_id are required');
+      await assertCanManageMembershipTarget(userId, params);
       const removed = await repo.removeMember(groupId, userId);
       if (!removed) throw new BadRequest(`Membership not found: ${groupId}/${userId}`);
       return removed;

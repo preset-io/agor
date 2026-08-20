@@ -1773,7 +1773,8 @@ export function scopeFindToAccessibleBoardsSql(options?: { allowSuperadmin?: boo
  *
  * Behavior:
  * - Service accounts (executor) pass through.
- * - Admin / superadmin pass through (respecting `allowSuperadmin`).
+ * - Admin / superadmin pass through. `allowSuperadmin` only controls the
+ *   exceptional branch-RBAC bypass; it cannot remove ordinary admin authority.
  * - Session creator passes through.
  * - Everyone else → Forbidden. Branch `all` does NOT grant access: session
  *   env selections expose the creator's private credentials to the executor.
@@ -1789,10 +1790,9 @@ export function checkSessionOwnerOrAdmin(
   // Service accounts (executor) bypass RBAC
   if (user._isServiceAccount) return;
 
-  const allowSuperadmin = options?.allowSuperadmin ?? true;
   const userRole = user.role;
 
-  if (userRole === ROLES.ADMIN || isSuperAdmin(userRole, allowSuperadmin)) {
+  if (hasMinimumRole(userRole, ROLES.ADMIN)) {
     return;
   }
 
@@ -1879,7 +1879,6 @@ export function determineSpawnIdentity(
   branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
   options?: { allowSuperadmin?: boolean }
 ): { created_by: string; usedLegacySharing: boolean } {
-  const allowSuperadmin = options?.allowSuperadmin ?? true;
   const callerId = caller.user_id;
   const role = caller.role;
 
@@ -1892,7 +1891,9 @@ export function determineSpawnIdentity(
 
   // Admin / superadmin → always attributed to themselves so the audit trail
   // points at the human who pressed the button. Never inherit parent identity.
-  if (role === ROLES.ADMIN || isSuperAdmin(role, allowSuperadmin)) {
+  // `allow_superadmin` only gates exceptional branch-RBAC bypasses. A
+  // superadmin always retains the ordinary admin authority represented here.
+  if (hasMinimumRole(role, ROLES.ADMIN)) {
     if (!callerId) {
       // Should not happen — admins always have an id — but fall back safely.
       return { created_by: parent.created_by, usedLegacySharing: false };

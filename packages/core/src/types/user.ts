@@ -68,13 +68,18 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * Role rank used for minimum-role comparisons.
  * Higher rank = more privileges. 'owner' is a deprecated alias for superadmin.
  */
-const ROLE_RANK: Record<string, number> = {
+const ROLE_AUTHORITY_RANK: Readonly<Record<UserRole | 'owner', number>> = {
   [ROLES.VIEWER]: 0,
   [ROLES.MEMBER]: 1,
   [ROLES.ADMIN]: 2,
   [ROLES.SUPERADMIN]: 3,
   owner: 3,
 };
+
+/** Return true only for canonical roles accepted on new writes. */
+export function isUserRole(role: unknown): role is UserRole {
+  return typeof role === 'string' && Object.values(ROLES).includes(role as UserRole);
+}
 
 /**
  * Normalize legacy role values.
@@ -90,8 +95,55 @@ export function normalizeRole(role: string | undefined): UserRole {
  * Shared by backend hooks and frontend permission checks.
  */
 export function hasMinimumRole(userRole: string | undefined, minimumRole: UserRole): boolean {
+  if (!userRole) return false;
   const normalized = normalizeRole(userRole);
-  return (ROLE_RANK[normalized] ?? 0) >= ROLE_RANK[minimumRole];
+  return (ROLE_AUTHORITY_RANK[normalized] ?? -1) >= (ROLE_AUTHORITY_RANK[minimumRole] ?? -1);
+}
+
+/**
+ * Compare two roles by authority.
+ *
+ * Positive means `left` has more authority, zero means equal authority, and
+ * negative means less authority. Unknown/missing roles are always below every
+ * canonical role. The deprecated `owner` value retains superadmin authority
+ * for reads of historical data, but is canonicalized before new writes.
+ */
+export function compareRoleAuthority(left: string | undefined, right: string | undefined): number {
+  return roleAuthorityRank(left) - roleAuthorityRank(right);
+}
+
+function roleAuthorityRank(role: string | undefined): number {
+  if (!role) return -1;
+  const normalized = normalizeRole(role);
+  return ROLE_AUTHORITY_RANK[normalized] ?? -1;
+}
+
+function isKnownRoleAuthority(role: string | undefined): boolean {
+  return !!role && (isUserRole(role) || role === 'owner');
+}
+
+/** Whether an actor's role is authoritative over a target's current role. */
+export function hasRoleAuthorityOver(
+  actorRole: string | undefined,
+  targetRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(targetRole) &&
+    compareRoleAuthority(actorRole, targetRole) >= 0
+  );
+}
+
+/** Whether an actor may assign the requested role without exceeding their ceiling. */
+export function canAssignUserRole(
+  actorRole: string | undefined,
+  requestedRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(requestedRole) &&
+    compareRoleAuthority(actorRole, requestedRole) >= 0
+  );
 }
 
 /**

@@ -14,7 +14,13 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import {
+  canAssignUserRole,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLE_OPTIONS,
+  ROLES,
+} from '@agor-live/client';
 import {
   BellOutlined,
   CheckCircleFilled,
@@ -288,6 +294,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
+  const canEditTarget =
+    !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
+  const canAdministerTarget = isAdmin && canEditTarget;
+  const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
+    canAssignUserRole(currentUser?.role, option.value)
+  );
 
   // Authorize the active panel SYNCHRONOUSLY during render (never correct it in
   // an effect): a stale/unauthorized key must resolve to Profile before any
@@ -296,6 +308,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // tenant-disabled provider deep link can't render its credential controls.
   // Mirrors the permission gating that builds `navGroups`.
   const activeKey = ((): string => {
+    if (isEditingOther && !canEditTarget) return 'profile';
     if (rawActiveKey.startsWith(PROVIDER_KEY_PREFIX)) {
       // FAIL CLOSED until availability is known: an unhydrated store reports
       // every tool as enabled, so a disabled-provider deep link would briefly
@@ -308,7 +321,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
     if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
       return 'profile';
-    if (rawActiveKey === 'access' && !isAdmin) return 'profile';
+    if (rawActiveKey === 'access' && !canAdministerTarget) return 'profile';
     return rawActiveKey;
   })();
 
@@ -424,7 +437,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const loadUserGroups = useCallback(async () => {
     const userId = user?.user_id;
-    if (!client || !userId || !isAdmin) {
+    if (!client || !userId || !canAdministerTarget) {
       setAvailableGroups([]);
       setUserGroupIds([]);
       setGroupsLoaded(false);
@@ -451,7 +464,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } finally {
       setLoadingGroups(false);
     }
-  }, [client, form, isAdmin, user?.user_id]);
+  }, [canAdministerTarget, client, form, user?.user_id]);
 
   // Initialize when modal opens with user data
   useEffect(() => {
@@ -587,7 +600,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const syncUserGroups = async (nextGroupIds: string[]) => {
-    if (!client || !user || !isAdmin || !groupsLoaded) return;
+    if (!client || !user || !canAdministerTarget || !groupsLoaded) return;
     await syncGroupsForUser(client, user.user_id, userGroupIds, nextGroupIds);
     setUserGroupIds(nextGroupIds);
   };
@@ -667,7 +680,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Profile edit and a Preferences edit from clobbering each other's keys when
   // both are flushed against the same not-yet-refreshed `user` prop.
   const commitMainPanels = async (panels: Set<string>): Promise<boolean> => {
-    if (!user) return false;
+    if (!user || !canEditTarget) return false;
 
     try {
       const toValidate: string[] = [];
@@ -710,7 +723,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         preferencesTouched = true;
       }
 
-      if (panels.has('access') && isAdmin && isEditingOther) {
+      if (panels.has('access') && canAdministerTarget && isEditingOther) {
         updates.must_change_password = form.getFieldValue('must_change_password');
       }
 
@@ -985,6 +998,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Sidebar navigation model. Kept as plain data so the same structure feeds
   // both the AntD menu and the search filter.
   const navGroups = useMemo(() => {
+    if (isEditingOther && !canEditTarget) {
+      return [
+        {
+          key: 'grp-account',
+          label: 'Account',
+          children: [{ key: 'profile', ...PANEL_META.profile }],
+        },
+      ];
+    }
     const groups: Array<{
       key: string;
       label: string;
@@ -1032,7 +1054,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       },
     ];
 
-    if (isAdmin) {
+    if (canAdministerTarget) {
       groups.push({
         key: 'grp-admin',
         label: 'Admin',
@@ -1040,7 +1062,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
     }
     return groups;
-  }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
+  }, [canAdministerTarget, canEditTarget, visibleAgenticToolTabs, isEditingOther, resolveProvider]);
 
   const menuItems: MenuProps['items'] = useMemo(
     () =>
@@ -1411,7 +1433,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // per field, so "Done" only flushes any dirty session-defaults left over
   // from another provider before closing.
   const handleModalSave = async () => {
-    if (!user || savingModal) return;
+    if (!user || savingModal || !canEditTarget) return;
     setSavingModal(true);
     try {
       // Flush EVERY edited main panel (plus the active one if it owns the shared
@@ -1442,7 +1464,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
         <FieldRow label="Name" name="name">
-          <Input placeholder="John Doe" />
+          <Input placeholder="John Doe" disabled={!canEditTarget} />
         </FieldRow>
 
         <FieldRow
@@ -1454,7 +1476,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             { type: 'email', message: 'Please enter a valid email' },
           ]}
         >
-          <Input placeholder="user@example.com" />
+          <Input placeholder="user@example.com" disabled={!canEditTarget} />
         </FieldRow>
 
         <FieldRow
@@ -1463,7 +1485,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           valuePropName="checked"
           tooltip="Shows your Slack-synced profile image instead of your initials tile. Turns off automatically if Slack sync is removed."
         >
-          <Switch />
+          <Switch disabled={!canEditTarget} />
         </FieldRow>
 
         <FieldRow
@@ -1471,12 +1493,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
-          help={isAdmin ? undefined : 'Maintained by administrators'}
+          help={canAdministerTarget ? undefined : 'Maintained by administrators'}
         >
           <Select
-            disabled={!isAdmin}
+            disabled={!canAdministerTarget || isSelf}
             style={{ maxWidth: 320 }}
-            options={ROLE_OPTIONS.map((opt) => ({
+            options={assignableRoleOptions.map((opt) => ({
               value: opt.value,
               label: opt.label,
               description: opt.description,
@@ -1519,14 +1541,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
         <FieldRow label="Password" name="password" help="Leave blank to keep current password">
-          <Input.Password placeholder="••••••••" />
+          <Input.Password placeholder="••••••••" disabled={!canEditTarget} />
         </FieldRow>
 
         <FieldRow
           label="Execution home key"
           name="unix_username"
           help={
-            isAdmin
+            canAdministerTarget
               ? 'Transitional home key used only by delegated execution'
               : 'Maintained by administrators'
           }
@@ -1539,7 +1561,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             { max: 32, message: 'Execution home key must be 32 characters or less' },
           ]}
         >
-          <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />
+          <Input placeholder="johnsmith" maxLength={32} disabled={!canAdministerTarget} />
         </FieldRow>
       </Form>
     </>
@@ -1618,7 +1640,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           />
         </FieldRow>
 
-        {isAdmin && isEditingOther && (
+        {canAdministerTarget && isEditingOther && (
           <>
             <SectionDivider label="Danger zone" />
             <Form.Item
@@ -1966,7 +1988,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         <Button key="close" onClick={handleClose} disabled={savingModal}>
           Close
         </Button>,
-        <Button key="save" type="primary" onClick={handleModalSave} loading={savingModal}>
+        <Button
+          key="save"
+          type="primary"
+          onClick={handleModalSave}
+          loading={savingModal}
+          disabled={!canEditTarget}
+        >
           Save
         </Button>,
       ];

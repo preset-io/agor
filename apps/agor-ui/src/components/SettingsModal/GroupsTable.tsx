@@ -1,5 +1,5 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -158,7 +158,10 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   }
 
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
-    toUserSelectOption
+    (user) => ({
+      ...toUserSelectOption(user),
+      disabled: !hasRoleAuthorityOver(currentUser?.role, user.role),
+    })
   );
   const filteredGroups = filterBySettingsSearch(
     [...groups].sort((a, b) => a.name.localeCompare(b.name)),

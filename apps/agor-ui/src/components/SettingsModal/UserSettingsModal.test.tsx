@@ -170,6 +170,78 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('fails closed when an admin opens a superadmin settings modal', () => {
+    const currentAdmin = makeUser({
+      user_id: 'admin-1',
+      email: 'admin@example.test',
+      role: 'admin',
+    });
+    const targetSuperadmin = makeUser({
+      user_id: 'superadmin-1',
+      email: 'superadmin@example.test',
+      role: 'superadmin',
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={targetSuperadmin}
+        currentUser={currentAdmin}
+        client={null}
+        onUpdate={vi.fn()}
+        initialTab="security"
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /codex/i })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
+    expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
+  it('lets a superadmin manage an admin while locking self role changes', () => {
+    const currentSuperadmin = makeUser({
+      user_id: 'superadmin-1',
+      email: 'superadmin@example.test',
+      role: 'superadmin',
+    });
+    const targetAdmin = makeUser({
+      user_id: 'admin-1',
+      email: 'admin@example.test',
+      role: 'admin',
+    });
+    const { unmount } = renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={targetAdmin}
+        currentUser={currentSuperadmin}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /security/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Role')).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+
+    unmount();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={currentSuperadmin}
+        currentUser={currentSuperadmin}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Role')).toBeDisabled();
+  });
+
   it('saves dirty agentic defaults across tabs and closes from the footer', async () => {
     const user = makeUser({
       default_agentic_config: {

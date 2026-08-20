@@ -34,6 +34,12 @@ import {
 
 /**
  * Users repository implementation
+ *
+ * Security boundary: this is a persistence primitive for trusted bootstrap,
+ * external-identity provisioning, and background jobs. It intentionally has
+ * no actor context. Request-driven REST, Socket.IO, MCP, and CLI mutations must
+ * go through the daemon UsersService, which enforces actor/target role
+ * authority before calling the database.
  */
 export class UsersRepository implements BaseRepository<InternalUser, Partial<InternalUser>> {
   constructor(private db: Database) {}

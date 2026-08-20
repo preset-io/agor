@@ -4238,6 +4238,9 @@ async function bootstrapSuperadminUsers(
       // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
       const user = await usersService.get(userId as any);
       if (user.role === ROLES.SUPERADMIN) continue;
+      // Deliberately use the provider-less, actor-less UsersService seam. This
+      // is daemon startup provisioning from operator-owned config, not a user
+      // request; request-derived callers must always carry actor params.
       // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
       await usersService.patch(userId as any, { role: ROLES.SUPERADMIN });
       promotedCount++;

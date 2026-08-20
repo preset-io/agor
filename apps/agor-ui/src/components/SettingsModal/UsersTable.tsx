@@ -8,7 +8,13 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import {
+  canAssignUserRole,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLE_OPTIONS,
+  ROLES,
+} from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import {
   Button,
@@ -61,6 +67,19 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
+    canAssignUserRole(currentUser?.role, option.value)
+  );
+
+  const canEditUser = (target: User): boolean =>
+    currentUser?.user_id === target.user_id ||
+    (isAdmin && hasRoleAuthorityOver(currentUser?.role, target.role));
+
+  const canDeleteUser = (target: User): boolean =>
+    !!currentUser &&
+    currentUser.user_id !== target.user_id &&
+    isAdmin &&
+    hasRoleAuthorityOver(currentUser.role, target.role);
 
   const loadGroups = useCallback(async () => {
     if (!client || !isAdmin) {
@@ -215,26 +234,42 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       title: 'Actions',
       key: 'actions',
       width: 88,
-      render: (_: unknown, user: User) => (
-        <SettingsActionGroup>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => setEditingUser(user)}
-          />
-          <Popconfirm
-            title="Delete user?"
-            description={`Are you sure you want to delete user "${user.email}"?`}
-            onConfirm={() => handleDelete(user.user_id)}
-            okText="Delete"
-            cancelText="Cancel"
-            okButtonProps={{ danger: true }}
-          >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger />
-          </Popconfirm>
-        </SettingsActionGroup>
-      ),
+      render: (_: unknown, user: User) => {
+        const showEdit = canEditUser(user);
+        const showDelete = canDeleteUser(user);
+        if (!showEdit && !showDelete) return null;
+        return (
+          <SettingsActionGroup>
+            {showEdit && (
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                aria-label={`Edit ${user.email}`}
+                onClick={() => setEditingUser(user)}
+              />
+            )}
+            {showDelete && (
+              <Popconfirm
+                title="Delete user?"
+                description={`Are you sure you want to delete user "${user.email}"?`}
+                onConfirm={() => handleDelete(user.user_id)}
+                okText="Delete"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  aria-label={`Delete ${user.email}`}
+                  danger
+                />
+              </Popconfirm>
+            )}
+          </SettingsActionGroup>
+        );
+      },
     },
   ];
 
@@ -257,9 +292,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 320 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-            New User
-          </Button>
+          {isAdmin && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+              New User
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -333,7 +370,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             rules={[{ required: true, message: 'Please select a role' }]}
           >
             <Select
-              options={ROLE_OPTIONS.map((opt) => ({
+              options={assignableRoleOptions.map((opt) => ({
                 value: opt.value,
                 label: opt.label,
                 title: opt.description,

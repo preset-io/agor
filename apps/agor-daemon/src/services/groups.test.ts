@@ -1,14 +1,17 @@
-import type { BranchRepository } from '@agor/core/db';
-import type { HookContext } from '@agor/core/types';
+import { type BranchRepository, GroupRepository } from '@agor/core/db';
+import type { AuthenticatedParams, HookContext, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   assertBranchGroupGrantPermissionLevel,
   branchGroupGrantPermissionLevelOrDefault,
+  createGroupMembershipsService,
   groupMembershipsHooks,
   groupsHooks,
   requireBranchGrantManager,
 } from './groups';
+import { UsersService } from './users';
 
 function contextFor(role?: string, extraUser: Record<string, unknown> = {}): HookContext {
   return {
@@ -70,6 +73,52 @@ describe('groups service authorization hooks', () => {
     expect(() => groupsHooks.before.all[0](context)).not.toThrow();
     expect(() => groupsHooks.before.create[0](context)).not.toThrow();
     expect(() => groupMembershipsHooks.before.all[0](context)).not.toThrow();
+  });
+});
+
+describe('group membership target authority', () => {
+  dbTest('enforces actor authority over the membership target', async ({ db }) => {
+    const users = new UsersService(db);
+    const memberships = createGroupMembershipsService(db);
+    const group = await new GroupRepository(db).create({ name: 'Authority group' });
+    const superadmin = await users.create({
+      email: 'group-superadmin@example.test',
+      password: 'password-1234',
+      role: 'superadmin',
+    });
+    const admin = await users.create({
+      email: 'group-admin@example.test',
+      password: 'password-1234',
+      role: 'admin',
+    });
+    const member = await users.create({
+      email: 'group-member@example.test',
+      password: 'password-1234',
+      role: 'member',
+    });
+    const params = (actor: User): AuthenticatedParams => ({
+      provider: 'rest',
+      user: { user_id: actor.user_id, email: actor.email, role: actor.role },
+    });
+
+    await expect(
+      memberships.create({ group_id: group.group_id, user_id: superadmin.user_id }, params(admin))
+    ).rejects.toMatchObject({ code: 403 });
+
+    await memberships.create({ group_id: group.group_id, user_id: superadmin.user_id });
+    await expect(
+      memberships.remove(superadmin.user_id, {
+        ...params(admin),
+        query: { group_id: group.group_id },
+      })
+    ).rejects.toMatchObject({ code: 403 });
+
+    await expect(
+      memberships.create({ group_id: group.group_id, user_id: admin.user_id }, params(superadmin))
+    ).resolves.toMatchObject({ user_id: admin.user_id });
+    await expect(
+      memberships.create({ group_id: group.group_id, user_id: member.user_id }, params(admin))
+    ).resolves.toMatchObject({ user_id: member.user_id });
   });
 });
 
