@@ -148,13 +148,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantId = `catalog-connect-${label}-${generateId()}`;
       return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         await setMcpMemberPolicy(scoped, 'allow_crud', tenantId, null);
-        const user = (await new UsersRepository(scoped).create({
-          email: `${label}-${generateId()}@example.test`,
-          name: label,
-          role: 'member',
-        })) as User;
+        const user = await buildUser(scoped, label);
         return { tenantId, user };
       });
+    }
+
+    async function buildUser(scoped: Database, label: string) {
+      return (await new UsersRepository(scoped).create({
+        email: `${label}-${generateId()}@example.test`,
+        name: label,
+        role: 'member',
+      })) as User;
     }
 
     async function seedPeer(
@@ -260,8 +264,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       } as AuthenticatedParams;
     }
 
-    async function connect(user: User, tenantId: string, entry: MCPCatalogEntry = ENTRY) {
-      const app = connectApp(entry);
+    async function connect(
+      user: User,
+      tenantId: string,
+      entry: MCPCatalogEntry = ENTRY,
+      app = connectApp(entry)
+    ) {
       return runWithTenantDatabaseScope(db, tenantId, () =>
         createRegisteredMCPCatalogConnectService(app, db).create(REQUEST, params(user, tenantId))
       );
@@ -280,14 +288,48 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('propagates authenticated tenant and user context to select the caller grant', async () => {
-      const actor = await buildTenant('caller');
-      const other = await buildTenant('other-user');
+    it('does not reuse or re-key a visible same-tenant peer grant for another user', async () => {
+      const actor = await buildTenant('same-tenant-user-a');
+      const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+        buildUser(scoped, 'same-tenant-user-b')
+      );
       const peer = await seedPeer(actor.tenantId, actor.user);
-      await seedPeer(other.tenantId, other.user);
+      const app = connectApp();
 
-      const result = await connect(actor.user, actor.tenantId);
-      expect(result.mcp_server.mcp_server_id).toBe(peer.mcp_server_id);
+      const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
+        app.service('mcp-servers').find({
+          ...params(otherUser, actor.tenantId),
+          provider: undefined,
+          query: { usableByUserId: otherUser.user_id, $limit: 1000 },
+        })
+      );
+      expect(Array.isArray(visibleToOther) ? visibleToOther : visibleToOther.data).toEqual(
+        expect.arrayContaining([expect.objectContaining({ mcp_server_id: peer.mcp_server_id })])
+      );
+
+      // Both calls use the same tenant scope, so tenant RLS cannot distinguish
+      // these users. The production grant lookup must enforce the user key.
+      const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app);
+      expect(actorResult).toMatchObject({
+        reused_existing_server: true,
+        reuse_kind: 'credential_peer',
+        mcp_server: { mcp_server_id: peer.mcp_server_id },
+      });
+
+      const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app);
+      expect(otherResult.reused_existing_server).toBe(false);
+      expect(otherResult.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+
+      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+        const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
+        expect(await grants.listForUser(actor.user.user_id)).toEqual([
+          expect.objectContaining({
+            user_id: actor.user.user_id,
+            mcp_server_id: peer.mcp_server_id,
+          }),
+        ]);
+        expect(await grants.listForUser(otherUser.user_id)).toEqual([]);
+      });
     });
 
     it('denies cross-tenant reuse even with a valid foreign user and server identifier', async () => {
