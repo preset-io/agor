@@ -1277,9 +1277,9 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: /primary assistant/i }));
 
     await screen.findByRole('heading', { name: 'Preferences' });
-    expect(screen.getByText('Assistant')).toBeInTheDocument();
-    expect(screen.getByText('Notifications')).toBeInTheDocument();
-    expect(screen.getByText('Developer tools')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Developer tools' })).toBeInTheDocument();
     expect(screen.getByText('Primary assistant')).toBeInTheDocument();
     expect(await screen.findByText('Select a primary assistant')).toBeInTheDocument();
     expect(getPrimaryTeammate).toHaveBeenCalled();
@@ -1331,7 +1331,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
     await screen.findByRole('heading', { name: 'Preferences' });
     expect(screen.queryByText('Primary assistant')).not.toBeInTheDocument();
-    expect(screen.queryByText('Assistant')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Assistant' })).not.toBeInTheDocument();
   });
 });
 

@@ -84,7 +84,7 @@ import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
-import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
+import { FieldRow, PanelHeader, SectionDivider, SettingsSection } from './panelPrimitives';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
@@ -1649,8 +1649,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <PanelHeader title={PANEL_META.preferences.title} />
 
       {!isEditingOther && (
-        <>
-          <SectionDivider label="Assistant" />
+        <SettingsSection title="Assistant">
           <Typography.Text strong>Primary assistant</Typography.Text>
           <Typography.Paragraph
             type="secondary"
@@ -1659,28 +1658,37 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             Choose the teammate Agor uses by default for personal and ambient work.
           </Typography.Paragraph>
           <PrimaryTeammatePicker client={client} compact />
-        </>
+        </SettingsSection>
       )}
 
-      <SectionDivider label="Notifications" />
-      <AudioSettingsTab form={audioForm} onValuesChange={() => markMainPanelDirty('preferences')} />
+      <SettingsSection title="Notifications">
+        <AudioSettingsTab
+          form={audioForm}
+          onValuesChange={() => markMainPanelDirty('preferences')}
+        />
+      </SettingsSection>
 
-      <SectionDivider label="Developer tools" />
-      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
-        <FieldRow
-          label="Live event stream"
-          badge={
-            <Tag color={token.colorPrimary} style={{ fontSize: token.fontSizeSM }}>
-              BETA
-            </Tag>
-          }
-          name="eventStreamEnabled"
-          valuePropName="checked"
-          help="Show a navbar shortcut for inspecting live WebSocket events while debugging."
+      <SettingsSection title="Developer tools">
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={() => markMainPanelDirty('preferences')}
         >
-          <Switch />
-        </FieldRow>
-      </Form>
+          <FieldRow
+            label="Live event stream"
+            badge={
+              <Tag color={token.colorPrimary} style={{ fontSize: token.fontSizeSM }}>
+                BETA
+              </Tag>
+            }
+            name="eventStreamEnabled"
+            valuePropName="checked"
+            help="Show a navbar shortcut for inspecting live WebSocket events while debugging."
+          >
+            <Switch />
+          </FieldRow>
+        </Form>
+      </SettingsSection>
     </>
   );
 
