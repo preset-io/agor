@@ -418,6 +418,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
               userLifecycle: 'external',
               roleAuthority: 'claims',
               localAuth: 'disabled',
+              external: { provider: 'external_launch', provisioning: 'jit' },
               capabilities: {
                 users: {
                   create: false,

@@ -202,11 +202,11 @@ export interface AgorExternalLaunchSettings {
   /** Environment variable that contains the exchange endpoint bearer credential. */
   service_credential_env?: string;
 
-  /** Backchannel request timeout in milliseconds (default: 10000). */
+  /** Backchannel request timeout in milliseconds, from 1 to 120000 (default: 10000). */
   request_timeout_ms?: number;
 
-  /** Optional allow-list of JWT algorithms for returned launch assertions. */
-  algorithms?: string[];
+  /** Optional non-empty allow-list of supported JWT algorithms for returned assertions. */
+  algorithms?: AgorExternalLaunchAlgorithm[];
 
   /** Allow launch assertions to assign admin/superadmin roles (default: false). */
   allow_admin_roles?: boolean;
@@ -254,6 +254,46 @@ export interface AgorExternalLaunchSettings {
    * the deep-link with the host. Rejected during config validation.
    */
   return_host_param?: string;
+}
+
+/** Algorithms accepted by the launch assertion verifier. `none` is never valid. */
+export const AgorExternalLaunchAlgorithm = {
+  HS256: 'HS256',
+  HS384: 'HS384',
+  HS512: 'HS512',
+  RS256: 'RS256',
+  RS384: 'RS384',
+  RS512: 'RS512',
+  ES256: 'ES256',
+  ES384: 'ES384',
+  ES512: 'ES512',
+  PS256: 'PS256',
+  PS384: 'PS384',
+  PS512: 'PS512',
+} as const;
+export type AgorExternalLaunchAlgorithm =
+  (typeof AgorExternalLaunchAlgorithm)[keyof typeof AgorExternalLaunchAlgorithm];
+
+/** Fully normalized launch settings consumed by startup and request handling. */
+export interface ResolvedExternalLaunchSettings {
+  enabled: boolean;
+  exchangeUrl?: string;
+  audience?: string;
+  issuer?: string;
+  instanceId?: string;
+  providerId?: string;
+  jwksUrl?: string;
+  publicKey?: string;
+  devSharedSecret?: string;
+  serviceCredential?: string;
+  allowAdminRoles: boolean;
+  trustVerifiedEmailForLinking: boolean;
+  requestTimeoutMs: number;
+  algorithms?: AgorExternalLaunchAlgorithm[];
+  forwardRequestHost: boolean;
+  trustedHostHeader: string;
+  loginRedirectUrl?: string;
+  returnHostParam?: string;
 }
 
 /** Which system may create and remove user projections in this daemon. */

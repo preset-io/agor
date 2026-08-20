@@ -2,7 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   assertValidEffectiveExternalLaunchConfig,
   resolveEffectiveExternalLaunchConfig,
+  resolveExternalLaunchSettings,
 } from './external-launch';
+import type { AgorConfig } from './types';
+
+const completeProvider = {
+  enabled: true,
+  exchange_url: 'https://issuer.example.test/exchange',
+  issuer: 'https://issuer.example.test',
+  audience: 'runtime:test',
+  jwks_url: 'https://issuer.example.test/jwks',
+} as const;
+
+function unsafeConfig(externalLaunch: Record<string, unknown>): AgorConfig {
+  return { external_launch: externalLaunch } as unknown as AgorConfig;
+}
 
 describe('external launch effective config', () => {
   it('materializes supported environment overrides once', () => {
@@ -74,5 +88,60 @@ describe('external launch effective config', () => {
         },
       })
     ).not.toThrow();
+  });
+
+  it.each([
+    ['non-HTTP exchange URL', { exchange_url: 'not-a-url' }, /exchange_url.*HTTP/i],
+    ['non-HTTP JWKS URL', { jwks_url: 'file:///tmp/jwks.json' }, /jwks_url.*HTTP/i],
+    ['zero timeout', { request_timeout_ms: 0 }, /request_timeout_ms.*1/i],
+    ['excessive timeout', { request_timeout_ms: 120_001 }, /request_timeout_ms.*120000/i],
+    ['empty algorithms', { algorithms: [] }, /algorithms.*non-empty/i],
+    ['unsupported algorithm', { algorithms: ['none'] }, /algorithms.*only contain/i],
+    [
+      'malformed public key',
+      { jwks_url: undefined, public_key: 'not-a-public-key' },
+      /public_key.*valid public key/i,
+    ],
+    ['numeric trusted header', { trusted_host_header: 42 }, /trusted_host_header.*string/i],
+    ['invalid trusted header', { trusted_host_header: 'host header' }, /HTTP header name/i],
+    ['non-boolean host forwarding', { forward_request_host: 'yes' }, /must be a boolean/i],
+  ])('fails startup for an enabled provider with %s', (_label, override, expected) => {
+    expect(() =>
+      assertValidEffectiveExternalLaunchConfig(unsafeConfig({ ...completeProvider, ...override }))
+    ).toThrow(expected);
+  });
+
+  it('requires configured algorithms to match the verification key family', () => {
+    expect(() =>
+      assertValidEffectiveExternalLaunchConfig(
+        unsafeConfig({
+          ...completeProvider,
+          jwks_url: undefined,
+          dev_shared_secret: 'secret',
+          algorithms: ['ES256'],
+        })
+      )
+    ).toThrow(/symmetric verification.*HS/i);
+  });
+
+  it('returns the normalized settings consumed by request handling', () => {
+    const result = resolveExternalLaunchSettings(
+      unsafeConfig({
+        ...completeProvider,
+        algorithms: ['ES256'],
+        trusted_host_header: 'X-Forwarded-Host',
+        request_timeout_ms: 5_000,
+      })
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.settings).toMatchObject({
+      enabled: true,
+      exchangeUrl: completeProvider.exchange_url,
+      jwksUrl: completeProvider.jwks_url,
+      algorithms: ['ES256'],
+      trustedHostHeader: 'x-forwarded-host',
+      requestTimeoutMs: 5_000,
+    });
   });
 });

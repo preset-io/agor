@@ -5,7 +5,15 @@
  * Used on app startup to determine if login page should be shown and display instance label.
  */
 
-import type { ResolvedIdentityAuthority } from '@agor/core/config/browser';
+import {
+  AgorExternalIdentityProvider,
+  AgorExternalIdentityProvisioning,
+  AgorLocalAuthMode,
+  AgorRoleAuthority,
+  AgorUserLifecycleAuthority,
+  IDENTITY_AUTHORITY_CONTRACT_VERSION,
+  type ResolvedIdentityAuthority,
+} from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
 import type { UploadIngressPolicy } from '@agor/core/types';
 import { useEffect, useSyncExternalStore } from 'react';
@@ -74,17 +82,27 @@ interface HealthResponse {
   timestamp: number;
   version: string;
   database: string;
-  auth: AuthConfig;
+  auth: unknown;
   instance?: InstanceConfig;
   features?: FeaturesConfig;
 }
 
-interface AuthConfigState {
+export const IdentityContractState = {
+  UNKNOWN: 'unknown',
+  LEGACY: 'legacy',
+  SUPPORTED: 'supported',
+  UNSUPPORTED: 'unsupported',
+} as const;
+export type IdentityContractState =
+  (typeof IdentityContractState)[keyof typeof IdentityContractState];
+
+export interface AuthConfigState {
   config: AuthConfig | null;
   instanceConfig: InstanceConfig | null;
   featuresConfig: FeaturesConfig | undefined;
   loading: boolean;
   error: Error | null;
+  identityContractState: IdentityContractState;
 }
 
 let snapshot: AuthConfigState = {
@@ -93,6 +111,7 @@ let snapshot: AuthConfigState = {
   featuresConfig: undefined,
   loading: true,
   error: null,
+  identityContractState: IdentityContractState.UNKNOWN,
 };
 let request: Promise<void> | null = null;
 const listeners = new Set<() => void>();
@@ -105,18 +124,28 @@ export function __resetAuthConfigForTests(): void {
     featuresConfig: undefined,
     loading: true,
     error: null,
+    identityContractState: IdentityContractState.UNKNOWN,
   };
   request = null;
 }
 
 /** Seed the already-loaded app-shell snapshot for isolated component tests. */
 export function __setAuthConfigForTests(config: AuthConfig): void {
+  const identityContractState = config.identity
+    ? isResolvedIdentityAuthority(config.identity)
+      ? IdentityContractState.SUPPORTED
+      : IdentityContractState.UNSUPPORTED
+    : IdentityContractState.LEGACY;
   snapshot = {
-    config,
+    config: identityContractState === IdentityContractState.UNSUPPORTED ? null : config,
     instanceConfig: null,
     featuresConfig: undefined,
     loading: false,
-    error: null,
+    error:
+      identityContractState === IdentityContractState.UNSUPPORTED
+        ? new Error('Unsupported daemon identity capability contract')
+        : null,
+    identityContractState,
   };
   request = Promise.resolve();
 }
@@ -131,9 +160,115 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+type UserIdentityCapability = keyof ResolvedIdentityAuthority['capabilities']['users'];
+
+const USER_IDENTITY_CAPABILITIES = {
+  create: true,
+  delete: true,
+  identityWrite: true,
+  roleWrite: true,
+  passwordWrite: true,
+  avatarSettingsWrite: true,
+  selfConfigurationWrite: true,
+} as const satisfies Record<UserIdentityCapability, true>;
+
+function isEnumValue<T extends string>(values: readonly T[], value: unknown): value is T {
+  return typeof value === 'string' && values.includes(value as T);
+}
+
+function isResolvedIdentityAuthority(value: unknown): value is ResolvedIdentityAuthority {
+  if (!isRecord(value)) return false;
+  if (value.contractVersion !== IDENTITY_AUTHORITY_CONTRACT_VERSION) return false;
+  if (!isEnumValue(Object.values(AgorUserLifecycleAuthority), value.userLifecycle)) {
+    return false;
+  }
+  if (!isEnumValue(Object.values(AgorRoleAuthority), value.roleAuthority)) return false;
+  if (!isEnumValue(Object.values(AgorLocalAuthMode), value.localAuth)) return false;
+
+  const capabilities = value.capabilities;
+  if (!isRecord(capabilities) || !isRecord(capabilities.users)) return false;
+  const users = capabilities.users;
+  for (const capability of Object.keys(USER_IDENTITY_CAPABILITIES)) {
+    if (typeof users[capability] !== 'boolean') return false;
+  }
+  if (users.selfConfigurationWrite !== true) return false;
+
+  const externallyManaged = value.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
+  if (externallyManaged) {
+    if (value.roleAuthority !== AgorRoleAuthority.CLAIMS) return false;
+    if (value.localAuth !== AgorLocalAuthMode.DISABLED) return false;
+    if (!isRecord(value.external)) return false;
+    if (value.external.provider !== AgorExternalIdentityProvider.EXTERNAL_LAUNCH) return false;
+    if (value.external.provisioning !== AgorExternalIdentityProvisioning.JIT) return false;
+  } else {
+    if (value.roleAuthority !== AgorRoleAuthority.INTERNAL) return false;
+    if (value.localAuth !== AgorLocalAuthMode.ENABLED) return false;
+    if (value.external !== undefined) return false;
+  }
+
+  return (
+    users.create === !externallyManaged &&
+    users.delete === !externallyManaged &&
+    users.identityWrite === !externallyManaged &&
+    users.roleWrite === (value.roleAuthority === AgorRoleAuthority.INTERNAL) &&
+    users.passwordWrite === (value.localAuth === AgorLocalAuthMode.ENABLED && !externallyManaged) &&
+    users.avatarSettingsWrite === !externallyManaged
+  );
+}
+
+function parseAuthConfig(value: unknown): {
+  config: AuthConfig | null;
+  identityContractState: IdentityContractState;
+  error: Error | null;
+} {
+  if (!isRecord(value) || typeof value.requireAuth !== 'boolean') {
+    throw new Error('Daemon returned an invalid authentication configuration');
+  }
+
+  const identity = value.identity;
+  if (identity === undefined) {
+    // A pre-contract daemon is intentionally permissive for mixed-version
+    // rollout. Server authorization remains authoritative.
+    return {
+      config: value as unknown as AuthConfig,
+      identityContractState: IdentityContractState.LEGACY,
+      error: null,
+    };
+  }
+  if (!isResolvedIdentityAuthority(identity)) {
+    return {
+      config: null,
+      identityContractState: IdentityContractState.UNSUPPORTED,
+      error: new Error('Unsupported or malformed daemon identity capability contract'),
+    };
+  }
+  return {
+    config: value as unknown as AuthConfig,
+    identityContractState: IdentityContractState.SUPPORTED,
+    error: null,
+  };
+}
+
+/** Legacy daemons remain permissive; unknown or invalid contracts fail closed. */
+export function isIdentityCapabilityAvailable(
+  config: AuthConfig | null,
+  contractState: IdentityContractState,
+  capability: UserIdentityCapability
+): boolean {
+  if (contractState === IdentityContractState.LEGACY) return true;
+  return (
+    contractState === IdentityContractState.SUPPORTED &&
+    config?.identity?.capabilities.users[capability] === true
+  );
+}
+
 function fetchAuthConfigOnce(): Promise<void> {
   if (request) return request;
-  request = (async () => {
+  const currentRequest = (async () => {
     try {
       const response = await fetch(`${getDaemonUrl()}/health`);
       if (!response.ok) {
@@ -141,26 +276,35 @@ function fetchAuthConfigOnce(): Promise<void> {
       }
 
       const health: HealthResponse = await response.json();
+      const parsed = parseAuthConfig(health.auth);
       publish({
-        config: health.auth,
+        config: parsed.config,
         instanceConfig: health.instance ?? null,
         featuresConfig: health.features,
         loading: false,
-        error: null,
+        error: parsed.error,
+        identityContractState: parsed.identityContractState,
       });
     } catch (err) {
       publish({
-        // Default to requiring auth on error (secure by default). Capability
-        // consumers also inspect `error` and keep mutation controls disabled.
-        config: { requireAuth: true },
+        // Keep config absent so the app shell shows its configuration-error
+        // state rather than synthesizing a potentially wrong login policy.
+        config: null,
         instanceConfig: null,
         featuresConfig: undefined,
         loading: false,
         error: err instanceof Error ? err : new Error(String(err)),
+        identityContractState: IdentityContractState.UNKNOWN,
       });
     }
   })();
-  return request;
+  request = currentRequest;
+  void currentRequest.finally(() => {
+    // Successful health remains cached for the app lifetime. A transient
+    // failure is retryable on the next mount instead of poisoning the singleton.
+    if (snapshot.error && request === currentRequest) request = null;
+  });
+  return currentRequest;
 }
 
 /** One shared health snapshot for the whole UI; consumers never refetch or drift. */

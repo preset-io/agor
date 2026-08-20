@@ -60,11 +60,5 @@ WHERE identity.value->>'key' IS NOT NULL
 ALTER TABLE "user_external_identities" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "user_external_identities" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 CREATE POLICY "tenant_isolation_user_external_identities" ON "user_external_identities"
-	USING (
-		COALESCE(current_setting('agor.system_scope', true), '') = ''
-		AND "tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
-	)
-	WITH CHECK (
-		COALESCE(current_setting('agor.system_scope', true), '') = ''
-		AND "tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
-	);
+	USING ("tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'))
+	WITH CHECK ("tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'));

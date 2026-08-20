@@ -40,6 +40,13 @@ external_launch:
   # Optional: allow role claims above member. Defaults to false.
   allow_admin_roles: false
 
+  # Optional backchannel timeout, 1-120000 ms. Defaults to 10000.
+  request_timeout_ms: 10000
+
+  # Optional non-empty allow-list. HS* is symmetric-only; RS*/PS*/ES* is
+  # asymmetric-only. Defaults to HS256 for a dev secret and RS256 otherwise.
+  algorithms: [RS256]
+
   # Optional: primary action shown when launch sign-in cannot continue.
   # Must be http:// or https://.
   login_redirect_url: https://workspace.example.com/open

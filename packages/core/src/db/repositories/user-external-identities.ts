@@ -28,7 +28,9 @@ export class UserExternalIdentitiesRepository {
     if (!tenantId) {
       throw new RepositoryError('External identity provisioning requires a tenant database scope');
     }
-    const scopedKey = `${tenantId}\0${key}`;
+    // PostgreSQL text values cannot contain NUL. JSON encodes this tuple
+    // unambiguously while keeping the advisory-lock input portable.
+    const scopedKey = JSON.stringify([tenantId, key]);
     await executeRaw(this.db, sql`SELECT pg_advisory_xact_lock(hashtextextended(${scopedKey}, 0))`);
   }
 

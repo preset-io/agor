@@ -1,4 +1,19 @@
-import type { AgorConfig, AgorExternalLaunchSettings } from './types';
+import { createPublicKey } from 'node:crypto';
+import {
+  type AgorConfig,
+  AgorExternalLaunchAlgorithm,
+  type AgorExternalLaunchSettings,
+  type ResolvedExternalLaunchSettings,
+} from './types';
+
+export const EXTERNAL_LAUNCH_DEFAULT_TIMEOUT_MS = 10_000;
+export const EXTERNAL_LAUNCH_MAX_TIMEOUT_MS = 120_000;
+export const EXTERNAL_LAUNCH_DEFAULT_TRUSTED_HOST_HEADER = 'host';
+export const EXTERNAL_LAUNCH_DEFAULT_RETURN_HOST_PARAM = 'return_host';
+
+const RESERVED_RETURN_TO_PARAM = 'return_to';
+const HTTP_HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const ENVIRONMENT_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const EXTERNAL_LAUNCH_ENV = {
   ENABLED: 'AGOR_EXTERNAL_LAUNCH_ENABLED',
@@ -26,6 +41,228 @@ function booleanEnvironmentValue(value: string | undefined, name: string): boole
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requiredString(
+  raw: Record<string, unknown>,
+  key: keyof AgorExternalLaunchSettings,
+  options: { preserveWhitespace?: boolean } = {}
+): string | undefined {
+  const value = raw[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`external_launch.${key} must be a non-empty string`);
+  }
+  return options.preserveWhitespace ? value : value.trim();
+}
+
+function optionalBoolean(
+  raw: Record<string, unknown>,
+  key: keyof AgorExternalLaunchSettings,
+  fallback = false
+): boolean {
+  const value = raw[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== 'boolean') {
+    throw new Error(`external_launch.${key} must be a boolean`);
+  }
+  return value;
+}
+
+function httpUrl(value: string | undefined, path: string): string | undefined {
+  if (value === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${path} must be a valid HTTP(S) URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${path} must be a valid HTTP(S) URL`);
+  }
+  return value;
+}
+
+function parseAlgorithms(
+  raw: Record<string, unknown>
+): ResolvedExternalLaunchSettings['algorithms'] {
+  const algorithms = raw.algorithms;
+  if (algorithms === undefined) return undefined;
+  if (!Array.isArray(algorithms) || algorithms.length === 0) {
+    throw new Error('external_launch.algorithms must be a non-empty array');
+  }
+  const supported = new Set<string>(Object.values(AgorExternalLaunchAlgorithm));
+  if (algorithms.some((algorithm) => typeof algorithm !== 'string' || !supported.has(algorithm))) {
+    throw new Error(`external_launch.algorithms may only contain: ${[...supported].join(', ')}`);
+  }
+  return algorithms as ResolvedExternalLaunchSettings['algorithms'];
+}
+
+function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunchSettings {
+  const rawValue = config.external_launch as unknown;
+  if (rawValue !== undefined && !isObject(rawValue)) {
+    throw new Error('external_launch must be an object');
+  }
+  const raw = rawValue ?? {};
+
+  const enabled = optionalBoolean(raw, 'enabled');
+  const exchangeUrl = httpUrl(requiredString(raw, 'exchange_url'), 'external_launch.exchange_url');
+  const issuer = requiredString(raw, 'issuer');
+  const audience = requiredString(raw, 'audience');
+  const instanceId = requiredString(raw, 'instance_id');
+  const providerId = requiredString(raw, 'provider_id');
+  const jwksUrl = httpUrl(requiredString(raw, 'jwks_url'), 'external_launch.jwks_url');
+  const publicKey = requiredString(raw, 'public_key', { preserveWhitespace: true });
+  const devSharedSecret = requiredString(raw, 'dev_shared_secret', { preserveWhitespace: true });
+  const serviceCredential = requiredString(raw, 'service_credential', {
+    preserveWhitespace: true,
+  });
+  const devSharedSecretEnv = requiredString(raw, 'dev_shared_secret_env');
+  const serviceCredentialEnv = requiredString(raw, 'service_credential_env');
+  for (const [path, value] of [
+    ['external_launch.dev_shared_secret_env', devSharedSecretEnv],
+    ['external_launch.service_credential_env', serviceCredentialEnv],
+  ] as const) {
+    if (value !== undefined && !ENVIRONMENT_VARIABLE_NAME.test(value)) {
+      throw new Error(`${path} must be a valid environment variable name`);
+    }
+  }
+
+  const timeoutValue = raw.request_timeout_ms;
+  if (
+    timeoutValue !== undefined &&
+    (!Number.isSafeInteger(timeoutValue) ||
+      (timeoutValue as number) <= 0 ||
+      (timeoutValue as number) > EXTERNAL_LAUNCH_MAX_TIMEOUT_MS)
+  ) {
+    throw new Error(
+      `external_launch.request_timeout_ms must be an integer from 1 to ${EXTERNAL_LAUNCH_MAX_TIMEOUT_MS}`
+    );
+  }
+  const algorithms = parseAlgorithms(raw);
+  const allowAdminRoles = optionalBoolean(raw, 'allow_admin_roles');
+  const trustVerifiedEmailForLinking = optionalBoolean(raw, 'trust_verified_email_for_linking');
+  const forwardRequestHost = optionalBoolean(raw, 'forward_request_host');
+
+  const configuredHeader = requiredString(raw, 'trusted_host_header');
+  if (configuredHeader !== undefined && !HTTP_HEADER_NAME.test(configuredHeader)) {
+    throw new Error('external_launch.trusted_host_header must be a valid HTTP header name');
+  }
+  const trustedHostHeader = (
+    configuredHeader ?? EXTERNAL_LAUNCH_DEFAULT_TRUSTED_HOST_HEADER
+  ).toLowerCase();
+
+  const loginRedirectUrl = httpUrl(
+    requiredString(raw, 'login_redirect_url'),
+    'external_launch.login_redirect_url'
+  );
+  const returnHostParamValue = raw.return_host_param;
+  if (returnHostParamValue !== undefined && typeof returnHostParamValue !== 'string') {
+    throw new Error('external_launch.return_host_param must be a string');
+  }
+  // Preserve the existing explicit-empty behavior: it selects the default.
+  const configuredReturnHostParam = returnHostParamValue?.trim() || undefined;
+  if (configuredReturnHostParam === RESERVED_RETURN_TO_PARAM) {
+    throw new Error(
+      `external_launch.return_host_param must not be "${RESERVED_RETURN_TO_PARAM}" because that name is reserved`
+    );
+  }
+  if (
+    configuredReturnHostParam !== undefined &&
+    !/^[A-Za-z0-9_.-]+$/.test(configuredReturnHostParam)
+  ) {
+    throw new Error(
+      'external_launch.return_host_param may only contain letters, digits, underscore, hyphen, and dot'
+    );
+  }
+
+  const verificationMethods = [jwksUrl, publicKey, devSharedSecret].filter(Boolean);
+  if (enabled && !exchangeUrl) {
+    throw new Error('external_launch.exchange_url is required when external launch is enabled');
+  }
+  if (enabled && (!issuer || !audience)) {
+    throw new Error(
+      'external_launch.issuer and external_launch.audience are required when external launch is enabled'
+    );
+  }
+  if (enabled && verificationMethods.length === 0) {
+    throw new Error('external_launch requires exactly one assertion verification method');
+  }
+  if (enabled && verificationMethods.length > 1) {
+    throw new Error('external_launch must not configure multiple assertion verification methods');
+  }
+  if (enabled && publicKey) {
+    try {
+      createPublicKey(publicKey);
+    } catch {
+      throw new Error('external_launch.public_key must be a valid public key');
+    }
+  }
+  if (enabled && algorithms) {
+    const hasHsAlgorithm = algorithms.some((algorithm) => algorithm.startsWith('HS'));
+    const hasNonHsAlgorithm = algorithms.some((algorithm) => !algorithm.startsWith('HS'));
+    if (devSharedSecret && hasNonHsAlgorithm) {
+      throw new Error('external_launch symmetric verification may only use HS* algorithms');
+    }
+    if ((jwksUrl || publicKey) && hasHsAlgorithm) {
+      throw new Error('external_launch asymmetric verification cannot use HS* algorithms');
+    }
+  }
+
+  return {
+    enabled,
+    exchangeUrl,
+    issuer,
+    audience,
+    instanceId,
+    providerId,
+    jwksUrl,
+    publicKey,
+    devSharedSecret,
+    serviceCredential,
+    allowAdminRoles,
+    trustVerifiedEmailForLinking,
+    requestTimeoutMs: (timeoutValue as number | undefined) ?? EXTERNAL_LAUNCH_DEFAULT_TIMEOUT_MS,
+    algorithms,
+    forwardRequestHost,
+    trustedHostHeader,
+    loginRedirectUrl,
+    returnHostParam: loginRedirectUrl
+      ? (configuredReturnHostParam ?? EXTERNAL_LAUNCH_DEFAULT_RETURN_HOST_PARAM)
+      : undefined,
+  };
+}
+
+export interface ExternalLaunchSettingsResolution {
+  settings: ResolvedExternalLaunchSettings;
+  error?: string;
+}
+
+const DISABLED_LAUNCH_SETTINGS: ResolvedExternalLaunchSettings = {
+  enabled: false,
+  allowAdminRoles: false,
+  trustVerifiedEmailForLinking: false,
+  requestTimeoutMs: EXTERNAL_LAUNCH_DEFAULT_TIMEOUT_MS,
+  forwardRequestHost: false,
+  trustedHostHeader: EXTERNAL_LAUNCH_DEFAULT_TRUSTED_HOST_HEADER,
+};
+
+/**
+ * Parse the complete provider profile once through the same fail-closed
+ * contract used by startup and request handling. Invalid raw values never
+ * escape into auth code as partially trusted settings.
+ */
+export function resolveExternalLaunchSettings(
+  config: AgorConfig
+): ExternalLaunchSettingsResolution {
+  try {
+    return { settings: parseExternalLaunchSettings(config) };
+  } catch (error) {
+    return {
+      settings: DISABLED_LAUNCH_SETTINGS,
+      error: error instanceof Error ? error.message : 'external_launch configuration is invalid',
+    };
+  }
 }
 
 /**
@@ -97,41 +334,7 @@ export function resolveEffectiveExternalLaunchConfig(
  * enforcement points from accepting different provider configurations.
  */
 export function externalLaunchConfigurationError(config: AgorConfig): string | undefined {
-  const raw = config.external_launch as unknown;
-  if (raw !== undefined && !isObject(raw)) return 'external_launch must be an object';
-  if (raw === undefined) return undefined;
-
-  const settings = raw as unknown as AgorExternalLaunchSettings;
-  if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
-    return 'external_launch.enabled must be a boolean';
-  }
-  if (settings.enabled !== true) return undefined;
-  if (!nonEmptyEnvironmentValue(settings.exchange_url)) {
-    return 'external_launch.exchange_url is required when external launch is enabled';
-  }
-  if (!nonEmptyEnvironmentValue(settings.issuer) || !nonEmptyEnvironmentValue(settings.audience)) {
-    return 'external_launch.issuer and external_launch.audience are required when external launch is enabled';
-  }
-
-  const configuredKeyCount = [
-    settings.jwks_url,
-    settings.public_key,
-    settings.dev_shared_secret,
-  ].filter((value) => nonEmptyEnvironmentValue(value) !== undefined).length;
-  if (configuredKeyCount === 0) {
-    return 'external_launch requires exactly one assertion verification method';
-  }
-  if (configuredKeyCount > 1) {
-    return 'external_launch must not configure multiple assertion verification methods';
-  }
-
-  const usesAsymmetricKey = Boolean(
-    nonEmptyEnvironmentValue(settings.jwks_url) || nonEmptyEnvironmentValue(settings.public_key)
-  );
-  if (usesAsymmetricKey && settings.algorithms?.some((algorithm) => /^hs/i.test(algorithm))) {
-    return 'external_launch asymmetric verification cannot use HS* algorithms';
-  }
-  return undefined;
+  return resolveExternalLaunchSettings(config).error;
 }
 
 /** Fail startup before database initialization when enabled launch auth is unusable. */
