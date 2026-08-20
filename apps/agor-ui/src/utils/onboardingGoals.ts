@@ -163,7 +163,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   },
   {
     id: 'hand-off-build',
-    title: 'Spin up a build',
+    title: 'Build me an app',
     description: 'A working app or dashboard on a live test env.',
     icon: BuildOutlined,
     mcpRecs: ['github', 'figma'],

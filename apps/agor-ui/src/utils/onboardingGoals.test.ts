@@ -132,7 +132,7 @@ describe('buildGoalBootstrapGuidance', () => {
     expect(lines[0]).toBe(findOnboardingGoal('hand-off-build')?.bootstrapLine);
     expect(lines[1]).toBe(findOnboardingGoal('dig-into-anything')?.bootstrapLine);
     // Bridging line names primary and secondary without adding another opening command.
-    expect(lines[2]).toContain('"Spin up a build"');
+    expect(lines[2]).toContain('"Build me an app"');
     expect(lines[2]).toContain('"Dig into anything"');
     expect(lines[2]).toMatch(/do not ask which matters more/i);
   });

@@ -172,7 +172,7 @@ describe('OnboardingWizard', () => {
       expect(baseElement.textContent).not.toContain(emoji);
     }
     // Title + description still render.
-    expect(screen.getByText('Spin up a build')).toBeInTheDocument();
+    expect(screen.getByText('Build me an app')).toBeInTheDocument();
     expect(screen.getByText('A working app or dashboard on a live test env.')).toBeInTheDocument();
   });
 
@@ -259,7 +259,7 @@ describe('OnboardingWizard', () => {
     // A third pick is blocked at the cap — its card is marked disabled (aria-disabled
     // keeps it focusable so the explanatory tooltip stays reachable) and clicking
     // it is a no-op rather than a fourth selection.
-    const thirdCard = screen.getByText('Spin up a build').closest('button');
+    const thirdCard = screen.getByText('Build me an app').closest('button');
     expect(thirdCard).toHaveAttribute('aria-disabled', 'true');
     // The reason is exposed to assistive tech (part of the card's name), not hover-only.
     expect(thirdCard).toHaveTextContent('Deselect one to swap it for this.');
