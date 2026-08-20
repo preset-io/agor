@@ -227,7 +227,10 @@ describe('executor response receiver', () => {
     } as RequestInit & { duplex: 'half' });
 
     body.write(`${terminal(request.descriptor.requestId, 0, { success: true })}\n`);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Yield a macrotask so the final frame lands as its own chunk before the
+    // trailing bytes — exercises the "bytes after final in a LATER chunk" path.
+    // setTimeout (not setImmediate) keeps the daemon multitenancy-boundary check happy.
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
     body.end('trailing');
 
     expect((await responsePromise).status).toBe(400);
