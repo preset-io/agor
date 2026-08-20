@@ -28,7 +28,7 @@ interface SessionPageProps {
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
   onMenuClick?: () => void;
-  promptDrafts: Map<string, string>;
+  promptDrafts: ReadonlyMap<string, string>;
   onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 

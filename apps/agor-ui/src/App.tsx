@@ -53,7 +53,10 @@ import type {
   SessionInitializationResult,
   SessionInitializationRetry,
 } from './domain/sessionCreation';
-import { initializeCreatedSession } from './domain/sessionCreation';
+import {
+  admitSessionInitializationPrompt,
+  initializeCreatedSession,
+} from './domain/sessionCreation';
 import {
   createSessionInitializationRecoveryState,
   pruneSessionInitializationRecovery,
@@ -61,6 +64,12 @@ import {
   runSessionInitializationSingleFlight,
   scopeSessionInitializationRecovery,
 } from './domain/sessionInitializationRecovery';
+import {
+  clearSessionPromptDraft,
+  createSessionPromptDraftState,
+  scopeSessionPromptDraftState,
+  updateSessionPromptDraft,
+} from './domain/sessionPromptDrafts';
 import {
   IdentityContractState,
   useAgorClient,
@@ -115,6 +124,7 @@ const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
 const EMPTY_REPOS: Repo[] = [];
 const EMPTY_SESSION_INITIALIZATION_RETRIES: ReadonlyMap<string, SessionInitializationRetry> =
   new Map();
+const EMPTY_SESSION_PROMPT_DRAFTS: ReadonlyMap<string, string> = new Map();
 
 /**
  * Resolve the framework repo once it reaches `clone_status: 'ready'`, up to a
@@ -465,9 +475,11 @@ function AppContent() {
     }
   }, [location.pathname, location.search]);
 
-  // Per-session prompt drafts (persists across session switches)
-  const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
   const recoveryOwnerId = user?.user_id ?? null;
+  // Per-session prompt drafts persist across session switches, but never across callers.
+  const [sessionPromptDraftState, setSessionPromptDraftState] = useState(() =>
+    createSessionPromptDraftState(recoveryOwnerId)
+  );
   const [sessionInitializationRecovery, setSessionInitializationRecovery] = useState(() =>
     createSessionInitializationRecoveryState(recoveryOwnerId)
   );
@@ -493,6 +505,10 @@ function AppContent() {
     sessionInitializationRecovery.ownerId === recoveryOwnerId
       ? sessionInitializationRecovery.retries
       : EMPTY_SESSION_INITIALIZATION_RETRIES;
+  const promptDrafts =
+    sessionPromptDraftState.ownerId === recoveryOwnerId
+      ? sessionPromptDraftState.drafts
+      : EMPTY_SESSION_PROMPT_DRAFTS;
 
   useEffect(() => {
     for (const controller of initializationAbortControllersRef.current.values()) {
@@ -501,6 +517,7 @@ function AppContent() {
     initializationAbortControllersRef.current.clear();
     initializationFlightsRef.current.clear();
     setSessionInitializationsInFlight(new Set());
+    setSessionPromptDraftState((current) => scopeSessionPromptDraftState(current, recoveryOwnerId));
     setSessionInitializationRecovery(() => {
       const next = scopeSessionInitializationRecovery(
         sessionInitializationRecoveryRef.current,
@@ -1126,7 +1143,22 @@ function AppContent() {
             return buildPromptWithAttachments(prompt, uploaded.files);
           },
           sendPrompt: (targetSessionId, prompt, permissionMode, idempotencyKey) =>
-            handleSendPrompt(targetSessionId, prompt, permissionMode, idempotencyKey),
+            admitSessionInitializationPrompt(
+              async () => {
+                if (!client) throw new Error('Connection unavailable');
+                await client.sessions.prompt(targetSessionId, prompt, {
+                  permissionMode,
+                  idempotencyKey,
+                });
+              },
+              shouldContinue,
+              (error) => {
+                showError(
+                  `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
+                );
+                console.error('Prompt error:', error);
+              }
+            ),
           onSetupError: (stage, error) => {
             const label = stage === 'mcpServers' ? 'MCP servers' : 'environment variables';
             showError(
@@ -1234,24 +1266,16 @@ function AppContent() {
 
   // Update draft for a specific session
   const handleUpdateDraft = (sessionId: string, draft: string) => {
-    setPromptDrafts((prev) => {
-      const next = new Map(prev);
-      if (draft.trim()) {
-        next.set(sessionId, draft);
-      } else {
-        next.delete(sessionId); // Clean up empty drafts
-      }
-      return next;
-    });
+    setSessionPromptDraftState((current) =>
+      updateSessionPromptDraft(current, recoveryOwnerId, sessionId, draft)
+    );
   };
 
   // Clear draft for a specific session
   const handleClearDraft = (sessionId: string) => {
-    setPromptDrafts((prev) => {
-      const next = new Map(prev);
-      next.delete(sessionId);
-      return next;
-    });
+    setSessionPromptDraftState((current) =>
+      clearSessionPromptDraft(current, recoveryOwnerId, sessionId)
+    );
   };
 
   // Handle fork session
@@ -1320,6 +1344,7 @@ function AppContent() {
     idempotencyKey?: string
   ): Promise<boolean> => {
     if (!client) return false;
+    const operationOwnerId = recoveryOwnerId;
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
@@ -1328,11 +1353,17 @@ function AppContent() {
       });
 
       // Clear the draft after sending
-      handleClearDraft(sessionId);
+      setSessionPromptDraftState((current) =>
+        clearSessionPromptDraft(current, operationOwnerId, sessionId)
+      );
       return true;
     } catch (error) {
-      showError(`Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`);
-      console.error('Prompt error:', error);
+      if (recoveryOwnerIdRef.current === operationOwnerId) {
+        showError(
+          `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
+        );
+        console.error('Prompt error:', error);
+      }
       return false;
     }
   };

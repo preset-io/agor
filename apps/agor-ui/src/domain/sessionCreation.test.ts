@@ -1,7 +1,40 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deliverInitialSessionContent, initializeCreatedSession } from './sessionCreation';
+import {
+  admitSessionInitializationPrompt,
+  deliverInitialSessionContent,
+  initializeCreatedSession,
+} from './sessionCreation';
 
 const IDEMPOTENCY_KEY = '0198cdef-1234-7000-8000-123456789abc';
+
+describe('admitSessionInitializationPrompt', () => {
+  it('does not surface a delayed failure after the initiating identity is stale', async () => {
+    let rejectAdmission!: (error: Error) => void;
+    let current = true;
+    const onError = vi.fn();
+    const result = admitSessionInitializationPrompt(
+      () => new Promise((_, reject) => (rejectAdmission = reject)),
+      () => current,
+      onError
+    );
+
+    current = false;
+    rejectAdmission(new Error('connection lost'));
+
+    await expect(result).resolves.toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('admits content without owning or clearing a separately typed compose draft', async () => {
+    const drafts = new Map([['session-1', 'separate follow-up']]);
+
+    await expect(
+      admitSessionInitializationPrompt(vi.fn().mockResolvedValue(undefined), () => true)
+    ).resolves.toBe(true);
+
+    expect(drafts.get('session-1')).toBe('separate follow-up');
+  });
+});
 
 describe('deliverInitialSessionContent', () => {
   it('keeps the full draft retryable and sends nothing when attachment upload fails', async () => {

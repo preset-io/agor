@@ -89,6 +89,26 @@ export interface InitialContentDeliveryDependencies {
 }
 
 /**
+ * Admit an initialization prompt without coupling delivery to compose UI state.
+ * Errors are surfaced only while the initiating authentication generation is
+ * still current; an ambiguous stale completion remains owned by that operation.
+ */
+export async function admitSessionInitializationPrompt(
+  admit: () => Promise<unknown>,
+  shouldContinue: () => boolean,
+  onError?: (error: unknown) => void
+): Promise<boolean> {
+  if (!shouldContinue()) return false;
+  try {
+    await admit();
+    return true;
+  } catch (error) {
+    if (shouldContinue()) onError?.(error);
+    return false;
+  }
+}
+
+/**
  * Deliver new-session content as one retryable unit. In particular, an upload
  * failure never falls through to a text-only send, which would make a safe
  * retry of the original draft impossible.

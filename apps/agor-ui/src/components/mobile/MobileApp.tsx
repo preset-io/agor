@@ -34,7 +34,7 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
-  promptDrafts: Map<string, string>;
+  promptDrafts: ReadonlyMap<string, string>;
   onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 
