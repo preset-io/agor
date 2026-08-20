@@ -136,8 +136,19 @@ describe('auth_type', () => {
     expect(withAuth('').auth_type).toBe('unknown');
   });
 
-  it.each(['none', 'oauth', 'credentials'] as const)('carries a stated %s', (authType) => {
+  it.each(['none', 'oauth'] as const)('carries a stated %s', (authType) => {
     expect(withAuth(`auth_type: ${authType}`).auth_type).toBe(authType);
+  });
+
+  it('requires a reviewed scheme and acquisition URL for credentials', () => {
+    expect(() => withAuth('auth_type: credentials')).toThrow(CuratedCatalogError);
+    const entry = parseCuratedCatalog(
+      `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n`
+    )[0];
+    expect(entry.credentials).toEqual({
+      scheme: 'bearer',
+      acquisition_url: 'https://example.com/tokens',
+    });
   });
 
   it('refuses a verdict only a live check could produce', () => {

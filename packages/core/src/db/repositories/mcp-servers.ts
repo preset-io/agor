@@ -60,7 +60,7 @@ export class MCPServerRepository
       display_name: row.data.display_name,
       description: row.data.description,
       import_path: row.data.import_path,
-      catalog_entry_name: row.data.catalog_entry_name,
+      catalog_entry_name: row.catalog_entry_name ?? row.data.catalog_entry_name,
 
       // Transport config
       command: row.data.command,
@@ -109,6 +109,7 @@ export class MCPServerRepository
       scope: data.scope!,
       enabled: data.enabled ?? true,
       source: data.source ?? 'user',
+      catalog_entry_name: data.catalog_entry_name ?? null,
 
       // Scope foreign key (only for global scope)
       owner_user_id: data.owner_user_id ?? null,
@@ -228,6 +229,9 @@ export class MCPServerRepository
 
       if (filters?.source) {
         conditions.push(eq(mcpServers.source, filters.source));
+      }
+      if (filters?.catalogEntryName) {
+        conditions.push(eq(mcpServers.catalog_entry_name, filters.catalogEntryName));
       }
 
       if (filters?.usableByUserId) {

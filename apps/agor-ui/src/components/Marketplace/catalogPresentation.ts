@@ -181,9 +181,9 @@ const CONNECT_STATUSES = {
   },
   needsKey: {
     readiness: 'api-key',
-    label: 'Needs an API key',
+    label: 'Needs a bearer access token',
     detail:
-      'This server needs an API key from your own account. Paste one when you connect — Agor stores it for you alone, and never shows it again.',
+      'This server needs a bearer access token from your own account. Paste one when you connect — Agor stores it for you alone, and never shows it again.',
   },
   unchecked: {
     readiness: 'unchecked',
@@ -202,7 +202,7 @@ const CONNECT_STATUSES = {
  * Auth types that are not a refusal.
  *
  * The same rule the cards state: `none` is stated open, `oauth` signs the user
- * in with their own account after connecting, `credentials` takes a key the
+ * in with their own account after connecting, `credentials` takes a reviewed bearer token the
  * user pastes into the drawer, and `unknown` is simply unstated — connecting
  * checks the endpoint. An entry that says nothing is worth offering, so a
  * filter demanding `none` would hide entries the card beside it called

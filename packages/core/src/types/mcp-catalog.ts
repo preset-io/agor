@@ -163,12 +163,24 @@ export interface MCPCatalogEntry {
 
   auth_type: MCPCatalogAuthType;
 
+  /** Reviewed instructions for a non-OAuth credential. Generic 401/403 responses never imply a scheme. */
+  credentials?: MCPCatalogEntryCredentials;
+
   /**
    * Per-server OAuth settings, for the endpoints discovery cannot fully
    * describe. See {@link MCPCatalogEntryOAuth}. Omitted by every entry that
    * does not need one, which is the intended state.
    */
   oauth?: MCPCatalogEntryOAuth;
+}
+
+export interface MCPCatalogEntryCredentials {
+  /** The only marketplace credential scheme currently supported. */
+  scheme: 'bearer';
+  /** Vendor documentation for creating the bearer access token. */
+  acquisition_url: string;
+  /** Vendor-specific label, e.g. "personal access token". */
+  label?: string;
 }
 
 /**
@@ -375,7 +387,7 @@ export interface MCPCatalogConnectData {
    * a key sent to a server that never asked for one would be a secret written
    * to a row with no reason to carry it.
    */
-  api_key?: string;
+  bearer_token?: string;
   /**
    * The `permission_disclosure` the user was shown and accepted.
    *
@@ -434,13 +446,18 @@ export interface MCPCatalogConnectResult {
  * has to stay distinguishable from both — every other refusal carries none of
  * this, and a client must not read a missing field as `not_accepted`.
  */
-export const MCP_CATALOG_API_KEY_REQUIREMENTS = ['required', 'not_accepted'] as const;
+export const MCP_CATALOG_CREDENTIAL_REQUIREMENTS = [
+  'required',
+  'not_accepted',
+  'oauth',
+  'unsupported',
+] as const;
 
-export type MCPCatalogApiKeyRequirement = (typeof MCP_CATALOG_API_KEY_REQUIREMENTS)[number];
+export type MCPCatalogCredentialRequirement = (typeof MCP_CATALOG_CREDENTIAL_REQUIREMENTS)[number];
 
 /** The machine-readable half of a connect refusal. Rides on `error.data`. */
 export interface MCPCatalogConnectErrorData {
-  api_key_requirement: MCPCatalogApiKeyRequirement;
+  credential_requirement: MCPCatalogCredentialRequirement;
 }
 
 /**
@@ -448,7 +465,7 @@ export interface MCPCatalogConnectErrorData {
  *
  * Lives beside the type it reads rather than in the browser bundle, so the
  * daemon that writes this field and the drawer that reacts to it are looking at
- * one definition. The alternative — a client-side `err.data.api_key_requirement`
+ * one definition. The alternative — a client-side `err.data.credential_requirement`
  * spelled out at the call site — is a string literal that no longer matches the
  * moment anybody renames the field, and it fails by silently doing nothing,
  * which is indistinguishable from the endpoint not having stated a requirement.
@@ -456,10 +473,14 @@ export interface MCPCatalogConnectErrorData {
  * Defensive about its input because it is handed whatever a `catch` caught:
  * a Feathers error, a `TypeError` from a dropped socket, or a string.
  */
-export function readApiKeyRequirement(error: unknown): MCPCatalogApiKeyRequirement | undefined {
+export function readCredentialRequirement(
+  error: unknown
+): MCPCatalogCredentialRequirement | undefined {
   const data = (error as { data?: unknown } | null | undefined)?.data;
-  const requirement = (data as MCPCatalogConnectErrorData | undefined)?.api_key_requirement;
-  return MCP_CATALOG_API_KEY_REQUIREMENTS.includes(requirement as MCPCatalogApiKeyRequirement)
-    ? (requirement as MCPCatalogApiKeyRequirement)
+  const requirement = (data as MCPCatalogConnectErrorData | undefined)?.credential_requirement;
+  return MCP_CATALOG_CREDENTIAL_REQUIREMENTS.includes(
+    requirement as MCPCatalogCredentialRequirement
+  )
+    ? (requirement as MCPCatalogCredentialRequirement)
     : undefined;
 }

@@ -454,6 +454,8 @@ export interface MCPServerFilters {
   usableByUserId?: string;
   /** Restrict to system-owned rows, used for the official catalog. */
   ownerless?: boolean;
+  /** Exact materialized catalog identity; never a substring search. */
+  catalogEntryName?: string;
 }
 
 /**

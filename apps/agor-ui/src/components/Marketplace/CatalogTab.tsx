@@ -8,11 +8,11 @@
 
 import type {
   AgenticToolName,
-  MCPCatalogApiKeyRequirement,
   MCPCatalogCategory,
+  MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
 } from '@agor/core/types';
-import { readApiKeyRequirement } from '@agor/core/types';
+import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
@@ -110,7 +110,9 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
   // catalog entry the drawer built its form from. Held here rather than in the
   // drawer because it arrives with the connect response, which is this
   // component's to make.
-  const [keyRequirement, setKeyRequirement] = useState<MCPCatalogApiKeyRequirement | null>(null);
+  const [keyRequirement, setKeyRequirement] = useState<MCPCatalogCredentialRequirement | null>(
+    null
+  );
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
@@ -174,12 +176,12 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
       branchId,
       agenticTool,
       acknowledgedDisclosure,
-      apiKey,
+      bearerToken,
     }: {
       branchId: string;
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
-      apiKey?: string;
+      bearerToken?: string;
     }) => {
       if (!selected || !client) return;
       setConnecting(true);
@@ -194,7 +196,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           // or it carries no such field, and the daemon reads absence as "the
           // user supplied nothing" rather than having to unpick which kind of
           // empty arrived.
-          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
         rememberConnectBranchId(branchId);
         // A starter prompt is written to exercise the server it ships with, so
@@ -221,7 +223,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         // wants, or offering none where it now does — into one more attempt.
         // Left alone when the refusal carries no requirement, so an unrelated
         // failure does not reshape the form.
-        const requirement = readApiKeyRequirement(err);
+        const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
         setConnecting(false);
@@ -315,7 +317,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         defaultBranchId={getLastConnectBranchId()}
         connecting={connecting}
         connectError={connectError}
-        apiKeyRequirement={keyRequirement}
+        credentialRequirement={keyRequirement}
         onConnect={handleConnect}
       />
     </Flex>

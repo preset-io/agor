@@ -1340,6 +1340,7 @@ export const mcpServers = sqliteTable(
     source: text('source', {
       enum: ['user', 'imported', 'agor', 'catalog'],
     }).notNull(),
+    catalog_entry_name: text('catalog_entry_name'),
 
     // JSON blob for configuration and capabilities
     data: t
@@ -1415,6 +1416,9 @@ export const mcpServers = sqliteTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
+    catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
+      .on(table.owner_user_id, table.catalog_entry_name)
+      .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
 

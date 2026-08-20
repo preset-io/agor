@@ -259,7 +259,7 @@ export type MCPApiKeyProbeVerdict = 'accepted' | 'rejected' | 'unusable';
  * key was presented and the endpoint still would not let the client in, which
  * is one fact from the user's side however the server chose to phrase it.
  */
-export async function probeRemoteApiKey(
+export async function probeRemoteBearerToken(
   remoteUrl: string,
   apiKey: string,
   options: AuthProbeOptions = {}
@@ -277,3 +277,6 @@ export async function probeRemoteApiKey(
 
   return 'unusable';
 }
+
+/** @deprecated Use the scheme-explicit name. */
+export const probeRemoteApiKey = probeRemoteBearerToken;

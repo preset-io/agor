@@ -9,7 +9,7 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogApiKeyRequirement, MCPCatalogEntry } from '@agor/core/types';
+import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -133,6 +133,11 @@ const DATADOG = {
   permission_disclosure: 'Reads metrics, logs, traces, monitors, and incidents.',
   website_url: 'https://docs.datadoghq.com/account_management/api-app-keys/',
   auth_type: 'credentials',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Personal access token',
+    acquisition_url: 'https://docs.datadoghq.com/mcp_server/setup/',
+  },
 } as unknown as MCPCatalogEntry;
 
 const SENTRY = {
@@ -147,7 +152,7 @@ function renderWithConnect(entry: MCPCatalogEntry) {
   const props = (
     shown: MCPCatalogEntry,
     open = true,
-    apiKeyRequirement: MCPCatalogApiKeyRequirement | null = null
+    credentialRequirement: MCPCatalogCredentialRequirement | null = null
   ) => ({
     entry: shown,
     open,
@@ -158,7 +163,7 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     defaultBranchId: 'branch-1',
     connecting: false,
     connectError: null,
-    apiKeyRequirement,
+    credentialRequirement,
     onConnect,
   });
   const view = render(<CatalogDetailDrawer {...props(entry)} />);
@@ -170,12 +175,12 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     // state on it outlives the interaction unless something clears it.
     setOpen: (open: boolean) => view.rerender(<CatalogDetailDrawer {...props(entry, open)} />),
     /** What `CatalogTab` does after a refusal that named a requirement. */
-    answerFromEndpoint: (requirement: MCPCatalogApiKeyRequirement) =>
+    answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
   };
 }
 
-const keyField = () => screen.queryByPlaceholderText(/Paste your .* API key/);
+const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
   it('offers a key field for an entry that needs one, and gates connect on it', () => {
@@ -204,7 +209,7 @@ describe('CatalogDetailDrawer API key', () => {
     // routinely arrives with surrounding whitespace, and the button should not
     // enable for a field holding only spaces.
     expect(onConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ branchId: 'branch-1', apiKey: 'fake-key-1111' })
+      expect.objectContaining({ branchId: 'branch-1', bearerToken: 'fake-key-1111' })
     );
   });
 
@@ -265,18 +270,12 @@ describe('CatalogDetailDrawer API key', () => {
     renderWithConnect(DATADOG);
 
     const link = screen.getByRole('link', { name: /Where to find it/ });
-    expect(link).toHaveAttribute('href', DATADOG.website_url);
+    expect(link).toHaveAttribute('href', DATADOG.credentials?.acquisition_url);
   });
 
-  it('reveals the field when the endpoint asks for a key the entry did not', () => {
-    // `curated.yaml` says `none`; the vendor has since put the endpoint behind
-    // an account. Before this, the daemon answered "paste one to connect" and
-    // the drawer had nowhere to paste — a dead end reachable from nothing worse
-    // than an out-of-date file.
-    const { answerFromEndpoint } = renderWithConnect(DEEPWIKI);
+  it('keeps the prescribed bearer field when the endpoint confirms credentials', () => {
+    const { answerFromEndpoint } = renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));
-    expect(keyField()).toBeNull();
-
     answerFromEndpoint('required');
 
     expect(keyField()).toBeVisible();
@@ -288,14 +287,16 @@ describe('CatalogDetailDrawer API key', () => {
   it('sends the key on the retry the endpoint asked for', () => {
     // The whole point of one extra round trip: the second attempt carries what
     // the first was refused for lacking.
-    const { answerFromEndpoint, onConnect } = renderWithConnect(DEEPWIKI);
+    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));
     answerFromEndpoint('required');
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
 
     fireEvent.click(connectButton());
 
-    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'fake-key-1111' }));
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ bearerToken: 'fake-key-1111' })
+    );
   });
 
   it('drops the requirement when the endpoint says it wants no key', () => {
@@ -324,7 +325,7 @@ describe('CatalogDetailDrawer API key', () => {
     fireEvent.click(connectButton());
 
     expect(onConnect).toHaveBeenCalledWith(
-      expect.not.objectContaining({ apiKey: expect.anything() })
+      expect.not.objectContaining({ bearerToken: expect.anything() })
     );
     // And the discarded key is not waiting in the field if the requirement
     // flips back.
@@ -340,10 +341,10 @@ describe('CatalogDetailDrawer API key', () => {
 
     fireEvent.click(connectButton());
 
-    // No `apiKey` at all rather than an empty one: the daemon refuses a key
+    // No `bearerToken` at all rather than an empty one: the daemon refuses a key
     // sent to an endpoint that never asked for one.
     expect(onConnect).toHaveBeenCalledWith(
-      expect.not.objectContaining({ apiKey: expect.anything() })
+      expect.not.objectContaining({ bearerToken: expect.anything() })
     );
   });
 

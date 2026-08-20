@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { probeRemoteApiKey, probeRemoteAuthType } from './auth-probe';
+import { probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
 
 // These cover the status-to-verdict rules, so the transport is injected. The
 // outbound destination filter is not exercised here: it lives in
@@ -269,7 +269,7 @@ describe('probeRemoteAuthType', () => {
  *
  * The key is an obvious fake. A fixture is a file in a public repository.
  */
-describe('probeRemoteApiKey', () => {
+describe('probeRemoteBearerToken', () => {
   const KEY = 'fake-not-a-real-key-0000';
   let fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -282,7 +282,9 @@ describe('probeRemoteApiKey', () => {
   it('accepts a key the endpoint completes a handshake for', async () => {
     mockFetch(async () => new Response(INITIALIZE_RESULT, { status: 200 }));
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('accepted');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'accepted'
+    );
   });
 
   it('sends the key as a bearer credential, once, to the URL it was given', async () => {
@@ -291,7 +293,7 @@ describe('probeRemoteApiKey', () => {
     // somewhere nobody chose.
     const spy = mockFetch(async () => new Response(INITIALIZE_RESULT, { status: 200 }));
 
-    await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl });
+    await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl });
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(String(spy.mock.calls[0][0])).toBe('https://example.com/mcp');
@@ -302,7 +304,9 @@ describe('probeRemoteApiKey', () => {
   it.each([401, 403])('rejects a key the endpoint answers %s to', async (status) => {
     mockFetch(async () => jsonResponse(status));
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('rejected');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'rejected'
+    );
   });
 
   it('rejects a key the endpoint answers with an OAuth challenge', async () => {
@@ -310,7 +314,9 @@ describe('probeRemoteApiKey', () => {
     // the server phrases it, that is one fact from the user's side.
     mockFetch(async () => jsonResponse(401, { 'www-authenticate': 'Bearer realm="OAuth"' }));
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('rejected');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'rejected'
+    );
   });
 
   it('does not accept a 200 that is not an MCP handshake', async () => {
@@ -319,7 +325,9 @@ describe('probeRemoteApiKey', () => {
     // fails — the failure this check exists to prevent.
     mockFetch(async () => new Response('<html>Welcome</html>', { status: 200 }));
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('unusable');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'unusable'
+    );
   });
 
   it('reads an accepted handshake delivered as an SSE event', async () => {
@@ -331,7 +339,9 @@ describe('probeRemoteApiKey', () => {
         })
     );
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('accepted');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'accepted'
+    );
   });
 
   it.each([500, 502, 404])('calls a %s unusable rather than a bad key', async (status) => {
@@ -339,7 +349,9 @@ describe('probeRemoteApiKey', () => {
     // credential that is fine.
     mockFetch(async () => jsonResponse(status));
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('unusable');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'unusable'
+    );
   });
 
   it('calls an unreachable endpoint unusable rather than throwing', async () => {
@@ -347,7 +359,9 @@ describe('probeRemoteApiKey', () => {
       throw new Error('ECONNREFUSED');
     });
 
-    expect(await probeRemoteApiKey('https://example.com/mcp', KEY, { fetchImpl })).toBe('unusable');
+    expect(await probeRemoteBearerToken('https://example.com/mcp', KEY, { fetchImpl })).toBe(
+      'unusable'
+    );
   });
 
   it('does not dial a non-public URL at all', async () => {
@@ -355,7 +369,7 @@ describe('probeRemoteApiKey', () => {
     // own network.
     const spy = mockFetch(async () => new Response(INITIALIZE_RESULT, { status: 200 }));
 
-    expect(await probeRemoteApiKey('http://169.254.169.254/mcp', KEY, { fetchImpl })).toBe(
+    expect(await probeRemoteBearerToken('http://169.254.169.254/mcp', KEY, { fetchImpl })).toBe(
       'unusable'
     );
     expect(spy).not.toHaveBeenCalled();

@@ -31,6 +31,7 @@ export type MCPServerParams = QueryParams<{
   source?: string;
   usableByUserId?: string;
   ownerless?: boolean;
+  catalogEntryName?: string;
 }>;
 
 /**
@@ -71,6 +72,7 @@ export class MCPServersService extends DrizzleService<
       if (params.query.source) filters.source = params.query.source as MCPSource;
       if (params.query.usableByUserId) filters.usableByUserId = params.query.usableByUserId;
       if (params.query.ownerless !== undefined) filters.ownerless = params.query.ownerless;
+      if (params.query.catalogEntryName) filters.catalogEntryName = params.query.catalogEntryName;
     }
 
     const servers = await this.mcpServerRepo.findAll(filters);

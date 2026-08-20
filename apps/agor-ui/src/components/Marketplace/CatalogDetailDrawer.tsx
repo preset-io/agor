@@ -11,7 +11,7 @@
 import type {
   AgenticToolName,
   Branch,
-  MCPCatalogApiKeyRequirement,
+  MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
 } from '@agor/core/types';
 import { ThunderboltOutlined } from '@ant-design/icons';
@@ -58,7 +58,7 @@ export interface CatalogDetailDrawerProps {
   connectError: string | null;
   /**
    * What the live endpoint said it wanted, if a previous connect was refused
-   * over the API key. Overrides the entry's `auth_type` for deciding whether
+   * over the bearer access token. Overrides the entry's `auth_type` for deciding whether
    * the field is shown and required.
    *
    * The entry is a record of what was true when `curated.yaml` was last edited;
@@ -67,12 +67,12 @@ export interface CatalogDetailDrawerProps {
    * leaves the user holding a button that submits something the daemon will
    * refuse every time.
    */
-  apiKeyRequirement?: MCPCatalogApiKeyRequirement | null;
+  credentialRequirement?: MCPCatalogCredentialRequirement | null;
   /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
    *
-   * `apiKey` is present only for an entry that asks for one, and is the only
+   * `bearerToken` is present only for an entry that asks for one, and is the only
    * thing this drawer sends that the user typed. Everything else about the
    * server — where it is, how it is reached, what kind of credential it takes —
    * is the catalog's, resolved on the daemon from `catalog_key`.
@@ -81,7 +81,7 @@ export interface CatalogDetailDrawerProps {
     branchId: string;
     agenticTool: AgenticToolName;
     acknowledgedDisclosure: string;
-    apiKey?: string;
+    bearerToken?: string;
   }) => void;
 }
 
@@ -95,7 +95,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   defaultBranchId,
   connecting,
   connectError,
-  apiKeyRequirement,
+  credentialRequirement,
   onConnect,
 }) => {
   const { token } = theme.useToken();
@@ -123,7 +123,35 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   }, [branchOptions, defaultBranchId, branchId]);
 
   const connect = entry ? connectStatus(entry) : undefined;
-  const blockedReason = connect?.readiness === 'blocked' ? connect.detail : undefined;
+  const runtimeStatus =
+    credentialRequirement === 'required'
+      ? {
+          readiness: 'api-key',
+          label: 'Needs a bearer access token',
+          detail: 'This endpoint requires the reviewed bearer-token scheme.',
+        }
+      : credentialRequirement === 'oauth'
+        ? {
+            readiness: 'sign-in',
+            label: 'Sign in after connecting',
+            detail:
+              'The endpoint now requires OAuth. Connecting sets it up, then you sign in from the session.',
+          }
+        : credentialRequirement === 'not_accepted'
+          ? {
+              readiness: 'ready',
+              label: 'No account needed',
+              detail: 'The endpoint is currently open and will not accept a pasted token.',
+            }
+          : credentialRequirement === 'unsupported'
+            ? {
+                readiness: 'blocked',
+                label: 'Credential scheme not supported',
+                detail:
+                  'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
+              }
+            : connect;
+  const blockedReason = runtimeStatus?.readiness === 'blocked' ? runtimeStatus.detail : undefined;
   const title = entry ? entryTitle(entry) : '';
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
@@ -150,10 +178,9 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   // server asked for at that moment, and that is the thing to build the form
   // from. Absent — the ordinary case, including every first attempt — the entry
   // decides as before.
-  const needsApiKey =
-    apiKeyRequirement != null ? apiKeyRequirement === 'required' : connect?.readiness === 'api-key';
+  const needsApiKey = runtimeStatus?.readiness === 'api-key';
   const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
-  const apiKey = keyField.trim();
+  const bearerToken = keyField.trim();
 
   // Discard the key when the interaction that needed it ends — the drawer
   // closing, or a different entry being shown.
@@ -180,7 +207,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   }, [open, entryId, needsApiKey]);
 
   const canConnect = Boolean(
-    !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || apiKey)
+    !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || bearerToken)
   );
 
   return (
@@ -239,12 +266,12 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
             </div>
           )}
 
-          {connect && connect.readiness !== 'blocked' && (
+          {runtimeStatus && runtimeStatus.readiness !== 'blocked' && (
             <Alert
-              type={connect.readiness === 'ready' ? 'success' : 'info'}
+              type={runtimeStatus.readiness === 'ready' ? 'success' : 'info'}
               showIcon
-              message={connect.label}
-              description={connect.detail}
+              message={runtimeStatus.label}
+              description={runtimeStatus.detail}
             />
           )}
 
@@ -299,12 +326,12 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 </Form.Item>
                 {needsApiKey && (
                   <Form.Item
-                    label="API key"
+                    label={entry.credentials?.label ?? 'Bearer access token'}
                     required
                     style={{ marginBottom: 0 }}
                     // The two things a user needs and the entry can supply:
                     // whose key this is, and where to go and get one. Without
-                    // the first, "API key" is ambiguous on a page that also
+                    // the first, "bearer access token" is ambiguous on a page that also
                     // mentions Agor; without the second, the answer is a search
                     // engine. `website_url` is the vendor's own page, so it is
                     // the honest place to send someone — the marketplace does
@@ -312,13 +339,13 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                     // would rot silently.
                     extra={
                       <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                        Your own {title} API key. It is stored for you alone and never shown again —
-                        reconnect with a new one to rotate it.
-                        {entry.website_url && (
+                        Your own {title} bearer access token. It is stored for you alone and never
+                        shown again — reconnect with a new one to rotate it.
+                        {entry.credentials?.acquisition_url && (
                           <>
                             {' '}
                             <Link
-                              href={entry.website_url}
+                              href={entry.credentials.acquisition_url}
                               target="_blank"
                               rel="noopener noreferrer"
                             >
@@ -336,7 +363,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                           entryId === undefined ? null : { entryId, value: event.target.value }
                         )
                       }
-                      placeholder={`Paste your ${title} API key`}
+                      placeholder={`Paste your ${title} bearer access token`}
                       autoComplete="off"
                       // The browser is the one place this drawer cannot promise
                       // anything about: an autofilled or remembered value here
@@ -365,15 +392,24 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                     // Only for an entry that asks. Sending a key to an endpoint
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
-                    ...(needsApiKey ? { apiKey } : {}),
+                    ...(needsApiKey ? { bearerToken } : {}),
                   })
                 }
               >
-                Connect &amp; try it
+                {runtimeStatus?.readiness === 'sign-in'
+                  ? 'Connect, then sign in'
+                  : runtimeStatus?.readiness === 'api-key'
+                    ? 'Verify token & connect'
+                    : runtimeStatus?.readiness === 'unchecked'
+                      ? 'Check & connect'
+                      : 'Connect & try it'}
               </Button>
               <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                Opens a new session on that branch with {title} attached and a starter prompt ready
-                to send.
+                {runtimeStatus?.readiness === 'sign-in'
+                  ? `Opens a new session with ${title} attached; sign in there before using its tools.`
+                  : runtimeStatus?.readiness === 'unchecked'
+                    ? `Checks ${title}'s live authentication requirement before opening a session.`
+                    : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`}
               </Text>
             </Flex>
           )}

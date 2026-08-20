@@ -6,15 +6,15 @@
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPAuth, MCPCatalogEntry, UserID } from '@agor/core/types';
-import { readApiKeyRequirement } from '@agor/core/types';
+import { readCredentialRequirement } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 
-const { probeRemoteAuthType, probeRemoteApiKey } = vi.hoisted(() => ({
+const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
-  probeRemoteApiKey: vi.fn(),
+  probeRemoteBearerToken: vi.fn(),
 }));
-vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteApiKey }));
+vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 
@@ -272,6 +272,7 @@ describe('mcp-catalog/connect', () => {
       name: 'io.sentry/mcp',
       title: undefined,
       auth_type: 'credentials',
+      credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
     } as unknown as MCPCatalogEntry;
     const { app, deps } = buildApp(entry);
 
@@ -280,7 +281,7 @@ describe('mcp-catalog/connect', () => {
         { ...request, catalog_key: 'io.sentry/mcp' },
         params
       )
-    ).rejects.toThrow(/^Sentry needs an API key/);
+    ).rejects.toThrow(/^Sentry needs a bearer access token/);
   });
 
   it('lands on a session with the server attached', async () => {
@@ -1347,15 +1348,19 @@ describe('credential reuse', () => {
  * repository, which is the same reason `curated.yaml` cannot hold one.
  */
 describe('mcp-catalog/connect — endpoints that take an API key', () => {
-  const KEY_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'credentials' };
+  const KEY_ENTRY: MCPCatalogEntry = {
+    ...CURATED,
+    auth_type: 'credentials',
+    credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  };
   const PASTED_KEY = 'fake-not-a-real-key-0000';
-  const keyRequest = { ...request, api_key: PASTED_KEY };
+  const keyRequest = { ...request, bearer_token: PASTED_KEY };
 
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('credentials');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   it('installs the entry with the pasted key as its bearer token', async () => {
@@ -1385,28 +1390,28 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
 
     await createMCPCatalogConnectService(app).create(keyRequest, params);
 
-    expect(probeRemoteApiKey).toHaveBeenCalledWith('https://mcp.linear.app/mcp', PASTED_KEY);
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith('https://mcp.linear.app/mcp', PASTED_KEY);
   });
 
   it('refuses an entry that needs a key when none was pasted', async () => {
     const { app, created } = buildApp(KEY_ENTRY);
 
     await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
-      /needs an API key; paste one to connect it/
+      /needs a bearer access token; paste one to connect it/
     );
     expect(created.mcpServers).toHaveLength(0);
-    expect(probeRemoteApiKey).not.toHaveBeenCalled();
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
   });
 
   it('writes nothing when the endpoint rejects the key, and does not echo it back', async () => {
-    probeRemoteApiKey.mockResolvedValue('rejected');
+    probeRemoteBearerToken.mockResolvedValue('rejected');
     const { app, created } = buildApp(KEY_ENTRY);
 
     const error = await createMCPCatalogConnectService(app)
       .create(keyRequest, params)
       .catch((caught: Error) => caught);
 
-    expect((error as Error).message).toMatch(/did not accept that API key/);
+    expect((error as Error).message).toMatch(/did not accept that bearer access token/);
     // An error string travels to the client, into the daemon log, and into
     // whatever collects those. It is the easiest place for a secret to end up.
     expect(JSON.stringify(error)).not.toContain(PASTED_KEY);
@@ -1416,7 +1421,7 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
   it('distinguishes an unusable endpoint from a bad key', async () => {
     // Reporting this as a rejected key sends somebody to rotate a credential
     // that is fine.
-    probeRemoteApiKey.mockResolvedValue('unusable');
+    probeRemoteBearerToken.mockResolvedValue('unusable');
     const { app, created } = buildApp(KEY_ENTRY);
 
     await expect(createMCPCatalogConnectService(app).create(keyRequest, params)).rejects.toThrow(
@@ -1426,7 +1431,7 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
   });
 
   it.each([
-    ['none', /is not asking for an API key/],
+    ['none', /is not asking for a bearer access token/],
     ['oauth', /signs you in with your own account/],
   ] as const)('refuses a key offered to an endpoint answering %s', async (probed, message) => {
     // Refused rather than dropped. Storing it would put a live secret on a row
@@ -1453,20 +1458,20 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
       .create(request, params)
       .catch((caught: Error) => caught);
 
-    expect(readApiKeyRequirement(error)).toBe('required');
+    expect(readCredentialRequirement(error)).toBe('required');
   });
 
   it('keeps saying required when the key was merely wrong', async () => {
     // A client that has already revealed the field keeps it revealed, which is
     // what lets a typo be corrected in place rather than resetting the form.
-    probeRemoteApiKey.mockResolvedValue('rejected');
+    probeRemoteBearerToken.mockResolvedValue('rejected');
     const { app } = buildApp(KEY_ENTRY);
 
     const error = await createMCPCatalogConnectService(app)
       .create(keyRequest, params)
       .catch((caught: Error) => caught);
 
-    expect(readApiKeyRequirement(error)).toBe('required');
+    expect(readCredentialRequirement(error)).toBe('required');
   });
 
   it.each(['none', 'oauth'] as const)(
@@ -1482,7 +1487,7 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
         .create(keyRequest, params)
         .catch((caught: Error) => caught);
 
-      expect(readApiKeyRequirement(error)).toBe('not_accepted');
+      expect(readCredentialRequirement(error)).toBe(probed === 'oauth' ? 'oauth' : 'not_accepted');
     }
   );
 
@@ -1497,14 +1502,14 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
       .create(keyRequest, params)
       .catch((caught: Error) => caught);
 
-    expect(readApiKeyRequirement(error)).toBeUndefined();
+    expect(readCredentialRequirement(error)).toBeUndefined();
   });
 
   it('reads a whitespace-only key as no key at all', async () => {
     const { app, created } = buildApp(KEY_ENTRY);
 
     await expect(
-      createMCPCatalogConnectService(app).create({ ...request, api_key: '   ' }, params)
+      createMCPCatalogConnectService(app).create({ ...request, bearer_token: '   ' }, params)
     ).rejects.toThrow(/paste one to connect it/);
     expect(created.mcpServers).toHaveLength(0);
   });
@@ -1515,11 +1520,11 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
     const { app, created } = buildApp(KEY_ENTRY);
 
     await createMCPCatalogConnectService(app).create(
-      { ...request, api_key: `  ${PASTED_KEY}\n` },
+      { ...request, bearer_token: `  ${PASTED_KEY}\n` },
       params
     );
 
-    expect(probeRemoteApiKey).toHaveBeenCalledWith(expect.anything(), PASTED_KEY);
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith(expect.anything(), PASTED_KEY);
     expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'bearer', token: PASTED_KEY } });
   });
 
@@ -1538,11 +1543,11 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
 
     await expect(
       createMCPCatalogConnectService(app).create(
-        { ...request, api_key: MCP_HEADER_REDACTED_SENTINEL },
+        { ...request, bearer_token: MCP_HEADER_REDACTED_SENTINEL },
         params
       )
     ).rejects.toThrow(/placeholder Agor shows in place of a hidden key/);
-    expect(probeRemoteApiKey).not.toHaveBeenCalled();
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
     expect(created.mcpServers).toHaveLength(0);
   });
 
@@ -1551,7 +1556,7 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
 
     await expect(
       createMCPCatalogConnectService(app).create(
-        { ...request, api_key: `  ${MCP_HEADER_REDACTED_SENTINEL}\n` },
+        { ...request, bearer_token: `  ${MCP_HEADER_REDACTED_SENTINEL}\n` },
         params
       )
     ).rejects.toThrow(/placeholder Agor shows/);
@@ -1566,7 +1571,7 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
     const { app, created } = buildApp(KEY_ENTRY);
 
     await createMCPCatalogConnectService(app)
-      .create({ ...request, api_key: MCP_HEADER_REDACTED_SENTINEL }, params)
+      .create({ ...request, bearer_token: MCP_HEADER_REDACTED_SENTINEL }, params)
       .catch(() => {});
 
     expect(JSON.stringify(created.mcpServers)).not.toContain(MCP_HEADER_REDACTED_SENTINEL);
@@ -1579,10 +1584,10 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
 
     await expect(
       createMCPCatalogConnectService(app).create(
-        { ...request, api_key: { toString: () => PASTED_KEY } } as never,
+        { ...request, bearer_token: { toString: () => PASTED_KEY } } as never,
         params
       )
-    ).rejects.toThrow(/api_key must be a string/);
+    ).rejects.toThrow(/bearer_token must be a string/);
     expect(created.mcpServers).toHaveLength(0);
   });
 });
@@ -1602,10 +1607,14 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
  * every re-connect would silently mint another row.
  */
 describe('mcp-catalog/connect — reusing a key-bearing install', () => {
-  const KEY_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'credentials' };
+  const KEY_ENTRY: MCPCatalogEntry = {
+    ...CURATED,
+    auth_type: 'credentials',
+    credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  };
   const BOB = '00000000-0000-7000-8000-00000000b0bb' as UserID;
   const NEW_KEY = 'fake-new-key-1111';
-  const keyRequest = { ...request, api_key: NEW_KEY };
+  const keyRequest = { ...request, bearer_token: NEW_KEY };
 
   /** A key-bearing install as the service reads it back: token redacted. */
   const keyInstallOf = (overrides: Record<string, unknown> = {}) =>
@@ -1618,8 +1627,8 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('credentials');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   it('recognises the caller’s own install through the redaction on the row', async () => {
@@ -1724,19 +1733,23 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
  * row, and it is the secret itself.
  */
 describe('mcp-catalog/connect — a key request from a caller that is not the marketplace', () => {
-  const KEY_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'credentials' };
+  const KEY_ENTRY: MCPCatalogEntry = {
+    ...CURATED,
+    auth_type: 'credentials',
+    credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  };
   const PASTED_KEY = 'fake-not-a-real-key-2222';
 
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('credentials');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   const HOSTILE_KEY_REQUEST = {
     ...request,
-    api_key: PASTED_KEY,
+    bearer_token: PASTED_KEY,
     // Where the caller would like their credential sent.
     url: 'https://collector.attacker.example/mcp',
     remote_url: 'https://collector.attacker.example/mcp',
@@ -1763,8 +1776,8 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
     // Both requests to the vendor, neither to the caller's host. The second is
     // the one that carries the credential.
     expect(probeRemoteAuthType).toHaveBeenCalledWith('https://mcp.linear.app/mcp');
-    expect(probeRemoteApiKey).toHaveBeenCalledWith('https://mcp.linear.app/mcp', PASTED_KEY);
-    expect(probeRemoteApiKey).toHaveBeenCalledTimes(1);
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith('https://mcp.linear.app/mcp', PASTED_KEY);
+    expect(probeRemoteBearerToken).toHaveBeenCalledTimes(1);
   });
 
   it('builds the row from the catalog entry plus the key, and nothing else', async () => {
@@ -1811,7 +1824,11 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
  * conversation.
  */
 describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
-  const KEY_ENTRY: MCPCatalogEntry = { ...CURATED, auth_type: 'credentials' };
+  const KEY_ENTRY: MCPCatalogEntry = {
+    ...CURATED,
+    auth_type: 'credentials',
+    credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
+  };
   const NEW_KEY = 'fake-new-key-3333';
 
   const keyInstallOf = (overrides: Record<string, unknown> = {}) =>
@@ -1824,8 +1841,8 @@ describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('none');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   it('leaves nothing when the server row cannot be created', async () => {
@@ -1878,7 +1895,7 @@ describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
     serversOf(app).patch.mockRejectedValue(new Error('patch failed'));
 
     await expect(
-      createMCPCatalogConnectService(app).create({ ...request, api_key: NEW_KEY }, params)
+      createMCPCatalogConnectService(app).create({ ...request, bearer_token: NEW_KEY }, params)
     ).rejects.toThrow(/patch failed/);
 
     expect(removedSessions).toEqual(['session-1']);

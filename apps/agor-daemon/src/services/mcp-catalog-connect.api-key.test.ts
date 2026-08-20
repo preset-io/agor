@@ -46,11 +46,11 @@ import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 import { createMCPServersService } from './mcp-servers.js';
 
-const { probeRemoteAuthType, probeRemoteApiKey } = vi.hoisted(() => ({
+const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
-  probeRemoteApiKey: vi.fn(),
+  probeRemoteBearerToken: vi.fn(),
 }));
-vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteApiKey }));
+vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
 const DATADOG = 'com.datadoghq/mcp';
 const DISCLOSURE = 'Reads metrics, logs, traces, monitors, and incidents.';
@@ -63,6 +63,7 @@ const CURATED = {
   remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
   has_remote: true,
   auth_type: 'credentials',
+  credentials: { scheme: 'bearer', acquisition_url: 'https://example.com/tokens' },
   permission_disclosure: DISCLOSURE,
 } as unknown as MCPCatalogEntry;
 
@@ -223,9 +224,9 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     addUser: (email: string, role: UserRole = 'member') =>
       users.create({ email, name: email, role }) as Promise<User>,
     paramsFor,
-    connectAs: (caller: User, apiKey?: string) =>
+    connectAs: (caller: User, bearerToken?: string) =>
       createMCPCatalogConnectService(app).create(
-        { ...CONNECT_REQUEST, ...(apiKey === undefined ? {} : { api_key: apiKey }) },
+        { ...CONNECT_REQUEST, ...(bearerToken === undefined ? {} : { bearer_token: bearerToken }) },
         paramsFor(caller)
       ),
     find: (caller: User) =>
@@ -267,8 +268,8 @@ describe('an API-key install, end to end', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('credentials');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   it('produces a working server row carrying the key', async () => {
@@ -411,14 +412,28 @@ describe('an API-key install, end to end', () => {
     // The old key is gone, not shadowed by a second row nobody uses.
     expect(rows[0]?.auth?.token).toBe(ROTATED_KEY);
   });
+
+  it('serializes concurrent first connects to one owner/catalog install', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('alice@agor.live');
+
+    const results = await Promise.all([
+      daemon.connectAs(alice, WORKING_KEY),
+      daemon.connectAs(alice, WORKING_KEY),
+    ]);
+
+    expect(await daemon.stored()).toHaveLength(1);
+    expect(new Set(results.map((result) => result.mcp_server.mcp_server_id)).size).toBe(1);
+    expect(results.filter((result) => result.reused_existing_server)).toHaveLength(1);
+  });
 });
 
 describe('two colleagues connecting the same API-key entry', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('credentials');
-    probeRemoteApiKey.mockReset();
-    probeRemoteApiKey.mockResolvedValue('accepted');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteBearerToken.mockResolvedValue('accepted');
   });
 
   const ALICE_KEY = 'fake-alice-key-1111';
@@ -479,7 +494,7 @@ describe('two colleagues connecting the same API-key entry', () => {
 describe('the paths an API key does not change', () => {
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
-    probeRemoteApiKey.mockReset();
+    probeRemoteBearerToken.mockReset();
   });
 
   it('installs an open endpoint with no auth, as before', async () => {
@@ -491,7 +506,7 @@ describe('the paths an API key does not change', () => {
 
     const [row] = await daemon.stored();
     expect(row?.auth).toEqual({ type: 'none' });
-    expect(probeRemoteApiKey).not.toHaveBeenCalled();
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
   });
 
   it('installs an OAuth endpoint configured-but-unauthenticated, as before', async () => {
@@ -503,7 +518,7 @@ describe('the paths an API key does not change', () => {
 
     const [row] = await daemon.stored();
     expect(row?.auth).toEqual({ type: 'oauth', oauth_mode: 'per_user' });
-    expect(probeRemoteApiKey).not.toHaveBeenCalled();
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
   });
 
   it('still lets two users share one unauthenticated install', async () => {

@@ -71,6 +71,14 @@ const catalogEntryOAuthSchema = z
     message: 'must state at least one setting, or be omitted entirely',
   });
 
+const catalogEntryCredentialsSchema = z
+  .object({
+    scheme: z.literal('bearer'),
+    acquisition_url: httpUrl,
+    label: nonEmpty.optional(),
+  })
+  .strict();
+
 const catalogEntrySchema = z
   .object({
     name: nonEmpty,
@@ -99,8 +107,25 @@ const catalogEntrySchema = z
      * opened up simply never uses them.
      */
     oauth: catalogEntryOAuthSchema.optional(),
+    credentials: catalogEntryCredentialsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, context) => {
+    if (entry.auth_type === 'credentials' && !entry.credentials) {
+      context.addIssue({
+        code: 'custom',
+        path: ['credentials'],
+        message: 'is required when auth_type is credentials',
+      });
+    }
+    if (entry.credentials && entry.auth_type !== 'credentials') {
+      context.addIssue({
+        code: 'custom',
+        path: ['credentials'],
+        message: 'is only valid when auth_type is credentials',
+      });
+    }
+  });
 
 const catalogFileSchema = z
   .object({

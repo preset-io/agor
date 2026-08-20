@@ -3,7 +3,7 @@
  * can use it.
  *
  * The request names a catalog entry, where the session should live, and — for
- * an endpoint that asks for one — the caller's own API key. Nothing else. URL,
+ * an endpoint that asks for one — the caller's own bearer access token. Nothing else. URL,
  * transport, and the kind of auth are read from the catalog entry and the live
  * endpoint. Accepting those from the client would make this a way to register
  * any server at all without passing the `mcp_member_policy` gate that guards
@@ -26,12 +26,13 @@
  * is installed ready to use; one that answers with an OAuth challenge is
  * installed configured-but-unauthenticated, for the user to complete through
  * the OAuth flow that already exists in Settings → MCP Servers; one that asks
- * for an API key is installed with the key the caller pasted, after that key
+ * for an bearer access token is installed with the key the caller pasted, after that key
  * has been tried against the endpoint.
  */
 
+import { isDatabaseUniqueConstraintError } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
-import { probeRemoteApiKey, probeRemoteAuthType } from '@agor/core/mcp-catalog';
+import { probeRemoteAuthType, probeRemoteBearerToken } from '@agor/core/mcp-catalog';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type {
@@ -321,8 +322,8 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  *   already has a name and a button for — the user signs in from the same place
  *   as any other OAuth server. Connect is not the flow and does not start it;
  *   it produces the row the flow completes.
- * - **A non-OAuth 401/403.** An API key, which nothing can obtain on the user's
- *   behalf — so the user supplies it, and {@link resolveApiKeyAuth} decides
+ * - **A non-OAuth 401/403.** An bearer access token, which nothing can obtain on the user's
+ *   behalf — so the user supplies it, and {@link resolveBearerTokenAuth} decides
  *   whether it works before anything is written.
  * - **Nothing identifiable answered.** Refused, unchanged.
  *
@@ -336,28 +337,38 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string },
-  apiKey: string | undefined
+  bearerToken: string | undefined
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
 
   if (probed === 'none' || probed === 'oauth') {
-    if (apiKey !== undefined) {
+    if (bearerToken !== undefined) {
       throw new BadRequest(
-        `${catalogDisplayName(entry)} is not asking for an API key${
+        `${catalogDisplayName(entry)} is not asking for a bearer access token${
           probed === 'oauth' ? '; it signs you in with your own account' : ''
         }. Connect it again without one.`,
         // The client asked with a key because the entry said to. Telling it
         // what the endpoint actually wants is what lets the form drop the
         // field and the user retry, rather than being held at a button that
         // submits something the daemon will refuse again.
-        { api_key_requirement: 'not_accepted' } satisfies MCPCatalogConnectErrorData
+        {
+          credential_requirement: probed === 'oauth' ? 'oauth' : 'not_accepted',
+        } satisfies MCPCatalogConnectErrorData
       );
     }
     return probed === 'none' ? { type: 'none' } : catalogOAuthConfig(entry);
   }
 
-  if (probed === 'credentials') return resolveApiKeyAuth(entry, apiKey);
+  if (probed === 'credentials') {
+    if (entry.credentials?.scheme !== 'bearer') {
+      throw new BadRequest(
+        `${catalogDisplayName(entry)} requires credentials, but its reviewed credential scheme is not supported by Marketplace`,
+        { credential_requirement: 'unsupported' } satisfies MCPCatalogConnectErrorData
+      );
+    }
+    return resolveBearerTokenAuth(entry, bearerToken);
+  }
 
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
@@ -365,7 +376,7 @@ async function resolveAuthRequirement(
 }
 
 /**
- * The auth block to install a key-requiring entry with, or the refusal.
+ * The auth block to install a bearer-token-requiring entry with, or the refusal.
  *
  * The key is tried against the endpoint before the row exists. Not for form:
  * a wrong key installs a server whose every tool fails, and it fails later and
@@ -388,39 +399,42 @@ async function resolveAuthRequirement(
  * easiest place for a secret to end up, since it travels to the client, into
  * daemon logs, and into whatever collects them.
  */
-async function resolveApiKeyAuth(
+async function resolveBearerTokenAuth(
   entry: MCPCatalogEntry & { remote_url: string },
-  apiKey: string | undefined
+  bearerToken: string | undefined
 ): Promise<MCPAuth> {
   const name = catalogDisplayName(entry);
-  if (apiKey === undefined) {
+  if (bearerToken === undefined) {
     throw new BadRequest(
-      `${name} needs an API key; paste one to connect it`,
+      `${name} needs a bearer access token; paste one to connect it`,
       // The mirror of the `not_accepted` case: the client asked without a key
       // because the entry said none was needed, and the endpoint disagreed.
       // Without this the drawer has no field to offer and the sentence above is
       // an instruction the user cannot follow.
-      { api_key_requirement: 'required' } satisfies MCPCatalogConnectErrorData
+      { credential_requirement: 'required' } satisfies MCPCatalogConnectErrorData
     );
   }
 
-  const verdict = await probeRemoteApiKey(entry.remote_url, apiKey);
-  if (verdict === 'accepted') return { type: 'bearer', token: apiKey };
+  const verdict = await probeRemoteBearerToken(entry.remote_url, bearerToken);
+  if (verdict === 'accepted') return { type: 'bearer', token: bearerToken };
   if (verdict === 'rejected') {
     // Still `required` — the endpoint wants a key, this one was just wrong. A
     // client that has already revealed the field keeps it revealed, which is
     // what lets a typo be corrected in place.
-    throw new BadRequest(`${name} did not accept that API key; check it and try again`, {
-      api_key_requirement: 'required',
-    } satisfies MCPCatalogConnectErrorData);
+    throw new BadRequest(
+      `${name} did not accept that bearer access token; check it and try again`,
+      {
+        credential_requirement: 'required',
+      } satisfies MCPCatalogConnectErrorData
+    );
   }
   throw new BadRequest(
-    `${name} did not answer as an MCP server when that API key was tried, so it was not connected`
+    `${name} did not answer as an MCP server when that bearer access token was tried, so it was not connected`
   );
 }
 
 /**
- * The API key as the request carried it, or `undefined` for a request that
+ * The bearer access token as the request carried it, or `undefined` for a request that
  * carried none.
  *
  * Whitespace-only is `undefined`, not a key: a client that sends an untouched
@@ -433,10 +447,10 @@ async function resolveApiKeyAuth(
  * A non-string is refused rather than coerced. `String(value)` on an object
  * produces `[object Object]`, which is a credential-shaped thing nobody typed.
  */
-function readApiKey(value: unknown, entry: MCPCatalogEntry): string | undefined {
+function readBearerToken(value: unknown, entry: MCPCatalogEntry): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') {
-    throw new BadRequest(`api_key must be a string to connect ${catalogDisplayName(entry)}`);
+    throw new BadRequest(`bearer_token must be a string to connect ${catalogDisplayName(entry)}`);
   }
   const trimmed = value.trim();
   if (trimmed === '') return undefined;
@@ -467,7 +481,7 @@ function readApiKey(value: unknown, entry: MCPCatalogEntry): string | undefined 
   // what the two sides share, and it is enough.
   if (trimmed === MCP_HEADER_REDACTED_SENTINEL) {
     throw new BadRequest(
-      `That is the placeholder Agor shows in place of a hidden key, not a key. Paste the real ${catalogDisplayName(entry)} API key.`
+      `That is the placeholder Agor shows in place of a hidden key, not a key. Paste the real ${catalogDisplayName(entry)} bearer access token.`
     );
   }
 
@@ -589,7 +603,12 @@ export function createMCPCatalogConnectService(
     const result = await service('mcp-servers').find({
       ...params,
       provider: undefined,
-      query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
+      query: {
+        ...(userId ? { usableByUserId: userId } : {}),
+        source: 'catalog',
+        catalogEntryName: entry.name,
+        $limit: 2,
+      },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
     const mayReuse = (server: MCPServer): boolean =>
@@ -760,7 +779,7 @@ export function createMCPCatalogConnectService(
   /**
    * Write the key the caller just pasted onto the install being reused.
    *
-   * Rotation is the ordinary life of an API key, and re-connecting from the
+   * Rotation is the ordinary life of an bearer access token, and re-connecting from the
    * marketplace is where a user would do it — so the alternative is a connect
    * that reports success while the server keeps authenticating with the key the
    * user just replaced. Nothing surfaces that: the row reads back redacted, so
@@ -820,7 +839,7 @@ export function createMCPCatalogConnectService(
       // comes from the entry the catalog resolved and the answer the endpoint
       // gave, so a caller holding a key can only ever aim it at the URL the
       // checked-in file already points to.
-      const auth = await resolveAuthRequirement(entry, readApiKey(data.api_key, entry));
+      const auth = await resolveAuthRequirement(entry, readBearerToken(data.bearer_token, entry));
 
       const userId = params.user?.user_id as UserID | undefined;
       const existing = await findExistingInstall(entry, auth, userId, params);
@@ -846,12 +865,27 @@ export function createMCPCatalogConnectService(
       // one path that can produce one. Saying so is also what makes the row
       // private to the caller — an install is theirs whatever the tenant's
       // `mcp_member_policy` says. See `McpCatalogInstallParams`.
-      const mcpServer =
-        existing?.server ??
-        ((await service('mcp-servers').create(createInput, {
-          ...params,
-          mcpCatalogInstall: { entry_name: entry.name },
-        })) as MCPServer);
+      let selection = existing;
+      let mcpServer = selection?.server;
+      let createdServer = false;
+      if (!mcpServer) {
+        try {
+          mcpServer = (await service('mcp-servers').create(createInput, {
+            ...params,
+            mcpCatalogInstall: { entry_name: entry.name },
+          })) as MCPServer;
+          createdServer = true;
+        } catch (error) {
+          // The database identity constraint is the serialization point. A
+          // concurrent connect may win between our targeted read and create;
+          // recover its row rather than creating a second credential copy.
+          if (!isDatabaseUniqueConstraintError(error)) throw error;
+          selection = await findExistingInstall(entry, auth, userId, params);
+          if (!selection) throw error;
+          mcpServer = selection.server;
+        }
+      }
+      const reusedExisting = !createdServer;
 
       // Four writes across three services, so there is no transaction to lean
       // on. What this request created, it takes back on failure: a server or a
@@ -898,21 +932,21 @@ export function createMCPCatalogConnectService(
         // the caller was told they did not get. That is a state the product can
         // survive and a user can retry out of, which the alternative is not.
         const installed =
-          existing && carriesRowLevelSecret(auth)
-            ? await rotateInstalledKey(existing, auth, params)
+          reusedExisting && carriesRowLevelSecret(auth)
+            ? await rotateInstalledKey(mcpServer, auth, params)
             : mcpServer;
 
         return {
           mcp_server: installed,
           session,
           starter_prompt: entry.starter_prompt,
-          reused_existing_server: Boolean(existing),
-          reuse_kind: existing?.kind ?? 'new_catalog_install',
+          reused_existing_server: reusedExisting,
+          reuse_kind: selection?.kind ?? 'new_catalog_install',
           effective_oauth_policy:
             auth.type === 'oauth'
               ? {
                   effective_mode: entry.oauth?.compatibility_mode ?? 'marketplace',
-                  managed_by_catalog: !existing || existing.kind === 'catalog_install',
+                  managed_by_catalog: !selection || selection.kind === 'catalog_install',
                 }
               : undefined,
         };
@@ -957,7 +991,7 @@ export function createMCPCatalogConnectService(
             );
           }
         }
-        if (!existing) {
+        if (createdServer) {
           try {
             await service('mcp-servers').remove(mcpServer.mcp_server_id, {
               ...params,
