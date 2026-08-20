@@ -5,11 +5,10 @@
  * authenticates ONLY the Socket.IO terminal channel — those events are handled
  * in socketio.ts, outside Feathers, and are gated on `terminal_user_id`.
  *
- * As a REST/Feathers identity it must be REJECTED, not merely under-privileged:
- * its `role: 'terminal-executor'` is not a key in the RBAC rank table, so
- * `hasMinimumRole()` falls through to rank 0 (== viewer) and it would otherwise
- * pass `requireAuth` and any viewer-gated check. "Low" is not "none"; we make it
- * "none" here by rejecting the request outright at the shared auth chokepoint.
+ * As a REST/Feathers identity it must be REJECTED, not merely under-privileged.
+ * The canonical RBAC helpers fail closed for this non-user role, and this guard
+ * independently rejects it at the shared auth chokepoint so a future change to
+ * role comparison cannot accidentally turn a terminal token into an API user.
  */
 
 import { Forbidden } from '@agor/core/feathers';
