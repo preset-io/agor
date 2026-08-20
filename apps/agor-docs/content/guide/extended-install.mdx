@@ -370,9 +370,9 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ## MCP catalog
 
-Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, loaded by
-the daemon at startup, so browsing the marketplace requires no catalog service and there is nothing
-to configure.
+Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
+on the daemon's first catalog read and then cached for the life of the process, so browsing the
+marketplace requires no external catalog service and there is nothing to configure.
 
 What the catalog offers is therefore a function of the deployed binary: rolling
 back to an older release withdraws entries added since, until you roll forward
@@ -381,9 +381,10 @@ again. That is intended, but it is not something to discover during an incident.
 Each entry records whether its endpoint needs an account, but Connect checks the live endpoint rather
 than trusting that record. A completed MCP handshake is installed ready to use. An OAuth challenge is
 installed as a per-user connection. A non-OAuth challenge can be installed when the catalog includes a
-reviewed bearer-token recipe: the drawer asks for the token, tests it against the catalog URL before
-writing anything, and stores it on a connection owned by that user. A stale catalog auth label therefore
-does not silently install a connection that the live endpoint will reject.
+reviewed bearer-token recipe: the drawer asks for the token, and the daemon first durably claims this
+user's connect generation so a slower, older reconnect cannot overwrite a newer token. It then tests the
+token against the catalog URL and writes the server/session only after the probe accepts it. A stale
+catalog auth label therefore does not silently install a connection that the live endpoint will reject.
 
 Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
 accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,

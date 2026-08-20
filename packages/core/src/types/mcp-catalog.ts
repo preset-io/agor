@@ -266,8 +266,8 @@ const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api
  *
  * Shared because both sides of the wire need this and disagreed: the catalog
  * UI derived the publisher while connect took the last path segment, so the
- * server name the agent saw was the word "mcp" for 38 of 50 entries. One rule,
- * two formattings — never two rules.
+ * server name the agent saw was often the word "mcp". One rule, two
+ * formattings — never two rules.
  *
  * The publisher identifies the server only while every name is hand-reviewed.
  * `io.github.<user>/<repo>` inverts it — every server one GitHub user publishes
@@ -336,10 +336,11 @@ export type MCPCatalogSort = 'popularity' | 'name';
 /**
  * What the Marketplace narrows the catalog by.
  *
- * These are exactly the toolbar's controls. The catalog is a few dozen frozen
- * objects the browser already holds, so applying them is a pass over an array,
- * not a request — which is why there is no `limit`/`offset` here: paging a list
- * you hold is a `slice`, and it is the grid's business rather than a filter's.
+ * These are exactly the toolbar's controls. The catalog is a bounded set of
+ * frozen objects the browser already holds, so applying them is a pass over an
+ * array, not a request — which is why there is no `limit`/`offset` here: paging
+ * a list you hold is a `slice`, and it is the grid's business rather than a
+ * filter's.
  */
 export interface MCPCatalogFilters {
   /** Case-insensitive substring match over name, title, and description. */

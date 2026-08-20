@@ -1012,6 +1012,44 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
     });
   });
 
+  it.each(['strict', 'legacy'] as const)(
+    'preserves an owned install’s explicit %s override when reconnecting a catalog-default entry',
+    async (mode) => {
+      const existing = installOf({
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_compatibility_mode: mode,
+        },
+      });
+      const { app, patched, deps } = buildApp(OAUTH_ENTRY, [existing]);
+
+      const result = await createMCPCatalogConnectService(app, deps).create(request, params);
+
+      expect(result.reuse_kind).toBe('catalog_install');
+      expect((patched.at(-1)!.data.auth as MCPAuth).oauth_compatibility_mode).toBe(mode);
+      expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe(mode);
+      expect(result.effective_oauth_policy).toEqual({
+        effective_mode: mode,
+        managed_by_catalog: false,
+      });
+    }
+  );
+
+  it('keeps the derived Marketplace policy when reconnecting an unmodified catalog-default row', async () => {
+    const existing = installOf({ auth: { type: 'oauth', oauth_mode: 'per_user' } });
+    const { app, patched, deps } = buildApp(OAUTH_ENTRY, [existing]);
+
+    const result = await createMCPCatalogConnectService(app, deps).create(request, params);
+
+    expect(patched).toHaveLength(0);
+    expect(result.mcp_server.auth?.oauth_compatibility_mode).toBeUndefined();
+    expect(result.effective_oauth_policy).toEqual({
+      effective_mode: 'marketplace',
+      managed_by_catalog: true,
+    });
+  });
+
   it('reuses the install the caller has already signed into', async () => {
     // The OAuth flow never writes to the server row — the token lives in
     // `user_mcp_oauth_tokens` — but the `mcp-servers` read hook hydrates the
@@ -1594,13 +1632,19 @@ describe('mcp-catalog/connect — endpoints that take an API key', () => {
     expect(result.session.session_id).toBe('session-1');
   });
 
-  it('tries the key against the catalog endpoint before writing anything', async () => {
+  it('claims its generation, then tries the key before creating the server or session', async () => {
     // A key that is wrong at install time produces a server whose every tool
     // fails, reported by the agent as a broken tool rather than a bad
     // credential. One extra handshake is what buys the difference.
-    const { app } = buildApp(KEY_ENTRY);
+    const built = buildApp(KEY_ENTRY);
+    probeRemoteBearerToken.mockImplementationOnce(async () => {
+      expect(built.generationClaims).toHaveLength(1);
+      expect(built.created.mcpServers).toHaveLength(0);
+      expect(built.created.sessions).toHaveLength(0);
+      return 'accepted';
+    });
 
-    await createMCPCatalogConnectService(app).create(keyRequest, params);
+    await createMCPCatalogConnectService(built.app).create(keyRequest, params);
 
     expect(probeRemoteBearerToken).toHaveBeenCalledWith('https://mcp.linear.app/mcp', PASTED_KEY);
   });

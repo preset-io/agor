@@ -1,6 +1,6 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ApiOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Popover, Space, Typography, theme } from 'antd';
+import { Tag as AntTag, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -28,6 +28,40 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [saving, setSaving] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const popupRef = React.useRef<HTMLDivElement>(null);
+  const generatedId = React.useId().replaceAll(':', '');
+  const popupId = `session-mcp-popup-${generatedId}`;
+  const headingId = `${popupId}-heading`;
+
+  React.useEffect(() => {
+    if (!open) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (
+        rootRef.current &&
+        event.target instanceof Node &&
+        !rootRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', dismissOutside);
+    return () => document.removeEventListener('pointerdown', dismissOutside);
+  }, [open]);
+
+  const dismissAndRestoreFocus = React.useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+  const handleEscape = (event: React.KeyboardEvent) => {
+    if (open && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      dismissAndRestoreFocus();
+    }
+  };
 
   const summary = React.useMemo(
     () =>
@@ -76,7 +110,9 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
     <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         <div>
-          <Typography.Text strong>Session MCP servers</Typography.Text>
+          <Typography.Text id={headingId} strong>
+            Session MCP servers
+          </Typography.Text>
           <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>
             Attach tools/connectors that the agent can use in this conversation.
           </Typography.Paragraph>
@@ -103,28 +139,31 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           loading={saving}
           disabled={!client || saving}
           style={{ width: '100%' }}
+          getPopupContainer={(trigger) =>
+            popupRef.current ?? trigger.parentElement ?? document.body
+          }
         />
       </Space>
     </div>
   );
 
   return (
-    <Popover
-      trigger="click"
-      placement="top"
-      getPopupContainer={(trigger) => trigger.parentElement ?? document.body}
-      title={null}
-      content={content}
-    >
+    <div ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
       {/* Tag renders a span, but this popover contains the only in-session
           sign-in action for a fresh Marketplace OAuth install. Keep the Tag's
           appearance inside a native disclosure control so Enter/Space, focus,
           and the stateful accessible name do not depend on click handlers on a
           span. */}
       <button
+        ref={triggerRef}
         type="button"
         aria-label={badgeAccessibleName}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={popupId}
         title={badgeTitle}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={handleEscape}
         style={{
           margin: 0,
           padding: 0,
@@ -179,6 +218,31 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           </AntTag>
         </Tag>
       </button>
-    </Popover>
+
+      {open && (
+        <div
+          ref={popupRef}
+          id={popupId}
+          role="dialog"
+          aria-labelledby={headingId}
+          onKeyDown={handleEscape}
+          style={{
+            position: 'absolute',
+            bottom: `calc(100% + ${token.sizeXS}px)`,
+            left: 0,
+            zIndex: token.zIndexPopupBase,
+            padding: token.paddingSM,
+            background: token.colorBgElevated,
+            borderWidth: token.lineWidth,
+            borderStyle: 'solid',
+            borderColor: token.colorBorderSecondary,
+            borderRadius: token.borderRadiusLG,
+            boxShadow: token.boxShadowSecondary,
+          }}
+        >
+          {content}
+        </div>
+      )}
+    </div>
   );
 };

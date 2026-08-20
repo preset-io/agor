@@ -431,14 +431,17 @@ endpoint still challenges for OAuth.
 An endpoint the probe finds behind a non-OAuth challenge is installed with a key
 the user pastes into the marketplace drawer. The key never goes in
 `curated.yaml` — that file is checked in, public, and byte-identical for every
-tenant. It arrives as `api_key` on the connect request, the only field on that
+tenant. It arrives as `bearer_token` on the connect request, the only field on that
 request that is the caller's rather than the catalog's: URL, transport, and the
 kind of credential still derive server-side from the entry, so a client holding
 a key cannot name where it is sent. It is stored as `auth.token` on the
 installed `mcp_servers` row, which is where every bearer credential in Agor
-lives and therefore what `redactMCPAuthSecrets` already covers on read. Connect
-tries the key against the endpoint before writing anything (`probeRemoteBearerToken`)
-rather than installing a server whose every tool would fail. Reuse of a row that
+lives and therefore what `redactMCPAuthSecrets` already covers on read. Before
+the authenticated probe, Connect durably claims the caller's generation for
+that catalog install so an older concurrent request cannot later overwrite a
+newer key. It then tries the key against the endpoint (`probeRemoteBearerToken`)
+and writes the server/session only after acceptance, rather than installing a
+server whose every tool would fail. Reuse of a row that
 keeps a secret in its own columns is restricted to the row's owner, so two users
 connecting the same entry get two rows and two keys; re-connecting with a new
 key rotates the one row rather than leaving the old key live beside it.

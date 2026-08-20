@@ -26,8 +26,8 @@
  * is installed ready to use; one that answers with an OAuth challenge is
  * installed configured-but-unauthenticated, for the user to complete through
  * the OAuth flow that already exists in Settings → MCP Servers; one that asks
- * for an bearer access token is installed with the key the caller pasted, after that key
- * has been tried against the endpoint.
+ * for a bearer access token is installed with the key the caller pasted after
+ * that key has been tried against the endpoint.
  */
 
 import { isDatabaseUniqueConstraintError } from '@agor/core/db';
@@ -125,6 +125,28 @@ function isCredentialPeerOf(
     sameCatalogEndpoint(server.url, entry.remote_url) &&
     Object.keys(server.headers ?? {}).length === 0
   );
+}
+
+/**
+ * Reconcile catalog-owned configuration without erasing the owner's explicit
+ * OAuth compatibility choice.
+ *
+ * Endpoint, transport, scope, headers, and every other auth field still come
+ * from the current catalog prescription. `strict` and `legacy` are different:
+ * they are the two validated public overrides the Settings UI can persist, and
+ * the OAuth resolver treats either as authoritative over the derived
+ * Marketplace profile. Replacing the whole auth object with `prescribed`
+ * would silently turn an explicit Strict row back into Marketplace whenever
+ * the catalog omits `compatibility_mode` (and similarly erase Legacy).
+ *
+ * Preserve only those two known-safe values. A malformed database value is not
+ * carried forward through reconciliation.
+ */
+function preserveExplicitOAuthCompatibility(server: MCPServer, prescribed: MCPAuth): MCPAuth {
+  if (server.auth?.type !== 'oauth' || prescribed.type !== 'oauth') return prescribed;
+  const explicitMode = server.auth.oauth_compatibility_mode;
+  if (explicitMode !== 'strict' && explicitMode !== 'legacy') return prescribed;
+  return { ...prescribed, oauth_compatibility_mode: explicitMode };
 }
 
 async function hasCatalogCredentialPolicy(
@@ -825,6 +847,9 @@ export function createMCPCatalogConnectService(
     params: AuthenticatedParams,
     generation?: { ownerUserId: string; catalogEntryName: string; value: number }
   ): Promise<MCPServer> => {
+    const reconciledAuth = reconcile
+      ? preserveExplicitOAuthCompatibility(server, prescribed)
+      : prescribed;
     const updates = reconcile
       ? {
           enabled: true,
@@ -832,7 +857,7 @@ export function createMCPCatalogConnectService(
           scope: createInput.scope,
           url: createInput.url,
           headers: {},
-          auth: prescribed,
+          auth: reconciledAuth,
         }
       : { auth: prescribed };
     if (!generation) {
@@ -936,6 +961,15 @@ export function createMCPCatalogConnectService(
           !isCurrentCatalogInstall(mcpServer, entry, auth, {
             reconcileMissingCompatibilityMode: true,
           }));
+      const preservedCompatibilityOverride =
+        selection?.kind === 'catalog_install' &&
+        mcpServer.auth?.type === 'oauth' &&
+        auth.type === 'oauth' &&
+        (mcpServer.auth.oauth_compatibility_mode === 'strict' ||
+          mcpServer.auth.oauth_compatibility_mode === 'legacy') &&
+        mcpServer.auth.oauth_compatibility_mode !== auth.oauth_compatibility_mode
+          ? mcpServer.auth.oauth_compatibility_mode
+          : undefined;
 
       // Four writes across three services, so there is no transaction to lean
       // on. What this request created, it takes back on failure: a server or a
@@ -1010,8 +1044,13 @@ export function createMCPCatalogConnectService(
           effective_oauth_policy:
             auth.type === 'oauth'
               ? {
-                  effective_mode: entry.oauth?.compatibility_mode ?? 'marketplace',
-                  managed_by_catalog: !selection || selection.kind === 'catalog_install',
+                  effective_mode:
+                    preservedCompatibilityOverride ??
+                    entry.oauth?.compatibility_mode ??
+                    'marketplace',
+                  managed_by_catalog:
+                    (!selection || selection.kind === 'catalog_install') &&
+                    preservedCompatibilityOverride === undefined,
                 }
               : undefined,
         };

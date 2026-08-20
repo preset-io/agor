@@ -1,5 +1,5 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPServerPill } from './MCPServerPill';
 
@@ -54,7 +54,7 @@ describe('MCPServerPill OAuth recovery', () => {
 
     const signIn = screen.getByRole('button', { name: 'Sign in to OAuth Server' });
     expect(signIn.tagName).toBe('BUTTON');
-    signIn.focus();
+    act(() => signIn.focus());
     expect(signIn).toHaveFocus();
     fireEvent.click(signIn);
 
@@ -105,7 +105,7 @@ describe('MCPServerPill OAuth recovery', () => {
       name: 'Refresh OAuth credentials for OAuth Server',
     });
     expect(refresh.tagName).toBe('BUTTON');
-    refresh.focus();
+    act(() => refresh.focus());
     expect(refresh).toHaveFocus();
     fireEvent.click(refresh);
 
