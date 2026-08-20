@@ -118,7 +118,10 @@ describe('connectStatus', () => {
     // something of the user before it does rather than after. Sharing
     // `blocked` with "no endpoint at all" is what used to hide the field.
     const keyed = connectStatus(entry({ auth_type: 'credentials' }));
-    expect(keyed).toMatchObject({ readiness: 'api-key', label: 'Needs an API key' });
+    expect(keyed).toMatchObject({
+      readiness: 'api-key',
+      label: 'Needs a bearer access token',
+    });
     expect(keyed.detail).toMatch(/paste one when you connect/i);
     // Says whose key it is and what becomes of it — the two things a user has
     // to know before typing a credential into somebody else's software.

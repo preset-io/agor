@@ -101,7 +101,6 @@ function buildApp(
   const refreshed: string[] = [];
   const resourceLookups: string[] = [];
   const patched: Array<{ id: string; data: Record<string, unknown> }> = [];
-  const removedSessions: string[] = [];
   const services: Record<string, unknown> = {
     'mcp-catalog': { get: vi.fn(async () => entry) },
     '/mcp-servers/oauth-refresh': {
@@ -164,10 +163,6 @@ function buildApp(
         created.sessions = created.sessions.filter(
           (session) => (session as { session_id?: string }).session_id !== id
         );
-        removedSessions.push(id);
-        return { session_id: id };
-      }),
-      remove: vi.fn(async (id: string) => {
         removedSessions.push(id);
         return { session_id: id };
       }),
@@ -1345,6 +1340,10 @@ describe('credential reuse', () => {
       expect(built.refreshed).toEqual([]);
       expect(result.mcp_server.mcp_server_id).toBe('server-live');
     });
+  });
+});
+
+/**
  * Installing an entry whose endpoint asks for an API key.
  *
  * The key is the first thing a connect request has ever carried that is the

@@ -193,6 +193,8 @@ function hasLiveCallerGrant(server: MCPServer, now: number): boolean {
   if (!auth?.oauth_access_token) return false;
   const expiresAt = auth.oauth_token_expires_at;
   return !(expiresAt && expiresAt <= now);
+}
+
 const RUNTIME_HYDRATED_AUTH_FIELDS = [
   'oauth_access_token',
   'oauth_refresh_token',
@@ -785,6 +787,8 @@ export function createMCPCatalogConnectService(
     }
 
     return undefined;
+  };
+
   /**
    * Write the key the caller just pasted onto the install being reused.
    *
