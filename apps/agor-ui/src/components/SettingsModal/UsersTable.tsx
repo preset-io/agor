@@ -322,6 +322,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         rowKey="user_id"
         pagination={false}
         size="small"
+        scroll={{ x: 900 }}
       />
 
       {/* Create User Modal */}

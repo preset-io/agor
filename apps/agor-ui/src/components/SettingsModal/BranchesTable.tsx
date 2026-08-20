@@ -617,6 +617,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"
+          scroll={{ x: 1000 }}
           onRow={(record) => ({
             onClick: () => onRowClick?.(record),
             style: { cursor: onRowClick ? 'pointer' : 'default' },

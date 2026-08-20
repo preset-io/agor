@@ -15,6 +15,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { BranchModal, type BranchModalTab } from '../BranchModal';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHomePage } from './MobileHomePage';
@@ -69,6 +70,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [branchEditor, setBranchEditor] = useState<{
+    branchId: string;
+    tab: BranchModalTab;
+  } | null>(null);
+  const selectedBranch = branchEditor ? (branchById.get(branchEditor.branchId) ?? null) : null;
+  const selectedRepo = selectedBranch ? (repoById.get(selectedBranch.repo_id) ?? null) : null;
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -107,6 +114,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               branchById={branchById}
               sessionById={sessionById}
               onMenuClick={() => setDrawerOpen(true)}
+              onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
               onOpenSettings={onOpenWorkspaceSettings}
             />
           }
@@ -166,6 +174,23 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           }
         />
       </Routes>
+      <BranchModal
+        open={branchEditor !== null}
+        onClose={() => setBranchEditor(null)}
+        branch={selectedBranch}
+        repo={selectedRepo}
+        sessions={selectedBranch ? (sessionsByBranch.get(selectedBranch.branch_id) ?? []) : []}
+        boardObjects={
+          selectedBranch?.board_id ? (boardObjectsByBoardId.get(selectedBranch.board_id) ?? []) : []
+        }
+        client={client}
+        currentUser={user}
+        defaultTab={branchEditor?.tab}
+        onOpenSettings={() => {
+          setBranchEditor(null);
+          onOpenWorkspaceSettings('repos');
+        }}
+      />
     </Layout>
   );
 };

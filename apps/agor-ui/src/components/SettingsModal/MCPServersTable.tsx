@@ -677,6 +677,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         rowKey="mcp_server_id"
         pagination={{ defaultPageSize: 10, showSizeChanger: true }}
         size="small"
+        scroll={{ x: 1000 }}
       />
 
       {/* Create MCP Server Modal */}

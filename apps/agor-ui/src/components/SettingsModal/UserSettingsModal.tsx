@@ -45,6 +45,7 @@ import {
   ConfigProvider,
   Divider,
   Form,
+  Grid,
   Input,
   Layout,
   Menu,
@@ -260,6 +261,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { config: authConfig, identityContractState } = useAuthConfig();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
 
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -2165,7 +2168,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       footer={footer}
       closable
       closeIcon={<CloseOutlined />}
-      width="min(1050px, calc(100vw - 32px))"
+      width={compact ? 'calc(100vw - 16px)' : 'min(1050px, calc(100vw - 32px))'}
+      style={{ top: compact ? 8 : undefined }}
       styles={{
         // Zero the card's default 20px 24px frame and clip to the rounded
         // corners so the inner Layout fills the card edge-to-edge — the Sider
@@ -2176,9 +2180,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         header: { display: 'none' },
         body: {
           padding: 0,
-          height: 'calc(100vh - 280px)',
-          minHeight: 450,
-          maxHeight: 650,
+          height: compact ? 'calc(100dvh - 88px)' : 'calc(100vh - 280px)',
+          minHeight: compact ? 0 : 450,
+          maxHeight: compact ? 'none' : 650,
         },
         // With the card frame gone, the footer supplies its own padding and a
         // top divider so it reads as one bar across the bottom of the card.
@@ -2205,14 +2209,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         )}
       </div>
       <ConfigProvider theme={scopedTheme}>
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Layout
+          style={{
+            height: '100%',
+            background: token.colorBgContainer,
+            flexDirection: compact ? 'column' : 'row',
+          }}
+        >
           <Sider
-            width={220}
+            width={compact ? '100%' : 220}
             style={{
               background: token.colorBgElevated,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
+              borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
               overflow: 'auto',
-              padding: `20px ${token.marginSM}px`,
+              maxHeight: compact ? 240 : undefined,
+              flex: compact ? '0 0 auto' : undefined,
+              padding: compact ? `${token.paddingSM}px` : `20px ${token.marginSM}px`,
             }}
           >
             <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>

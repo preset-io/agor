@@ -7,7 +7,7 @@ import type {
   Repo,
   Session,
 } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileBoardPage } from './MobileBoardPage';
@@ -83,6 +83,7 @@ const placements = [
 
 describe('MobileBoardPage', () => {
   it('represents every supported board object and entity type', () => {
+    const onOpenBranch = vi.fn();
     render(
       <MemoryRouter initialEntries={['/m/board/board-1']}>
         <Routes>
@@ -142,6 +143,7 @@ describe('MobileBoardPage', () => {
                   ])
                 }
                 onMenuClick={vi.fn()}
+                onOpenBranch={onOpenBranch}
               />
             }
           />
@@ -157,5 +159,7 @@ describe('MobileBoardPage', () => {
     expect(screen.getByText('Customer ticket')).toBeInTheDocument();
     expect(screen.getByText('feat/mobile')).toBeInTheDocument();
     expect(screen.getByText('Polish mobile UI')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
+    expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'schedule');
   });
 });

@@ -10,6 +10,7 @@ import type {
 } from '@agor-live/client';
 import {
   AppstoreOutlined,
+  CalendarOutlined,
   CodeOutlined,
   CommentOutlined,
   FileMarkdownOutlined,
@@ -17,6 +18,7 @@ import {
   LinkOutlined,
   PushpinFilled,
   RightOutlined,
+  SettingOutlined,
   TagsOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
@@ -53,6 +55,7 @@ interface MobileBoardPageProps {
   cardById: Map<string, CardWithType>;
   artifactById: Map<string, Artifact>;
   onMenuClick: () => void;
+  onOpenBranch: (branchId: string, tab: 'general' | 'environment' | 'schedule') => void;
 }
 
 function statusColor(status: Branch['filesystem_status']): string {
@@ -93,6 +96,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   cardById,
   artifactById,
   onMenuClick,
+  onOpenBranch,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -408,6 +412,23 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                     }
                   >
                     <Flex vertical gap={token.marginSM}>
+                      <Flex gap={token.marginXS} wrap>
+                        <Button
+                          icon={<SettingOutlined />}
+                          onClick={() => onOpenBranch(branch.branch_id, 'general')}
+                        >
+                          Manage
+                        </Button>
+                        <Button onClick={() => onOpenBranch(branch.branch_id, 'environment')}>
+                          Environment
+                        </Button>
+                        <Button
+                          icon={<CalendarOutlined />}
+                          onClick={() => onOpenBranch(branch.branch_id, 'schedule')}
+                        >
+                          Schedules
+                        </Button>
+                      </Flex>
                       <Text type="secondary" ellipsis>
                         {repo?.slug ?? 'Repository unavailable'}
                       </Text>

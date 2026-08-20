@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
+import { Badge, Button, Grid, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
@@ -78,6 +78,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
   const { showSuccess, showError } = useThemedMessage();
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
 
@@ -298,13 +300,20 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       open={open}
       onCancel={onClose}
       footer={footer}
-      width={900}
+      width={compact ? 'calc(100vw - 16px)' : 900}
+      style={{ top: compact ? 8 : undefined }}
       mask={{ closable: false }}
       styles={{
-        body: { padding: 0, maxHeight: '80vh', overflowY: 'auto' },
+        body: {
+          padding: 0,
+          height: compact ? 'calc(100dvh - 150px)' : undefined,
+          maxHeight: compact ? 'none' : '80vh',
+          overflowY: 'auto',
+        },
       }}
     >
       <Tabs
+        tabPosition="top"
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BranchModalTab)}
         items={tabItems}

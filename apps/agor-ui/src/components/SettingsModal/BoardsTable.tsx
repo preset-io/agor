@@ -374,6 +374,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         rowKey="board_id"
         pagination={false}
         size="small"
+        scroll={{ x: 760 }}
         onRow={(record) => ({
           style: record.archived ? { opacity: 0.5 } : undefined,
         })}

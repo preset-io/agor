@@ -506,13 +506,22 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       }}
       closeIcon={<CloseOutlined />}
     >
-      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+      <Layout
+        style={{
+          height: '100%',
+          background: token.colorBgContainer,
+          flexDirection: compact ? 'column' : 'row',
+        }}
+      >
         <Sider
-          width={compact ? 148 : 240}
+          width={compact ? '100%' : 240}
           style={{
             background: token.colorBgElevated,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
+            borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
             overflow: 'auto',
+            maxHeight: compact ? 230 : undefined,
+            flex: compact ? '0 0 auto' : undefined,
             padding: compact ? '12px 0' : '20px 0',
           }}
         >
