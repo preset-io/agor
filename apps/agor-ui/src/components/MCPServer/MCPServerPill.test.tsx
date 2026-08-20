@@ -69,6 +69,7 @@ describe('MCPServerPill OAuth recovery', () => {
 
   it('names the admin edit action for the server it edits', () => {
     permissionState.isAdmin = true;
+    const onEdit = vi.fn();
     const server = {
       mcp_server_id: '01900000-0000-7000-8000-000000000005',
       name: 'oauth-server',
@@ -79,11 +80,12 @@ describe('MCPServerPill OAuth recovery', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerPill server={server} needsAuth client={null} />);
+    render(<MCPServerPill server={server} needsAuth client={null} onEdit={onEdit} />);
 
-    expect(
-      screen.getByRole('button', { name: 'Edit OAuth Server MCP server' })
-    ).toBeInTheDocument();
+    const edit = screen.getByRole('button', { name: 'Edit OAuth Server MCP server' });
+    expect(edit).toBeInTheDocument();
+    fireEvent.click(edit);
+    expect(onEdit).toHaveBeenCalledWith(server);
   });
 
   it('exposes authenticated OAuth refresh as a named native button', async () => {

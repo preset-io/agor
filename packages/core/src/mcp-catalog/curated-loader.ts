@@ -51,9 +51,9 @@ const httpUrl = z.url().refine((value) => /^https?:\/\//i.test(value), {
  * is pasting a whole OAuth client configuration into an entry, and the
  * dangerous halves of one — `client_secret`, `token_url`, `authorization_url` —
  * are exactly the keys someone would reach for. Under `.strict()` any of them
- * fails the load loudly at review time and at daemon start, rather than being
- * dropped in silence: a published client secret that nobody was told about is
- * strictly worse than a catalog that will not parse. See
+ * fails the load loudly at review time and on the first catalog read, rather
+ * than being dropped in silence: a published client secret that nobody was
+ * told about is strictly worse than a catalog that will not parse. See
  * {@link MCPCatalogEntryOAuth} for why each accepted key is accepted.
  */
 const catalogEntryOAuthSchema = z

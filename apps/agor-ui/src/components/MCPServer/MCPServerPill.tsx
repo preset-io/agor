@@ -9,13 +9,14 @@ import { formatAbsoluteTime } from '../../utils/time';
 import { ENTITY_PILL_COLORS } from '../Pill';
 import { Tag } from '../Tag';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
-import { MCPServerEditModal } from './MCPServerEditModal';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 interface MCPServerPillProps {
   server: MCPServer;
   needsAuth: boolean;
   client: AgorClient | null;
+  /** Lets an overlay owner open an editor without nesting its lifecycle in this pill. */
+  onEdit?: (server: MCPServer) => void;
 }
 
 /**
@@ -68,14 +69,19 @@ function formatRefreshError(error?: string): string {
  *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
  *                      activation force-refreshes the token (even before it's due)
  *                      so operators can probe per-provider refresh policy.
- *   - Admin only: a small pencil icon at the end opens the MCP edit modal
- *                 so operators can fix config without leaving the session view.
+ *   - Admin only: when the overlay owner supplies `onEdit`, a small pencil icon
+ *                 requests the MCP editor so operators can fix config without
+ *                 leaving the session view.
  */
-export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth, client }) => {
+export const MCPServerPill: React.FC<MCPServerPillProps> = ({
+  server,
+  needsAuth,
+  client,
+  onEdit,
+}) => {
   const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
   const { isAdmin } = usePermissions();
   const [refreshing, setRefreshing] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
   const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
@@ -230,7 +236,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
           ) : (
             label
           )}
-          {isAdmin && (
+          {isAdmin && onEdit && (
             // Real <button> for keyboard focus + screen-reader semantics.
             // Native `title` (not <Tooltip>) so we don't stack a second
             // AntD tooltip on top of the parent expiry/auth tooltip.
@@ -240,7 +246,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
               title={`Edit ${label} MCP server`}
               onClick={(e) => {
                 e.stopPropagation();
-                setEditModalOpen(true);
+                onEdit(server);
               }}
               style={{
                 marginLeft: 8,
@@ -274,14 +280,6 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         </Tag>
       </Tooltip>
       {oauthFailure && <MCPOAuthRecoveryAlert failure={oauthFailure} />}
-      {isAdmin && (
-        <MCPServerEditModal
-          server={server}
-          open={editModalOpen}
-          client={client}
-          onClose={() => setEditModalOpen(false)}
-        />
-      )}
     </>
   );
 };

@@ -5,7 +5,7 @@ import React from 'react';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
-import { MCPServerPill } from '../MCPServer';
+import { MCPServerEditModal, MCPServerPill } from '../MCPServer';
 import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { Tag } from '../Tag';
@@ -29,6 +29,8 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   const { showSuccess, showError } = useThemedMessage();
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
+  const [editModalOpen, setEditModalOpen] = React.useState(false);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const popupRef = React.useRef<HTMLDivElement>(null);
@@ -62,6 +64,21 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
       dismissAndRestoreFocus();
     }
   };
+
+  const handleEditServer = React.useCallback((server: MCPServer) => {
+    // AntD Modal portals to document.body. Close this disclosure deliberately
+    // before opening the modal, and keep the modal's state at this overlay
+    // owner, so interacting with the portal cannot be mistaken for an outside
+    // click or unmount the editor with the disclosure contents.
+    setOpen(false);
+    setEditingServer(server);
+    setEditModalOpen(true);
+  }, []);
+
+  const finishEditModalClose = React.useCallback(() => {
+    setEditingServer(null);
+    triggerRef.current?.focus();
+  }, []);
 
   const summary = React.useMemo(
     () =>
@@ -108,7 +125,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 
   const content = (
     <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={10} style={{ width: '100%' }}>
         <div>
           <Typography.Text id={headingId} strong>
             Session MCP servers
@@ -126,6 +143,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
                 server={server}
                 needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
                 client={client}
+                onEdit={handleEditServer}
               />
             ))}
           </Space>
@@ -242,6 +260,16 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
         >
           {content}
         </div>
+      )}
+      {editingServer && (
+        <MCPServerEditModal
+          server={editingServer}
+          open={editModalOpen}
+          client={client}
+          onClose={() => setEditModalOpen(false)}
+          afterClose={finishEditModalClose}
+          focusTriggerAfterClose={false}
+        />
       )}
     </div>
   );

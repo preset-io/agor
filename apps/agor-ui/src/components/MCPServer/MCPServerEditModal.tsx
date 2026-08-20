@@ -31,6 +31,10 @@ export interface MCPServerEditModalProps {
   /** The scopes this editor may switch to, on the same terms. */
   offeredScopes?: MCPScope[];
   onClose: () => void;
+  /** Runs after the portal has finished closing (for example, to restore focus). */
+  afterClose?: () => void;
+  /** Delegates focus restoration to an owner when the original trigger was unmounted. */
+  focusTriggerAfterClose?: boolean;
 }
 
 interface TestResult {
@@ -49,7 +53,8 @@ interface TestResult {
  *
  * Hydrates its own form from `server`, owns transport/authType/test state,
  * and persists updates via the `mcp-servers` Feathers service. Used by
- * both `MCPServersTable` (settings) and `MCPServerPill` (admin shortcut).
+ * both `MCPServersTable` (settings) and `SessionMcpFooterControl` (admin
+ * shortcut).
  */
 export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
@@ -58,6 +63,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   offeredTransports,
   offeredScopes,
   onClose,
+  afterClose,
+  focusTriggerAfterClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
@@ -309,6 +316,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       title="Edit MCP Server"
       open={open}
       onCancel={closeAndReset}
+      afterClose={afterClose}
+      focusable={focusTriggerAfterClose === undefined ? undefined : { focusTriggerAfterClose }}
       width={600}
       destroyOnHidden
       footer={

@@ -139,8 +139,10 @@ function isCredentialPeerOf(
  * would silently turn an explicit Strict row back into Marketplace whenever
  * the catalog omits `compatibility_mode` (and similarly erase Legacy).
  *
- * Preserve only those two known-safe values. A malformed database value is not
- * carried forward through reconciliation.
+ * Preserve only those two validated public values: Strict retains the narrow
+ * policy, while Legacy remains the explicit, deliberately broader operator
+ * override. A malformed database value is not carried forward through
+ * reconciliation.
  */
 function preserveExplicitOAuthCompatibility(server: MCPServer, prescribed: MCPAuth): MCPAuth {
   if (server.auth?.type !== 'oauth' || prescribed.type !== 'oauth') return prescribed;
