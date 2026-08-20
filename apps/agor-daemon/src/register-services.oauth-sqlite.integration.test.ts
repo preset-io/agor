@@ -8,8 +8,16 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
-import type { AuthenticatedParams, MCPServer, MCPServerID, User, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  MCPCatalogEntry,
+  MCPServer,
+  MCPServerID,
+  User,
+  UserID,
+} from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 
 // The boundary under test is daemon discovery/OAuth authority, not the MCP
@@ -32,6 +40,10 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
 }));
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: class {},
+}));
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
+  probeRemoteAuthType: vi.fn().mockResolvedValue('oauth'),
 }));
 
 type Deferred<T> = {
@@ -251,7 +263,11 @@ type SQLiteHarness = {
   deny: (state: string) => Promise<{ status: number; body: string }>;
 };
 
-async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 'shared') {
+async function createHarness(
+  provider: TestProvider,
+  oauthMode?: 'per_user' | 'shared',
+  options: { catalogPeer?: boolean } = {}
+) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
   const db = rawDb as unknown as TenantScopeAwareDatabase;
@@ -263,12 +279,13 @@ async function createHarness(provider: TestProvider, oauthMode?: 'per_user' | 's
     name: 'sqlite-oauth-authority',
     transport: 'http',
     url: provider.savedMcpUrl,
-    headers: { 'X-Saved-Config': 'true' },
+    headers: options.catalogPeer ? undefined : { 'X-Saved-Config': 'true' },
     scope: 'global',
     owner_user_id: user.user_id as UserID,
     auth: {
       type: 'oauth',
       oauth_client_id: 'saved-client-id',
+      ...(options.catalogPeer ? { oauth_compatibility_mode: 'strict' as const } : {}),
       ...(oauthMode ? { oauth_mode: oauthMode } : {}),
     },
   });
@@ -480,6 +497,77 @@ describe('SQLite saved-row OAuth authority', () => {
         harness.server.mcp_server_id as MCPServerID
       )
     ).toBeNull();
+  });
+
+  it('refuses catalog reuse after a current versioned SQLite grant binding drifts', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', { catalogPeer: true });
+    databases.push(harness.rawDb);
+
+    // Drive the actual OAuth start/callback flow. This is intentionally not a
+    // repository-inserted legacy fixture: post-#2491 SQLite grants are bound
+    // by the same authority used in production.
+    await authorizeSavedServer(harness);
+    const tokens = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const currentGrant = await tokens.getToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID
+    );
+    expect(currentGrant?.grant_binding_version).toBe(4);
+    expect(currentGrant?.grant_binding_fingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    // catalog_entry_name participates in the durable fingerprint but not in
+    // credential-peer matching. Mutating it therefore isolates the assertion:
+    // only hydration's current binding check can remove the credential that
+    // would otherwise make connect reuse this row.
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      catalog_entry_name: 'drifted/catalog-stamp',
+    });
+
+    const entry = {
+      name: 'test/sqlite-current-binding',
+      title: 'SQLite Current Binding',
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+      oauth: { client_id: 'saved-client-id', compatibility_mode: 'strict' },
+      permission_disclosure: 'Exercises current SQLite grant binding.',
+    } as unknown as MCPCatalogEntry;
+    harness.app.use('mcp-catalog', {
+      async get() {
+        return entry;
+      },
+    } as never);
+    harness.app.use('sessions', {
+      async create(data: Record<string, unknown>) {
+        return { ...data, session_id: 'sqlite-connect-session' };
+      },
+      async remove() {},
+    } as never);
+    harness.app.use('/sessions/:id/mcp-servers', {
+      async create(data: unknown) {
+        return data;
+      },
+    } as never);
+
+    const result = await createRegisteredMCPCatalogConnectService(harness.app, harness.db).create(
+      {
+        catalog_key: entry.name,
+        branch_id: 'sqlite-binding-branch',
+        agentic_tool: 'claude-code',
+        acknowledged_disclosure: entry.permission_disclosure,
+      },
+      { ...paramsFor(harness), provider: 'rest' }
+    );
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe(harness.server.mcp_server_id);
+    await expect(
+      tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
   });
 
   it('rejects a saved-row mutation that lands while the provider token exchange is running', async () => {
