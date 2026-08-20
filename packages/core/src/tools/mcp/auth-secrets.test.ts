@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { redactMCPAuthSecrets, restoreRedactedMCPAuthSecrets } from './auth-secrets';
+import type { MCPAuth } from '../../types/mcp';
+import { mergeMCPAuth, redactMCPAuthSecrets, restoreRedactedMCPAuthSecrets } from './auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
 
 describe('MCP auth secret helpers', () => {
@@ -180,5 +181,107 @@ describe('MCP auth secret helpers', () => {
 
     expect(restored).toEqual({ type: 'oauth', oauth_client_id: 'public-client-id' });
     expect(restored).not.toHaveProperty('oauth_access_token');
+  });
+});
+
+describe('mergeMCPAuth', () => {
+  const stored: MCPAuth = {
+    type: 'oauth',
+    oauth_client_id: 'pre-registered-client',
+    oauth_client_secret: 'stored-secret',
+    oauth_compatibility_mode: 'legacy',
+    oauth_scope: 'read',
+  };
+
+  it('preserves untouched fields when only one sub-field changes (issue #2500)', () => {
+    // The bug: widening scope on a Google Calendar connector wiped the
+    // pre-registered client id/secret and the legacy compatibility mode.
+    const merged = mergeMCPAuth({
+      current: stored,
+      next: { type: 'oauth', oauth_scope: 'read write' },
+    });
+
+    expect(merged).toEqual({
+      type: 'oauth',
+      oauth_client_id: 'pre-registered-client',
+      oauth_client_secret: 'stored-secret',
+      oauth_compatibility_mode: 'legacy',
+      oauth_scope: 'read write',
+    });
+  });
+
+  it('keeps stored secrets when a redaction sentinel is passed back', () => {
+    const merged = mergeMCPAuth({
+      current: stored,
+      next: {
+        type: 'oauth',
+        oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+        oauth_scope: 'read write',
+      },
+    });
+
+    expect(merged?.oauth_client_secret).toBe('stored-secret');
+    expect(merged?.oauth_scope).toBe('read write');
+    // Untouched metadata still survives the merge.
+    expect(merged?.oauth_compatibility_mode).toBe('legacy');
+  });
+
+  it('clears exactly one field when it is sent as an explicit null', () => {
+    const merged = mergeMCPAuth({
+      current: stored,
+      // Callers reach this path through the service/REST layer; null is the
+      // documented "unset this one field" escape hatch.
+      next: { type: 'oauth', oauth_compatibility_mode: null } as unknown as MCPAuth,
+    });
+
+    expect(merged).not.toHaveProperty('oauth_compatibility_mode');
+    // Everything the caller did not mention is still there.
+    expect(merged?.oauth_client_id).toBe('pre-registered-client');
+    expect(merged?.oauth_client_secret).toBe('stored-secret');
+    expect(merged?.oauth_scope).toBe('read');
+  });
+
+  it('distinguishes an explicit null from an omitted field', () => {
+    const merged = mergeMCPAuth({
+      current: stored,
+      // oauth_scope omitted → kept; oauth_client_id null → cleared.
+      next: { type: 'oauth', oauth_client_id: null } as unknown as MCPAuth,
+    });
+
+    expect(merged).not.toHaveProperty('oauth_client_id');
+    expect(merged?.oauth_scope).toBe('read');
+  });
+
+  it('replaces wholesale on a mode switch so stale fields never survive', () => {
+    const merged = mergeMCPAuth({
+      current: stored,
+      next: { type: 'bearer', token: 'new-token' },
+    });
+
+    expect(merged).toEqual({ type: 'bearer', token: 'new-token' });
+  });
+
+  it('drops a sentinel with nothing to restore on a mode switch', () => {
+    const merged = mergeMCPAuth({
+      current: stored,
+      next: { type: 'bearer', token: MCP_HEADER_REDACTED_SENTINEL },
+    });
+
+    expect(merged).toEqual({ type: 'bearer' });
+    expect(merged).not.toHaveProperty('token');
+  });
+
+  it('replaces wholesale when there is no stored auth', () => {
+    const merged = mergeMCPAuth({
+      current: undefined,
+      next: { type: 'oauth', oauth_scope: 'read' },
+    });
+
+    expect(merged).toEqual({ type: 'oauth', oauth_scope: 'read' });
+  });
+
+  it('clears auth entirely when next is null or undefined', () => {
+    expect(mergeMCPAuth({ current: stored, next: null })).toBeUndefined();
+    expect(mergeMCPAuth({ current: stored, next: undefined })).toBeUndefined();
   });
 });

@@ -460,6 +460,126 @@ describe('MCPServerRepository custom headers', () => {
     }
   );
 
+  dbTest('should merge a partial auth update onto stored config (issue #2500)', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'calendar',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'pre-registered-client',
+          oauth_client_secret: 'stored-secret',
+          oauth_compatibility_mode: 'legacy',
+          oauth_scope: 'read',
+        },
+      })
+    );
+
+    // Widen just the scope, exactly as the bug report's agent did.
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { type: 'oauth', oauth_scope: 'read write' },
+    });
+
+    // Untouched fields survive instead of being clobbered.
+    expect(updated.auth).toEqual({
+      type: 'oauth',
+      oauth_client_id: 'pre-registered-client',
+      oauth_client_secret: 'stored-secret',
+      oauth_compatibility_mode: 'legacy',
+      oauth_scope: 'read write',
+    });
+
+    const found = await repo.findById(created.mcp_server_id);
+    expect(found?.auth).toEqual(updated.auth);
+  });
+
+  dbTest('should apply a full auth update as sent', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'calendar',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'pre-registered-client',
+          oauth_client_secret: 'stored-secret',
+          oauth_compatibility_mode: 'legacy',
+        },
+      })
+    );
+
+    // A caller that resends every field still overwrites them all.
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'new-client',
+        oauth_client_secret: 'new-secret',
+        oauth_compatibility_mode: 'strict',
+        oauth_scope: 'read write',
+      },
+    });
+
+    expect(updated.auth).toEqual({
+      type: 'oauth',
+      oauth_client_id: 'new-client',
+      oauth_client_secret: 'new-secret',
+      oauth_compatibility_mode: 'strict',
+      oauth_scope: 'read write',
+    });
+  });
+
+  dbTest('should clear a single auth field sent as explicit null', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'calendar',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'pre-registered-client',
+          oauth_compatibility_mode: 'legacy',
+        },
+      })
+    );
+
+    const updated = await repo.update(created.mcp_server_id, {
+      // null unsets exactly this field; the rest is preserved.
+      auth: { type: 'oauth', oauth_compatibility_mode: null } as unknown as MCPServer['auth'],
+    });
+
+    expect(updated.auth).toEqual({
+      type: 'oauth',
+      oauth_client_id: 'pre-registered-client',
+    });
+  });
+
+  dbTest('should replace auth wholesale on a mode switch', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        name: 'calendar',
+        transport: 'http',
+        url: 'https://mcp.example.com/mcp',
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'pre-registered-client',
+          oauth_client_secret: 'stored-secret',
+        },
+      })
+    );
+
+    // Switching auth mode must not leave stale oauth_* fields behind.
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { type: 'bearer', token: 'new-token' },
+    });
+
+    expect(updated.auth).toEqual({ type: 'bearer', token: 'new-token' });
+  });
+
   dbTest('should clear custom headers when updating to stdio transport', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const created = await repo.create(

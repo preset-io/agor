@@ -1377,14 +1377,20 @@ describe('strict current MCP OAuth profile', () => {
 
   it('guesses issuer-relative /register only for explicit legacy fallback', async () => {
     globalThis.fetch = strictFetch();
-    await expect(
+    const missingEndpointError = await rejectedError<Error & { diagnostic: MCPOAuthDCRDiagnostic }>(
       startMCPOAuthFlow(
         `Bearer resource_metadata="${metadataUri}"`,
         undefined,
         'https://agor.example.com/mcp-servers/oauth-callback',
         { resourceUri, compatibilityMode: 'legacy', dcrMode: 'advertised' }
       )
-    ).rejects.toThrow('does not advertise');
+    );
+    expect(missingEndpointError.message).toContain('does not advertise');
+    // The internal stage identifier stays on the structured diagnostic for
+    // logging but must not leak into the user-facing message (issue #2500).
+    expect(missingEndpointError.diagnostic.stage).toBe('dcr_endpoint_discovery');
+    expect(missingEndpointError.message).not.toContain('stage:');
+    expect(missingEndpointError.message).not.toContain('dcr_endpoint_discovery');
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalledWith(
       `${issuer}/register`,
       expect.objectContaining({ method: 'POST' })

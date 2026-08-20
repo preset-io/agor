@@ -472,7 +472,7 @@ const mcpServerUpdateSchema = z
     auth: mcpAuthInputSchema
       .optional()
       .describe(
-        "Replace auth config. Existing redacted secrets are preserved if their redacted placeholders are passed back; prefer omitting auth unless changing it. Use { type: 'none' } to clear auth."
+        "Patch auth config: fields you send are merged onto the stored config, so sending only { type:'oauth', oauth_scope:'…' } widens the scope while preserving oauth_client_id, oauth_client_secret, oauth_compatibility_mode, etc. `type` must match the stored mode to merge — changing it (e.g. to a different auth mode, or { type:'none' } to clear auth) replaces the config wholesale. Redacted secrets are preserved when their placeholders are passed back. Send a field as an empty string to clear it."
       ),
     scope: z.enum(['global', 'session']).optional().describe('Scope to set.'),
     enabled: z.boolean().optional().describe('Enabled flag.'),
@@ -842,7 +842,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_update',
     {
       description:
-        'Update an existing MCP server definition. Permissions are service-enforced: admins always may, members only under the workspace `mcp_member_policy`, and nobody but an admin or the owner may touch a private server. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
+        'Update an existing MCP server definition. Permissions are service-enforced: admins always may, members only under the workspace `mcp_member_policy`, and nobody but an admin or the owner may touch a private server. Updating config does not create a session-specific link: enabled `global` servers are already effective for all sessions, while `session` scoped servers need `agor_sessions_add_mcp_server`. Provide only fields to change; the `auth` object is merged onto the stored config field-by-field (same `auth.type`), so you can widen one OAuth field without resending the rest. Validation rejects incompatible combinations (e.g. stdio+url/auth/headers, remote+command/args, wrong auth fields). OAuth tip: keep only `auth:{type:"oauth"}` unless discovery fails or a provider requires endpoint/client overrides. Use `auth:{type:"none"}` to clear auth.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerUpdateSchema,
     },

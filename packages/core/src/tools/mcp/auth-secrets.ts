@@ -84,3 +84,62 @@ export function restoreRedactedMCPAuthSecrets(options: {
 
   return restored;
 }
+
+/**
+ * Merge a partial `auth` update onto the stored config for a persisted update.
+ *
+ * The stored update path is PATCH, not PUT: a caller widening one sub-field
+ * (say `oauth_scope`) must not silently clear the others. Widening scope on a
+ * Google Calendar connector used to wipe `oauth_compatibility_mode`, the
+ * pre-registered `oauth_client_id`, and the client secret, because the whole
+ * `auth` object was replaced by whatever the caller sent (see issue #2500). So:
+ *
+ * - An **omitted** field keeps its stored value.
+ * - An **explicit `null`** clears that one field — the escape hatch for unsetting
+ *   a previously-set value without resending the rest.
+ * - A **redaction sentinel** in a secret field is a claim of "unchanged": the
+ *   stored secret is preserved and the sentinel is never persisted (see the
+ *   INVARIANT on {@link restoreRedactedMCPAuthSecrets}).
+ * - A **new value** overwrites.
+ *
+ * Merging is scoped to a single auth *mode*. Changing `type` (e.g. `oauth` →
+ * `none`, or `oauth` → `bearer`) makes the previous mode's fields meaningless,
+ * so a mode switch is a full replace — stale fields from the old mode never
+ * survive. An omitted or `null` `next` clears auth entirely.
+ */
+export function mergeMCPAuth(options: {
+  current?: MCPAuth;
+  next?: MCPAuth | null;
+}): MCPAuth | undefined {
+  if (options.next === null || options.next === undefined) return undefined;
+
+  const next = options.next as unknown as Record<string, unknown>;
+
+  // Only merge within one mode. On a mode switch (or when there is no stored
+  // auth) start from an empty base so the incoming object fully replaces it.
+  const sameType = options.current !== undefined && next.type === options.current.type;
+  const merged: Record<string, unknown> = sameType
+    ? { ...(options.current as unknown as Record<string, unknown>) }
+    : {};
+
+  const secretFields = new Set<string>(MCP_AUTH_SECRET_FIELDS);
+
+  for (const key of Object.keys(next)) {
+    const value = next[key];
+    // Present-but-undefined is treated as omission: keep the stored value.
+    if (value === undefined) continue;
+    // Explicit null clears exactly this field; omission would have kept it.
+    if (value === null) {
+      delete merged[key];
+      continue;
+    }
+    // A sentinel means "unchanged": keep the stored secret already carried in
+    // `merged` (same-mode merge), or drop it when there is nothing stored to
+    // restore (mode switch, or a stale form after a concurrent edit). The
+    // sentinel itself must never be persisted.
+    if (secretFields.has(key) && value === MCP_HEADER_REDACTED_SENTINEL) continue;
+    merged[key] = value;
+  }
+
+  return merged as unknown as MCPAuth;
+}

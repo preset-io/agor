@@ -15,7 +15,7 @@ import type {
 } from '@agor/core/types';
 import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
-import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
+import { mergeMCPAuth } from '../../tools/mcp/auth-secrets';
 import { restoreRedactedMCPEnvSecrets } from '../../tools/mcp/env-secrets';
 import {
   normalizeMCPCustomHeaders,
@@ -280,7 +280,10 @@ export class MCPServerRepository
         });
       }
       if ('auth' in updates) {
-        merged.auth = restoreRedactedMCPAuthSecrets({
+        // Partial auth updates PATCH onto the stored config: omitted fields are
+        // preserved, an explicit null clears a single field, and a mode switch
+        // (changed `auth.type`) replaces wholesale. See issue #2500.
+        merged.auth = mergeMCPAuth({
           current: current.auth,
           next: updates.auth,
         });

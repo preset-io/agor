@@ -471,8 +471,11 @@ function registrationFailure(
     ? lead
     : `Dynamic Client Registration failed: ${lead}`;
   const status = diagnostic.http_status === undefined ? '' : ` (HTTP ${diagnostic.http_status})`;
+  // The internal `diagnostic.stage` identifier is carried on the structured
+  // diagnostic (and logged), but must not leak into the user-facing message —
+  // see issue #2500. The message stays actionable via the recovery guidance.
   return new OAuthDCRFailure(
-    `${failureLead}${status} at stage ${diagnostic.stage}. ${dcrRecoveryGuidance(diagnostic)}`,
+    `${failureLead}${status}. ${dcrRecoveryGuidance(diagnostic)}`,
     diagnostic
   );
 }
@@ -480,7 +483,7 @@ function registrationFailure(
 function missingRegistrationEndpointFailure(): OAuthDCRFailure {
   const diagnostic: MCPOAuthDCRDiagnostic = { stage: 'dcr_endpoint_discovery' };
   return new OAuthDCRFailure(
-    'OAuth client_id is required because the authorization server does not advertise a Dynamic Client Registration endpoint (stage: dcr_endpoint_discovery). The provider may require a pre-registered OAuth app. Enter the Client ID and Client Secret in Advanced — OAuth settings, then retry.',
+    'OAuth client_id is required because the authorization server does not advertise a Dynamic Client Registration endpoint. The provider may require a pre-registered OAuth app. Enter the Client ID and Client Secret in Advanced — OAuth settings, then retry.',
     diagnostic
   );
 }
