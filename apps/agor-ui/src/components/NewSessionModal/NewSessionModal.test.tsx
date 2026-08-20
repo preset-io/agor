@@ -183,7 +183,7 @@ describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
   });
 
   it('clears the previous configuration source before a successful close and reopen', async () => {
-    const onCreate = vi.fn();
+    const onCreate = vi.fn(async () => null);
     const props = {
       onClose: vi.fn(),
       onCreate,

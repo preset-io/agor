@@ -1251,9 +1251,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     // the users service. A null result leaves the select ready for a choice —
     // enough to prove the Preferences assistant section mounts the picker.
     const ensurePrimaryTeammateDefault = vi.fn(async () => null);
+    const getPrimaryTeammateCandidates = vi.fn(async () => []);
     const client = {
       service: (name: string) => {
-        if (name === 'users') return { ensurePrimaryTeammateDefault };
+        if (name === 'users') {
+          return { ensurePrimaryTeammateDefault, getPrimaryTeammateCandidates };
+        }
         return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
       },
     } as unknown as AgorClient;
@@ -1287,9 +1290,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
   it('redirects the former Primary Assistant deep link to Preferences', async () => {
     const ensurePrimaryTeammateDefault = vi.fn(async () => null);
+    const getPrimaryTeammateCandidates = vi.fn(async () => []);
     const client = {
       service: (name: string) => {
-        if (name === 'users') return { ensurePrimaryTeammateDefault };
+        if (name === 'users') {
+          return { ensurePrimaryTeammateDefault, getPrimaryTeammateCandidates };
+        }
         return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
       },
     } as unknown as AgorClient;
