@@ -346,6 +346,30 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
   };
 }
 
+/**
+ * Build the catalog-connect service exactly as the production route registers it.
+ * Kept as a named boundary so PostgreSQL integration coverage can exercise the
+ * authenticated tenant-scoped grant lookup instead of substituting a test
+ * implementation of that decisive dependency.
+ */
+export function createRegisteredMCPCatalogConnectService(
+  app: Application,
+  db: TenantScopeAwareDatabase
+) {
+  return createMCPCatalogConnectService(app, {
+    async readGrantResourceUri(serverId, params) {
+      const userId = params.user?.user_id as UserID | undefined;
+      if (!userId) return undefined;
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () =>
+        (await new UserMCPOAuthTokenRepository(db).getToken(userId, serverId))
+          ?.oauth_resource_uri ?? undefined;
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+  });
+}
+
 export function createUploadAuthMiddleware(input: {
   authentication: {
     create(
@@ -4276,30 +4300,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerLongAuthenticatedRoute(
     app,
     '/mcp-catalog/connect',
-    createMCPCatalogConnectService(app, {
-      /**
-       * The protected resource the calling user's own grant was minted for.
-       *
-       * Credential reuse compares this against the entry's endpoint, and it is
-       * the one fact no `mcp_servers` read carries: the hydrate hook copies a
-       * token and its expiry, never `oauth_resource_uri`. Injected rather than
-       * handed the connect service a database of its own.
-       *
-       * Keyed on the authenticated caller and never on `null`, so a shared
-       * grant — which belongs to the server rather than to anyone — is not
-       * reachable through this at all.
-       */
-      async readGrantResourceUri(serverId, params) {
-        const userId = params.user?.user_id as UserID | undefined;
-        if (!userId) return undefined;
-        const tenantId =
-          (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
-        const read = async () =>
-          (await new UserMCPOAuthTokenRepository(db).getToken(userId, serverId))
-            ?.oauth_resource_uri ?? undefined;
-        return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
-      },
-    }),
+    createRegisteredMCPCatalogConnectService(app, db),
     { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );

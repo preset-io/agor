@@ -1,0 +1,322 @@
+/**
+ * PostgreSQL proof for the production catalog-connect registration boundary.
+ * The repository PostgreSQL runner supplies an isolated database and a
+ * non-superuser/NOBYPASSRLS role.
+ */
+import {
+  createDatabase,
+  createTenantScopedDatabaseProxy,
+  type Database,
+  executeRaw,
+  generateId,
+  initializeDatabase,
+  isPostgresDatabase,
+  MCPServerRepository,
+  runWithTenantDatabaseScope,
+  setMcpMemberPolicy,
+  sql,
+  type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
+  UsersRepository,
+} from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
+import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@agor/core/types';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
+import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
+import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
+import { createMCPServersService } from './mcp-servers.js';
+
+const { probeRemoteAuthType } = vi.hoisted(() => ({ probeRemoteAuthType: vi.fn() }));
+vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType }));
+
+const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
+const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
+const SECRET = 'catalog-connect-postgres-integration-secret';
+const RESOURCE = 'https://mcp.example.test/connect';
+const ENTRY = {
+  name: 'test/catalog-connect-postgres',
+  title: 'PostgreSQL Connect Test',
+  transport: 'streamable-http',
+  remote_url: RESOURCE,
+  has_remote: true,
+  has_package: false,
+  // Deliberately stale: the probe is authoritative and returns OAuth.
+  auth_type: 'none',
+  oauth: { compatibility_mode: 'strict' },
+  permission_disclosure: 'Exercises the PostgreSQL catalog connect boundary.',
+} as unknown as MCPCatalogEntry;
+const REQUEST = {
+  catalog_key: ENTRY.name,
+  branch_id: 'branch-postgres-test',
+  agentic_tool: 'claude-code' as const,
+  acknowledged_disclosure: ENTRY.permission_disclosure,
+};
+
+function rowsOf(result: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
+  const rows = (result as { rows?: unknown[] } | undefined)?.rows;
+  return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+}
+
+function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
+  const captured = {
+    beforeAll: [] as unknown[],
+    beforeFind: [] as unknown[],
+    beforeCreate: [] as unknown[],
+    afterFind: [] as unknown[],
+    afterGet: [] as unknown[],
+  };
+  const app = {
+    service(path: string) {
+      return {
+        hooks(hooks: {
+          before?: { all?: unknown[]; find?: unknown[]; create?: unknown[] };
+          after?: { find?: unknown[]; get?: unknown[] };
+        }) {
+          if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.beforeAll.push(...(hooks.before?.all ?? []));
+          captured.beforeFind.push(...(hooks.before?.find ?? []));
+          captured.beforeCreate.push(...(hooks.before?.create ?? []));
+          captured.afterFind.push(...(hooks.after?.find ?? []));
+          captured.afterGet.push(...(hooks.after?.get ?? []));
+        },
+      };
+    },
+    use() {},
+    publish() {},
+  };
+  registerHooks({
+    db,
+    app: app as unknown as RegisterHooksContext['app'],
+    config: {
+      database: { dialect: 'postgresql' },
+      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+    } as RegisterHooksContext['config'],
+    jwtSecret: SECRET,
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: true },
+    sessionsService: {} as RegisterHooksContext['sessionsService'],
+    messagesService: {} as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: { mode: 'hosted' } as RegisterHooksContext['deployment'],
+  });
+  return captured;
+}
+
+describe.skipIf(!postgresUrl || !usesPostgresSchema)(
+  'registered catalog connect (PostgreSQL/RLS)',
+  () => {
+    let rawDb: Database;
+    let db: TenantScopeAwareDatabase;
+    let previousMasterSecret: string | undefined;
+
+    beforeAll(async () => {
+      previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+      process.env.AGOR_MASTER_SECRET = SECRET;
+      rawDb = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      await initializeDatabase(rawDb);
+      if (!isPostgresDatabase(rawDb)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const [role] = rowsOf(
+        await executeRaw(
+          rawDb,
+          sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+        )
+      );
+      expect(role).toMatchObject({ rolsuper: false, rolbypassrls: false });
+      db = createTenantScopedDatabaseProxy(rawDb, {
+        requireScope: true,
+        label: 'catalog-connect-postgres-test',
+      });
+    }, 60_000);
+
+    afterAll(async () => {
+      await (rawDb as Database & { $client: { end: () => Promise<void> } }).$client.end();
+      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+    });
+
+    beforeEach(() => {
+      probeRemoteAuthType.mockReset();
+      probeRemoteAuthType.mockResolvedValue('oauth');
+    });
+
+    async function buildTenant(label: string) {
+      const tenantId = `catalog-connect-${label}-${generateId()}`;
+      return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await setMcpMemberPolicy(scoped, 'allow_crud', tenantId, null);
+        const user = (await new UsersRepository(scoped).create({
+          email: `${label}-${generateId()}@example.test`,
+          name: label,
+          role: 'member',
+        })) as User;
+        return { tenantId, user };
+      });
+    }
+
+    async function seedPeer(
+      tenantId: string,
+      user: User,
+      options: { fingerprintDrift?: boolean; compatibilityMode?: 'strict' | 'legacy' } = {}
+    ) {
+      return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const server = await new MCPServerRepository(scoped).create({
+          name: `peer-${generateId()}`,
+          transport: 'http',
+          url: RESOURCE,
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_compatibility_mode: options.compatibilityMode ?? 'strict',
+          },
+        });
+        const resolved = {
+          resourceUri: RESOURCE,
+          metadataUrl: `${RESOURCE}/.well-known/oauth-protected-resource`,
+          issuer: 'https://identity.example.test',
+          authorizationEndpoint: 'https://identity.example.test/authorize',
+          tokenEndpoint: 'https://identity.example.test/token',
+          redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+          clientId: 'catalog-connect-client',
+          compatibilityMode: options.compatibilityMode ?? 'strict',
+        } as const;
+        const fingerprintServer = options.fingerprintDrift
+          ? ({ ...server, url: `${RESOURCE}/old` } as MCPServer)
+          : server;
+        await new UserMCPOAuthTokenRepository(scoped, SECRET).saveToken(
+          user.user_id,
+          server.mcp_server_id,
+          {
+            accessToken: `access-${tenantId}-${generateId()}`,
+            clientId: resolved.clientId,
+            expiresAt: new Date(Date.now() + 3_600_000),
+            grantBinding: {
+              generation: 1,
+              version: 1,
+              fingerprint: fingerprintMCPOAuthGrantConfiguration(
+                SECRET,
+                fingerprintServer,
+                resolved,
+                1
+              ),
+              ...resolved,
+              metadataUri: resolved.metadataUrl,
+            },
+          }
+        );
+        return server;
+      });
+    }
+
+    function connectApp(entry: MCPCatalogEntry = ENTRY) {
+      const hooks = registeredMcpServerHooks(db);
+      const app = feathers();
+      app.use('mcp-servers', createMCPServersService(db));
+      app.service('mcp-servers').hooks({
+        before: {
+          all: hooks.beforeAll,
+          find: hooks.beforeFind,
+          create: hooks.beforeCreate,
+        },
+        after: { find: hooks.afterFind, get: hooks.afterGet },
+      } as never);
+      app.use('mcp-catalog', {
+        async get() {
+          return entry;
+        },
+      } as never);
+      app.use('sessions', {
+        async create(data: Record<string, unknown>) {
+          return { ...data, session_id: `session-${generateId()}` };
+        },
+        async remove() {},
+      } as never);
+      app.use('/sessions/:id/mcp-servers', {
+        async create(data: unknown) {
+          return data;
+        },
+      } as never);
+      app.use('/mcp-servers/oauth-refresh', {
+        async create() {
+          return { success: false };
+        },
+      } as never);
+      return app;
+    }
+
+    function params(user: User, tenantId: string): AuthenticatedParams {
+      return {
+        provider: 'rest',
+        authenticated: true,
+        user: { user_id: user.user_id, email: user.email, role: 'member' },
+        authentication: { strategy: 'jwt', payload: { tenant_id: tenantId } },
+        tenant: { tenant_id: tenantId, source: 'auth_claim' },
+      } as AuthenticatedParams;
+    }
+
+    async function connect(user: User, tenantId: string, entry: MCPCatalogEntry = ENTRY) {
+      const app = connectApp(entry);
+      return runWithTenantDatabaseScope(db, tenantId, () =>
+        createRegisteredMCPCatalogConnectService(app, db).create(REQUEST, params(user, tenantId))
+      );
+    }
+
+    it('reuses the authenticated caller credential peer and obeys probed OAuth policy', async () => {
+      const actor = await buildTenant('positive');
+      const peer = await seedPeer(actor.tenantId, actor.user);
+      const result = await connect(actor.user, actor.tenantId);
+
+      expect(probeRemoteAuthType).toHaveBeenCalledWith(RESOURCE);
+      expect(result).toMatchObject({
+        reused_existing_server: true,
+        reuse_kind: 'credential_peer',
+        mcp_server: { mcp_server_id: peer.mcp_server_id },
+      });
+    });
+
+    it('propagates authenticated tenant and user context to select the caller grant', async () => {
+      const actor = await buildTenant('caller');
+      const other = await buildTenant('other-user');
+      const peer = await seedPeer(actor.tenantId, actor.user);
+      await seedPeer(other.tenantId, other.user);
+
+      const result = await connect(actor.user, actor.tenantId);
+      expect(result.mcp_server.mcp_server_id).toBe(peer.mcp_server_id);
+    });
+
+    it('denies cross-tenant reuse even with a valid foreign user and server identifier', async () => {
+      const foreign = await buildTenant('foreign');
+      const local = await buildTenant('local');
+      const foreignPeer = await seedPeer(foreign.tenantId, foreign.user);
+
+      const result = await connect(foreign.user, local.tenantId);
+      expect(result.reused_existing_server).toBe(false);
+      expect(result.mcp_server.mcp_server_id).not.toBe(foreignPeer.mcp_server_id);
+    });
+
+    it('rejects a grant whose durable binding drifted through the full connect path', async () => {
+      const actor = await buildTenant('binding-drift');
+      const peer = await seedPeer(actor.tenantId, actor.user, { fingerprintDrift: true });
+
+      const result = await connect(actor.user, actor.tenantId);
+      expect(result.reused_existing_server).toBe(false);
+      expect(result.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+    });
+
+    it('rejects catalog compatibility-policy drift through the full connect path', async () => {
+      const actor = await buildTenant('policy-drift');
+      const peer = await seedPeer(actor.tenantId, actor.user, { compatibilityMode: 'legacy' });
+
+      const result = await connect(actor.user, actor.tenantId);
+      expect(result.reused_existing_server).toBe(false);
+      expect(result.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+      expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe('strict');
+    });
+  }
+);
