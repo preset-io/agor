@@ -27,19 +27,7 @@ import {
   LeftOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Divider,
-  Input,
-  List,
-  Modal,
-  Spin,
-  Tag,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import {
   type CSSProperties,
   Fragment,
@@ -101,18 +89,6 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'done'];
 
-// Prefilled so the required workspace step never blocks on an empty field; the
-// user can rename it. Named the teammate and the board the wizard creates.
-const DEFAULT_TEAMMATE_NAME = 'Scout';
-
-// Surfaced when the workspace step needs the API but the socket client isn't
-// available. That step is required and has no Skip, so a bare early return
-// would leave its only button doing nothing at all.
-const NO_CLIENT_BOARD_ERROR =
-  "Can't reach the server right now - check your connection and try again.";
-
-// The workspace step creates the user's board + first teammate, so it is NOT
-// skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   goals: { number: 1, label: 'Goals', skippable: true },
   workspace: { number: 2, label: 'Teammate', skippable: true },
@@ -475,7 +451,7 @@ export function OnboardingWizard({
   // ── Step 3: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
-  const [teammateName, setTeammateName] = useState(DEFAULT_TEAMMATE_NAME);
+  const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   // Chosen gallery template id (null = nothing picked yet). Sets the default
   // avatar and the teammate's framework source branch — never the name.
@@ -504,7 +480,7 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
-    setTeammateName(DEFAULT_TEAMMATE_NAME);
+    setTeammateName('');
     setTeammateEmoji('🤖');
     setSelectedTemplateId(null);
     setBoardError(null);

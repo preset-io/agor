@@ -150,8 +150,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
   {
     id: 'builder',
     title: 'Builder',
-    description:
-      'Turns your idea into a working app or dashboard, spun up on a live test env.',
+    description: 'Turns your idea into a working app or dashboard, spun up on a live test env.',
     icon: BuildOutlined,
     category: 'build',
     emoji: '🛠️',

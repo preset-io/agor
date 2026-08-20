@@ -250,7 +250,7 @@ describe('OnboardingWizard', () => {
 
   it('is multi-select, order-preserving, and caps at two goals', async () => {
     const onComplete = vi.fn();
-    const { boardsService } = renderWizard({ onComplete, initialStep: 'goals' });
+    renderWizard({ onComplete, initialStep: 'goals' });
 
     // First-picked = primary, second-picked = secondary (order preserved).
     clickButton('Dig into anything');
@@ -273,26 +273,26 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i); // llm
     clickButton(/open my board/i);
 
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        goals: ['dig-into-anything', 'ship-without-busywork'],
-        // Merge: first two of primary (dig) then first two of secondary (ship).
-        suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
-      })
+    // Completion is async (board creation, then onComplete), so wait for it.
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          goals: ['dig-into-anything', 'ship-without-busywork'],
+          // Merge: first two of primary (dig) then first two of secondary (ship).
+          suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
+        })
+      )
     );
   });
 
-  it('treats Skip on the goals step as authoritative after a selection', async () => {
+  it('treats Skip as authoritative after experimenting with a goal selection', async () => {
     const onComplete = vi.fn();
-    const { boardsService } = renderWizard({ onComplete });
+    renderWizard({ onComplete, initialStep: 'goals' });
 
     clickButton('Ship without the busywork');
     clickButton(/skip for now/i);
-    await findAndClickButton(/skip for now/i); // llm
-
-    clickButton(/^continue →/i); // required workspace
-    await waitFor(() => expect(boardsService.create).toHaveBeenCalledTimes(1));
-    await findAndClickButton(/^continue →/i); // required tools
+    await findAndClickButton(/skip for now/i); // workspace
+    clickButton(/skip for now/i); // llm
     clickButton(/open my board/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -330,11 +330,14 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i); // llm
     clickButton(/open my board/i);
 
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        goals: [],
-        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      })
+    // Completion is async (board creation, then onComplete), so wait for it.
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          goals: [],
+          suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        })
+      )
     );
   });
 
@@ -729,7 +732,7 @@ describe('OnboardingWizard', () => {
 
   it('lets the user skip every step without any confirmation dialog', async () => {
     const onComplete = vi.fn();
-    const { boardsService } = renderWizard({ onComplete });
+    renderWizard({ onComplete });
 
     expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
     clickButton(/skip for now/i);
@@ -746,20 +749,23 @@ describe('OnboardingWizard', () => {
 
     clickButton(/open my board/i);
     // Skipping the workspace step leaves the teammate unnamed — no teammateName
-    // is emitted, so the app shell skips teammate creation and just opens the board.
-    expect(onComplete).toHaveBeenCalledWith({
-      branchId: '',
-      sessionId: '',
-      boardId: '',
-      path: 'teammate',
-      teammateName: undefined,
-      teammateEmoji: '🤖',
-      sourceBranch: undefined,
-      agent: null,
-      suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      goals: [],
-      canManageIntegrations: false,
-    });
+    // is emitted, so the app shell skips teammate creation. A board is still
+    // always created (with a generic default name) so the user lands on one.
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: '',
+        sessionId: '',
+        boardId: 'board-1',
+        path: 'teammate',
+        teammateName: undefined,
+        teammateEmoji: '🤖',
+        sourceBranch: undefined,
+        agent: null,
+        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        goals: [],
+        canManageIntegrations: false,
+      })
+    );
   });
 
   it('shows a loading state on the final step while onComplete is in flight', async () => {
@@ -777,8 +783,8 @@ describe('OnboardingWizard', () => {
     clickButton(/open my board/i);
 
     // Loading affordance is visible and the button is disabled while pending.
-    expect(await screen.findByText(/setting up your ai teammate/i)).toBeInTheDocument();
-    const button = screen.getByText(/setting up your ai teammate/i).closest('button');
+    expect(await screen.findByText(/setting up/i)).toBeInTheDocument();
+    const button = screen.getByText(/setting up/i).closest('button');
     expect(button).toBeDisabled();
 
     // Resolving completion lets the flow finish (parent closes the modal).
