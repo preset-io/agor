@@ -216,6 +216,14 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
 
+Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
+
+### Optional session cleanup
+
+Gateway Sessions are retained until someone archives them. If a teammate branch accumulates too many old conversations, use a [scheduled prompt](/guide/scheduler) for an explicit, workspace-specific policy rather than relying on a product-wide default. Have the scheduled teammate call `agor_sessions_bulk_archive` with `sessionType: "gateway"`, its `branchId`, and the desired `olderThanDays`; test the filter with `dryRun: true` before changing the schedule to `dryRun: false`.
+
+Archiving is reversible and preserves the Session transcript for search and audit. The tool applies the schedule owner's normal RBAC permissions and reports Sessions it cannot modify.
+
 ### Scope reference
 
 The wizard and manifest bake these in automatically. This table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
