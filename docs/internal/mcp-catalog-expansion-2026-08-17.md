@@ -1,118 +1,108 @@
-# MCP catalog expansion — 60 installable entries
+# MCP catalog expansion — finalized against current Marketplace OAuth
 
-**Date:** 2026-08-17
-**Branch:** `catalog-expansion-research`
-**Outcome:** `curated.yaml` grows from 50 entries / 48 installable to **62 entries / 60 installable**.
-**Addendum 2026-08-18:** §10 audits all six `auth_type: none` entries against the
-Browserbase failure mode — all six pass, no value changed. §11 sizes a rank re-rank.
+**Original research:** 2026-08-17
+**Final verification:** 2026-08-20
+**Branch:** `catalog-expansion-research` (rebased locally as `pr-2481-ready`)
+**Outcome:** current `main` has 40 installable entries; this change adds **11**, for
+**51 installable entries**. Ten use reviewed Marketplace OAuth discovery and one
+(Clerk) is genuinely open. Render is rejected at the pre-DCR client boundary.
 
----
-
-## 1. Method, and what "verified" means here
-
-Every endpoint below was dialled with `probeRemoteAuthType`
-(`packages/core/src/mcp-catalog/auth-probe.ts`) — the same function `connect`
-runs — from this host, driven by a throwaway vitest harness that was deleted
-before commit. One unauthenticated JSON-RPC `initialize` per request, no
-credentials, through `createPinnedFetch`.
-
-Each accepted endpoint was probed **at least three times** across separate
-runs; nothing accepted disagreed with itself on any run. The raw verdicts are
-in the tables below, one column per run.
-
-Two rules were applied on top of the probe:
-
-- **`unreachable` or `unknown` → rejected.** No exceptions.
-- **No vendor documentation naming the endpoint → rejected**, however well it
-  probed. Three servers answered a clean handshake and were still rejected on
-  this ground alone (§3.2). An aggregator listing was never accepted as the
-  source; where only Smithery / Composio / mcpservers.org named a URL, the
-  candidate was dropped.
-
-`auth_type` in every shipped entry is the probe's verdict, not the vendor's
-claim. Where the two disagree it is called out in §5.
+This report supersedes the original initialize-only acceptance decision for the OAuth
+entries. Sections 3–5 retain the earlier broad candidate research as provenance; the
+final accepted set, counts, ranks, and verification record are in §§2, 6, 8, and 11.
 
 ---
 
-## 2. Accepted — 12 new entries
+## 1. Final verification method
 
-Probe verdicts, one column per run. All URLs are exactly as shipped.
+The original 2026-08-17 pass sent at least three `probeRemoteAuthType` handshakes to
+each proposed endpoint and checked vendor documentation. That established endpoint,
+transport, and initial auth classification, but **not** whether Agor could safely start
+the OAuth flow. #2491 demonstrated that initialize-only evidence is insufficient.
 
-| Vendor      | Endpoint probed                                   | r1    | r2    | r3    | r4    | r5    | Verdict  | List          |
-| ----------- | ------------------------------------------------- | ----- | ----- | ----- | ----- | ----- | -------- | ------------- |
-| Netlify     | `https://netlify-mcp.netlify.app/mcp`             | oauth | oauth | oauth | —     | —     | oauth    | `unpublished` |
-| Postman     | `https://mcp.postman.com/mcp`                     | oauth | oauth | oauth | oauth | oauth | oauth    | `entries`     |
-| Miro        | `https://mcp.miro.com/`                           | oauth | oauth | oauth | oauth | oauth | oauth    | `entries`     |
-| Tavily      | `https://mcp.tavily.com/mcp/`                     | oauth | oauth | oauth | oauth | —     | oauth    | `unpublished` |
-| Algolia     | `https://mcp.algolia.com/mcp`                     | oauth | oauth | oauth | oauth | oauth | oauth    | `entries`     |
-| Render      | `https://mcp.render.com/mcp`                      | oauth | oauth | oauth | oauth | oauth | oauth    | `unpublished` |
-| Cloudinary  | `https://asset-management.mcp.cloudinary.com/mcp` | oauth | oauth | oauth | oauth | oauth | oauth    | `entries`     |
-| Clerk       | `https://mcp.clerk.com/mcp`                       | none  | none  | none  | none  | none  | **none** | `entries`     |
-| Axiom       | `https://mcp.axiom.co/mcp`                        | oauth | oauth | oauth | oauth | —     | oauth    | `entries`     |
-| Klaviyo     | `https://mcp.klaviyo.com/mcp`                     | oauth | oauth | oauth | oauth | oauth | oauth    | `unpublished` |
-| Customer.io | `https://mcp.customer.io/mcp`                     | oauth | oauth | oauth | oauth | oauth | oauth    | `unpublished` |
-| incident.io | `https://mcp.incident.io/mcp`                     | oauth | oauth | oauth | oauth | oauth | oauth    | `unpublished` |
+On 2026-08-20 every proposed OAuth entry was therefore run through the current
+production boundary, with the compatibility mode a canonical catalog install actually
+receives:
 
-### 2.1 The `entries:` / `unpublished:` placement, justified
+1. unauthenticated MCP `initialize` using the catalog probe request;
+2. `resolveMCPOAuthDiscovery(..., { compatibilityMode: "marketplace" })`;
+3. live protected-resource and authorization-server metadata fetches through Agor's
+   hardened outbound fetch path;
+4. the same `startMCPOAuthFlow` validation used by `oauth-start`, including exact or
+   bounded same-origin resource binding, issuer validation, HTTPS endpoint safety, and
+   PKCE S256;
+5. authorization-plan construction with a nonfunctional placeholder public client ID,
+   stopping **before** Dynamic Client Registration.
 
-The loader's rule is that `entries:` means _the registry publishes a server
-under exactly this `name`_. I applied it strictly, and additionally required
-that the registry record list the same remote URL we are cataloguing — a
-registry record for an npm package is not a record of the endpoint. Each of the
-six on the `entries:` side was fetched from
-`registry.modelcontextprotocol.io/v0/servers` and confirmed `isLatest: true`,
-`status: active`, with the shipped URL in its `remotes`:
+The placeholder bypassed the DCR POST only so validation could reach plan construction.
+It was never sent to a provider, no authorization endpoint was opened, no DCR endpoint
+was called, and no provider-side client or grant was created. Acceptance additionally
+required either an advertised safe DCR endpoint or a vendor-reviewed public client for
+Agor's callback contract. None of the accepted OAuth rows needs catalog OAuth overrides;
+all intentionally use #2491's derived `marketplace` mode. None advertises the complete
+strict contract, principally RFC 9207 callback-issuer support, so none is mislabeled
+`strict`.
 
-| Shipped `name`                              | Registry `remotes`                                     |
-| ------------------------------------------- | ------------------------------------------------------ |
-| `com.postman/postman-mcp-server`            | `https://mcp.postman.com/mcp` (+ `/minimal`, EU hosts) |
-| `io.github.miroapp/mcp-server`              | `https://mcp.miro.com/`                                |
-| `io.github.algolia/algolia-productivity`    | `https://mcp.algolia.com/mcp`                          |
-| `io.github.cloudinary/asset-management-mcp` | `https://asset-management.mcp.cloudinary.com/mcp`      |
-| `io.github.clerk/mcp-server`                | `https://mcp.clerk.com/mcp`                            |
-| `co.axiom/mcp`                              | `https://mcp.axiom.co/sse`, `https://mcp.axiom.co/mcp` |
-
-The six on the `unpublished:` side are the inverse case, and each fails the rule
-for a stated reason:
-
-- **Netlify** — registry has no Netlify-operated entry at all. The four
-  `app.netlify.*` names are third-party apps that merely _deploy on_ Netlify.
-- **Render** — no vendor entry; every `render` match is an unrelated
-  PDF/video-rendering server.
-- **Tavily** — `io.github.tavily-ai/tavily-mcp` exists but has **no `remotes`**;
-  it publishes the local package, not this endpoint. Shipped as
-  `com.tavily/mcp`, Agor's own reverse-DNS guess.
-- **Klaviyo**, **Customer.io**, **incident.io** — no vendor-namespaced entry.
-  All registry matches are aggregator rehosts (`io.github.pipeworx-io/*`,
-  `com.mcparmory/*`), which are not the vendor.
-
-Resulting split: 34 `entries:` / 28 `unpublished:` = 0.452, comfortably over the
-loader test's 0.2 floor.
-
-### 2.2 Curation notes worth a reviewer's eye
-
-- **Algolia's `permission_disclosure` says "Read-only"** because Algolia's own
-  docs say so verbatim: _"it can't create, update, or delete indices, records,
-  or settings."_ It is the only new entry that cannot write.
-- **Axiom is not read-only** despite reading like a query tool: the docs
-  document creating and deleting dashboards, monitors and notifiers, and warn
-  that queries are billable. Both facts are in the disclosure.
-- **Clerk is a documentation server**, two tools, no tenant data — the
-  disclosure says so rather than implying it reaches your Clerk instance. It
-  and Tavily's "no other account data" line are the two places where saying
-  _less_ is the honest answer.
-- **Customer.io's PII scope is behind an admin grant** (`read:sensitive`), so
-  the disclosure states that rather than a flat "reads your customer data".
-- **Klaviyo gets the harshest disclosure of the twelve** — it can send campaigns
-  and bulk-suppress profiles, which is a live customer-facing write.
-- `popularity_rank` 51–62. Ranks 1–50 were all taken; appending rather than
-  re-ranking keeps the diff reviewable, at the cost of implying Netlify is less
-  popular than Kagi. Sized in §11 — a re-rank renumbers ~50 of 62 entries and
-  needs Smithery data I do not have, so it is not folded into this one.
+Clerk was rechecked beyond `initialize`: notification, `tools/list`, and a real
+`list_clerk_sdk_snippets` tool call with no credentials. Vendor documentation was
+re-read for all eleven accepted entries and Render. Registry provenance was re-read
+from the official MCP Registry API for the six entries filed under `entries:`.
 
 ---
 
-## 3. Rejected
+## 2. Accepted — 11 new entries
+
+All ten OAuth endpoints returned an OAuth challenge and produced an authorization plan
+containing `resource`, `code_challenge`, and `code_challenge_method=S256`. Metadata and
+DCR endpoints below were fetched/discovered, not called for registration.
+
+| Vendor      | Endpoint                                          | Live discovery and binding                                                                         | Client boundary                  | Policy      | Decision |
+| ----------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- | ----------- | -------- |
+| Postman     | `https://mcp.postman.com/mcp`                     | Header PRM; exact resource; issuer `https://mcp.postman.com`; S256                                 | Advertised `/register`           | marketplace | Accept   |
+| Cloudinary  | `https://asset-management.mcp.cloudinary.com/mcp` | Header PRM; same-origin parent resource; same-origin issuer; S256                                  | Advertised `/register`           | marketplace | Accept   |
+| Miro        | `https://mcp.miro.com/`                           | Header PRM; exact resource and issuer; S256                                                        | Advertised `/register`           | marketplace | Accept   |
+| Axiom       | `https://mcp.axiom.co/mcp`                        | Header PRM; exact resource; same-origin issuer; S256                                               | Advertised `/register`           | marketplace | Accept   |
+| Algolia     | `https://mcp.algolia.com/mcp`                     | Header PRM; exact resource; PRM-bound `https://dashboard.algolia.com` issuer; S256                 | Advertised `/2/oauth/register`   | marketplace | Accept   |
+| Netlify     | `https://netlify-mcp.netlify.app/mcp`             | Header PRM; exact resource; trailing-slash-equivalent same-origin issuer; S256                     | Advertised `/oauth-server/reg`   | marketplace | Accept   |
+| Klaviyo     | `https://mcp.klaviyo.com/mcp`                     | Well-known PRM; same-origin parent resource and issuer; S256                                       | Advertised `/register`           | marketplace | Accept   |
+| Customer.io | `https://mcp.customer.io/mcp`                     | Header PRM; exact resource and issuer; S256                                                        | Advertised `/oauth2/register`    | marketplace | Accept   |
+| incident.io | `https://mcp.incident.io/mcp`                     | Header PRM; same-origin parent resource; exact `/mcp` issuer; S256; advertised HTTPS app endpoints | Advertised `/mcp/oauth/register` | marketplace | Accept   |
+| Tavily      | `https://mcp.tavily.com/mcp/`                     | Header PRM; trailing-slash-equivalent resource and issuer; S256                                    | Advertised `/register`           | marketplace | Accept   |
+| Clerk       | `https://mcp.clerk.com/mcp`                       | Full no-auth MCP sequence; two listed tools; real snippet-index call                               | No client required               | none        | Accept   |
+
+### 2.1 Registry provenance, rechecked 2026-08-20
+
+The official registry currently has active, latest records with the exact shipped name
+and remote for these six, so they remain under `entries:`:
+
+- `com.postman/postman-mcp-server`
+- `io.github.miroapp/mcp-server`
+- `io.github.algolia/algolia-productivity`
+- `io.github.cloudinary/asset-management-mcp`
+- `io.github.clerk/mcp-server`
+- `co.axiom/mcp`
+
+No exact registry record exists for the inferred names `com.netlify/mcp`,
+`com.klaviyo/mcp`, `io.customer/mcp`, `io.incident/mcp`, or `com.tavily/mcp`; those
+five remain under `unpublished:`. The resulting catalog split is 30 published / 21
+unpublished. This is provenance, not a quality tier.
+
+### 2.2 Curation notes
+
+Permission disclosures were retained because the vendor capability reviews still match:
+Algolia is read-only; Axiom can mutate monitors/dashboards and bills queries; Klaviyo can
+send campaigns and bulk-suppress profiles; Customer.io gates sensitive profile data and
+live-data edits behind admin controls; Clerk exposes public documentation rather than a
+Clerk tenant. Editorial ranks were reassigned into gaps created by #2491 instead of
+appending stale 51–62 ranks; §11 records the exact mapping.
+
+---
+
+## 3. Original 2026-08-17 search-space rejections
+
+This section preserves the original breadth-first research record. Its candidate counts are
+historical, not the final-catalog delta against current `main`; §6 is authoritative for
+that.
 
 > **How to read §3.1 and §3.3 — READ THIS BEFORE COPYING ANY URL FROM THEM.**
 >
@@ -122,9 +112,9 @@ loader test's 0.2 floor.
 > touched. Those are leads, not findings, and they are labelled:
 >
 > - **`UNVERIFIED CANDIDATE`** — a real documented URL that nothing here has
->   dialled. It may 404, need a key, or not be an MCP server at all. It must go
->   through §1 (three probes + vendor docs) **and** §10 (tools actually work)
->   before it can enter `curated.yaml`.
+>   dialled. It may 404, need a key, or not be an MCP server at all. Before it
+>   can enter `curated.yaml`, OAuth candidates need the complete §1 boundary
+>   audit and no-auth candidates need §10's tools-actually-work audit.
 > - **`NOT A CANDIDATE`** — per-tenant or templated, so there is no fixed URL a
 >   static catalogue could ever carry. Not worth re-researching.
 >
@@ -202,13 +192,15 @@ without an account_. The probe cannot tell those apart, so curation has to.
 
 ### 3.3 Deferred — probed and documented, but not shipped this round
 
-These passed both bars in §1. They were left out only to land on exactly 60
-installable, and are the shortlist for the next pass.
+These passed the original initialize probe and documentation review. They were left out
+of the original August 17 pass and were not reconsidered for this finalization because
+the task was to validate the proposed PR entries against the newer OAuth boundary, not
+expand its candidate set.
 
 **They are still not clearable for paste.** Every one of them predates §10, so
 none has been checked for the Browserbase failure mode. The three that probe
 `none` in particular — and any future candidate that does — must go through
-§10's tools-actually-work check before shipping, not just §1's handshake. Rows
+§10's tools-actually-work check before shipping, not just an initialize handshake. Rows
 whose "Category it would fill" column flags a URL disagreement are
 `UNVERIFIED CANDIDATE` on that alternate URL.
 
@@ -238,14 +230,31 @@ whose "Category it would fill" column flags a URL disagreement are
 
 ---
 
+### 3.4 Final OAuth-boundary rejection — Render
+
+Render was in the original twelve but is **not shipped**. The 2026-08-20 live
+marketplace-policy audit reached a safe authorization plan through protected-resource
+and authorization-server discovery, with exact resource/issuer binding and advertised
+PKCE S256. It then found no `registration_endpoint`. Render's documentation gives the
+public client IDs `claude` and `codex` to those named clients; neither is a reviewed Agor
+client and neither establishes that Agor's deployment-specific callback URI is registered.
+Borrowing one would cross the client/redirect boundary that #2491 made explicit. No DCR
+request was sent and no provider-side client was created.
+
+**Decision:** reject `com.render/mcp` until Render advertises DCR or explicitly provides
+a public client whose redirect contract includes Agor.
+
+---
+
 ## 4. Vendors from the hypothesis list that were wrong
 
 Asked for explicitly. Of the 40 vendors suggested:
 
-**Already in the catalog** (14) — Atlassian, Cloudflare, Vercel, Zapier, Asana,
-ClickUp, Monday, Intercom, HubSpot, Webflow, Canva, Figma, Neon, Supabase, Box,
-Dropbox, GitLab, PayPal, Square, Datadog, Grafana, MongoDB. Checked before
-adding anything.
+**Already in the original research baseline** — Atlassian, Cloudflare, Vercel,
+Zapier, Asana, ClickUp, Monday, Intercom, HubSpot, Webflow, Canva, Figma, Neon,
+Supabase, Box, Dropbox, GitLab, PayPal, Square, Datadog, Grafana, and MongoDB.
+#2491 subsequently removed HubSpot, Box, and MongoDB; this branch preserves those
+removals.
 
 **No remote MCP server exists** — the recollections that were wrong:
 
@@ -302,228 +311,84 @@ One near-miss worth the same treatment: **Storyblok's** documented host
 
 ---
 
-## 6. Counts
+## 6. Final counts against current `origin/main`
 
-|                                                                                          | Before                   | After                     |
-| ---------------------------------------------------------------------------------------- | ------------------------ | ------------------------- |
-| Total entries                                                                            | 50                       | **62**                    |
-| Installable (`remote_url` set)                                                           | 48                       | **60**                    |
-| Not installable (package-only)                                                           | 2                        | 2                         |
-| `entries:`                                                                               | 28                       | 34                        |
-| `unpublished:`                                                                           | 22                       | 28                        |
-| `unpublished` fraction (test floor 0.2)                                                  | 0.440                    | 0.452                     |
-| `remote_url` fraction (test floor 0.8)                                                   | 0.960                    | 0.968                     |
-| `auth_type: none` (test floor 3)                                                         | 5                        | 6                         |
-| Categories: dev-tools / productivity / data-storage / observability / search / messaging | 14 / 12 / 10 / 8 / 4 / 2 | 18 / 13 / 11 / 10 / 6 / 4 |
+All catalog entries on current `main` and on this branch are installable; there are no
+package-only rows. Counts are reported here for review, not asserted as brittle exact
+whole-catalog tests. The loader tests continue to enforce structural invariants and the
+new audit test names the reviewed entries directly.
 
-The two non-installable entries are unchanged: `com.auth0/mcp` and
-`io.github.ClickHouse/mcp-clickhouse`.
+|                                         | Current main |    Final branch |        Delta |
+| --------------------------------------- | -----------: | --------------: | -----------: |
+| Total / installable                     |           40 |          **51** |          +11 |
+| `entries:` / `unpublished:`             |      24 / 16 |     **30 / 21** |      +6 / +5 |
+| OAuth / none / credentials              |   34 / 5 / 1 |  **44 / 6 / 1** | +10 / +1 / 0 |
+| dev-tools / productivity / data-storage |  12 / 11 / 6 | **15 / 12 / 7** | +3 / +1 / +1 |
+| observability / search / messaging      |    7 / 3 / 1 |   **9 / 5 / 3** | +2 / +2 / +2 |
 
-Totals for the exercise: **72 endpoints probed** across 96 probe requests,
-**12 accepted**, **60 rejected** (32 unreachable, 2 unknown, 3 probed-clean but
-rejected on curation grounds, 23 verified-and-documented but deferred to stay at
-60).
+Relative to the rebased PR before the final audit, one proposed row is removed: Render.
+The eight endpoints removed by #2491 remain absent.
 
 ---
 
-## 7. Test results
+## 7. Final checks
 
-Run before the change, on this host, as a baseline:
+All checks were run after the final catalog, rank, and audit-test edits:
 
-| Suite                                      | Baseline                                        | After                   |
-| ------------------------------------------ | ----------------------------------------------- | ----------------------- |
-| `packages/core src/mcp-catalog/` (4 files) | 93 passed, 0 failed                             | **93 passed, 0 failed** |
-| `packages/core` full suite                 | 24 files failed / 566 tests failed, 2990 passed | not re-run in full      |
+- `pnpm --filter @agor/core exec vitest run src/mcp-catalog --reporter=verbose`
+  — **123 passed** in four files.
+- `pnpm --filter @agor/core exec vitest run src/tools/mcp/oauth-mcp-transport.test.ts --reporter=dot`
+  — **85 passed**.
+- `pnpm --filter @agor/daemon exec vitest run src/services/mcp-catalog-connect.test.ts src/services/mcp-catalog-connect.install.test.ts src/services/mcp-oauth-compatibility.test.ts --reporter=dot`
+  — **141 passed** in three files.
+- `pnpm --filter @agor/git typecheck` — passed.
+- `pnpm --filter @agor/core exec tsc --noEmit --customConditions source` — passed.
+- `pnpm --filter @agor/daemon exec tsc --noEmit --customConditions source` — passed.
+- `pnpm lint` — passed: 2,344 files checked and 330 frontend design-system fixture
+  cases passed.
+- `git diff --check` — passed.
 
-**The full-core failure is pre-existing and fails on THIS HOST**, unrelated to
-this change: every failure traces to
-`Error: Failed to load config: EACCES: permission denied, open '/home/agorpg/.agor/config.yaml'`
-in `config-manager.ts:866`, reached via `BranchRepository.create`. It reproduces
-on a clean tree. `cursor-models.test.ts` hits a live API and is likewise noisy
-here.
-
-The catalog's own suite — which is what enforces name uniqueness, rank
-uniqueness, the slug-collision invariant, the `auth_type`-required-iff-remote
-rule, the provenance split and the ≥3 open servers floor — passes clean with the
-twelve new entries in.
+The direct core and daemon `typecheck` scripts resolve workspace dependencies from
+their `dist` declarations and therefore require upstream package builds in a clean
+worktree. Repository instructions prohibit running builds in the user's watch-mode
+environment, so the equivalent source-export checks above use TypeScript's `source`
+custom condition; they do not emit files. Focused Vitest also compiles and exercises the
+changed loader contract and production OAuth path from source.
 
 ---
 
-## 8. YAML as shipped
+## 8. Final accepted set (source of truth remains `curated.yaml`)
 
-Already committed into `packages/core/src/mcp-catalog/curated.yaml`, in the
-category block each belongs to. Reproduced here so the report stands alone.
+Duplicating full YAML here made the original report drift during rebase. The checked-in
+file is authoritative; this stable identity/provenance/rank index is enough to review the
+curation decision without hard-coding a catalog-wide count.
 
-### `entries:`
-
-```yaml
-- name: com.postman/postman-mcp-server
-  category: dev-tools
-  capabilities: [docs, automations, projects]
-  benefit: Read your collections and API specs from the session, so an agent calls an endpoint the way it is actually defined rather than the way it guessed.
-  starter_prompt: List the collections in my Postman workspace and run the requests in the one I name against its staging environment.
-  permission_disclosure: Reads and writes collections, environments, API specifications, mocks, and monitors in the Postman workspaces you authorise.
-  icon_url: https://www.google.com/s2/favicons?domain=postman.com&sz=64
-  popularity_rank: 52
-  remote_url: https://mcp.postman.com/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: io.github.clerk/mcp-server
-  category: dev-tools
-  capabilities: [docs, code-search]
-  benefit: Pull Clerk's own SDK snippets for the framework you are in, so auth code compiles against the current API rather than a remembered one.
-  starter_prompt: Show Clerk's current pattern for protecting a server route in the framework I am using and check my implementation against it.
-  permission_disclosure: Reads Clerk's public documentation and SDK code snippets. No account, application, or end-user data is accessed.
-  icon_url: https://www.google.com/s2/favicons?domain=clerk.com&sz=64
-  popularity_rank: 58
-  remote_url: https://mcp.clerk.com/mcp
-  transport: streamable-http
-  auth_type: none
-
-- name: io.github.cloudinary/asset-management-mcp
-  title: Cloudinary
-  category: data-storage
-  capabilities: [files, content-cms]
-  benefit: Upload, tag, and transform media from the session, so an agent wires up image URLs it has actually created rather than ones it invented.
-  starter_prompt: Search my Cloudinary library for the assets I describe and generate a responsive transformation URL for each.
-  permission_disclosure: Uploads, renames, deletes, tags, and transforms assets in the Cloudinary product environment you authorise, and searches everything stored in it.
-  icon_url: https://www.google.com/s2/favicons?domain=cloudinary.com&sz=64
-  popularity_rank: 57
-  remote_url: https://asset-management.mcp.cloudinary.com/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: io.github.miroapp/mcp-server
-  title: Miro
-  category: productivity
-  capabilities: [design, notes, projects]
-  benefit: Read the board a plan was sketched on, and draw the revised diagram back onto it when the design changes.
-  starter_prompt: Find the board I name, summarise what is on it, and add a flow diagram of the architecture we just discussed.
-  permission_disclosure: Reads and writes boards, items, diagrams, and data tables in the Miro teams you authorise, limited to the boards your own Miro account can already reach.
-  icon_url: https://www.google.com/s2/favicons?domain=miro.com&sz=64
-  popularity_rank: 53
-  remote_url: https://mcp.miro.com/
-  transport: streamable-http
-  auth_type: oauth
-
-- name: co.axiom/mcp
-  category: observability
-  capabilities: [logs, traces, metrics, datasets, sql]
-  benefit: Query event data in APL so "what changed at 03:00" is answered from the logs rather than from the diff.
-  starter_prompt: List my Axiom datasets and run an APL query showing error rates by service over the last six hours.
-  permission_disclosure: Runs APL queries over the datasets in the Axiom organisations you authorise, and can create and delete dashboards, monitors, and notifiers. Queries are billed to your Axiom account and are routed through Axiom's US infrastructure whichever region your data sits in.
-  icon_url: https://www.google.com/s2/favicons?domain=axiom.co&sz=64
-  popularity_rank: 59
-  remote_url: https://mcp.axiom.co/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: io.github.algolia/algolia-productivity
-  title: Algolia
-  category: search
-  capabilities: [datasets, analytics]
-  benefit: Search your own indices and read their analytics, so "why does this query return nothing" is settled against the live index.
-  starter_prompt: List my Algolia indices, run the query I name against the main one, and show which searches returned no results last week.
-  permission_disclosure: Read-only. Searches indices and reads analytics for every Algolia application your account can reach, and cannot create, update, or delete indices, records, or settings.
-  icon_url: https://www.google.com/s2/favicons?domain=algolia.com&sz=64
-  popularity_rank: 55
-  remote_url: https://mcp.algolia.com/mcp
-  transport: streamable-http
-  auth_type: oauth
-```
-
-### `unpublished:`
-
-```yaml
-- name: com.netlify/mcp
-  category: dev-tools
-  capabilities: [deployments, logs, databases, files]
-  benefit: Ship a site and read the build log that follows without leaving the session that wrote the code.
-  starter_prompt: List my Netlify projects, deploy the one I name, and quote the build log if it fails.
-  permission_disclosure: Reads and manages projects, deploys, environment variables, blob storage, forms, and Netlify DB databases in the Netlify teams you authorise.
-  icon_url: https://www.google.com/s2/favicons?domain=netlify.com&sz=64
-  popularity_rank: 51
-  remote_url: https://netlify-mcp.netlify.app/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: com.render/mcp
-  category: dev-tools
-  capabilities: [deployments, logs, metrics, databases, sql]
-  benefit: Create a service, trigger a deploy, and read the metrics it produces, all in the session that changed the code.
-  starter_prompt: Show my Render services, find the one that deployed most recently, and quote the log lines around its last error.
-  permission_disclosure: Reads services, deploys, logs, and metrics, creates services and Postgres databases, and updates environment variables in the Render workspaces you authorise. SQL against Render Postgres is read-only, and nothing can be deleted.
-  icon_url: https://www.google.com/s2/favicons?domain=render.com&sz=64
-  popularity_rank: 56
-  remote_url: https://mcp.render.com/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: com.klaviyo/mcp
-  category: messaging
-  capabilities: [email, crm, analytics]
-  benefit: Answer "how did that campaign do, and who did it go to" without exporting a report first.
-  starter_prompt: Summarise how my last five email campaigns performed and describe which segment each one targeted.
-  permission_disclosure: Reads and writes profiles, events, campaigns, flows, and catalogs in the Klaviyo accounts you authorise, including your customers' personal data. It can create, send, and clone campaigns and bulk-import or suppress profiles.
-  icon_url: https://www.google.com/s2/favicons?domain=klaviyo.com&sz=64
-  popularity_rank: 60
-  remote_url: https://mcp.klaviyo.com/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: io.customer/mcp
-  title: Customer.io
-  category: messaging
-  capabilities: [email, crm, automations]
-  benefit: Trace why a customer did or did not receive a message, back through the campaign that should have sent it.
-  starter_prompt: Find the campaign I name, describe the segment it sends to, and explain why the person I describe was excluded.
-  permission_disclosure: Reads campaigns, segments, and profiles in the Customer.io workspaces you authorise, and can create, edit, and delete them. Personal data on customer profiles sits behind a separate scope a workspace admin must grant.
-  icon_url: https://www.google.com/s2/favicons?domain=customer.io&sz=64
-  popularity_rank: 61
-  remote_url: https://mcp.customer.io/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: io.incident/mcp
-  title: incident.io
-  category: observability
-  capabilities: [incidents, alerts]
-  benefit: Ask who was paged and what they did, then write the follow-up back onto the incident.
-  starter_prompt: Summarise the incidents from the last week, say who was on call for each, and list the follow-ups still open.
-  permission_disclosure: Reads and writes incidents, alerts, escalations, and on-call schedules in the incident.io organisations you authorise, acting as your own user. It can declare incidents and acknowledge pages.
-  icon_url: https://www.google.com/s2/favicons?domain=incident.io&sz=64
-  popularity_rank: 62
-  remote_url: https://mcp.incident.io/mcp
-  transport: streamable-http
-  auth_type: oauth
-
-- name: com.tavily/mcp
-  category: search
-  capabilities: [web-search, web-scrape]
-  benefit: Search the live web and pull the page text back in one step, so research arrives as content rather than as links.
-  starter_prompt: Research the topic I name, extract the full text of the three best sources, and summarise where they disagree.
-  permission_disclosure: Sends your search queries to Tavily and returns public web content. Searches are billed against the API key on the Tavily account you authorise. No other account data is accessed.
-  icon_url: https://www.google.com/s2/favicons?domain=tavily.com&sz=64
-  popularity_rank: 54
-  remote_url: https://mcp.tavily.com/mcp/
-  transport: streamable-http
-  auth_type: oauth
-```
+| Name                                        | Provenance | Rank | Auth  |
+| ------------------------------------------- | ---------- | ---: | ----- |
+| `com.postman/postman-mcp-server`            | registry   |   13 | OAuth |
+| `com.netlify/mcp`                           | inferred   |   16 | OAuth |
+| `io.github.miroapp/mcp-server`              | registry   |   18 | OAuth |
+| `com.tavily/mcp`                            | inferred   |   27 | OAuth |
+| `io.github.algolia/algolia-productivity`    | registry   |   40 | OAuth |
+| `io.github.cloudinary/asset-management-mcp` | registry   |   46 | OAuth |
+| `io.github.clerk/mcp-server`                | registry   |   50 | none  |
+| `co.axiom/mcp`                              | registry   |   51 | OAuth |
+| `com.klaviyo/mcp`                           | inferred   |   52 | OAuth |
+| `io.customer/mcp`                           | inferred   |   53 | OAuth |
+| `io.incident/mcp`                           | inferred   |   54 | OAuth |
 
 ---
 
 ## 10. Audit of the six `auth_type: none` entries
 
-Added 2026-08-18, after the twelve above shipped.
+Added 2026-08-18 and rechecked on 2026-08-20 after rebasing onto current `main`.
 
 The Browserbase rejection in §3.2 rests on a claim that applies to the catalog
 as it already stands, not only to what it refused: **a `none` verdict means the
 handshake was accepted, not that the server is usable without an account.**
-Until OAuth auto-mode lands, the `none` entries are the entire installable set,
-so if any of them were Browserbase-shaped, Connect would succeed and install a
-server whose every tool fails — and that would be the only thing a user could
-install.
+#2491 now makes reviewed catalog OAuth entries installable, but the Browserbase
+shape remains a catalog-integrity defect: Connect could still install a server whose
+handshake succeeds while every useful tool fails.
 
 ### 10.1 What was tested, and what it does and does not establish
 
@@ -558,6 +423,11 @@ What it does **not** establish:
 | `ai.exa/exa`                   | 2 tools      | `web_search_exa` (`"model context protocol"`, 1 result)               | Returned a real search hit with page highlights                     | **Genuinely open** |
 | `com.firecrawl/mcp`            | 3 tools      | `firecrawl_scrape` (`https://example.com`)                            | Returned scraped markdown + metadata                                | **Genuinely open** |
 | `io.github.clerk/mcp-server`   | 2 tools      | `list_clerk_sdk_snippets` (no args)                                   | Returned the real snippet bundle index                              | **Genuinely open** |
+
+On 2026-08-20 Clerk was re-run through `initialize` →
+`notifications/initialized` → `tools/list` → `list_clerk_sdk_snippets`: 200/202/200/200,
+two tools, a 3,147-byte real snippet index, and no tool error. The other five retain the
+2026-08-18 evidence below.
 
 **None of the six is Browserbase-shaped.** Every one dispatched a real tool
 unauthenticated and returned real data. The commercial ones you were right to
@@ -598,8 +468,8 @@ designed behaviour, not an oversight to be caught later.
   repos require the separate Devin MCP server and a Devin API key.
 - **Clerk** — a documentation server: two tools, public content, no tenant data.
 
-So all six are _rate-limited_ free tiers rather than _unauthenticated_ ones in
-the sense the catalog implies. That distinction is the recommendation below.
+Four are metered keyless tiers and two are open public-documentation services.
+That distinction is the recommendation below.
 
 ### 10.4 Recommendation — do not flip any value; the schema is missing a state
 
@@ -623,7 +493,7 @@ four values cannot distinguish:
 
 Categories 1 and 2 are both fine to ship and the difference is a curation-copy
 matter — arguably `permission_disclosure` should mention metering, as Tavily's
-and Kagi's already do, and Context7's and Firecrawl's currently do not. It is
+does, and Context7's and Firecrawl's currently do not. It is
 category 3 that is dangerous, and it is dangerous precisely because nothing in
 the file or the probe can express it.
 
@@ -644,10 +514,9 @@ Three options, in the order I would consider them:
   review. Fine while a human reviews every addition; it fails silently the day
   the catalog admits entries nobody vetted.
 
-This interacts with the sibling branch's OAuth auto-mode work, which is why I
-am flagging rather than proposing a diff: if auto-mode makes `oauth` entries
-installable, the `none` entries stop being the whole installable set and the
-urgency of the above drops considerably.
+#2491 has since landed the bounded Marketplace OAuth mode. That reduces the product
+impact of a bad `none` classification, but it does not remove the need for the
+tools-actually-work curation check.
 
 ### 10.5 One incidental finding
 
@@ -662,72 +531,44 @@ switching to `/v2/mcp` would be a one-line change.
 
 ---
 
-## 11. What a `popularity_rank` re-rank would actually change
+## 11. Editorial rank update
 
-Deferred from §2.2, where the append to 51–62 is explained. Sizing it, since
-the question is whether it is worth a pass.
+#2491 freed ranks 1, 13, 16, 18, 27, 40, 46, and 50. Rather than leave every
+addition below the old tail, this finalization uses seven of those conservative insertion
+points and then appends the four most specialist vendors. No existing entry is renumbered.
 
-**The visible symptom.** `popularity` is the marketplace's default sort, so
-today Netlify (51), Postman (52), Miro (53) and Tavily (54) all render below
-Kagi (50), Globalping (48) and Apify (49). For four mainstream vendors that is
-plainly wrong as an ordering claim.
+| Entry       | Old proposal | Final | Rationale                                   |
+| ----------- | -----------: | ----: | ------------------------------------------- |
+| Postman     |           52 |    13 | mainstream API-development platform         |
+| Netlify     |           51 |    16 | mainstream deployment platform              |
+| Miro        |           53 |    18 | mainstream collaboration/design platform    |
+| Tavily      |           54 |    27 | prominent agent-search provider             |
+| Algolia     |           55 |    40 | established search platform, specialist MCP |
+| Cloudinary  |           57 |    46 | established media platform, specialist MCP  |
+| Clerk       |           58 |    50 | focused public documentation server         |
+| Axiom       |           59 |    51 | specialist observability platform           |
+| Klaviyo     |           60 |    52 | specialist marketing platform               |
+| Customer.io |           61 |    53 | specialist marketing platform               |
+| incident.io |           62 |    54 | specialist incident platform                |
 
-**Roughly where they would land.** My estimate, by general prominence rather
-than by data — see the caveat below:
-
-| Entry       | Now | Estimate | Would move above                           |
-| ----------- | --- | -------- | ------------------------------------------ |
-| Netlify     | 51  | ~13–16   | Semgrep 24, Buildkite 31, Auth0 38, Wix 44 |
-| Postman     | 52  | ~18–22   | most of the productivity tail              |
-| Tavily      | 54  | ~20–25   | Firecrawl 26, Apify 49, Kagi 50            |
-| Miro        | 53  | ~25–30   | Monday 33, ClickUp 36, Canva 42            |
-| Render      | 56  | ~28–33   | Buildkite 31                               |
-| Algolia     | 55  | ~30–35   | —                                          |
-| Cloudinary  | 57  | ~33–38   | Box 40                                     |
-| Klaviyo     | 60  | ~38–43   | Resend 37                                  |
-| Axiom       | 59  | ~40–45   | Amplitude 47, Globalping 48                |
-| Clerk       | 58  | ~45–50   | —                                          |
-| Customer.io | 61  | ~45–50   | —                                          |
-| incident.io | 62  | ~45–50   | PagerDuty 46 is the comparator             |
-
-**The cost.** Ranks 1–50 are dense with no gaps, and `popularity_rank` is
-`z.int().positive()`, so there is no room to slot anything in. Inserting eight
-entries above rank 40 renumbers everything below the highest insertion —
-**roughly 50 of 62 entries get a new number.** There is no cheap partial
-version of this.
-
-**Why I would not do it on intuition.** The file's header says the existing
-ranks are "hand-assigned, informed by relative install volume on Smithery." I
-do not have those numbers. A re-rank by my sense of vendor prominence would
-replace a data-informed ordering with a guess, across 50 lines, in a diff where
-a reviewer cannot check any single line — exactly the shape of change that put
-the false header into this file in the first place.
-
-**Recommendation:** worth a pass, but only one that starts by pulling fresh
-Smithery figures for all 62. If that data is not available, the honest
-alternative is to leave the append in place and accept that `popularity_rank`
-means "roughly, and newest last" — or to drop the rank on new entries entirely
-and let them sort last explicitly, which is at least not a false claim.
+Rank 1 intentionally remains vacant rather than promoting a new entry to GitHub's former
+position without comparable install-volume evidence. Rank remains editorial metadata,
+not a measured Agor install count.
 
 ---
 
-## 12. Sources
+## 12. Vendor and registry sources (rechecked 2026-08-20)
 
-Vendor documentation each accepted entry's endpoint, transport and scopes were
-taken from:
-
-- Netlify — `docs.netlify.com/build/build-with-ai/netlify-mcp-server/`, `docs.netlify.com/build/build-with-ai/agent-setup-guides/set-up-claude-code-for-netlify/`
-- Render — `render.com/docs/mcp-server`
-- Postman — `learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server`
-- Clerk — `clerk.com/docs/guides/ai/mcp/clerk-mcp-server`
-- Miro — `developers.miro.com/docs/miro-mcp`, `help.miro.com/hc/en-us/articles/31624028247058`
-- Algolia — `algolia.com/doc/guides/model-context-protocol/productivity-mcp`
-- Cloudinary — `cloudinary.com/documentation/cloudinary_llm_mcp`
-- Axiom — `axiom.co/docs/console/intelligence/mcp-server`
-- Tavily — `docs.tavily.com/documentation/mcp`
-- Klaviyo — `developers.klaviyo.com/en/docs/klaviyo_mcp_server`
-- Customer.io — `docs.customer.io/ai/mcp/get-started/`
-- incident.io — `docs.incident.io/ai/remote-mcp`
-
-Registry records: `https://registry.modelcontextprotocol.io/v0/servers?search=<term>`,
-filtered to `isLatest: true` and `status: active`.
+- [Postman remote MCP](https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server)
+- [Cloudinary MCP and AI agent tools](https://cloudinary.com/documentation/cloudinary_llm_mcp)
+- [Miro MCP](https://developers.miro.com/docs/miro-mcp)
+- [Axiom MCP](https://axiom.co/docs/console/intelligence/mcp-server)
+- [Algolia Productivity MCP](https://www.algolia.com/doc/guides/model-context-protocol/productivity-mcp)
+- [Netlify MCP setup](https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/#mcp-server-support)
+- [Klaviyo MCP](https://developers.klaviyo.com/en/docs/klaviyo_mcp_server)
+- [Customer.io MCP](https://docs.customer.io/ai/mcp/get-started/)
+- [incident.io remote MCP](https://docs.incident.io/ai/remote-mcp)
+- [Tavily MCP](https://docs.tavily.com/documentation/mcp)
+- [Clerk MCP](https://clerk.com/docs/guides/ai/mcp/clerk-mcp-server)
+- [Render MCP — rejected](https://render.com/docs/mcp-server)
+- [Official MCP Registry API](https://registry.modelcontextprotocol.io/v0.1/servers)

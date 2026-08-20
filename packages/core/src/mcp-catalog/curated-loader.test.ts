@@ -348,6 +348,73 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
+  it('keeps the 2026-08-20 boundary-audited expansion on its reviewed endpoints and auth paths', async () => {
+    // Evidence, including the live marketplace pre-DCR authorization plans and
+    // registry provenance, lives in docs/internal/mcp-catalog-expansion-2026-08-17.md.
+    // Assert identities rather than a whole-catalog count: unrelated additions
+    // should not require this audit contract to change.
+    const entries = await loadCuratedCatalog();
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'com.postman/postman-mcp-server',
+          remote_url: 'https://mcp.postman.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.clerk/mcp-server',
+          remote_url: 'https://mcp.clerk.com/mcp',
+          auth_type: 'none',
+        }),
+        expect.objectContaining({
+          name: 'io.github.cloudinary/asset-management-mcp',
+          remote_url: 'https://asset-management.mcp.cloudinary.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.miroapp/mcp-server',
+          remote_url: 'https://mcp.miro.com/',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'co.axiom/mcp',
+          remote_url: 'https://mcp.axiom.co/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.algolia/algolia-productivity',
+          remote_url: 'https://mcp.algolia.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'com.netlify/mcp',
+          remote_url: 'https://netlify-mcp.netlify.app/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'com.klaviyo/mcp',
+          remote_url: 'https://mcp.klaviyo.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.customer/mcp',
+          remote_url: 'https://mcp.customer.io/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.incident/mcp',
+          remote_url: 'https://mcp.incident.io/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'com.tavily/mcp',
+          remote_url: 'https://mcp.tavily.com/mcp/',
+          auth_type: 'oauth',
+        }),
+      ])
+    );
+  });
+
   it('opts the providers that pass the strict production boundary into strict mode', async () => {
     // Marketplace installs with no statement use the daemon's bounded
     // interoperability profile. These three publish the exact PRM/issuer,
@@ -374,6 +441,7 @@ describe('the shipped catalog', () => {
       'com.slack/mcp',
       'com.pagerduty/mcp',
       'com.kagi/mcp',
+      'com.render/mcp',
     ];
 
     expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
