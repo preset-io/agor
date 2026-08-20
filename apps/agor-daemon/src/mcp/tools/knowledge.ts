@@ -55,7 +55,7 @@ import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../../utils/spawn-executor.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
@@ -744,7 +744,7 @@ async function runBranchKnowledgeCommand(
       'session'
     );
   });
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     {
       command,
       sessionToken: generateScopedServiceToken(

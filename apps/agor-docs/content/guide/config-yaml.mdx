@@ -61,8 +61,46 @@ Supported environment overrides still win over YAML. Important examples are `POR
 `AGOR_RBAC_ENABLED`, `AGOR_UNIX_USER_MODE`, and the sandbox overrides. They are
 resolved in memory and never written back.
 
+`AGOR_EXECUTOR_RESPONSE_ORIGIN_URL` overrides
+`execution.executor_response.origin_url`. In Kubernetes/HA it must be the
+exact initiating replica's executor-reachable origin, not the load-balanced
+daemon Service URL.
+
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.
+
+## Bounded executor request responses
+
+Agor's normal executor lifecycle remains autonomous and fire-and-forget. A
+smaller class of operations—file browsing and other calls whose HTTP/MCP caller
+needs a result—uses one authenticated executor-to-daemon response stream.
+Stdout and stderr are process logs only and are never parsed as result data.
+
+```yaml
+execution:
+  executor_response:
+    # Total uncompressed NDJSON response-body bytes. Default: 8 MiB.
+    max_response_bytes: 8388608
+    # In-flight waiters owned by one daemon. Default: 16.
+    max_active_requests: 16
+
+    # Both are required before executor_command_template may launch a
+    # request-mode operation. The origin must route to this exact replica.
+    external_protocol: executor-response-v1
+    origin_url: http://daemon-0.internal:3030
+```
+
+Local subprocesses default to the initiating daemon's loopback listener, so a
+standalone local installation normally omits `origin_url` and
+`external_protocol`. Templated/delegated execution must declare the protocol
+and an exact reachable origin; absence fails the request before launch. The
+protocol declaration is an operator assertion, so daemon and executor images
+must still come from an aligned Agor release.
+
+The response body is held only by the initiating process's bounded waiter. It
+is not relayed through Redis or recovered by another HA replica. A disconnect,
+timeout, daemon restart, or oversized result fails the request without an
+automatic retry; a user action may start a new invocation.
 
 ## Inspecting and materializing effective configuration
 

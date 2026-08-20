@@ -21,6 +21,7 @@ import {
   resolveExecutorHeartbeatConfig,
   resolveSdkWatchdogConfig,
 } from './executor-heartbeat';
+import { resolveExecutorResponseConfig } from './executor-response';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
@@ -691,6 +692,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution, 'execution', [
     'executor_heartbeat',
+    'executor_response',
     'sdk_watchdog',
     'dispatch_connect_timeout_ms',
     'unix_user_mode',
@@ -722,6 +724,13 @@ function validateConfig(config: AgorConfig): void {
     'command_template',
     'timeout_ms',
   ]);
+  only(config.execution?.executor_response, 'execution.executor_response', [
+    'max_response_bytes',
+    'max_active_requests',
+    'origin_url',
+    'external_protocol',
+  ]);
+  resolveExecutorResponseConfig(config.execution?.executor_response);
   only(config.execution?.sdk_watchdog, 'execution.sdk_watchdog', [
     'mode',
     'first_progress_timeout_ms',
@@ -1379,6 +1388,18 @@ export function resolveEffectiveConfig(
       ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
   }
+  const resolvedExecutorResponse =
+    defaults.execution?.executor_response ||
+    config.execution?.executor_response ||
+    env.AGOR_EXECUTOR_RESPONSE_ORIGIN_URL
+      ? {
+          ...defaults.execution?.executor_response,
+          ...config.execution?.executor_response,
+          ...(env.AGOR_EXECUTOR_RESPONSE_ORIGIN_URL
+            ? { origin_url: env.AGOR_EXECUTOR_RESPONSE_ORIGIN_URL }
+            : {}),
+        }
+      : undefined;
 
   const resolved: AgorConfig = {
     ...defaults,
@@ -1396,6 +1417,7 @@ export function resolveEffectiveConfig(
     execution: {
       ...defaults.execution,
       ...config.execution,
+      ...(resolvedExecutorResponse ? { executor_response: resolvedExecutorResponse } : {}),
       ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
       ...(env.AGOR_UNIX_USER_MODE
         ? {
@@ -1456,6 +1478,8 @@ export function resolveEffectiveConfig(
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
   if (!execution) return;
+
+  resolveExecutorResponseConfig(execution.executor_response);
 
   if (execution.unix_user_mode === 'delegated' && !execution.executor_command_template) {
     throw new Error(

@@ -343,8 +343,19 @@ async function startDaemonWithOwnedMetrics(
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
+  const configuredResponseHost = DAEMON_HOST.replace(/^\[(.*)\]$/, '$1');
+  const executorResponseHost =
+    configuredResponseHost === '0.0.0.0'
+      ? '127.0.0.1'
+      : configuredResponseHost === '::'
+        ? '::1'
+        : configuredResponseHost;
+  const executorResponseAuthority = executorResponseHost.includes(':')
+    ? `[${executorResponseHost}]`
+    : executorResponseHost;
   configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
+    localResponseOriginUrl: `http://${executorResponseAuthority}:${DAEMON_PORT}`,
     sandboxRuntimePaths: {
       homeDir: homedir(),
       dataHome,

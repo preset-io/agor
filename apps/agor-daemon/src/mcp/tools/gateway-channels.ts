@@ -50,7 +50,7 @@ import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../../utils/spawn-executor.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
@@ -1221,7 +1221,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         branchId: session.branch_id,
         ref,
       });
-      const result = await runExecutorCommand(
+      const result = await requestExecutor(
         {
           command: 'branch.upload.materialize',
           sessionToken: generateScopedServiceToken(
@@ -1714,7 +1714,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       const branch = target.branch;
       if (!branch) throw new Error('Gateway target branch is unavailable');
       if (args.source.kind === 'branch') {
-        const result = await runExecutorCommand(
+        const result = await requestExecutor(
           {
             command: 'branch.gateway.slack-file-upload',
             sessionToken: generateScopedServiceToken(

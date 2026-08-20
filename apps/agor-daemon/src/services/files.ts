@@ -20,7 +20,7 @@ import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-ho
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../utils/spawn-executor.js';
 
 // Constants for file search
@@ -129,7 +129,7 @@ export class FilesService {
         this.app as unknown as { settings: { authentication?: { secret?: string } } }
       );
 
-      const result = await runExecutorCommand(
+      const result = await requestExecutor(
         {
           command: 'branch.files.list',
           sessionToken,

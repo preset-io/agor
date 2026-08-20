@@ -23,7 +23,7 @@ import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-ho
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../utils/spawn-executor.js';
 
 export type FileParams = QueryParams<{ branch_id?: string }> & Partial<AuthenticatedParams>;
@@ -99,7 +99,7 @@ export class FileService
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    return runExecutorCommand(
+    return requestExecutor(
       {
         command,
         sessionToken,

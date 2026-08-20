@@ -461,6 +461,9 @@ export interface AgorExecutionSettings {
 
   dispatch_connect_timeout_ms?: number | null;
 
+  /** Bounded executor-to-daemon response channel for synchronous commands. */
+  executor_response?: AgorExecutorResponseSettings;
+
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
@@ -664,6 +667,21 @@ export interface AgorExecutionSettings {
    * default. Global, single-policy. See `context/explorations/executor-sandboxing.md`.
    */
   sandbox?: AgorSandboxSettings;
+}
+
+export interface AgorExecutorResponseSettings {
+  /** Maximum uncompressed framed response-body bytes. Default: 8 MiB. */
+  max_response_bytes?: number;
+  /** Maximum in-flight response reservations on one daemon. Default: 16. */
+  max_active_requests?: number;
+  /**
+   * Exact initiating-daemon origin reachable by executors. In standalone
+   * local mode the daemon URL is a safe fallback. HA/external deployments
+   * must configure an origin that does not load-balance to another replica.
+   */
+  origin_url?: string;
+  /** Operator assertion required for request-mode templated execution. */
+  external_protocol?: 'executor-response-v1';
 }
 
 /**

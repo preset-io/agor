@@ -473,6 +473,51 @@ describe('ExecutorPayloadSchema (discriminated union)', () => {
 
     expect(() => ExecutorPayloadSchema.parse(payload)).toThrow();
   });
+
+  it('requires a versioned response capability in request mode', () => {
+    const payload = {
+      command: 'branch.files.browse',
+      executorMode: 'request',
+      sessionToken: 'jwt',
+      params: { branchId: '550e8400-e29b-41d4-a716-446655440000' },
+    };
+
+    expect(() => ExecutorPayloadSchema.parse(payload)).toThrow(/executor response descriptor/i);
+    expect(() =>
+      ExecutorPayloadSchema.parse({
+        ...payload,
+        executorResponse: {
+          protocol: 'executor-response-v1',
+          profile: 'terminal',
+          requestId: '550e8400-e29b-41d4-a716-446655440001',
+          url: 'http://daemon.internal:3030/executor/responses/request',
+          token: 'a'.repeat(43),
+          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+          maxResponseBytes: 1024,
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects response capabilities on autonomous invocations', () => {
+    expect(() =>
+      ExecutorPayloadSchema.parse({
+        command: 'branch.files.browse',
+        executorMode: 'autonomous',
+        executorResponse: {
+          protocol: 'executor-response-v1',
+          profile: 'terminal',
+          requestId: '550e8400-e29b-41d4-a716-446655440001',
+          url: 'http://daemon.internal:3030/executor/responses/request',
+          token: 'a'.repeat(43),
+          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+          maxResponseBytes: 1024,
+        },
+        sessionToken: 'jwt',
+        params: { branchId: '550e8400-e29b-41d4-a716-446655440000' },
+      })
+    ).toThrow(/request mode/i);
+  });
 });
 
 describe('parseExecutorPayload', () => {

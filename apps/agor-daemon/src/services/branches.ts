@@ -72,7 +72,7 @@ import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
@@ -466,7 +466,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { branch, action } = options;
     const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
 
-    const result = await runExecutorCommand(payload, {
+    const result = await requestExecutor(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       delegatedHomeKey,
       preparedEnv: env,
@@ -515,7 +515,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'environment.logs',
         sessionToken,
@@ -1629,7 +1629,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const statusToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const statusResult = await runExecutorCommand(
+    const statusResult = await requestExecutor(
       {
         command: 'branch.filesystem.status',
         sessionToken: statusToken,

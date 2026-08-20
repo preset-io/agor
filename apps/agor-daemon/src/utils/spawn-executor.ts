@@ -6,9 +6,10 @@
  * operations to the executor for proper Unix isolation.
  *
  * DESIGN PHILOSOPHY:
- * - All spawns are fire-and-forget (daemon doesn't wait for results)
- * - Executor handles its own logging, status updates, and notifications via Feathers
- * - Executor connects back to daemon via WebSocket for real-time communication
+ * - Lifecycle work remains fire-and-forget and reports through the Agor client.
+ * - Short request-mode commands return one bounded result through the
+ *   authenticated executor response channel; stdout/stderr are logs only.
+ * - Executor process isolation and delegated launch behavior remain shared.
  *
  * EXECUTION MODES:
  * 1. Local subprocess (default): Spawns executor as a child process
@@ -23,16 +24,26 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgorExecutionSettings } from '@agor/core/config';
+import {
+  type AgorExecutionSettings,
+  type ResolvedExecutorResponseConfig,
+  resolveExecutorResponseConfig,
+} from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
-  EXECUTOR_RESULT_PREFIX,
-  INTERACTIVE_EXECUTOR_EVENT_PREFIX,
+  EXECUTOR_RESPONSE_PROTOCOL,
+  type ExecutorCommandResult,
 } from '@agor/core/executor-protocol';
 import { isValidExecutionHomeKey } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  configureExecutorResponseChannel,
+  ExecutorResponseAdmissionError,
+  type ExecutorResponseReservation,
+  reserveExecutorResponse,
+} from '../executor-response-channel.js';
 import {
   containExecutorProcess,
   markExecutorProcessExited,
@@ -70,20 +81,37 @@ export function configureDaemonUrl(url: string): void {
   console.log(`[Executor] Daemon URL configured: ${url}`);
 }
 
-let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
+let configuredExecutorDefaults: ExecutorSpawnDefaults = {
+  executorResponse: resolveExecutorResponseConfig(),
+};
 let requireExecutorTenantContext = false;
 
 /** Set default executor template and sandbox policy from config. */
 export function configureExecutor(
   config?: ExecutorConfig | null,
-  options: { requireTenantContext?: boolean; sandboxRuntimePaths?: SandboxRuntimePaths } = {}
+  options: {
+    requireTenantContext?: boolean;
+    sandboxRuntimePaths?: SandboxRuntimePaths;
+    /** Replica-local fallback used only for locally spawned request executors. */
+    localResponseOriginUrl?: string;
+  } = {}
 ): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
+    executorResponse: resolveExecutorResponseConfig(config?.executor_response),
     sandbox: config?.sandbox?.enabled ? config.sandbox : undefined,
     sandboxRuntimePaths: options.sandboxRuntimePaths,
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
+  const response = configuredExecutorDefaults.executorResponse;
+  configureExecutorResponseChannel({
+    originUrl:
+      response.originUrl ??
+      options.localResponseOriginUrl ??
+      `http://localhost:${process.env.PORT || '3030'}`,
+    maxResponseBytes: response.maxResponseBytes,
+    maxActiveRequests: response.maxActiveRequests,
+  });
 
   if (configuredExecutorDefaults.executorCommandTemplate) {
     const preview =
@@ -141,15 +169,7 @@ export interface SpawnExecutorOptions {
   preparedEnv?: Record<string, string>;
 }
 
-export interface ExecutorCommandResult {
-  success: boolean;
-  data?: unknown;
-  error?: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
+export type { ExecutorCommandResult } from '@agor/core/executor-protocol';
 
 /**
  * Invoke a fire-and-forget lifecycle callback while observing both synchronous
@@ -178,7 +198,7 @@ export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
   /** Optional timeout for short-lived command execution. */
   timeoutMs?: number;
-  /** Suppress child stdout/stderr logging because the JSON result may contain credentials. */
+  /** Suppress child stdout/stderr logs for credential-sensitive operations. */
   sensitiveOutput?: boolean;
 }
 
@@ -342,7 +362,7 @@ export function findExecutorPath(): string {
 /**
  * Spawn executor process with JSON payload via stdin (fire-and-forget)
  *
- * This is the SINGLE entry point for all executor spawning. It:
+ * This is the canonical entry point for autonomous executor spawning. It:
  * - Returns immediately after spawning (does NOT wait for completion)
  * - Supports both local subprocess and templated (k8s/docker) execution
  * - Logs stdout/stderr to daemon logs
@@ -367,14 +387,17 @@ export function spawnExecutor(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const payloadWithConfig = withResolvedConfig(payload);
+  const payloadWithConfig = {
+    ...withResolvedConfig(payload),
+    executorMode: 'autonomous' as const,
+  };
 
   if (executorCommandTemplate) {
     spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
       executorCommandTemplate,
       templateVariables: {
-        command: payloadWithConfig.command as string,
+        command: payload.command as string,
         task_id: generateTaskId(),
         unix_user: options.delegatedHomeKey || undefined,
         log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
@@ -608,85 +631,12 @@ function spawnExecutorWithTemplate(
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
 }
 
-function parseExecutorResultFromStdout(stdout: string): ExecutorCommandResult | null {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    const resultJson = line.startsWith(EXECUTOR_RESULT_PREFIX)
-      ? line.slice(EXECUTOR_RESULT_PREFIX.length)
-      : line.startsWith('{') && line.endsWith('}')
-        ? line
-        : null;
-    if (!resultJson) continue;
-    try {
-      const parsed = JSON.parse(resultJson) as unknown;
-      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
-        return parsed as ExecutorCommandResult;
-      }
-    } catch {
-      // Not the executor result line; keep scanning.
-    }
-  }
-
-  return null;
-}
-
-/**
- * Settle once the executor's result is complete, not merely once it has exited.
- *
- * `exit` fires as soon as the process is reaped, while bytes it wrote can still
- * be sitting unread in the pipe — parsing there loses up to a full pipe buffer
- * of output, which is the daemon-side half of #2222. `close` fires only after
- * every stdio stream has ended, so it is the final missing-result fence.
- *
- * Exiting with an already-parseable result is the common case and settles
- * immediately, so a descendant that inherited stdio and outlives the executor
- * cannot add latency. Only an incomplete result waits for `close`, backstopped
- * by the caller's command timeout — better a late accurate answer than a prompt
- * EXECUTOR_RESULT_MISSING for output that was still in flight.
- */
-function settleOnExecutorResultComplete(
-  child: ChildProcess,
-  readStdout: () => string,
-  settle: (result: ExecutorCommandResult | null, code: number | null) => void
-): void {
-  let done = false;
-  let parsed: ExecutorCommandResult | null = null;
-
-  const finish = (code: number | null) => {
-    if (done) return;
-    done = true;
-    settle(parsed, code);
-  };
-
-  child.on('exit', (code) => {
-    // Already settled (spawn error, or a close that preceded exit) — skip the
-    // parse, which walks the whole accumulated stdout.
-    if (done) return;
-    parsed = parseExecutorResultFromStdout(readStdout());
-    if (parsed) finish(code);
-  });
-
-  child.on('close', (code) => {
-    if (done) return;
-    parsed ??= parseExecutorResultFromStdout(readStdout());
-    finish(code);
-  });
-}
-
 function logChunkedOutput(prefix: string, stream: 'stdout' | 'stderr', chunk: Buffer): void {
   const text = chunk.toString();
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    if (line.trim().startsWith(EXECUTOR_RESULT_PREFIX)) continue;
     if (stream === 'stdout') {
-      if (process.env.AGOR_EXECUTOR_DEBUG_STDOUT === '1') {
-        console.log(`${prefix} ${line}`);
-      }
+      console.log(`${prefix} ${line}`);
     } else {
       console.error(`${prefix} ${line}`);
     }
@@ -739,16 +689,6 @@ function prepareLocalExecutorSpawn(
     cwd,
     envWithDaemonUrl,
   };
-}
-
-function parseInteractiveExecutorEvent(line: string): unknown | undefined {
-  if (!line.startsWith(INTERACTIVE_EXECUTOR_EVENT_PREFIX)) return undefined;
-  try {
-    return JSON.parse(line.slice(INTERACTIVE_EXECUTOR_EVENT_PREFIX.length)) as unknown;
-  } catch {
-    // Invalid protocol output is ignored and becomes a missing-result failure.
-  }
-  return undefined;
 }
 
 function failedInteractiveExecutorHandle(
@@ -871,6 +811,8 @@ export function startInteractiveExecutor(
   }
 
   const { timeoutMs = 10 * 60_000 } = options;
+  const tenantId = resolveExecutorTenantId();
+  const command = String(payload.command ?? '?');
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
   const location = resolveLocalExecutorLocation(options);
@@ -878,20 +820,52 @@ export function startInteractiveExecutor(
   if (cwdFailure) return failedInteractiveExecutorHandle(cwdFailure);
   const prepared = prepareLocalExecutorSpawn(options, '--interactive-command', location);
   const { cmd, args, cwd, envWithDaemonUrl } = prepared;
-  const child = spawn(cmd, args, {
-    cwd,
-    env: { ...envWithDaemonUrl },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-  });
+  let deliverEvent: (event: unknown) => void = () => undefined;
+  let response: ExecutorResponseReservation;
+  try {
+    const params = payload.params as { branchId?: unknown; sessionId?: unknown } | undefined;
+    response = reserveExecutorResponse({
+      tenantId,
+      ...(typeof options.templateVariables?.user_id === 'string'
+        ? { userId: options.templateVariables.user_id }
+        : {}),
+      command,
+      ...(typeof params?.branchId === 'string' ? { branchId: params.branchId } : {}),
+      ...(typeof params?.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      timeoutMs,
+      timeoutResult: failures.timeout,
+      profile: 'events',
+      onEvent: (event) => deliverEvent(event),
+    });
+  } catch (error) {
+    if (error instanceof ExecutorResponseAdmissionError) {
+      return failedInteractiveExecutorHandle(error.result);
+    }
+    throw error;
+  }
+  const requestPayload = {
+    ...withResolvedConfig(payload),
+    executorMode: 'request' as const,
+    executorResponse: response.descriptor,
+  };
+  let child: ChildProcess;
+  try {
+    child = spawn(cmd, args, {
+      cwd,
+      env: { ...envWithDaemonUrl },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+  } catch {
+    response.fail(failures.spawn);
+    return failedInteractiveExecutorHandle(failures.spawn);
+  }
   let resolveResult!: (result: ExecutorCommandResult) => void;
   const result = new Promise<ExecutorCommandResult>((resolve) => {
     resolveResult = resolve;
   });
-  let stdout = '';
-  let lineBuffer = '';
   let stderrSeen = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let terminalResult: ExecutorCommandResult | undefined;
   let finalization: Promise<ExecutorCommandResult> | undefined;
   let resolveClose!: () => void;
   const closed = new Promise<void>((resolve) => {
@@ -905,7 +879,6 @@ export function startInteractiveExecutor(
   ): Promise<ExecutorCommandResult> => {
     finalization ??= (async () => {
       input.failPending(false);
-      if (timer) clearTimeout(timer);
       if (leaderExited) markExecutorProcessExited(attemptId, child.pid);
       const containment = await containExecutorProcess(attemptId, taskId);
       if (containment.status !== 'verified_absent') {
@@ -913,9 +886,7 @@ export function startInteractiveExecutor(
       }
       await closed;
       untrackExecutorProcess(attemptId, taskId);
-      return (
-        fallback ?? parseExecutorResultFromStdout(stdout) ?? failures.missingResult(stderrSeen)
-      );
+      return fallback ?? terminalResult ?? failures.missingResult(stderrSeen);
     })();
     void finalization.then(resolveResult);
     return finalization;
@@ -925,11 +896,14 @@ export function startInteractiveExecutor(
   input = createJsonLineInput(
     child,
     () => Boolean(finalization),
-    () => void finalize(stdinFailure)
+    () => {
+      response.fail(stdinFailure);
+    }
   );
 
   if (!child.pid) {
     const spawnFailure = failures.spawn;
+    response.fail(spawnFailure);
     resolveResult(spawnFailure);
     return failedInteractiveExecutorHandle(spawnFailure);
   }
@@ -939,16 +913,11 @@ export function startInteractiveExecutor(
     deliver: input.deliver,
     endInput: input.end,
   };
+  deliverEvent = (event) => onEvent?.(event, controls);
 
   child.stdout?.on('data', (chunk: Buffer) => {
-    const text = chunk.toString();
-    stdout += text;
-    lineBuffer += text;
-    const lines = lineBuffer.split(/\r?\n/);
-    lineBuffer = lines.pop() ?? '';
-    for (const rawLine of lines) {
-      const event = parseInteractiveExecutorEvent(rawLine.trim());
-      if (event !== undefined) onEvent?.(event, controls);
+    if (!options.sensitiveOutput) {
+      logChunkedOutput(options.logPrefix ?? '[Executor]', 'stdout', chunk);
     }
   });
   child.stderr?.on('data', () => {
@@ -956,14 +925,16 @@ export function startInteractiveExecutor(
   });
   child.stdin?.on('error', () => {
     input.failPending(true);
-    void finalize(stdinFailure);
+    response.fail(stdinFailure);
   });
   child.on('error', () => {
-    void finalize(failures.spawn);
+    response.fail(failures.spawn);
   });
   child.on('exit', () => {
     input.failPending(false);
-    void finalize(undefined, true);
+    markExecutorProcessExited(attemptId, child.pid);
+    response.fail(failures.missingResult(stderrSeen));
+    void finalize(terminalResult, true);
   });
   child.on('close', () => {
     input.failPending(false);
@@ -972,14 +943,22 @@ export function startInteractiveExecutor(
     void finalize(undefined, true);
   });
 
-  timer = setTimeout(() => {
-    void finalize(failures.timeout);
-  }, timeoutMs);
-  void input.deliver(withResolvedConfig(payload), options.closeInputAfterPayload);
+  response.setFailureCleanup((terminal) => {
+    terminalResult = terminal;
+    void finalize(terminal);
+  });
+  void response.result.then((terminal) => {
+    terminalResult = terminal;
+    return finalize(terminal);
+  });
+  void input.deliver(requestPayload, options.closeInputAfterPayload);
 
   return {
     result,
-    cancel: () => finalize(failures.cancelled),
+    cancel: () => {
+      response.fail(failures.cancelled);
+      return finalize(failures.cancelled);
+    },
     deliver: input.deliver,
     endInput: input.end,
     verifyAbsence: async () => {
@@ -1046,7 +1025,7 @@ export function startContainedExecutorCommand(
         success: false,
         error: {
           code: 'EXECUTOR_RESULT_MISSING',
-          message: 'Executor exited without a JSON result',
+          message: 'Executor exited without a final response',
           details: {
             command,
             stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
@@ -1063,235 +1042,228 @@ export function startContainedExecutorCommand(
 }
 
 /**
- * Run a short-lived executor command and wait for its JSON result.
+ * Run a short-lived executor command and wait for its authenticated response.
  *
  * Use this for daemon call sites that need an immediate answer (for example
  * autocomplete and git-state probes). Long-running commands and lifecycle
  * tasks should keep using spawnExecutorFireAndForget().
  */
-export async function runExecutorCommand(
+export async function requestExecutor(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): Promise<ExecutorCommandResult> {
   const { templateVariables, logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
   const tenantId = resolveExecutorTenantId();
+  const commandName = String(payload.command ?? '?');
 
   const executorCommandTemplate =
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
-  const payloadWithConfig = withResolvedConfig(payload);
-
-  if (executorCommandTemplate) {
-    return runExecutorCommandWithTemplate(payloadWithConfig, {
-      ...options,
-      timeoutMs,
-      executorCommandTemplate,
-      templateVariables: {
-        command: payloadWithConfig.command as string,
-        task_id: generateTaskId(),
-        unix_user: options.delegatedHomeKey || undefined,
-        log_level: resolveExecutorLogLevel(options.env ?? (process.env as Record<string, string>)),
-        executor_type: 'executor',
-        ...templateVariables,
-        tenant_id: tenantId,
+  const responseConfig = configuredExecutorDefaults.executorResponse;
+  if (
+    executorCommandTemplate &&
+    (responseConfig.externalProtocol !== EXECUTOR_RESPONSE_PROTOCOL || !responseConfig.originUrl)
+  ) {
+    return {
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESPONSE_UNSUPPORTED',
+        message:
+          'Templated request execution requires ' +
+          `execution.executor_response.external_protocol=${EXECUTOR_RESPONSE_PROTOCOL} ` +
+          'and an exact origin_url',
       },
-      logPrefix,
-    });
+    };
   }
 
-  return runExecutorCommandLocal(payloadWithConfig, { ...options, timeoutMs, logPrefix });
+  const timeoutResult: ExecutorCommandResult = {
+    success: false,
+    error: {
+      code: 'EXECUTOR_TIMEOUT',
+      message: `Executor command timed out after ${timeoutMs}ms`,
+      details: { command: commandName },
+    },
+  };
+  let response: ExecutorResponseReservation;
+  try {
+    const params = payload.params as { branchId?: unknown; sessionId?: unknown } | undefined;
+    response = reserveExecutorResponse({
+      tenantId,
+      ...(typeof templateVariables?.user_id === 'string'
+        ? { userId: templateVariables.user_id }
+        : {}),
+      command: commandName,
+      ...(typeof params?.branchId === 'string' ? { branchId: params.branchId } : {}),
+      ...(typeof params?.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      timeoutMs,
+      timeoutResult,
+    });
+  } catch (error) {
+    if (error instanceof ExecutorResponseAdmissionError) return error.result;
+    throw error;
+  }
+  const payloadWithConfig = {
+    ...withResolvedConfig(payload),
+    executorMode: 'request' as const,
+    executorResponse: response.descriptor,
+  };
+
+  try {
+    if (executorCommandTemplate) {
+      requestExecutorWithTemplate(payloadWithConfig, response, {
+        ...options,
+        timeoutMs,
+        executorCommandTemplate,
+        templateVariables: {
+          command: payload.command as string,
+          task_id: generateTaskId(),
+          unix_user: options.delegatedHomeKey || undefined,
+          log_level: resolveExecutorLogLevel(
+            options.env ?? (process.env as Record<string, string>)
+          ),
+          executor_type: 'executor',
+          ...templateVariables,
+          tenant_id: tenantId,
+        },
+        logPrefix,
+      });
+    } else {
+      requestExecutorLocal(payloadWithConfig, response, { ...options, timeoutMs, logPrefix });
+    }
+  } catch {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: 'Executor process did not start',
+        details: { command: commandName },
+      },
+    });
+  }
+  return response.result;
 }
 
-function runExecutorCommandLocal(
+function requestExecutorLocal(
   payload: Record<string, unknown>,
+  response: ExecutorResponseReservation,
   options: RunExecutorCommandOptions
-): Promise<ExecutorCommandResult> {
-  const { logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+): void {
+  const { logPrefix = '[Executor]' } = options;
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
-  if (cwdFailure) return Promise.resolve(cwdFailure);
+  if (cwdFailure) {
+    response.fail(cwdFailure);
+    return;
+  }
   const prepared = prepareLocalExecutorSpawn(options, '--stdin', location);
   const { cmd, args, cwd, envWithDaemonUrl } = prepared;
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const child = spawn(cmd, args, {
-      cwd,
-      env: { ...envWithDaemonUrl },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: false,
-    });
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command },
-        },
-      });
-    }, timeoutMs);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
-    });
-
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_SPAWN_ERROR',
-          message: error.message,
-          details: { command: payload.command },
-        },
-      });
-    });
-
-    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (result) {
-        resolve(result);
-        return;
-      }
-
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_RESULT_MISSING',
-          message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: {
-            command: payload.command,
-            exitCode: code,
-            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
-          },
-        },
-      });
-    };
-
-    settleOnExecutorResultComplete(child, () => stdout, finish);
-
-    child.stdin?.write(JSON.stringify(payload));
-    child.stdin?.end();
+  const child = spawn(cmd, args, {
+    cwd,
+    env: { ...envWithDaemonUrl },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: false,
   });
+
+  let stderrSeen = false;
+  response.setFailureCleanup(() => child.kill('SIGTERM'));
+  child.stdout?.on('data', (chunk: Buffer) => {
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    stderrSeen = true;
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
+  });
+  child.stdin?.on('error', () => {
+    response.fail({
+      success: false,
+      error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor command input failed' },
+    });
+  });
+  child.on('error', (error) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: error.message,
+        details: { command: payload.command },
+      },
+    });
+  });
+  child.on('exit', (code) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_RESULT_MISSING',
+        message: `Executor exited with code ${code} before delivering a final response`,
+        details: {
+          command: payload.command,
+          exitCode: code,
+          stderr: stderrSeen ? '[redacted; enable executor debug logs]' : '',
+        },
+      },
+    });
+  });
+
+  child.stdin?.write(JSON.stringify(payload));
+  child.stdin?.end();
 }
 
-function runExecutorCommandWithTemplate(
+function requestExecutorWithTemplate(
   payload: Record<string, unknown>,
+  response: ExecutorResponseReservation,
   options: RunExecutorCommandOptions & {
     executorCommandTemplate: string;
     templateVariables: ExecutorTemplateVariables;
   }
-): Promise<ExecutorCommandResult> {
-  const {
-    executorCommandTemplate,
-    templateVariables,
-    logPrefix = '[Executor]',
-    timeoutMs = 60_000,
-  } = options;
+): void {
+  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
   const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
 
   console.log(`${logPrefix} Running templated executor command: ${payload.command ?? '?'}`);
 
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    const child = spawn('sh', ['-c', command], {
-      env: { ...process.env, LOG_LEVEL: logLevel },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_TIMEOUT',
-          message: `Executor command timed out after ${timeoutMs}ms`,
-          details: { command: payload.command, taskId: templateVariables.task_id },
-        },
-      });
-    }, timeoutMs);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
-    });
-
-    child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_SPAWN_ERROR',
-          message: error.message,
-          details: { command: payload.command, taskId: templateVariables.task_id },
-        },
-      });
-    });
-
-    const finish = (result: ExecutorCommandResult | null, code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-
-      if (result) {
-        resolve(result);
-        return;
-      }
-
-      resolve({
-        success: false,
-        error: {
-          code: 'EXECUTOR_RESULT_MISSING',
-          message: `Executor exited with code ${code} but did not emit a JSON result`,
-          details: {
-            command: payload.command,
-            exitCode: code,
-            stderr: stderr ? '[redacted; enable executor debug logs]' : '',
-          },
-        },
-      });
-    };
-
-    settleOnExecutorResultComplete(child, () => stdout, finish);
-
-    child.stdin?.write(JSON.stringify(payload));
-    child.stdin?.end();
+  const child = spawn('sh', ['-c', command], {
+    env: { ...process.env, LOG_LEVEL: logLevel },
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
+
+  response.setFailureCleanup(() => child.kill('SIGTERM'));
+  child.stdout?.on('data', (chunk: Buffer) => {
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stdout', chunk);
+  });
+  child.stderr?.on('data', (chunk: Buffer) => {
+    if (!options.sensitiveOutput) logChunkedOutput(logPrefix, 'stderr', chunk);
+  });
+  child.stdin?.on('error', () => {
+    response.fail({
+      success: false,
+      error: { code: 'EXECUTOR_STDIN_ERROR', message: 'Executor launcher input failed' },
+    });
+  });
+  child.on('error', (error) => {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: error.message,
+        details: { command: payload.command, taskId: templateVariables.task_id },
+      },
+    });
+  });
+  child.on('exit', (code) => {
+    // A templated launcher may exit after submitting remote work. Its exit is
+    // observed for process hygiene but is not the executor's terminal result.
+    if (code && code !== 0) {
+      console.error(`${logPrefix} Executor launcher exited with code ${code}`);
+    }
+  });
+
+  child.stdin?.write(JSON.stringify(payload));
+  child.stdin?.end();
 }
 
 export function getDaemonUrl(): string {
@@ -1398,11 +1370,16 @@ export function generateScopedServiceToken(
  * Configuration for executor spawning.
  * Loaded from ~/.agor/config.yaml execution section.
  */
-export type ExecutorConfig = Pick<AgorExecutionSettings, 'executor_command_template' | 'sandbox'>;
+export type ExecutorConfig = Pick<
+  AgorExecutionSettings,
+  'executor_command_template' | 'executor_response' | 'sandbox'
+>;
 
 interface ExecutorSpawnDefaults {
   /** Executor command template for containerized execution */
   executorCommandTemplate?: string;
+  /** Resolved bounded response transport policy. */
+  executorResponse: ResolvedExecutorResponseConfig;
   /** OS-level sandbox policy (SRT) wrapped around every local executor spawn. */
   sandbox?: AgorExecutionSettings['sandbox'];
   /** Deployment paths captured from the immutable startup configuration. */

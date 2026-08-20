@@ -1,4 +1,4 @@
-import { runExecutorCommand } from './spawn-executor.js';
+import { requestExecutor } from './spawn-executor.js';
 
 export interface ExecutorCodexAuthRouting {
   delegatedHomeKey: string | null;
@@ -45,7 +45,7 @@ const options = (routing: ExecutorCodexAuthRouting) => ({
 export async function inspectCodexAuthViaExecutor(
   routing: ExecutorCodexAuthRouting
 ): Promise<ExecutorCodexAuthInspection> {
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     { command: 'codex.auth-file', params: { operation: 'inspect' } },
     options(routing)
   );
@@ -73,7 +73,7 @@ export async function writeCodexAuthViaExecutor(
   content: string,
   routing: ExecutorCodexAuthRouting
 ): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     { command: 'codex.auth-file', params: { operation: 'write', content } },
     options(routing)
   );
@@ -90,7 +90,7 @@ export async function writeCodexAuthViaExecutor(
 }
 
 export async function deleteCodexAuthViaExecutor(routing: ExecutorCodexAuthRouting): Promise<void> {
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     { command: 'codex.auth-file', params: { operation: 'delete' } },
     options(routing)
   );

@@ -4,10 +4,10 @@ import {
   inspectCodexAuthViaExecutor,
   writeCodexAuthViaExecutor,
 } from './executor-codex-auth.js';
-import { runExecutorCommand } from './spawn-executor.js';
+import { requestExecutor } from './spawn-executor.js';
 
-vi.mock('./spawn-executor.js', () => ({ runExecutorCommand: vi.fn() }));
-const runMock = vi.mocked(runExecutorCommand);
+vi.mock('./spawn-executor.js', () => ({ requestExecutor: vi.fn() }));
+const runMock = vi.mocked(requestExecutor);
 
 describe('executor Codex auth dispatch', () => {
   beforeEach(() => vi.clearAllMocks());

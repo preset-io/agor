@@ -1,6 +1,6 @@
 import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
+import { requestExecutor } from '../utils/spawn-executor.js';
 import { FilesService } from './files.js';
 
 vi.mock('../utils/executor-delegated-home.js', () => ({
@@ -10,7 +10,7 @@ vi.mock('../utils/executor-delegated-home.js', () => ({
 vi.mock('../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
 }));
 
 const app = {
@@ -30,11 +30,11 @@ describe('FilesService tenant scope', () => {
         user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
       })
     ).rejects.toThrow('Missing active tenant context for files database access');
-    expect(runExecutorCommand).not.toHaveBeenCalled();
+    expect(requestExecutor).not.toHaveBeenCalled();
   });
 
   it('uses RBAC-preloaded records in a short database scope and executes afterward', async () => {
-    vi.mocked(runExecutorCommand).mockImplementation(async () => {
+    vi.mocked(requestExecutor).mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { results: [] } };
     });
@@ -48,7 +48,7 @@ describe('FilesService tenant scope', () => {
       } as never)
     );
 
-    expect(runExecutorCommand).toHaveBeenCalledOnce();
+    expect(requestExecutor).toHaveBeenCalledOnce();
   });
 
   it('does not swallow a conflicting tenant scope as empty autocomplete', async () => {
@@ -63,6 +63,6 @@ describe('FilesService tenant scope', () => {
         )
       ).toThrow('Cannot enter tenant context tenant-b');
     });
-    expect(runExecutorCommand).not.toHaveBeenCalled();
+    expect(requestExecutor).not.toHaveBeenCalled();
   });
 });

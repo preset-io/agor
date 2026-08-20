@@ -103,6 +103,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { registerExecutorResponseRoutes } from './executor-response-channel.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -494,6 +495,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
   } = ctx;
+
+  registerExecutorResponseRoutes(app);
 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;

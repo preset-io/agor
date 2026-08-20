@@ -134,6 +134,26 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.paths?.data_home).toBe('/from-environment');
   });
 
+  it('projects the replica-local executor response origin without mutating YAML', () => {
+    const input: AgorConfig = {
+      execution: {
+        executor_response: {
+          max_response_bytes: 2 * 1024 * 1024,
+          origin_url: 'https://yaml-daemon.internal',
+        },
+      },
+    };
+    const resolved = resolveEffectiveConfig(input, {
+      AGOR_EXECUTOR_RESPONSE_ORIGIN_URL: 'http://daemon-2.agor.svc:3030',
+    });
+
+    expect(resolved.execution?.executor_response).toEqual({
+      max_response_bytes: 2 * 1024 * 1024,
+      origin_url: 'http://daemon-2.agor.svc:3030',
+    });
+    expect(input.execution?.executor_response?.origin_url).toBe('https://yaml-daemon.internal');
+  });
+
   it('materializes StatsD YAML and strict environment overrides', () => {
     const input: AgorConfig = {
       metrics: {

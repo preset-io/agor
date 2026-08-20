@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
-import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
+import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
@@ -21,7 +21,7 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
   return {
     ...actual,
     spawnExecutor: vi.fn(),
-    runExecutorCommand: vi.fn(),
+    requestExecutor: vi.fn(),
     generateScopedServiceToken: vi.fn(() => 'service-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
@@ -217,12 +217,12 @@ function waitForDeferredWork(): Promise<void> {
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
-const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
+const mockedRequestExecutor = vi.mocked(requestExecutor);
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
-  mockedRunExecutorCommand.mockReset();
-  mockedRunExecutorCommand.mockResolvedValue({
+  mockedRequestExecutor.mockReset();
+  mockedRequestExecutor.mockResolvedValue({
     success: true,
     data: { exists: true, kind: 'directory' },
   });
@@ -502,14 +502,14 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { branchId: branch.branch_id, action: 'stop' },
     });
 
     await service.restartEnvironment(branch.branch_id);
 
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
         params: expect.objectContaining({
@@ -554,7 +554,7 @@ describe('BranchesService environment start async behavior', () => {
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
     } as never);
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { logs: 'line 1\nline 2', timestamp: '2026-06-19T00:00:00.000Z' },
     });
@@ -568,7 +568,7 @@ describe('BranchesService environment start async behavior', () => {
       branch.created_by,
       { branchId: branch.branch_id, maxUses: -1 }
     );
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.logs',
         sessionToken: 'executor-token',

@@ -70,7 +70,7 @@ import {
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../utils/spawn-executor.js';
 import type { UsersService } from './users.js';
 
@@ -533,7 +533,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         executor_branch_id: branch.branch_id,
       }
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.publish',
         sessionToken,
@@ -1005,7 +1005,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.land',
         sessionToken,
@@ -1730,7 +1730,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.validate',
         sessionToken: generateScopedServiceToken(

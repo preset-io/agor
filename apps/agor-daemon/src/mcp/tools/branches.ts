@@ -27,7 +27,7 @@ import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
@@ -354,7 +354,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
-      const statusResult = await runExecutorCommand(
+      const statusResult = await requestExecutor(
         {
           command: 'branch.filesystem.status',
           sessionToken: generateScopedServiceToken(

@@ -219,6 +219,14 @@ The daemon spawns executors using a configurable template:
 # ~/.agor/config.yaml
 
 execution:
+  executor_response:
+    max_response_bytes: 8388608
+    max_active_requests: 16
+    # Required for templated operations whose caller waits for a result.
+    external_protocol: executor-response-v1
+    # Must reach this exact daemon replica, never a load-balanced Service.
+    origin_url: http://daemon-0.agor-daemon-headless.agor.svc.cluster.local:3030
+
   # Local execution (default)
   # executor_command_template: null
 
@@ -292,14 +300,23 @@ in delegated mode it carries the compatibility home key.
 3. Daemon substitutes template variables
 4. Daemon executes template command via `sh -c`
 5. Payload is piped to executor via stdin
-6. **Daemon returns immediately** (fire-and-forget)
+6. For an autonomous lifecycle command, **daemon returns immediately**
+   (fire-and-forget)
 7. Executor connects back to daemon via WebSocket
 8. Executor performs work, updates database via Feathers API
 9. Pod terminates when executor exits
 
-### Fire-and-Forget Design
+For the narrower request/response command class, the initiating daemon instead
+creates a bounded in-memory waiter and passes a one-attempt response capability
+inside the stdin payload. The executor sends its final result to that exact
+daemon over authenticated HTTP NDJSON. The waiter returns as soon as the daemon
+accepts the final frame; launcher exit is not the result transport. Stdout and
+stderr remain logs only.
 
-The daemon **never waits** for executor completion. This is critical for:
+### Autonomous Fire-and-Forget Design
+
+The daemon **does not wait** for completion of autonomous executor work. This
+is critical for:
 
 - **Responsiveness**: UI gets immediate feedback
 - **Scalability**: Daemon doesn't hold connections open
@@ -856,6 +873,10 @@ daemon:
   public_url: http://agor-daemon.agor.svc.cluster.local:3030
 
 execution:
+  executor_response:
+    external_protocol: executor-response-v1
+    # Example only: use this replica's executor-reachable Pod IP or stable DNS.
+    origin_url: http://10.42.1.23:3030
   executor_command_template: |
     kubectl run executor-{task_id} \
       --image=ghcr.io/preset-io/agor-executor:latest \
@@ -869,7 +890,10 @@ execution:
 Remote executors may be deployed independently, but they are part of the same
 runtime contract as the daemon. Upgrade remote executor images to the same Agor
 release when upgrading the daemon; mixed-version daemon/executor deployments are
-not a supported rollout mode. Before downgrading to a release that predates the
+not a supported rollout mode. A request-mode launch is refused unless
+`execution.executor_response.external_protocol` declares
+`executor-response-v1` and `origin_url` identifies the initiating daemon.
+Before downgrading to a release that predates the
 `dispatching` state, stop or settle pending dispatches with the current daemon.
 
 ### SDK Health Watchdog
