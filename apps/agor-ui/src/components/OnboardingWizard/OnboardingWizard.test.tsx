@@ -688,9 +688,14 @@ describe('OnboardingWizard', () => {
     clickButton(/^connect →/i);
 
     // done — teammate-centric: name heroes the headline, the template is the role
-    // pill, the subcopy is the template's own description — and NOTHING else.
+    // pill, and one warm "it's yours; shape it by chatting" subline — nothing else.
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
+    expect(
+      screen.getByText(
+        "Rusty is all yours. Start a chat and tell them what you need — you'll shape how they work as you go."
+      )
+    ).toBeInTheDocument();
     // The single primary action is verb-first + named into the first session.
     expect(screen.getByText(/^meet rusty →$/i)).toBeInTheDocument();
     // The recap line is GONE: neither the provider nor the goal is echoed on the
@@ -714,7 +719,9 @@ describe('OnboardingWizard', () => {
     // No teammate to hero → the warm generic headline + board-open subcopy, and the
     // old skip-hint checklist is gone entirely.
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(screen.getByText('Open your board to start your first AI session.')).toBeInTheDocument();
+    expect(
+      screen.getByText("Your board's ready. Jump into a chat and tell your teammate what you need.")
+    ).toBeInTheDocument();
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/Skipped —/)).not.toBeInTheDocument();
     expect(screen.getByText(/open my board/i)).toBeInTheDocument(); // unnamed → generic CTA

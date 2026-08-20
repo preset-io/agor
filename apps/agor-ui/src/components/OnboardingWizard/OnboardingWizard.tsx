@@ -1606,9 +1606,6 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const name = teammateName.trim();
-    const goalTitles = selectedGoals
-      .map((id) => GOALS.find((goal) => goal.id === id)?.title)
-      .filter((title): title is string => Boolean(title));
     // Role = the picked template's title; the blank starter is a starting point,
     // not a role, so it never reads as a job title on the hero.
     const template =
@@ -1616,7 +1613,6 @@ export function OnboardingWizard({
         ? getTeammateTemplate(selectedTemplateId)
         : undefined;
     const roleTitle = template?.title;
-    const primaryGoal = goalTitles[0];
 
     // Adaptive, teammate-centric copy. An unnamed teammate can't be heroed, so it
     // keeps the warm generic headline; a named one is celebrated by name (+ role).
@@ -1624,16 +1620,13 @@ export function OnboardingWizard({
     let subline: string;
     if (!name) {
       headline = "You're ready to build.";
-      subline = 'Open your board to start your first AI session.';
-    } else if (roleTitle) {
-      headline = `${name} is ready.`;
-      subline = template?.description ?? `Your new ${roleTitle}, set up and ready on your board.`;
-    } else if (primaryGoal) {
-      headline = `${name} is ready.`;
-      subline = `Set up for what you picked: ${goalTitles.join(', ')}. Point ${name} at the first one in your first chat.`;
+      subline = "Your board's ready. Jump into a chat and tell your teammate what you need.";
     } else {
+      // One warm line for every named variant — the headline (${name} is ready.)
+      // and the role pill already carry the specifics, so the subline just lands
+      // "the teammate is yours; shape it by talking to it." No goal-listing.
       headline = `${name} is ready.`;
-      subline = `Shape ${name} however you like — just tell them what you need in your first chat.`;
+      subline = `${name} is all yours. Start a chat and tell them what you need — you'll shape how they work as you go.`;
     }
 
     return (
