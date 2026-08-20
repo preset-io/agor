@@ -21,10 +21,13 @@ import {
   assertTenantWritable,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  GatewayChannelRepository,
+  GatewayWebhookEndpointDiscoveryRepository,
   generateId,
   getCurrentTenantId,
   MessagesRepository,
   resolveMcpMemberPolicy,
+  runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
@@ -83,7 +86,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
-import type { NextFunction, Request, Response } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
@@ -196,6 +199,7 @@ import {
   type StagedMulterFile,
 } from './utils/upload.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
+import { authenticateWebhook, renderWebhookPrompt } from './utils/webhook-gateway.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
@@ -470,6 +474,58 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   } = ctx;
 
   const usersService = app.service('users');
+  // Public stateless webhook ingress. Endpoint discovery is the sole global
+  // operation; credentials and all side effects are reloaded in tenant scope.
+  (app as unknown as Express).use(
+    '/v1/gateway/webhooks/:endpointId',
+    async (req: Request & { rawBody?: Buffer }, res: Response) => {
+      const reject = () => res.status(404).json({ error: 'Webhook delivery rejected' });
+      if (req.method !== 'POST') return res.status(405).end();
+      try {
+        const endpointId = String(req.params?.endpointId ?? '');
+        if (!/^[a-f0-9-]{64,80}$/i.test(endpointId)) return reject();
+        const ref = await runWithSystemDatabaseScope(
+          db,
+          'webhook endpoint discovery',
+          (systemDb) =>
+            new GatewayWebhookEndpointDiscoveryRepository(systemDb).findTenantRef(endpointId),
+          { capability: 'gateway_webhook_endpoint_discovery' }
+        );
+        if (!ref) return reject();
+        const result = await runWithTenantDatabaseScope(db, ref.tenant_id, async (tenantDb) => {
+          const channel = await new GatewayChannelRepository(tenantDb).findById(ref.channel_id);
+          if (channel?.channel_type !== 'webhook' || !channel.enabled) return null;
+          const rawBody = req.rawBody as Buffer | undefined;
+          if (
+            !rawBody ||
+            !authenticateWebhook({ config: channel.config, headers: req.headers, rawBody })
+          )
+            return null;
+          const prompt = renderWebhookPrompt(String(channel.config.prompt_template), req.body);
+          const gateway = app.service('gateway') as unknown as {
+            create(data: Record<string, unknown>): Promise<{ sessionId: string; taskId?: string }>;
+          };
+          return gateway.create({
+            channel_key: channel.channel_key,
+            thread_id: `webhook-${generateId()}`,
+            text: prompt,
+            user_name: 'Webhook',
+            metadata: { webhook_ingress: true },
+          });
+        });
+        if (!result) return reject();
+        return res
+          .status(202)
+          .json({ accepted: true, session_id: result.sessionId, task_id: result.taskId });
+      } catch (error) {
+        console.warn(
+          '[gateway-webhook] Delivery rejected:',
+          error instanceof Error ? error.message : 'unknown error'
+        );
+        return reject();
+      }
+    }
+  );
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
   const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook({ db, config, jwtSecret });

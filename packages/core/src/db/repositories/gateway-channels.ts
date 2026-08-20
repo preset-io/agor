@@ -49,6 +49,38 @@ export interface EnabledGatewayChannelRef {
   tenant_id: TenantID;
 }
 
+/** Minimal result permitted at the unauthenticated webhook tenant boundary. */
+export interface WebhookEndpointRef {
+  channel_id: GatewayChannelID;
+  tenant_id: TenantID;
+}
+
+export class GatewayWebhookEndpointDiscoveryRepository {
+  constructor(private db: SystemDatabase) {}
+
+  async findTenantRef(endpointId: string): Promise<WebhookEndpointRef | null> {
+    const tenantColumn = (gatewayChannels as unknown as { tenant_id?: typeof gatewayChannels.id })
+      .tenant_id;
+    const row = await select(this.db, {
+      channel_id: gatewayChannels.id,
+      tenant_id: tenantColumn ?? sql<string>`'default'`,
+    })
+      .from(gatewayChannels)
+      .where(
+        and(
+          eq(gatewayChannels.webhook_endpoint_id, endpointId),
+          eq(gatewayChannels.channel_type, 'webhook')
+        )
+      )
+      .one();
+    if (!row) return null;
+    if (typeof row.tenant_id !== 'string' || !row.tenant_id) {
+      throw new RepositoryError('Webhook endpoint lookup returned no tenant identity');
+    }
+    return { channel_id: row.channel_id as GatewayChannelID, tenant_id: row.tenant_id as TenantID };
+  }
+}
+
 export interface GatewayListenerDiscoveryCursor {
   tenant_id: TenantID;
   channel_id: GatewayChannelID;
@@ -515,6 +547,7 @@ export class GatewayChannelRepository
         target_branch_id: row.target_branch_id as UUID,
         agor_user_id: row.agor_user_id as UUID,
         channel_key: row.channel_key,
+        webhook_endpoint_id: row.webhook_endpoint_id,
         config: decryptConfig(config),
         agentic_config: agenticConfig
           ? ({
@@ -569,6 +602,8 @@ export class GatewayChannelRepository
       target_branch_id: data.target_branch_id ?? '',
       agor_user_id: data.agor_user_id ?? '',
       channel_key: data.channel_key ?? generateId(),
+      webhook_endpoint_id:
+        data.webhook_endpoint_id ?? `${generateId()}${generateId().replaceAll('-', '')}`,
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},

@@ -1884,7 +1884,11 @@ export class GatewayService {
     if (!channel.enabled) {
       throw new Error('Channel is disabled');
     }
-    if (durableListenerOwnership && !data.gateway_inbound_event_id) {
+    if (
+      durableListenerOwnership &&
+      !data.gateway_inbound_event_id &&
+      data.metadata?.webhook_ingress !== true
+    ) {
       throw new Error(
         'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
       );

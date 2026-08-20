@@ -45,7 +45,8 @@ export type ChannelType =
   | 'telegram'
   | 'github'
   | 'teams'
-  | 'shortcut';
+  | 'shortcut'
+  | 'webhook';
 
 /** Providers with an explicitly audited PostgreSQL listener ownership contract. */
 export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
@@ -112,6 +113,8 @@ export function getRequiredSecretFields(
       // Shortcut is poll-based over the REST API — the API token is always
       // required for an enabled channel (there is no outbound-only mode).
       return ['api_token'];
+    case 'webhook':
+      return ['webhook_secret'];
     default:
       return [];
   }
@@ -330,7 +333,9 @@ export interface GatewayChannel {
   channel_type: ChannelType;
   target_branch_id: BranchID;
   agor_user_id: UserID;
-  channel_key: string; // UUID — the auth secret for inbound webhooks
+  channel_key: string; // Internal connector routing key (never a public webhook credential)
+  /** Public, non-secret locator for stateless webhook ingress. */
+  webhook_endpoint_id?: string;
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   agentic_config: PersistedGatewayAgenticConfig | null; // Session creation settings
   /** MCP servers attached independently of the agentic-tool configuration. */

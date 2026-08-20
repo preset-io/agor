@@ -245,7 +245,7 @@ const gatewayChannelCreateSchema = z
   .strictObject({
     name: mcpRequiredString('name', 'Human-readable channel name, e.g. "Engineering Slack".'),
     channelType: z
-      .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
+      .enum(['slack', 'github', 'teams', 'shortcut', 'webhook', 'discord', 'whatsapp', 'telegram'])
       .default('slack')
       .describe(
         'Gateway platform type. Current active connectors are slack, github, teams, and shortcut.'
@@ -672,7 +672,7 @@ const gatewayChannelUpdateSchema = z.strictObject({
   ),
   name: mcpOptionalNonEmptyString('name', 'New human-readable channel name.'),
   channelType: z
-    .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
+    .enum(['slack', 'github', 'teams', 'shortcut', 'webhook', 'discord', 'whatsapp', 'telegram'])
     .optional()
     .describe('Gateway platform type. Changing this should include compatible config.'),
   targetBranchId: mcpOptionalId('targetBranchId', 'Branch', 'New target branch/worktree ID.'),
@@ -1280,7 +1280,16 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           .optional()
           .describe('Include disabled channels (default: true).'),
         channelType: z
-          .enum(['slack', 'github', 'teams', 'shortcut', 'discord', 'whatsapp', 'telegram'])
+          .enum([
+            'slack',
+            'github',
+            'teams',
+            'shortcut',
+            'webhook',
+            'discord',
+            'whatsapp',
+            'telegram',
+          ])
           .optional()
           .describe('Optional platform filter.'),
         limit: mcpLimit(100, 100),

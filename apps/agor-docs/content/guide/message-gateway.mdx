@@ -6,6 +6,30 @@ heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 
 # Message Gateway
 
+## Webhook channel
+
+Webhook is a stateless, inbound-only channel for systems such as Jira. Each authenticated
+`POST /v1/gateway/webhooks/<endpoint-id>` creates a fresh teammate session and initial task
+on the configured branch. The response is returned after those records are durable; agent
+execution continues asynchronously. Webhook channels never send a reply and do not continue
+threads.
+
+Choose header-token authentication (the default and broadly compatible option) or HMAC-SHA256.
+HMAC senders sign the exact bytes of `<timestamp>.<raw-body>` and send the hex digest in the
+configured signature header (an optional `sha256=` prefix is accepted). The signed timestamp
+must be inside the configured replay window. The endpoint identifier is only a locator and is
+not the credential.
+
+The required prompt template supports `{{message.content}}`, `{{payload}}`, and restricted
+paths such as `{{payload.issue.key}}`. Payloads are untrusted agent input and can influence the
+run, but can never select the run-as user, branch, preset/model, permissions, or MCP servers.
+Use least privilege for that fixed channel configuration.
+
+> Webhook delivery has at-least-once side effects in this MVP: there is no event ID or duplicate
+> detection, so provider retries create additional sessions. Agor uses its existing 10 MB request
+> limit but provides no webhook-specific rate limiting, backpressure, or IP allowlist. Operators
+> must provide appropriate DoS and rate protection at their reverse proxy or ingress layer.
+
 <div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #4a90c0', borderRadius: '8px', backgroundColor: 'rgba(74, 144, 192, 0.08)' }}>
 
 **Security: Think Before Enabling**

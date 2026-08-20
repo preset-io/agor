@@ -2009,13 +2009,14 @@ export const gatewayChannels = pgTable(
     // Materialized for queries
     name: text('name').notNull(),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut', 'webhook'],
     }).notNull(),
     target_branch_id: varchar('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
     channel_key: text('channel_key').notNull(),
+    webhook_endpoint_id: text('webhook_endpoint_id').notNull(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
 
@@ -2047,6 +2048,9 @@ export const gatewayChannels = pgTable(
       table.agentic_tool_preset_id
     ),
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
+    webhookEndpointUnique: uniqueIndex('gateway_channels_webhook_endpoint_unique').on(
+      table.webhook_endpoint_id
+    ),
     channelKeyTenantUnique: uniqueIndex('gateway_channels_tenant_channel_key_unique').on(
       table.tenant_id,
       table.channel_key
@@ -2175,7 +2179,7 @@ export const gatewayOutboundMessages = pgTable(
       .notNull()
       .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut', 'webhook'],
     }).notNull(),
 
     platform_channel_id: text('platform_channel_id').notNull(),

@@ -50,6 +50,7 @@ export {
   parseThreadId as parseTeamsThreadId,
   TeamsConnector,
 } from './connectors/teams';
+export { WebhookConnector } from './connectors/webhook';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
 export {

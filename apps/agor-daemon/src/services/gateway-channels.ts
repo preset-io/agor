@@ -33,6 +33,7 @@ import {
 } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { getUploadLimits } from '../utils/upload.js';
+import { validateWebhookConfig } from '../utils/webhook-gateway.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 type PersistedGatewayChannelCreateData = Omit<GatewayChannelCreateData, 'agentic_config'> & {
@@ -136,6 +137,13 @@ export class GatewayChannelsService extends DrizzleService<
   }
 
   async create(data: GatewayChannelCreateData, params?: Params) {
+    if (data.channel_type === 'webhook') {
+      try {
+        validateWebhookConfig(data.config);
+      } catch (error) {
+        throw new BadRequest((error as Error).message);
+      }
+    }
     const rawData = data as unknown as Record<string, unknown>;
     const prepared = assertServiceWriteFields(
       'Gateway channel',
@@ -176,6 +184,13 @@ export class GatewayChannelsService extends DrizzleService<
         throw new BadRequest('Gateway agentic configuration cannot be multi-patched');
       }
       const current = await this.get(String(id), params);
+      if ((data.channel_type ?? current.channel_type) === 'webhook') {
+        try {
+          validateWebhookConfig({ ...current.config, ...data.config });
+        } catch (error) {
+          throw new BadRequest((error as Error).message);
+        }
+      }
       const materializedAgenticConfig = await this.validateConfig(
         data.agentic_config === undefined ? current.agentic_config : data.agentic_config,
         {

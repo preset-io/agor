@@ -1895,13 +1895,14 @@ export const gatewayChannels = sqliteTable(
     // Materialized for queries
     name: text('name').notNull(),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut', 'webhook'],
     }).notNull(),
     target_branch_id: text('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
     agor_user_id: text('agor_user_id', { length: 36 }).notNull(),
     channel_key: text('channel_key').notNull().unique(),
+    webhook_endpoint_id: text('webhook_endpoint_id').notNull().unique(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
 
@@ -1929,6 +1930,7 @@ export const gatewayChannels = sqliteTable(
   },
   (table) => ({
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
+    webhookEndpointIdx: index('idx_gateway_webhook_endpoint').on(table.webhook_endpoint_id),
     agenticToolPresetIdx: index('gateway_channels_agentic_tool_preset_idx').on(
       table.agentic_tool_preset_id
     ),
@@ -2042,7 +2044,7 @@ export const gatewayOutboundMessages = sqliteTable(
       .notNull()
       .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
     channel_type: text('channel_type', {
-      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut'],
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams', 'shortcut', 'webhook'],
     }).notNull(),
 
     platform_channel_id: text('platform_channel_id').notNull(),

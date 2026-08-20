@@ -119,6 +119,7 @@ const CHANNEL_TYPE_OPTIONS: {
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
   { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
+  { value: 'webhook', label: 'Webhook', icon: <ThunderboltOutlined /> },
   { value: 'discord', label: 'Discord', icon: <MessageOutlined />, comingSoon: true },
   { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined />, comingSoon: true },
   { value: 'telegram', label: 'Telegram', icon: <MessageOutlined />, comingSoon: true },
@@ -133,6 +134,7 @@ function getChannelTypeIcon(type: ChannelType): React.ReactNode {
     case 'teams':
       return <TeamOutlined />;
     case 'shortcut':
+    case 'webhook':
       return <ThunderboltOutlined />;
     default:
       return <MessageOutlined />;
@@ -148,6 +150,7 @@ function getChannelTypeColor(type: ChannelType): string {
     case 'teams':
       return 'geekblue';
     case 'shortcut':
+    case 'webhook':
       return 'gold';
     case 'discord':
       return 'blue';
@@ -2053,6 +2056,80 @@ const ChannelFormFields: React.FC<{
         )}
 
         {/* ── Teams setup (create step 1, or the whole edit body) ── */}
+        {channelType === 'webhook' && (mode === 'edit' || createStep === 1) && (
+          <>
+            {mode === 'edit' && editingChannel?.webhook_endpoint_id && (
+              <Alert
+                type="info"
+                showIcon
+                message="Webhook endpoint"
+                description={`${window.location.origin}/v1/gateway/webhooks/${editingChannel.webhook_endpoint_id}`}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            <Form.Item label="Authentication" name="webhook_auth_mode" initialValue="header-token">
+              <Select
+                options={[
+                  { value: 'header-token', label: 'Header token' },
+                  { value: 'hmac-sha256', label: 'HMAC-SHA256' },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(a, b) => a.webhook_auth_mode !== b.webhook_auth_mode}>
+              {({ getFieldValue }) =>
+                getFieldValue('webhook_auth_mode') === 'hmac-sha256' ? (
+                  <>
+                    <Form.Item
+                      label="Signature header"
+                      name="webhook_signature_header"
+                      initialValue="x-agor-signature"
+                    >
+                      <Input />
+                    </Form.Item>
+                    <Form.Item
+                      label="Timestamp header"
+                      name="webhook_timestamp_header"
+                      initialValue="x-agor-timestamp"
+                    >
+                      <Input />
+                    </Form.Item>
+                    <Form.Item
+                      label="Replay window (seconds)"
+                      name="webhook_replay_window_seconds"
+                      initialValue={300}
+                    >
+                      <InputNumber min={30} max={86400} />
+                    </Form.Item>
+                  </>
+                ) : (
+                  <Form.Item
+                    label="Token header"
+                    name="webhook_header_name"
+                    initialValue="x-agor-webhook-token"
+                  >
+                    <Input />
+                  </Form.Item>
+                )
+              }
+            </Form.Item>
+            <Form.Item
+              label="Secret"
+              name="webhook_secret"
+              rules={mode === 'create' ? [{ required: true }] : undefined}
+            >
+              <Input.Password autoComplete="new-password" />
+            </Form.Item>
+            <Form.Item
+              label="Prompt template"
+              name="webhook_prompt_template"
+              rules={[{ required: true }]}
+              tooltip="Payload is untrusted. Use {{message.content}}, {{payload}}, or restricted paths such as {{payload.issue.key}}."
+            >
+              <Input.TextArea rows={7} placeholder={'Handle this event:\n{{payload}}'} />
+            </Form.Item>
+          </>
+        )}
+
         {channelType === 'teams' && (mode === 'edit' || createStep === 1) && (
           <Collapse
             ghost
@@ -3279,13 +3356,25 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       'private_key',
       'app_password',
       'api_token',
+      'webhook_secret',
     ];
     const sanitizedExisting = { ...(existingConfig || {}) };
     for (const field of SENSITIVE_FIELDS) {
       delete sanitizedExisting[field];
     }
     const config: Record<string, unknown> = { ...sanitizedExisting };
-    if (values.channel_type === 'github') {
+    if (values.channel_type === 'webhook') {
+      config.auth_mode = values.webhook_auth_mode ?? 'header-token';
+      if (values.webhook_secret) config.webhook_secret = values.webhook_secret;
+      config.prompt_template = values.webhook_prompt_template;
+      if (config.auth_mode === 'hmac-sha256') {
+        config.signature_header = values.webhook_signature_header ?? 'x-agor-signature';
+        config.timestamp_header = values.webhook_timestamp_header ?? 'x-agor-timestamp';
+        config.replay_window_seconds = values.webhook_replay_window_seconds ?? 300;
+      } else {
+        config.header_name = values.webhook_header_name ?? 'x-agor-webhook-token';
+      }
+    } else if (values.channel_type === 'github') {
       // GitHub App credentials from form input
       if (values.github_app_id) {
         config.app_id = Number(values.github_app_id);
@@ -3568,7 +3657,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       envVars: channel.agentic_config?.envVars ?? [],
     };
 
-    if (channel.channel_type === 'slack') {
+    if (channel.channel_type === 'webhook') {
+      formValues.webhook_auth_mode = config?.auth_mode ?? 'header-token';
+      formValues.webhook_header_name = config?.header_name ?? 'x-agor-webhook-token';
+      formValues.webhook_signature_header = config?.signature_header ?? 'x-agor-signature';
+      formValues.webhook_timestamp_header = config?.timestamp_header ?? 'x-agor-timestamp';
+      formValues.webhook_replay_window_seconds = config?.replay_window_seconds ?? 300;
+      formValues.webhook_prompt_template = config?.prompt_template;
+    } else if (channel.channel_type === 'slack') {
       formValues.connection_mode = config?.connection_mode || 'socket';
       formValues.enable_channels = config?.enable_channels ?? false;
       formValues.enable_groups = config?.enable_groups ?? false;

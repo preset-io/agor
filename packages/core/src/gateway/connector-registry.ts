@@ -12,6 +12,7 @@ import { GitHubConnector } from './connectors/github';
 import { ShortcutConnector } from './connectors/shortcut';
 import { SlackConnector } from './connectors/slack';
 import { TeamsConnector } from './connectors/teams';
+import { WebhookConnector } from './connectors/webhook';
 
 type ConnectorFactory = (config: Record<string, unknown>) => GatewayConnector;
 
@@ -22,6 +23,7 @@ connectors.set('slack', (config) => new SlackConnector(config));
 connectors.set('github', (config) => new GitHubConnector(config));
 connectors.set('teams', (config) => new TeamsConnector(config));
 connectors.set('shortcut', (config) => new ShortcutConnector(config));
+connectors.set('webhook', () => new WebhookConnector());
 
 /**
  * Get a connector instance for the given channel type
