@@ -15,7 +15,6 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
-  Board,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -50,7 +49,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useAgorStore } from '../../store/agorStore';
 import {
   MAX_ONBOARDING_GOALS,
   mergeGoalMcpRecs,
@@ -349,6 +347,8 @@ export interface OnboardingWizardProps {
     teammateEmoji?: string;
     /** Framework source branch from the chosen template; undefined = repo default. */
     sourceBranch?: string;
+    /** Chosen gallery template id (persona); null/undefined = blank starter. */
+    templateId?: string | null;
     /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
     agent?: AgenticToolName | null;
     /** Goal-tailored MCP integration names to seed into the bootstrap prompt. */
@@ -456,13 +456,12 @@ export function OnboardingWizard({
   // Chosen gallery template id (null = nothing picked yet). Sets the default
   // avatar and the teammate's framework source branch — never the name.
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  // Onboarding always creates a fresh board for the teammate (1:1 teammate↔board
+  // convention); it never reuses the user's existing board, so there is no
+  // board-reuse verification state.
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardError, setBoardError] = useState<string | null>(null);
-  // Server-verified board: populated by a one-shot fetch so the board-reuse
-  // check doesn't depend on Zustand store hydration timing.
-  const [verifiedBoard, setVerifiedBoard] = useState<Board | null>(null);
-  const [boardVerifying, setBoardVerifying] = useState(false);
 
   // ── Step 4: completion ────────────────────────────────────────────────────
   // True while the async onComplete (teammate creation + navigation) runs, so
@@ -489,8 +488,6 @@ export function OnboardingWizard({
     setCreatedBoardId(null);
     setBoardError(null);
     setBoardCreating(false);
-    setVerifiedBoard(null);
-    setBoardVerifying(false);
     setCompleting(false);
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
@@ -620,47 +617,6 @@ export function OnboardingWizard({
     }
   }, [currentStep, onCheckAuth, agentHasKey, user?.agentic_auth_methods?.codex]);
 
-  const existingBoardId = user?.preferences?.mainBoardId || null;
-  // Subscribe to only THIS board rather than the whole boardById map, so the
-  // wizard re-renders on changes to the user's own board, not on every board
-  // write anywhere. Self-subscribing (vs a prop) still keeps the App shell out.
-  const existingBoard = useAgorStore((store) =>
-    existingBoardId ? (store.boardById.get(existingBoardId) ?? null) : null
-  );
-
-  // Server-verify the user's mainBoardId. The Zustand boardById store may not be
-  // hydrated when onboarding runs (fresh session or restart-onboarding), so a
-  // direct server fetch avoids the false-negative that creates a duplicate board.
-  useEffect(() => {
-    if (!open || !existingBoardId || !client) {
-      setVerifiedBoard(null);
-      setBoardVerifying(false);
-      return;
-    }
-    if (existingBoard) {
-      setVerifiedBoard(existingBoard);
-      setBoardVerifying(false);
-      return;
-    }
-    setBoardVerifying(true);
-    let cancelled = false;
-    (client.service('boards').get(existingBoardId) as Promise<Board>)
-      .then((board) => {
-        if (!cancelled) setVerifiedBoard(board);
-      })
-      .catch(() => {
-        // Board deleted or inaccessible — fall through to creating a new one
-      })
-      .finally(() => {
-        if (!cancelled) setBoardVerifying(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, existingBoardId, client, existingBoard]);
-
-  const hasExistingBoard = !!(verifiedBoard || createdBoardId);
-
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
       case 'goals':
@@ -687,8 +643,8 @@ export function OnboardingWizard({
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
-        if (boardVerifying) return false;
-        return hasExistingBoard || teammateName.trim().length > 0;
+        // A teammate name is required — it names the new board we always create.
+        return teammateName.trim().length > 0;
       case 'done':
         return true;
     }
@@ -701,7 +657,6 @@ export function OnboardingWizard({
     llmAuthVerified,
     apiKey,
     authMethod,
-    boardVerifying,
     teammateName,
   ]);
 
@@ -729,7 +684,6 @@ export function OnboardingWizard({
         return err ?? null;
       }
       case 'workspace':
-        if (boardVerifying) return null;
         return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
       default:
         return null;
@@ -743,7 +697,6 @@ export function OnboardingWizard({
     llmAuthVerified,
     apiKey,
     authMethod,
-    boardVerifying,
     teammateName,
     llmSaving,
     boardCreating,
@@ -764,7 +717,7 @@ export function OnboardingWizard({
         return 'Connect →';
       }
       case 'workspace':
-        return hasExistingBoard ? 'Keep going →' : 'Continue →';
+        return 'Continue →';
       case 'done': {
         const name = teammateName.trim();
         if (completing) return name ? `Setting up ${name}…` : 'Setting up your AI teammate…';
@@ -923,7 +876,12 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        if (hasExistingBoard) {
+        // Always create a NEW board named after the teammate — a teammate gets
+        // its own board and becomes its primary assistant (1:1 convention). We
+        // never reuse the user's existing board. If we already created one this
+        // run (user stepped back to workspace and forward again), reuse THAT
+        // rather than spawning a duplicate board.
+        if (createdBoardId) {
           goToStep('llm');
           return;
         }
@@ -954,7 +912,8 @@ export function OnboardingWizard({
         break;
       }
       case 'done': {
-        const boardIdToUse = createdBoardId || verifiedBoard?.board_id || '';
+        // Always the board we just created this run — never a reused board.
+        const boardIdToUse = createdBoardId || '';
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
         // this still powers the teammate proposing connections in its first session.
@@ -1003,7 +962,6 @@ export function OnboardingWizard({
     selectedTemplateId,
     saveOnboardingProgress,
     createdBoardId,
-    verifiedBoard,
     onComplete,
     goToStep,
   ]);
@@ -1614,12 +1572,9 @@ export function OnboardingWizard({
                   }}
                 />
               </div>
-              {hasExistingBoard && (
-                <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
-                  They'll join your existing board
-                  {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
-                </Text>
-              )}
+              <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
+                They'll get their own board, with you as owner.
+              </Text>
             </div>
 
             <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block' }}>

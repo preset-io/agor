@@ -590,7 +590,10 @@ describe('OnboardingWizard', () => {
     );
   });
 
-  it('workspace step skips board creation when the user already has one', async () => {
+  it('always creates a NEW board even when the user already has one (never reuses it)', async () => {
+    // The user already has a board (mainBoardId + hydrated store). Per the 1:1
+    // teammate↔board convention, onboarding must STILL create a fresh board named
+    // after the teammate and never reuse/join the existing one.
     const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
     const { boardsService } = renderWizard({
       initialStep: 'workspace',
@@ -598,78 +601,19 @@ describe('OnboardingWizard', () => {
       user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
     });
 
-    // The name editor is always shown — even when the user already has a board —
-    // so the teammate can be (re)named; the existing board is only a muted
-    // caption and is never touched.
-    const nameInput = screen.getByLabelText('Teammate name');
-    expect(nameInput).toBeInTheDocument();
-    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('Existing board');
-    fireEvent.change(nameInput, { target: { value: 'Ada' } });
+    // Helper copy promises a fresh, owned board — never "join your existing board".
+    expect(screen.queryByText(/join your existing board/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/their own board/i)).toBeInTheDocument();
 
-    clickButton(/^continue →/i);
-
-    expect(boardsService.create).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
-  });
-
-  it('reuses existing board via server fetch when boardById store is empty (restart onboarding)', async () => {
-    const serverBoard = makeBoard({ board_id: 'board-existing', name: 'My board' });
-    const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-new', created_by: 'user-1' })),
-      patch: vi.fn(async () => serverBoard),
-      get: vi.fn(async () => serverBoard),
-    };
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
-    };
-
-    renderWizard({
-      initialStep: 'workspace',
-      client: client as never,
-      user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
-      // No boardById — store is empty (the bug scenario)
-    });
-
-    // The pre-existing board is verified server-side but never renamed; the name
-    // editor stays available so the teammate can still be named.
-    await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-existing'));
-    expect(await screen.findByLabelText('Teammate name')).toBeInTheDocument();
-    expect(screen.getByText(/join your existing board/i)).toHaveTextContent('My board');
-
-    clickButton(/^continue →/i);
-    expect(boardsService.create).not.toHaveBeenCalled();
-    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
-  });
-
-  it('creates a new board when mainBoardId points to a deleted board', async () => {
-    const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-new', created_by: 'user-1' })),
-      get: vi.fn(async () => {
-        throw new Error('Not found');
-      }),
-    };
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
-    };
-
-    renderWizard({
-      initialStep: 'workspace',
-      client: client as never,
-      user: makeUser({ preferences: { mainBoardId: 'board-deleted' } } as Partial<User>),
-    });
-
-    await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-deleted'));
-    // Board not found — user can name a new teammate and create a board
-    await waitFor(() => expect(screen.getByText('Build your teammate')).toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
+    // Naming + Continue creates a brand-new board named after the teammate, even
+    // though the user already has one.
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
 
     await waitFor(() => {
-      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Ada', icon: '🤖' });
+      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
     });
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
