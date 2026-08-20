@@ -22,7 +22,6 @@ import {
   Checkbox,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -38,6 +37,7 @@ import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAut
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserAvatarsTab } from './UserAvatarsTab';
@@ -319,21 +319,21 @@ export const UsersTable: React.FC<UsersTableProps> = ({
 
       {/* Create User Modal */}
       {canCreateUsers && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Create User"
-          open={createModalOpen}
-          onOk={handleCreate}
-          onCancel={() => {
-            form.resetFields();
-            setCreateModalOpen(false);
-          }}
-          okText="Create"
-          width={800}
-        >
-          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-            <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
-              <Input placeholder="John Doe" />
-            </Form.Item>
+        open={createModalOpen}
+        onOk={handleCreate}
+        onCancel={() => {
+          form.resetFields();
+          setCreateModalOpen(false);
+        }}
+        okText="Create"
+        width={800}
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
+            <Input placeholder="John Doe" />
+          </Form.Item>
 
             <Form.Item
               label="Email"
@@ -388,11 +388,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               />
             </Form.Item>
 
-            <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
-              <Checkbox>Force password change on first login</Checkbox>
-            </Form.Item>
-          </Form>
-        </Modal>
+          <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+            <Checkbox>Force password change on first login</Checkbox>
+          </Form.Item>
+        </Form>
+        </AdaptiveSettingsModal>
       )}
 
       {/* Edit User Modal - reuses UserSettingsModal */}

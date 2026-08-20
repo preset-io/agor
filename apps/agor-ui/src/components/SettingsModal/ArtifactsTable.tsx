@@ -7,7 +7,6 @@ import {
   Empty,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -25,6 +24,7 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
@@ -324,7 +324,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       )}
 
       {editingArtifact && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Edit Artifact"
           open={editModalOpen}
           onOk={handleUpdate}
@@ -362,7 +362,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               />
             </Form.Item>
           </Form>
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
     </div>
   );

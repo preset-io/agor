@@ -1,18 +1,7 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
 import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
-import {
-  Button,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
+import { Button, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
@@ -20,6 +9,7 @@ import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch'
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -263,7 +253,12 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
         scroll={{ x: 700 }}
       />
 
-      <Modal title="Create Group" open={createOpen} onOk={createGroup} onCancel={closeCreateModal}>
+      <AdaptiveSettingsModal
+        title="Create Group"
+        open={createOpen}
+        onOk={createGroup}
+        onCancel={closeCreateModal}
+      >
         <Form form={form} layout="vertical" onValuesChange={handleCreateValuesChange}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
@@ -275,8 +270,8 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
-      </Modal>
-      <Modal
+      </AdaptiveSettingsModal>
+      <AdaptiveSettingsModal
         title="Edit Group"
         open={!!editingGroup}
         onOk={saveGroup}
@@ -307,7 +302,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             />
           </Form.Item>
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };

@@ -14,7 +14,6 @@ import {
   Form,
   Input,
   Layout,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -36,6 +35,8 @@ import { MetaRow } from '../MetaRow';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 const { Sider, Content } = Layout;
+
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 
 interface CardsTableProps {
   client: AgorClient | null;
@@ -514,7 +515,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 
       {/* Create CardType Modal */}
       {createTypeModalMounted && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Create Card Type"
           open={createTypeModalOpen}
           onOk={handleCreateType}
@@ -528,12 +529,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           okText="Create"
         >
           {typeFormContent}
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
 
       {/* Edit CardType Modal */}
       {editingType && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Edit Card Type"
           open={editTypeModalOpen}
           onOk={handleUpdateType}
@@ -547,7 +548,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           okText="Save"
         >
           {typeFormContent}
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
 
       {/* Card Detail Modal (reuse Phase 2 component) */}

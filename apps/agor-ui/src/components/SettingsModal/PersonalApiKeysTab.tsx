@@ -1,11 +1,12 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
+import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ApiKeyEntry {
@@ -190,7 +191,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       />
 
       {/* Create key modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Create API Key"
         open={showCreateModal && !newlyCreatedKey}
         onOk={handleCreate}
@@ -212,10 +213,10 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
           maxLength={100}
           autoFocus
         />
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Show key once modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title={
           <Space>
             <KeyOutlined />
@@ -259,7 +260,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
         >
           Copy to Clipboard
         </Button>
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };

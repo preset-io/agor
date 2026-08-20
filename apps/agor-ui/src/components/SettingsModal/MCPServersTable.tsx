@@ -23,7 +23,6 @@ import {
   Descriptions,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -60,6 +59,7 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -683,7 +683,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       />
 
       {/* Create MCP Server Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Add MCP Server"
         open={createModalOpen}
         onCancel={resetCreateModal}
@@ -729,7 +729,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             formRevision={formRevision}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Edit MCP Server Modal — self-contained */}
       <MCPServerEditModal
@@ -742,7 +742,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       />
 
       {/* View MCP Server Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="MCP Server Details"
         open={viewModalOpen}
         onCancel={() => {
@@ -858,7 +858,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             )}
           </Descriptions>
         )}
-      </Modal>
+      </AdaptiveSettingsModal>
     </>
   );
 

@@ -16,19 +16,7 @@ import {
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
@@ -38,6 +26,7 @@ import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -623,7 +612,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         />
       )}
 
-      <Modal
+      <AdaptiveSettingsModal
         title="Create Branch"
         open={createModalOpen}
         onOk={handleCreate}
@@ -648,7 +637,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             branchStorageConfig={branchStorageConfig}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal

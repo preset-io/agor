@@ -12,7 +12,6 @@ import {
   Button,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -30,6 +29,7 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
@@ -375,7 +375,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       />
 
       {/* Create Board Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Create Board"
         open={createModalOpen}
         width={760}
@@ -389,7 +389,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
           <BoardFormFields form={form} extra={customContextField} />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       <BoardEditModal
         board={editingBoard}

@@ -63,7 +63,6 @@ import {
   type FormInstance,
   Input,
   InputNumber,
-  Modal,
   Popconfirm,
   Radio,
   Select,
@@ -93,6 +92,7 @@ import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -3858,7 +3858,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       )}
 
       {/* Create Channel Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Add Gateway Channel"
         open={createModalOpen}
         onCancel={closeCreateModal}
@@ -3914,10 +3914,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackAppInfo={null}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Edit Channel Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Edit Gateway Channel"
         open={editModalOpen}
         onOk={handleUpdate}
@@ -3974,7 +3974,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackAppInfo={slackAppInfo}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };
