@@ -25,6 +25,7 @@ import {
   Button,
   Collapse,
   ConfigProvider,
+  Flex,
   Space,
   Spin,
   Tooltip,
@@ -916,14 +917,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             }
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: isGateway ? 'flex-start' : 'center',
-              gap: 4,
-              flex: 1,
-              minWidth: 0,
-            }}
+          <Flex
+            align={isGateway ? 'flex-start' : 'center'}
+            gap={token.marginXXS}
+            flex={1}
+            style={{ minWidth: 0 }}
           >
             {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
             {isRemoteSurrogate ? (
@@ -933,58 +931,53 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             ) : (
               <SessionRelationshipIcon session={session} size={10} />
             )}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+            <Flex vertical gap={isGateway ? token.marginXXS : 0} flex={1} style={{ minWidth: 0 }}>
+              <Flex align="center" gap={token.marginXXS} style={{ minWidth: 0 }}>
                 {renderSessionTitleWithFailure(session)}
-              </div>
-              {isGateway && (
-                <div style={{ marginTop: 4 }}>
-                  {gatewaySource ? (
-                    <ChannelPill
-                      channelType={gatewaySource.channel_type}
-                      channelName={gatewaySource.channel_name}
-                    />
-                  ) : (
-                    <Typography.Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>
-                      (Gateway - metadata unavailable)
-                    </Typography.Text>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
+              </Flex>
+              {isGateway &&
+                (gatewaySource ? (
+                  <ChannelPill
+                    channelType={gatewaySource.channel_type}
+                    channelName={gatewaySource.channel_name}
+                  />
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>
+                    (Gateway - metadata unavailable)
+                  </Typography.Text>
+                ))}
+            </Flex>
+          </Flex>
         </div>
       </SessionItemWithActions>
     );
   };
 
-  const sessionListContent = isManualSessionsOpen ? (
-    <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
-      <Tree
-        className="agor-flat-tree"
-        treeData={sessionTreeData}
-        expandedKeys={expandedManualKeys}
-        onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], manualExpandableKeys)}
-        showLine
-        switcherIcon={renderTreeSwitcherIcon}
-        showIcon={false}
-        blockNode
-        selectable={false}
-        style={{ background: 'transparent', borderRadius: 0, padding: 0 }}
-        titleRender={renderSessionNode}
-      />
-    </ConfigProvider>
-  ) : null;
+  const renderSessionTree = (
+    treeData: SessionTreeNode[],
+    expandedKeys: React.Key[],
+    expandableKeys: React.Key[]
+  ) => (
+    <Tree
+      className="agor-flat-tree"
+      treeData={treeData}
+      expandedKeys={expandedKeys}
+      onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
+      showLine
+      switcherIcon={renderTreeSwitcherIcon}
+      showIcon={false}
+      blockNode
+      selectable={false}
+      titleRender={renderSessionNode}
+    />
+  );
+
+  const sessionListContent = isManualSessionsOpen
+    ? renderSessionTree(sessionTreeData, expandedManualKeys, manualExpandableKeys)
+    : null;
 
   const sessionListHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
+    <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
         <Typography.Text strong>Sessions</Typography.Text>
         <Badge
@@ -1013,18 +1006,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           </Button>
         </div>
       )}
-    </div>
+    </Flex>
   );
 
   const scheduledRunsHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
+    <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
         <ClockCircleOutlined style={{ color: token.colorInfo }} />
         <Typography.Text strong>Scheduled Runs</Typography.Text>
@@ -1035,7 +1021,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         />
         {hasRunningScheduledSession && <Spin size="small" />}
       </Space>
-    </div>
+    </Flex>
   );
 
   const scheduledRunsContent = isScheduledRunsOpen ? (
@@ -1089,14 +1075,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   ) : null;
 
   const gatewaySessionsHeader = (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        width: '100%',
-      }}
-    >
+    <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
         <MessageOutlined style={{ color: token.colorSuccess }} />
         <Typography.Text strong>Gateway Sessions</Typography.Text>
@@ -1107,26 +1086,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         />
         {hasRunningGatewaySession && <Spin size="small" />}
       </Space>
-    </div>
+    </Flex>
   );
 
-  const gatewaySessionsContent = isGatewaySessionsOpen ? (
-    <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
-      <Tree
-        className="agor-flat-tree"
-        treeData={gatewaySessionTreeData}
-        expandedKeys={expandedGatewayKeys}
-        onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], gatewayExpandableKeys)}
-        showLine
-        switcherIcon={renderTreeSwitcherIcon}
-        showIcon={false}
-        blockNode
-        selectable={false}
-        style={{ background: 'transparent', borderRadius: 0, padding: 0 }}
-        titleRender={renderSessionNode}
-      />
-    </ConfigProvider>
-  ) : null;
+  const gatewaySessionsContent = isGatewaySessionsOpen
+    ? renderSessionTree(gatewaySessionTreeData, expandedGatewayKeys, gatewayExpandableKeys)
+    : null;
 
   const sessionSearchBar =
     isPanel && activeSessions.length > 0 ? (
