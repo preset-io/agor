@@ -739,7 +739,7 @@ export function OnboardingWizard({
         return 'Continue →';
       case 'done': {
         const name = teammateName.trim();
-        if (completing) return name ? `Setting up ${name}…` : 'Setting up your AI teammate…';
+        if (completing) return 'Setting up…';
         // Verb-first primary action into the activation moment — the teammate's
         // first session — named when we have a name, generic board-open otherwise.
         return name ? `Meet ${name} →` : 'Open my board →';
@@ -1620,13 +1620,13 @@ export function OnboardingWizard({
     let headline: string;
     let subline: string;
     if (!name) {
-      headline = "You're ready to build.";
+      headline = completing ? 'Almost ready…' : "You're ready to build.";
       subline = "Your board's ready. Jump into a chat and tell your teammate what you need.";
     } else {
       // One warm line for every named variant — the headline (${name} is ready.)
       // and the role pill already carry the specifics, so the subline just lands
       // "the teammate is yours; shape it by talking to it." No goal-listing.
-      headline = `${name} is ready.`;
+      headline = completing ? `${name} is almost ready.` : `${name} is ready.`;
       subline = `${name} is all yours. Start a chat and tell them what you need. You'll shape how they work as you go.`;
     }
 
