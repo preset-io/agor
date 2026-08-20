@@ -201,6 +201,22 @@ describe('loadCuratedCatalog', () => {
     ).toBeGreaterThan(0.2);
   });
 
+  it('files Tavily under its official Registry identity, not an inferred alias', async () => {
+    const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
+    const document = loadYaml(source) as {
+      entries: Array<{ name?: string }>;
+      unpublished: Array<{ name?: string }>;
+    };
+
+    expect(document.entries.map((entry) => entry.name)).toContain('io.github.tavily-ai/tavily-mcp');
+    expect(document.unpublished.map((entry) => entry.name)).not.toContain(
+      'io.github.tavily-ai/tavily-mcp'
+    );
+    expect([...document.entries, ...document.unpublished].map((entry) => entry.name)).not.toContain(
+      'com.tavily/mcp'
+    );
+  });
+
   it('loads the checked-in catalog with complete, unique curation', async () => {
     const entries = await loadCuratedCatalog();
 
@@ -348,9 +364,61 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
+  it('keeps material destructive, sensitive, and operational authority in disclosures', async () => {
+    const entries = await loadCuratedCatalog();
+    const disclosure = (name: string): string => {
+      const entry = entries.find((candidate) => candidate.name === name);
+      expect(entry, `missing catalog entry ${name}`).toBeDefined();
+      return entry!.permission_disclosure;
+    };
+
+    const expectTerms = (name: string, terms: string[]): void => {
+      const copy = disclosure(name).toLowerCase();
+      for (const term of terms) expect(copy).toContain(term.toLowerCase());
+    };
+    expectTerms('com.netlify/mcp', [
+      'user and team',
+      'access controls',
+      'install or remove extensions',
+      'secrets',
+    ]);
+    expectTerms('io.customer/mcp', [
+      'US-region',
+      'every scope',
+      'sensitive profile',
+      'live messages',
+      'subscriptions',
+      'integrations',
+      'webhooks',
+    ]);
+    expectTerms('io.incident/mcp', [
+      'investigation',
+      'post-mortem',
+      'logs',
+      'metrics',
+      'traces',
+      'dashboards',
+      'Allowed redirect domains',
+    ]);
+    expect(entries.find((entry) => entry.name === 'io.incident/mcp')).toMatchObject({
+      website_url: 'https://docs.incident.io/ai/remote-mcp',
+    });
+  });
+
+  it("uses Firecrawl's documented versioned keyless endpoint", async () => {
+    const entries = await loadCuratedCatalog();
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        name: 'com.firecrawl/mcp',
+        remote_url: 'https://mcp.firecrawl.dev/v2/mcp',
+        auth_type: 'none',
+      })
+    );
+  });
+
   it('keeps the 2026-08-20 boundary-audited expansion on its reviewed endpoints and auth paths', async () => {
-    // Evidence, including the live marketplace pre-DCR authorization plans and
-    // registry provenance, lives in docs/internal/mcp-catalog-expansion-2026-08-17.md.
+    // Live provider metadata evidence and the mocked production service-boundary
+    // fixture are documented in the accompanying audit report.
     // Assert identities rather than a whole-catalog count: unrelated additions
     // should not require this audit contract to change.
     const entries = await loadCuratedCatalog();
@@ -407,7 +475,7 @@ describe('the shipped catalog', () => {
           auth_type: 'oauth',
         }),
         expect.objectContaining({
-          name: 'com.tavily/mcp',
+          name: 'io.github.tavily-ai/tavily-mcp',
           remote_url: 'https://mcp.tavily.com/mcp/',
           auth_type: 'oauth',
         }),

@@ -7,9 +7,10 @@
 **51 installable entries**. Ten use reviewed Marketplace OAuth discovery and one
 (Clerk) is genuinely open. Render is rejected at the pre-DCR client boundary.
 
-This report supersedes the original initialize-only acceptance decision for the OAuth
-entries. Sections 3–5 retain the earlier broad candidate research as provenance; the
-final accepted set, counts, ranks, and verification record are in §§2, 6, 8, and 11.
+This report supersedes both the original initialize-only acceptance decision and the
+overstated first finalization audit. Sections 3–5 retain the earlier broad candidate
+research as provenance; the final accepted set, counts, ranks, and verification record
+are in §§2, 6, 8, and 11.
 
 ---
 
@@ -20,60 +21,94 @@ each proposed endpoint and checked vendor documentation. That established endpoi
 transport, and initial auth classification, but **not** whether Agor could safely start
 the OAuth flow. #2491 demonstrated that initialize-only evidence is insufficient.
 
-On 2026-08-20 every proposed OAuth entry was therefore run through the current
-production boundary, with the compatibility mode a canonical catalog install actually
-receives:
+On 2026-08-20 every proposed OAuth entry was rechecked in two deliberately distinct
+layers.
+
+### 1.1 Live-provider metadata and core validation
+
+The live-provider pass performed:
 
 1. unauthenticated MCP `initialize` using the catalog probe request;
 2. `resolveMCPOAuthDiscovery(..., { compatibilityMode: "marketplace" })`;
 3. live protected-resource and authorization-server metadata fetches through Agor's
    hardened outbound fetch path;
-4. the same `startMCPOAuthFlow` validation used by `oauth-start`, including exact or
-   bounded same-origin resource binding, issuer validation, HTTPS endpoint safety, and
-   PKCE S256;
-5. authorization-plan construction with a nonfunctional placeholder public client ID,
-   stopping **before** Dynamic Client Registration.
+4. direct `startMCPOAuthFlow` core validation with `marketplace`, a nonfunctional
+   placeholder client ID, and DCR disabled, covering resource/issuer safety, HTTPS
+   endpoint validation, and PKCE S256 before constructing a placeholder authorization
+   URL.
 
-The placeholder bypassed the DCR POST only so validation could reach plan construction.
-It was never sent to a provider, no authorization endpoint was opened, no DCR endpoint
-was called, and no provider-side client or grant was created. Acceptance additionally
-required either an advertised safe DCR endpoint or a vendor-reviewed public client for
-Agor's callback contract. None of the accepted OAuth rows needs catalog OAuth overrides;
-all intentionally use #2491's derived `marketplace` mode. None advertises the complete
-strict contract, principally RFC 9207 callback-issuer support, so none is mislabeled
-`strict`.
+This live pass **did not call** `/mcp-servers/oauth-start`. The placeholder client ID
+bypassed both Dynamic Client Registration and the automatic all-resource-scope branch;
+it also did not exercise canonical saved-row policy derivation, deployment callback
+resolution, pending-attempt creation, or provider acceptance of an Agor redirect URI.
+No live DCR or authorization endpoint was called, and no provider-side client or grant
+was created. The live result is evidence about current metadata and core safety
+validation only.
+
+### 1.2 Mocked daemon service-boundary fixture
+
+A deterministic SQLite integration test now calls the registered
+`/mcp-servers/oauth-start` service with a canonical, current catalog row and no saved
+client ID. Its local provider fixture publishes protected-resource scopes matching the
+five-scope Customer.io shape, advertises DCR, supports S256, and intentionally omits the
+strict-only RFC 9207 response-issuer flag. The test proves that the service:
+
+1. ignores a request-supplied placeholder client ID and reloads the saved row;
+2. derives `marketplace` with reason `current_catalog_marketplace` from the canonical
+   catalog identity, endpoint, transport, auth, and no-header policy;
+3. resolves the exact deployment callback
+   `https://agor.example.test/mcp-servers/oauth-callback`;
+4. selects **all** advertised protected-resource scopes and places them, in order, in
+   the DCR request; and
+5. reaches the fixture's DCR endpoint, which records the request and returns HTTP 418
+   without allocating a client.
+
+The service returns the redacted `dcr_registration` diagnostic and redirect, with no
+authorization URL, token request, or pending-attempt ID. This safely covers Agor's
+actual pre-mutation service seam. It is fixture evidence for the shared implementation,
+**not** a claim that any live vendor accepted DCR, registered Agor's callback, or created
+a durable pending attempt.
+
+Acceptance requires safe live metadata with an advertised DCR endpoint (or a separately
+reviewed public client, of which this final set uses none), plus the service-boundary
+fixture above. None of the accepted OAuth rows needs catalog OAuth overrides; all use
+#2491's derived `marketplace` mode. None is labeled `strict`.
 
 Clerk was rechecked beyond `initialize`: notification, `tools/list`, and a real
-`list_clerk_sdk_snippets` tool call with no credentials. Vendor documentation was
-re-read for all eleven accepted entries and Render. Registry provenance was re-read
-from the official MCP Registry API for the six entries filed under `entries:`.
+`list_clerk_sdk_snippets` tool call with no credentials. Firecrawl's corrected `/v2/mcp`
+URL was likewise re-run through a real unauthenticated `firecrawl_scrape` call. Vendor
+documentation and every permission disclosure were re-read for all eleven accepted
+entries. Registry provenance was re-read from the official MCP Registry API, including
+Tavily's official identity.
 
 ---
 
 ## 2. Accepted — 11 new entries
 
-All ten OAuth endpoints returned an OAuth challenge and produced an authorization plan
-containing `resource`, `code_challenge`, and `code_challenge_method=S256`. Metadata and
-DCR endpoints below were fetched/discovered, not called for registration.
+All ten OAuth endpoints returned an OAuth challenge. Direct core validation constructed
+a placeholder-client authorization URL containing `resource`, `code_challenge`, and
+`code_challenge_method=S256`; for the reasons in §1.1 this is not service-boundary, DCR,
+automatic-scope, redirect-registration, or pending-authority evidence. Live metadata and
+DCR endpoint declarations below were fetched/discovered, never called for registration.
 
-| Vendor      | Endpoint                                          | Live discovery and binding                                                                         | Client boundary                  | Policy      | Decision |
-| ----------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- | ----------- | -------- |
-| Postman     | `https://mcp.postman.com/mcp`                     | Header PRM; exact resource; issuer `https://mcp.postman.com`; S256                                 | Advertised `/register`           | marketplace | Accept   |
-| Cloudinary  | `https://asset-management.mcp.cloudinary.com/mcp` | Header PRM; same-origin parent resource; same-origin issuer; S256                                  | Advertised `/register`           | marketplace | Accept   |
-| Miro        | `https://mcp.miro.com/`                           | Header PRM; exact resource and issuer; S256                                                        | Advertised `/register`           | marketplace | Accept   |
-| Axiom       | `https://mcp.axiom.co/mcp`                        | Header PRM; exact resource; same-origin issuer; S256                                               | Advertised `/register`           | marketplace | Accept   |
-| Algolia     | `https://mcp.algolia.com/mcp`                     | Header PRM; exact resource; PRM-bound `https://dashboard.algolia.com` issuer; S256                 | Advertised `/2/oauth/register`   | marketplace | Accept   |
-| Netlify     | `https://netlify-mcp.netlify.app/mcp`             | Header PRM; exact resource; trailing-slash-equivalent same-origin issuer; S256                     | Advertised `/oauth-server/reg`   | marketplace | Accept   |
-| Klaviyo     | `https://mcp.klaviyo.com/mcp`                     | Well-known PRM; same-origin parent resource and issuer; S256                                       | Advertised `/register`           | marketplace | Accept   |
-| Customer.io | `https://mcp.customer.io/mcp`                     | Header PRM; exact resource and issuer; S256                                                        | Advertised `/oauth2/register`    | marketplace | Accept   |
-| incident.io | `https://mcp.incident.io/mcp`                     | Header PRM; same-origin parent resource; exact `/mcp` issuer; S256; advertised HTTPS app endpoints | Advertised `/mcp/oauth/register` | marketplace | Accept   |
-| Tavily      | `https://mcp.tavily.com/mcp/`                     | Header PRM; trailing-slash-equivalent resource and issuer; S256                                    | Advertised `/register`           | marketplace | Accept   |
-| Clerk       | `https://mcp.clerk.com/mcp`                       | Full no-auth MCP sequence; two listed tools; real snippet-index call                               | No client required               | none        | Accept   |
+| Vendor      | Endpoint                                          | Live discovery and binding                                                                         | Client boundary                                                       | Policy      | Decision |
+| ----------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------- | -------- |
+| Postman     | `https://mcp.postman.com/mcp`                     | Header PRM; exact resource; issuer `https://mcp.postman.com`; S256                                 | Advertised `/register`                                                | marketplace | Accept   |
+| Cloudinary  | `https://asset-management.mcp.cloudinary.com/mcp` | Header PRM; same-origin parent resource; same-origin issuer; S256                                  | Advertised `/register`                                                | marketplace | Accept   |
+| Miro        | `https://mcp.miro.com/`                           | Header PRM; exact resource and issuer; S256                                                        | Advertised `/register`                                                | marketplace | Accept   |
+| Axiom       | `https://mcp.axiom.co/mcp`                        | Header PRM; exact resource; same-origin issuer; S256                                               | Advertised `/register`                                                | marketplace | Accept   |
+| Algolia     | `https://mcp.algolia.com/mcp`                     | Header PRM; exact resource; PRM-bound `https://dashboard.algolia.com` issuer; S256                 | Advertised `/2/oauth/register`                                        | marketplace | Accept   |
+| Netlify     | `https://netlify-mcp.netlify.app/mcp`             | Header PRM; exact resource; trailing-slash-equivalent same-origin issuer; S256                     | Advertised `/oauth-server/reg`                                        | marketplace | Accept   |
+| Klaviyo     | `https://mcp.klaviyo.com/mcp`                     | Well-known PRM; same-origin parent resource and issuer; S256                                       | Advertised `/register`                                                | marketplace | Accept   |
+| Customer.io | `https://mcp.customer.io/mcp`                     | Header PRM; exact resource and issuer; S256; five advertised resource scopes                       | Advertised `/oauth2/register`                                         | marketplace | Accept   |
+| incident.io | `https://mcp.incident.io/mcp`                     | Header PRM; same-origin parent resource; exact `/mcp` issuer; S256; advertised HTTPS app endpoints | Advertised `/mcp/oauth/register`; callback host needs admin allowlist | marketplace | Accept   |
+| Tavily      | `https://mcp.tavily.com/mcp/`                     | Header PRM; trailing-slash-equivalent resource and issuer; S256                                    | Advertised `/register`                                                | marketplace | Accept   |
+| Clerk       | `https://mcp.clerk.com/mcp`                       | Full no-auth MCP sequence; two listed tools; real snippet-index call                               | No client required                                                    | none        | Accept   |
 
 ### 2.1 Registry provenance, rechecked 2026-08-20
 
 The official registry currently has active, latest records with the exact shipped name
-and remote for these six, so they remain under `entries:`:
+for these seven, so they remain under `entries:`:
 
 - `com.postman/postman-mcp-server`
 - `io.github.miroapp/mcp-server`
@@ -81,20 +116,36 @@ and remote for these six, so they remain under `entries:`:
 - `io.github.cloudinary/asset-management-mcp`
 - `io.github.clerk/mcp-server`
 - `co.axiom/mcp`
+- `io.github.tavily-ai/tavily-mcp`
 
 No exact registry record exists for the inferred names `com.netlify/mcp`,
-`com.klaviyo/mcp`, `io.customer/mcp`, `io.incident/mcp`, or `com.tavily/mcp`; those
-five remain under `unpublished:`. The resulting catalog split is 30 published / 21
-unpublished. This is provenance, not a quality tier.
+`com.klaviyo/mcp`, `io.customer/mcp`, or `io.incident/mcp`; those four remain under
+`unpublished:`. Tavily's official package also declares
+`mcpName: "io.github.tavily-ai/tavily-mcp"`; the earlier inferred `com.tavily/mcp`
+identity was wrong and has been removed. The resulting catalog split is 31 published /
+20 unpublished. This is provenance, not a quality tier.
 
 ### 2.2 Curation notes
 
-Permission disclosures were retained because the vendor capability reviews still match:
-Algolia is read-only; Axiom can mutate monitors/dashboards and bills queries; Klaviyo can
-send campaigns and bulk-suppress profiles; Customer.io gates sensitive profile data and
-live-data edits behind admin controls; Clerk exposes public documentation rather than a
-Clerk tenant. Editorial ranks were reassigned into gaps created by #2491 instead of
-appending stale 51–62 ranks; §11 records the exact mapping.
+All eleven permission disclosures were rechecked against current vendor documentation
+and the 2026-08-20 live metadata:
+
+| Entry       | Disclosure review                                                                                                                                                                                                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postman     | Expanded for the US-only OAuth Full endpoint's 100+ tools, workspace/access management, environment variables, destructive API operations, and hosted telemetry.                                                                                                                                                           |
+| Cloudinary  | Retained: its documented asset-management surface uploads, searches, renames, tags, transforms, and deletes media; live resource scopes remain `asset_management upload media_generation` plus identity scopes.                                                                                                            |
+| Miro        | Expanded to include acting on comments; board reach remains limited by the approving user's existing board access.                                                                                                                                                                                                         |
+| Axiom       | Expanded to cover metrics queries and update authority as well as create/delete dashboards, monitors, and notifiers, query billing, and US result routing.                                                                                                                                                                 |
+| Algolia     | Retained as explicitly read-only across every application/index the user can reach; official docs say data changes remain in the dashboard or APIs.                                                                                                                                                                        |
+| Netlify     | Expanded for user/team information, access-control changes, extension install/removal, build logs, form submissions, and environment secrets in addition to projects/deploys/storage/databases.                                                                                                                            |
+| Klaviyo     | Expanded for customer and user-generated content, destructive campaign actions and send cancellation, profile merge/import, and subscription/suppression changes.                                                                                                                                                          |
+| Customer.io | Expanded for the exact five live PRM scopes—`configure read read:sensitive write write:live`—and their full Journeys/CDP authority. Agor requests all five; provider consent, user role, and admin toggles still constrain the grant. The catalog URL is explicitly US-only; Customer.io's separate EU URL is not modeled. |
+| incident.io | Expanded for follow-ups, investigations, post-mortems/archives, and connected observability logs, metrics, traces, and dashboards; also states the admin callback-host allowlisting prerequisite users need before Agor can authorize.                                                                                     |
+| Tavily      | Updated under its official Registry identity; disclosure covers submitted queries/URLs, account usage, and the live `openid offline_access` session scopes. Tools remain public-web search/extraction only.                                                                                                                |
+| Clerk       | Retained: live `tools/list` and `list_clerk_sdk_snippets` expose public snippet bundles, not a Clerk tenant or end-user data.                                                                                                                                                                                              |
+
+Editorial ranks remain assigned into gaps created by #2491 instead of appending stale
+51–62 ranks; §11 records the exact mapping.
 
 ---
 
@@ -232,10 +283,11 @@ whose "Category it would fill" column flags a URL disagreement are
 
 ### 3.4 Final OAuth-boundary rejection — Render
 
-Render was in the original twelve but is **not shipped**. The 2026-08-20 live
-marketplace-policy audit reached a safe authorization plan through protected-resource
-and authorization-server discovery, with exact resource/issuer binding and advertised
-PKCE S256. It then found no `registration_endpoint`. Render's documentation gives the
+Render was in the original twelve but is **not shipped**. The 2026-08-20 live metadata
+and direct-core audit constructed a placeholder-client authorization URL through
+protected-resource and authorization-server discovery, with exact resource/issuer
+binding and advertised PKCE S256. Its live metadata has no `registration_endpoint`.
+Render's documentation gives the
 public client IDs `claude` and `codex` to those named clients; neither is a reviewed Agor
 client and neither establishes that Agor's deployment-specific callback URI is registered.
 Borrowing one would cross the client/redirect boundary that #2491 made explicit. No DCR
@@ -280,7 +332,7 @@ removals.
 
 ## 5. Where the documented endpoint and the working endpoint differed
 
-Four cases, all worth recording:
+Five cases, all worth recording:
 
 1. **Netlify — shipped the documented one over the guessable one.**
    `https://mcp.netlify.com/mcp` answers `oauth` on all three runs. No Netlify
@@ -304,6 +356,11 @@ Four cases, all worth recording:
    docs confirm OAuth is now the recommended path. `auth_type: oauth` is the
    probe's answer and the docs' answer; the registry metadata is stale.
 
+5. **Firecrawl — corrected the old alias.** The prior catalog used the working but
+   undocumented `https://mcp.firecrawl.dev/mcp` alias. Current docs name
+   `https://mcp.firecrawl.dev/v2/mcp`; the catalog now uses that versioned URL and a
+   real no-auth scrape passed there (§10.5).
+
 One near-miss worth the same treatment: **Storyblok's** documented host
 (`mcp.labs.storyblok.com`) and the host that answers openly
 (`mcp.storyblok.com`) are different servers with different auth. Rejected — see
@@ -321,7 +378,7 @@ new audit test names the reviewed entries directly.
 |                                         | Current main |    Final branch |        Delta |
 | --------------------------------------- | -----------: | --------------: | -----------: |
 | Total / installable                     |           40 |          **51** |          +11 |
-| `entries:` / `unpublished:`             |      24 / 16 |     **30 / 21** |      +6 / +5 |
+| `entries:` / `unpublished:`             |      24 / 16 |     **31 / 20** |      +7 / +4 |
 | OAuth / none / credentials              |   34 / 5 / 1 |  **44 / 6 / 1** | +10 / +1 / 0 |
 | dev-tools / productivity / data-storage |  12 / 11 / 6 | **15 / 12 / 7** | +3 / +1 / +1 |
 | observability / search / messaging      |    7 / 3 / 1 |   **9 / 5 / 3** | +2 / +2 / +2 |
@@ -335,17 +392,22 @@ The eight endpoints removed by #2491 remain absent.
 
 All checks were run after the final catalog, rank, and audit-test edits:
 
-- `pnpm --filter @agor/core exec vitest run src/mcp-catalog --reporter=verbose`
-  — **123 passed** in four files.
+- `pnpm --filter @agor/core exec vitest run src/mcp-catalog --reporter=dot`
+  — **126 passed** in four files.
 - `pnpm --filter @agor/core exec vitest run src/tools/mcp/oauth-mcp-transport.test.ts --reporter=dot`
   — **85 passed**.
 - `pnpm --filter @agor/daemon exec vitest run src/services/mcp-catalog-connect.test.ts src/services/mcp-catalog-connect.install.test.ts src/services/mcp-oauth-compatibility.test.ts --reporter=dot`
   — **141 passed** in three files.
+- `pnpm --filter @agor/daemon exec vitest run src/register-services.oauth-sqlite.integration.test.ts --reporter=dot`
+  — **15 passed**, including the new canonical-row Marketplace/DCR fixture.
 - `pnpm --filter @agor/git typecheck` — passed.
 - `pnpm --filter @agor/core exec tsc --noEmit --customConditions source` — passed.
 - `pnpm --filter @agor/daemon exec tsc --noEmit --customConditions source` — passed.
+- `pnpm check:multitenancy-boundaries` — passed.
 - `pnpm lint` — passed: 2,344 files checked and 330 frontend design-system fixture
   cases passed.
+- `pnpm exec prettier --check docs/internal/mcp-catalog-expansion-2026-08-17.md packages/core/src/mcp-catalog/curated.yaml`
+  — passed.
 - `git diff --check` — passed.
 
 The direct core and daemon `typecheck` scripts resolve workspace dependencies from
@@ -368,7 +430,7 @@ curation decision without hard-coding a catalog-wide count.
 | `com.postman/postman-mcp-server`            | registry   |   13 | OAuth |
 | `com.netlify/mcp`                           | inferred   |   16 | OAuth |
 | `io.github.miroapp/mcp-server`              | registry   |   18 | OAuth |
-| `com.tavily/mcp`                            | inferred   |   27 | OAuth |
+| `io.github.tavily-ai/tavily-mcp`            | registry   |   27 | OAuth |
 | `io.github.algolia/algolia-productivity`    | registry   |   40 | OAuth |
 | `io.github.cloudinary/asset-management-mcp` | registry   |   46 | OAuth |
 | `io.github.clerk/mcp-server`                | registry   |   50 | none  |
@@ -518,16 +580,15 @@ Three options, in the order I would consider them:
 impact of a bad `none` classification, but it does not remove the need for the
 tools-actually-work curation check.
 
-### 10.5 One incidental finding
+### 10.5 Firecrawl URL correction
 
-`com.firecrawl/mcp` ships `https://mcp.firecrawl.dev/mcp`, but Firecrawl's
-current docs name `https://mcp.firecrawl.dev/v2/mcp`. I sent one `initialize`
-to the documented path: it answers, and reports the **identical build** —
-`firecrawl-fastmcp` version `3.24.0` — so `/mcp` is a live alias of `/v2/mcp`
-rather than a different or older server. Nothing is broken. But the shipped URL
-is the undocumented one, which is the same shape as the Netlify case in §5, and
-an unversioned alias is the one more likely to be retired. Low priority;
-switching to `/v2/mcp` would be a one-line change.
+`com.firecrawl/mcp` now ships Firecrawl's documented versioned keyless URL,
+`https://mcp.firecrawl.dev/v2/mcp`, rather than the still-live but undocumented
+`/mcp` alias. On 2026-08-20 the versioned URL returned `none`, initialized as
+`firecrawl-fastmcp` 3.24.0, listed exactly `firecrawl_scrape`, `firecrawl_search`, and
+`firecrawl_parse`, and completed a real unauthenticated scrape of `https://example.com`.
+The starter prompt and disclosure now match that rate-limited keyless surface rather
+than promising the account-only crawl tool.
 
 ---
 
@@ -565,10 +626,13 @@ not a measured Agor install count.
 - [Axiom MCP](https://axiom.co/docs/console/intelligence/mcp-server)
 - [Algolia Productivity MCP](https://www.algolia.com/doc/guides/model-context-protocol/productivity-mcp)
 - [Netlify MCP setup](https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/#mcp-server-support)
+- [Netlify official MCP capability list](https://github.com/netlify/netlify-mcp#use-cases)
 - [Klaviyo MCP](https://developers.klaviyo.com/en/docs/klaviyo_mcp_server)
 - [Customer.io MCP](https://docs.customer.io/ai/mcp/get-started/)
 - [incident.io remote MCP](https://docs.incident.io/ai/remote-mcp)
 - [Tavily MCP](https://docs.tavily.com/documentation/mcp)
+- [Tavily official package identity](https://github.com/tavily-ai/tavily-mcp/blob/main/package.json)
 - [Clerk MCP](https://clerk.com/docs/guides/ai/mcp/clerk-mcp-server)
 - [Render MCP — rejected](https://render.com/docs/mcp-server)
 - [Official MCP Registry API](https://registry.modelcontextprotocol.io/v0.1/servers)
+- [Firecrawl MCP setup](https://github.com/firecrawl/firecrawl-docs/blob/main/mcp-server.mdx)

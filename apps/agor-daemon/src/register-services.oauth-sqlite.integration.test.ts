@@ -8,6 +8,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
+import { loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
   MCPCatalogEntry,
@@ -41,10 +42,16 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: class {},
 }));
-vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
-  probeRemoteAuthType: vi.fn().mockResolvedValue('oauth'),
-}));
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@agor/core/mcp-catalog')>();
+  return {
+    ...original,
+    loadCatalog: vi.fn((...args: Parameters<typeof original.loadCatalog>) =>
+      original.loadCatalog(...args)
+    ),
+    probeRemoteAuthType: vi.fn().mockResolvedValue('oauth'),
+  };
+});
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -63,7 +70,12 @@ type TestProvider = {
   baseUrl: string;
   savedMcpUrl: string;
   transientMcpUrl: string;
-  requests: Array<{ path: string; authorization?: string; transientHeader?: string }>;
+  requests: Array<{
+    path: string;
+    authorization?: string;
+    transientHeader?: string;
+    jsonBody?: Record<string, unknown>;
+  }>;
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
   releaseToken: () => void;
@@ -80,6 +92,8 @@ async function createTestProvider(
     numberedTokenResponses?: boolean;
     holdRefresh?: boolean;
     invalidRefresh?: boolean;
+    rejectDynamicRegistration?: boolean;
+    resourceScopes?: string[];
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
@@ -107,14 +121,15 @@ async function createTestProvider(
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', baseUrl);
-    requests.push({
+    const recordedRequest: TestProvider['requests'][number] = {
       path: url.pathname,
       authorization: request.headers.authorization,
       transientHeader:
         typeof request.headers['x-transient-config'] === 'string'
           ? request.headers['x-transient-config']
           : undefined,
-    });
+    };
+    requests.push(recordedRequest);
 
     if (url.pathname === '/.well-known/oauth-protected-resource') {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -122,6 +137,7 @@ async function createTestProvider(
         JSON.stringify({
           resource: `${baseUrl}/saved/mcp`,
           authorization_servers: [baseUrl],
+          ...(options.resourceScopes ? { scopes_supported: options.resourceScopes } : {}),
         })
       );
       return;
@@ -133,11 +149,29 @@ async function createTestProvider(
           issuer: baseUrl,
           authorization_endpoint: `${baseUrl}/authorize`,
           token_endpoint: `${baseUrl}/token`,
+          ...(options.rejectDynamicRegistration
+            ? { registration_endpoint: `${baseUrl}/register` }
+            : {}),
           response_types_supported: ['code'],
           code_challenge_methods_supported: ['S256'],
-          authorization_response_iss_parameter_supported: true,
+          // The DCR fixture deliberately omits RFC 9207 response-issuer
+          // support. Reaching /register therefore proves that the canonical
+          // catalog row selected Marketplace policy rather than strict.
+          ...(options.rejectDynamicRegistration
+            ? {}
+            : { authorization_response_iss_parameter_supported: true }),
         })
       );
+      return;
+    }
+    if (url.pathname === '/register' && options.rejectDynamicRegistration) {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      recordedRequest.jsonBody = body ? (JSON.parse(body) as Record<string, unknown>) : {};
+      // This fixture is intentionally pre-mutation: it records the production
+      // DCR request and rejects it without allocating a client or grant.
+      response.writeHead(418, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'fixture_rejected_without_mutation' }));
       return;
     }
     if (url.pathname === '/token') {
@@ -266,7 +300,7 @@ type SQLiteHarness = {
 async function createHarness(
   provider: TestProvider,
   oauthMode?: 'per_user' | 'shared',
-  options: { catalogPeer?: boolean } = {}
+  options: { catalogPeer?: boolean; catalogEntry?: MCPCatalogEntry } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
@@ -275,18 +309,20 @@ async function createHarness(
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
   });
+  const catalogEntry = options.catalogEntry;
   const server = await new MCPServerRepository(rawDb).create({
     name: 'sqlite-oauth-authority',
     transport: 'http',
     url: provider.savedMcpUrl,
-    headers: options.catalogPeer ? undefined : { 'X-Saved-Config': 'true' },
+    headers: options.catalogPeer || catalogEntry ? undefined : { 'X-Saved-Config': 'true' },
     scope: 'global',
     owner_user_id: user.user_id as UserID,
+    ...(catalogEntry ? { source: 'catalog' as const, catalog_entry_name: catalogEntry.name } : {}),
     auth: {
       type: 'oauth',
-      oauth_client_id: 'saved-client-id',
+      ...(catalogEntry ? {} : { oauth_client_id: 'saved-client-id' }),
       ...(options.catalogPeer ? { oauth_compatibility_mode: 'strict' as const } : {}),
-      ...(oauthMode ? { oauth_mode: oauthMode } : {}),
+      ...(catalogEntry || oauthMode ? { oauth_mode: oauthMode ?? 'per_user' } : {}),
     },
   });
 
@@ -447,6 +483,80 @@ afterEach(async () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('derives Marketplace policy and all advertised scopes at the service DCR boundary', async () => {
+    const advertisedScopes = ['configure', 'read', 'read:sensitive', 'write', 'write:live'];
+    const provider = await createTestProvider({
+      rejectDynamicRegistration: true,
+      resourceScopes: advertisedScopes,
+    });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/service-boundary-dcr-fixture',
+      title: 'Service boundary DCR fixture',
+      category: 'messaging',
+      capabilities: ['automations'],
+      benefit: 'Exercises the saved catalog policy boundary.',
+      starter_prompt: 'Exercise the boundary.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_999,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    // oauth-start and the two-phase helper each reload the current catalog
+    // independently. Both must derive authority from the same canonical row.
+    vi.mocked(loadCatalog)
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry]);
+    const policyLog = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const harness = await createHarness(provider, undefined, { catalogEntry });
+    databases.push(harness.rawDb);
+    try {
+      const result = (await harness.app.service('mcp-servers/oauth-start').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          // A request-supplied client cannot bypass DCR for a saved row.
+          client_id: 'request-placeholder-must-be-ignored',
+        },
+        paramsFor(harness)
+      )) as {
+        success: boolean;
+        authorizationUrl?: string;
+        attempt_id?: string;
+        redirect_uri?: string;
+        diagnostic?: { stage?: string; http_status?: number };
+      };
+
+      expect(result).toMatchObject({
+        success: false,
+        redirect_uri: 'https://agor.example.test/mcp-servers/oauth-callback',
+        diagnostic: { stage: 'dcr_registration', http_status: 418 },
+      });
+      expect(result.authorizationUrl).toBeUndefined();
+      expect(result.attempt_id).toBeUndefined();
+      expect(policyLog).toHaveBeenCalledWith(
+        expect.stringContaining('mode=marketplace reason=current_catalog_marketplace')
+      );
+
+      const registrationRequests = provider.requests.filter(
+        (request) => request.path === '/register'
+      );
+      expect(registrationRequests).toHaveLength(1);
+      expect(registrationRequests[0]?.jsonBody).toMatchObject({
+        redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
+        scope: advertisedScopes.join(' '),
+        token_endpoint_auth_method: 'none',
+      });
+      expect(provider.requests.some((request) => request.path === '/authorize')).toBe(false);
+      expect(provider.requests.some((request) => request.path === '/token')).toBe(false);
+    } finally {
+      policyLog.mockRestore();
+    }
+  });
+
   it('ignores a transient Settings Test Connection snapshot and binds the saved row', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
