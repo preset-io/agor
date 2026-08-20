@@ -420,3 +420,46 @@ describe('SDK session storage retirement migrations', () => {
     expect(migration).toContain('payloads are intentionally discarded');
   });
 });
+
+describe('Session recent index migrations', () => {
+  it('keeps the PostgreSQL ordering index tenant-aware and bounds lock acquisition', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0088_session_recent_index.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain(
+      '"sessions_tenant_archived_updated_idx" ON "sessions" ("tenant_id","archived","updated_at")'
+    );
+    expect(migration).not.toContain('"board_id"');
+  });
+
+  it('applies the equivalent standalone SQLite ordering index', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-recent-index-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      await client.execute(`
+        CREATE TABLE sessions (
+          session_id text PRIMARY KEY NOT NULL,
+          archived integer NOT NULL,
+          updated_at integer
+        )
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0091_session_recent_index.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA index_info(sessions_archived_updated_idx)');
+      expect(columns.rows.map((column) => column.name)).toEqual(['archived', 'updated_at']);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

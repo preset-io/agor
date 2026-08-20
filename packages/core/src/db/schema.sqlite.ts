@@ -205,6 +205,7 @@ export const sessions = sqliteTable(
     boardIdx: index('sessions_board_idx').on(table.board_id),
     branchIdx: index('sessions_branch_idx').on(table.branch_id),
     createdIdx: index('sessions_created_idx').on(table.created_at),
+    archivedUpdatedIdx: index('sessions_archived_updated_idx').on(table.archived, table.updated_at),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes — including the partial unique index below.
