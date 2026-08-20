@@ -96,12 +96,17 @@ execution:
     origin_url: http://daemon-0.internal:3030
 ```
 
-Local subprocesses default to the initiating daemon's loopback listener, so a
-standalone local installation normally omits `origin_url` and
-`external_protocol`. Templated/delegated execution must declare the protocol
-and an exact reachable origin; absence fails the request before launch. The
-protocol declaration is an operator assertion, so daemon and executor images
-must still come from an aligned Agor release.
+Local subprocesses are co-located with the replica that spawned them, so they
+always call back over that replica's loopback listener — `origin_url` never
+applies to them, even when it is set. A standalone local installation therefore
+omits `origin_url` and `external_protocol` entirely. `origin_url` is the
+reachable callback address for **off-host** (templated/delegated) executors
+only, so it must route to this exact replica and never to a load-balanced
+daemon Service URL. Templated/delegated execution must declare the protocol and
+an exact reachable origin; absence fails daemon startup rather than leaving
+every request-mode operation to fail only when invoked. The protocol
+declaration is an operator assertion, so daemon and executor images must still
+come from an aligned Agor release.
 
 The response body is held only by the initiating process's bounded waiter. It
 is not relayed through Redis or recovered by another HA replica. A disconnect,

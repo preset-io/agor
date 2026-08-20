@@ -105,8 +105,15 @@ export function configureExecutor(
   };
   requireExecutorTenantContext = options.requireTenantContext === true;
   const response = configuredExecutorDefaults.executorResponse;
+  // Local subprocess executors are co-located with this replica, so they always
+  // call back over loopback — guaranteed to reach the replica that holds the
+  // reservation. The configured `origin_url` is the reachable address for
+  // OFF-HOST (templated/delegated) executors only, and is applied per
+  // reservation on that path. Using it for local callbacks would risk
+  // misrouting through a load balancer to a replica whose `pending` map has no
+  // matching request.
   configureExecutorResponseChannel({
-    originUrl: response.originUrl ?? options.localResponseOriginUrl,
+    originUrl: options.localResponseOriginUrl,
     maxResponseBytes: response.maxResponseBytes,
     maxActiveRequests: response.maxActiveRequests,
   });
@@ -1109,6 +1116,11 @@ export async function requestExecutor(
       ...(typeof params?.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
       timeoutMs,
       timeoutResult,
+      // Off-host executors call back over the configured reachable origin; local
+      // subprocesses inherit the loopback origin from the channel config.
+      ...(executorCommandTemplate && responseConfig.originUrl
+        ? { originUrl: responseConfig.originUrl }
+        : {}),
     });
   } catch (error) {
     if (error instanceof ExecutorResponseAdmissionError) return error.result;

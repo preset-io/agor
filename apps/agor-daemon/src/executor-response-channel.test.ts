@@ -82,8 +82,8 @@ describe('executor response receiver', () => {
         requestId: request.descriptor.requestId,
         type: 'event',
         seq: 0,
-        name: 'authorized',
-        data: { authorization: { url: 'https://example.test', method: 'auto', instructions: '' } },
+        name: 'consumer.progress',
+        data: { completed: 1 },
       }),
       terminal(request.descriptor.requestId, 1, { success: true, data: { files: ['é.ts'] } }),
       '',
@@ -104,8 +104,8 @@ describe('executor response receiver', () => {
       data: { files: ['é.ts'] },
     });
     expect(onEvent).toHaveBeenCalledWith({
-      type: 'authorized',
-      authorization: { url: 'https://example.test', method: 'auto', instructions: '' },
+      type: 'consumer.progress',
+      completed: 1,
     });
     expect(activeExecutorResponseCount()).toBe(0);
   });
@@ -209,6 +209,60 @@ describe('executor response receiver', () => {
     await expect(request.result).resolves.toMatchObject({
       success: false,
       error: { code: 'EXECUTOR_RESPONSE_INVALID' },
+    });
+  });
+
+  it('rejects trailing bytes delivered after a final frame in a later chunk', async () => {
+    const request = reserve();
+    const body = new PassThrough();
+    const responsePromise = fetch(request.descriptor.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${request.descriptor.token}`,
+        'content-type': EXECUTOR_RESPONSE_CONTENT_TYPE,
+        [EXECUTOR_RESPONSE_PROTOCOL_HEADER]: EXECUTOR_RESPONSE_PROTOCOL,
+      },
+      body: body as unknown as BodyInit,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+
+    body.write(`${terminal(request.descriptor.requestId, 0, { success: true })}\n`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    body.end('trailing');
+
+    expect((await responsePromise).status).toBe(400);
+    await expect(request.result).resolves.toMatchObject({
+      success: false,
+      error: { code: 'EXECUTOR_RESPONSE_INVALID' },
+    });
+  });
+
+  it('frames UTF-8 NDJSON correctly across adversarial byte boundaries', async () => {
+    const request = reserve();
+    const body = new PassThrough();
+    const responsePromise = fetch(request.descriptor.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${request.descriptor.token}`,
+        'content-type': EXECUTOR_RESPONSE_CONTENT_TYPE,
+        [EXECUTOR_RESPONSE_PROTOCOL_HEADER]: EXECUTOR_RESPONSE_PROTOCOL,
+      },
+      body: body as unknown as BodyInit,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const bytes = Buffer.from(
+      `${terminal(request.descriptor.requestId, 0, {
+        success: true,
+        data: { value: 'split-é-🚀' },
+      })}\n`
+    );
+    for (const byte of bytes) body.write(Buffer.from([byte]));
+    body.end();
+
+    expect((await responsePromise).status).toBe(204);
+    await expect(request.result).resolves.toEqual({
+      success: true,
+      data: { value: 'split-é-🚀' },
     });
   });
 

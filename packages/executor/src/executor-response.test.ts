@@ -52,7 +52,7 @@ describe('ExecutorResponsePublisher', () => {
   it('sends ordered event/final NDJSON over one request', async () => {
     const publisher = new ExecutorResponsePublisher(descriptor);
     publisher.emit({ type: 'authorized' });
-    publisher.emit({ type: 'callback-started' });
+    publisher.emit({ type: 'consumer.progress', completed: 1 });
     await publisher.final({ success: true, data: { ok: true } });
 
     expect(
@@ -74,8 +74,8 @@ describe('ExecutorResponsePublisher', () => {
         requestId: descriptor.requestId,
         type: 'event',
         seq: 1,
-        name: 'callback-started',
-        data: {},
+        name: 'consumer.progress',
+        data: { completed: 1 },
       },
       {
         v: 1,
@@ -130,6 +130,13 @@ describe('ExecutorResponsePublisher', () => {
     const publisher = new ExecutorResponsePublisher(descriptor);
 
     expect(() => publisher.emit({ type: 'authorized' })).toThrow(/does not allow events/i);
+    await publisher.final({ success: true });
+  });
+
+  it('rejects malformed consumer-owned event names', async () => {
+    const publisher = new ExecutorResponsePublisher(descriptor);
+
+    expect(() => publisher.emit({ type: 'Not Namespaced' })).toThrow(/event name is invalid/i);
     await publisher.final({ success: true });
   });
 

@@ -8,6 +8,7 @@ import {
   EXECUTOR_RESPONSE_TOO_LARGE,
   type ExecutorCommandResult,
   type ExecutorResponseDescriptor,
+  ExecutorResponseEventNameSchema,
   type ExecutorResponseFrame,
 } from '@agor/core/executor-protocol';
 
@@ -89,15 +90,16 @@ export class ExecutorResponsePublisher {
       throw new Error('Executor response event is invalid');
     }
     const { type, ...data } = event as Record<string, unknown>;
-    if (type !== 'authorized' && type !== 'callback-started') {
-      throw new Error('Executor response event is not supported by v1');
+    const name = ExecutorResponseEventNameSchema.safeParse(type);
+    if (!name.success) {
+      throw new Error('Executor response event name is invalid');
     }
     const frame: ExecutorResponseFrame = {
       v: 1,
       requestId: this.descriptor.requestId,
       type: 'event',
       seq: this.seq,
-      name: type,
+      name: name.data,
       data,
     };
     if (this.enqueue(frame)) {

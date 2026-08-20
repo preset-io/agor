@@ -50,7 +50,18 @@ export const ExecutorCommandResultSchema = z
 
 export type ExecutorCommandResult = z.infer<typeof ExecutorCommandResultSchema>;
 
-export const ExecutorResponseEventNameSchema = z.enum(['authorized', 'callback-started']);
+/**
+ * Lowercase, dot/hyphen-segmented name shape shared by executor command names
+ * and consumer-owned event names. One definition so the two cannot drift.
+ */
+export const EXECUTOR_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]*$/;
+
+/** Consumer-owned event name; the transport validates only its bounded wire shape. */
+export const ExecutorResponseEventNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(EXECUTOR_NAME_PATTERN);
 
 export const ExecutorResponseEventFrameSchema = z
   .object({

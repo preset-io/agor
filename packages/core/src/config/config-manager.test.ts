@@ -311,6 +311,26 @@ describe('assertValidEffectiveExecutionConfig', () => {
     }
   );
 
+  it('requires templated execution to declare request-response support at startup', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: { executor_command_template: 'launcher -- {command}' },
+      })
+    ).toThrow(/requires request-mode response support/);
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          executor_command_template: 'launcher -- {command}',
+          executor_response: {
+            external_protocol: 'executor-response-v1',
+            origin_url: 'http://daemon-0.internal:3030',
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+
   it('rejects sandboxing combined with an external executor template', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({

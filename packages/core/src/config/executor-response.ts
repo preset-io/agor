@@ -1,4 +1,4 @@
-import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
+import { EXECUTOR_NAME_PATTERN, EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgorExecutorResponseSettings } from './types';
 import { resolveSafeIntegerInRange } from './validation';
 
@@ -53,7 +53,7 @@ function resolveTimeoutByCommand(
   }
   const resolved: Record<string, number> = {};
   for (const [command, value] of Object.entries(values ?? {})) {
-    if (!/^[a-z0-9][a-z0-9.-]*$/.test(command)) {
+    if (!EXECUTOR_NAME_PATTERN.test(command)) {
       throw new Error(
         'Config error: execution.executor_response.timeout_ms.by_command keys must be executor command names containing only lowercase letters, numbers, periods, and hyphens'
       );

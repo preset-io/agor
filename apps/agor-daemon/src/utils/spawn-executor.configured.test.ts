@@ -580,6 +580,9 @@ describe('configured executor spawning', () => {
     const { requestExecutor } = await import('./spawn-executor');
     const promise = requestExecutor({ command: 'branch.files.browse' });
 
+    // A skewed legacy executor may still print the retired result sentinel to
+    // stdout. It is only process logging now — never parsed as a result — so a
+    // run that delivers nothing over the response channel is a missing result.
     proc.stdout.emit('data', Buffer.from('AGOR_EXECUTOR_RESULT {"success":true}\n'));
     proc.emit('exit', 0);
 
@@ -587,6 +590,50 @@ describe('configured executor spawning', () => {
       success: false,
       error: { code: 'EXECUTOR_RESULT_MISSING' },
     });
+  });
+
+  it('routes local callbacks to loopback and off-host callbacks to the configured origin', async () => {
+    const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+    // Distinct loopback vs external origin so the two paths are distinguishable.
+    configureExecutor(
+      {
+        executor_response: {
+          origin_url: 'http://daemon-0.internal:3030',
+          external_protocol: 'executor-response-v1',
+        },
+      },
+      { localResponseOriginUrl: 'http://127.0.0.1:3030' }
+    );
+
+    const readCallbackUrl = (proc: ReturnType<typeof createMockProcess>): string => {
+      const payload = JSON.parse(proc.written.trim().split('\n')[0]) as {
+        executorResponse: { url: string };
+      };
+      return payload.executorResponse.url;
+    };
+
+    // Local subprocess → co-located, so it must call back over loopback.
+    const localProc = createMockProcess();
+    spawnMock.mockReturnValueOnce(localProc);
+    const localPromise = requestExecutor({ command: 'branch.files.browse' });
+    expect(readCallbackUrl(localProc)).toMatch(
+      /^http:\/\/127\.0\.0\.1:3030\/internal\/executor-responses\//
+    );
+    await deliverExecutorResponse(localProc, { success: true, data: { files: [] } });
+    await expect(localPromise).resolves.toEqual({ success: true, data: { files: [] } });
+
+    // Off-host templated launcher → must call back over the configured origin.
+    const remoteProc = createMockProcess();
+    spawnMock.mockReturnValueOnce(remoteProc);
+    const remotePromise = requestExecutor(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch {command}' }
+    );
+    expect(readCallbackUrl(remoteProc)).toMatch(
+      /^http:\/\/daemon-0\.internal:3030\/internal\/executor-responses\//
+    );
+    await deliverExecutorResponse(remoteProc, { success: true, data: { files: ['ok'] } });
+    await expect(remotePromise).resolves.toEqual({ success: true, data: { files: ['ok'] } });
   });
 
   it.each([

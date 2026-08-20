@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
+import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
@@ -1484,7 +1485,7 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
   if (!execution) return;
 
-  resolveExecutorResponseConfig(execution.executor_response);
+  const response = resolveExecutorResponseConfig(execution.executor_response);
 
   if (execution.unix_user_mode === 'delegated' && !execution.executor_command_template) {
     throw new Error(
@@ -1499,6 +1500,17 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
     throw new Error(
       `execution.executor_command_template uses removed placeholder(s): ${[...new Set(retiredPlaceholders)].join(', ')}. ` +
         'Use {unix_user} as the opaque delegated execution-home key instead.'
+    );
+  }
+
+  if (
+    execution.executor_command_template &&
+    (response.externalProtocol !== EXECUTOR_RESPONSE_PROTOCOL || !response.originUrl)
+  ) {
+    throw new Error(
+      'execution.executor_command_template requires request-mode response support: set ' +
+        `execution.executor_response.external_protocol=${EXECUTOR_RESPONSE_PROTOCOL} and an exact ` +
+        'execution.executor_response.origin_url for this daemon replica.'
     );
   }
 

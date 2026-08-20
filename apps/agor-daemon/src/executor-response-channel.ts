@@ -67,21 +67,6 @@ const pending = new Map<string, PendingResponse>();
 let accepting = true;
 let metrics: DaemonMetrics = NOOP_METRICS;
 
-const TRANSPORT_FAILURE_CODES = new Set([
-  'EXECUTOR_CANCELLED',
-  'EXECUTOR_RESPONSE_BUSY',
-  'EXECUTOR_RESPONSE_DAEMON_STOPPING',
-  'EXECUTOR_RESPONSE_DISCONNECTED',
-  'EXECUTOR_RESPONSE_DRAINING',
-  'EXECUTOR_RESPONSE_INVALID',
-  'EXECUTOR_RESPONSE_MISSING',
-  'EXECUTOR_RESPONSE_TOO_LARGE',
-  'EXECUTOR_RESULT_MISSING',
-  'EXECUTOR_SPAWN_ERROR',
-  'EXECUTOR_STDIN_ERROR',
-  'EXECUTOR_TIMEOUT',
-]);
-
 function activePublisherCount(): number {
   let count = 0;
   for (const record of pending.values()) {
@@ -121,11 +106,7 @@ function settle(
   record.settled = true;
   clearTimeout(record.timer);
   pending.delete(record.requestId);
-  const failureClass = result.success
-    ? 'none'
-    : TRANSPORT_FAILURE_CODES.has(result.error?.code ?? '')
-      ? 'transport'
-      : 'executor';
+  const failureClass = result.success ? 'none' : options.failed ? 'transport' : 'executor';
   metrics.increment('executor.responses', 1, {
     outcome: result.success ? 'success' : 'failure',
     failure_class: failureClass,
@@ -173,6 +154,13 @@ export function reserveExecutorResponse(input: {
   timeoutResult: ExecutorCommandResult;
   profile?: ExecutorResponseDescriptor['profile'];
   onEvent?: (event: unknown) => void;
+  /**
+   * Reachable origin for THIS reservation's callback. Off-host (templated)
+   * executors must be given a per-replica-addressable origin. Local subprocess
+   * callers omit this and inherit the loopback origin, which always reaches the
+   * replica holding the reservation.
+   */
+  originUrl?: string;
 }): ExecutorResponseReservation {
   if (!accepting) {
     metrics.increment('executor.response_rejections', 1, { reason: 'draining' });
@@ -222,7 +210,10 @@ export function reserveExecutorResponse(input: {
   metrics.increment('executor.response_requests');
   metrics.gauge('executor.responses_active', pending.size);
 
-  const url = new URL(`${RESPONSE_PATH}/${requestId}`, runtimeConfig.originUrl).toString();
+  const url = new URL(
+    `${RESPONSE_PATH}/${requestId}`,
+    input.originUrl ?? runtimeConfig.originUrl
+  ).toString();
   return {
     descriptor: {
       protocol: EXECUTOR_RESPONSE_PROTOCOL,
@@ -300,6 +291,14 @@ export function registerExecutorResponseRoutes(app: object): void {
       res.status(409).end();
       return;
     }
+
+    // Settle the waiter with a transport failure and end the pre-stream request.
+    // Used only before a publisher is attached, so there is nothing to close.
+    const reject = (status: number, result: ExecutorCommandResult): void => {
+      settle(record, result, { failed: true });
+      res.status(status).end();
+    };
+
     if (
       String(req.headers['content-type'] ?? '')
         .split(';', 1)[0]
@@ -308,12 +307,10 @@ export function registerExecutorResponseRoutes(app: object): void {
       req.headers[EXECUTOR_RESPONSE_PROTOCOL_HEADER] !== EXECUTOR_RESPONSE_PROTOCOL ||
       (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity')
     ) {
-      settle(
-        record,
-        failure('EXECUTOR_RESPONSE_INVALID', 'Executor response content type is invalid'),
-        { failed: true }
+      reject(
+        400,
+        failure('EXECUTOR_RESPONSE_INVALID', 'Executor response content type is invalid')
       );
-      res.status(400).end();
       return;
     }
 
@@ -325,25 +322,20 @@ export function registerExecutorResponseRoutes(app: object): void {
         !/^\d+$/.test(declaredLength) ||
         !Number.isSafeInteger(length)
       ) {
-        settle(
-          record,
-          failure('EXECUTOR_RESPONSE_INVALID', 'Executor response length is invalid'),
-          { failed: true }
-        );
-        res.status(400).end();
+        reject(400, failure('EXECUTOR_RESPONSE_INVALID', 'Executor response length is invalid'));
         return;
       }
       if (length > record.maxResponseBytes) {
-        settle(
-          record,
+        reject(
+          413,
           failure(
             EXECUTOR_RESPONSE_TOO_LARGE,
             'Executor response exceeds the configured size limit',
-            { maxResponseBytes: record.maxResponseBytes }
-          ),
-          { failed: true }
+            {
+              maxResponseBytes: record.maxResponseBytes,
+            }
+          )
         );
-        res.status(413).end();
         return;
       }
     }
@@ -351,8 +343,10 @@ export function registerExecutorResponseRoutes(app: object): void {
     record.publisherActive = true;
     metrics.gauge('executor.response_publishers_active', activePublisherCount());
     let received = 0;
-    let buffer = '';
     let done = false;
+    let frameChunks: Buffer[] = [];
+    let frameBytes = 0;
+    let terminalCandidate: ExecutorCommandResult | undefined;
     const decoder = new TextDecoder('utf-8', { fatal: true });
 
     const failAuthenticated = (status: number, result: ExecutorCommandResult) => {
@@ -370,18 +364,16 @@ export function registerExecutorResponseRoutes(app: object): void {
       req.destroy();
     };
 
-    const acceptLine = (line: string, hasTrailingBytes = false): boolean => {
+    const acceptFrame = () => {
+      const bytes =
+        frameChunks.length === 1 ? frameChunks[0]! : Buffer.concat(frameChunks, frameBytes);
+      frameChunks = [];
+      frameBytes = 0;
+      const content = bytes.at(-1) === 0x0d ? bytes.subarray(0, bytes.length - 1) : bytes;
+      const line = decoder.decode(content);
       if (!line) throw new Error('Executor response contains an empty frame');
       const terminal = processFrame(record, line);
-      if (!terminal) return false;
-      if (hasTrailingBytes) {
-        throw new Error('Executor response contains frames after final');
-      }
-      done = true;
-      settle(record, terminal, { failed: false });
-      res.status(204).end();
-      req.resume();
-      return true;
+      if (terminal) terminalCandidate = terminal;
     };
 
     req.on('data', (chunk: Buffer) => {
@@ -400,12 +392,23 @@ export function registerExecutorResponseRoutes(app: object): void {
         return;
       }
       try {
-        buffer += decoder.decode(chunk, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const [index, raw] of lines.entries()) {
-          const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-          if (acceptLine(line, index < lines.length - 1 || buffer.length > 0)) return;
+        let offset = 0;
+        while (offset < chunk.length) {
+          if (terminalCandidate) {
+            throw new Error('Executor response contains bytes after final');
+          }
+          const newline = chunk.indexOf(0x0a, offset);
+          if (newline === -1) {
+            const remainder = chunk.subarray(offset);
+            frameChunks.push(remainder);
+            frameBytes += remainder.byteLength;
+            break;
+          }
+          const part = chunk.subarray(offset, newline);
+          frameChunks.push(part);
+          frameBytes += part.byteLength;
+          acceptFrame();
+          offset = newline + 1;
         }
       } catch {
         failAuthenticated(
@@ -418,14 +421,20 @@ export function registerExecutorResponseRoutes(app: object): void {
     req.on('end', () => {
       if (done) return;
       try {
-        buffer += decoder.decode();
-        if (buffer) acceptLine(buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer);
-        if (!done) {
+        if (frameBytes > 0) {
+          if (terminalCandidate) throw new Error('Executor response contains bytes after final');
+          acceptFrame();
+        }
+        if (!terminalCandidate) {
           failAuthenticated(
             400,
             failure('EXECUTOR_RESPONSE_MISSING', 'Executor response ended without a final frame')
           );
+          return;
         }
+        done = true;
+        settle(record, terminalCandidate, { failed: false });
+        res.status(204).end();
       } catch {
         failAuthenticated(
           400,
