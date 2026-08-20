@@ -143,13 +143,13 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
             fontSize: 10,
             textAlign: 'center',
             fontVariantNumeric: 'tabular-nums',
-            // Recolor the count red via semantic tokens only — the neutral chip's
-            // geometry (size, radius, shape) is untouched, so the unauthorized
+            // Recolor the count amber via semantic tokens only — the neutral chip's
+            // geometry (size, radius, shape) is untouched, so the not-connected
             // state differs from the healthy state purely in color, theme-aware
-            // in light and dark. Avoids AntD's `color="error"` preset, whose own
+            // in light and dark. Avoids AntD's `color="warning"` preset, whose own
             // fill/border/radius would shift the box vs. the neutral chip.
-            ...(summary.tone === 'error'
-              ? { backgroundColor: token.colorErrorBg, color: token.colorError }
+            ...(summary.tone === 'warning'
+              ? { backgroundColor: token.colorWarningBg, color: token.colorWarning }
               : {}),
           }}
         >

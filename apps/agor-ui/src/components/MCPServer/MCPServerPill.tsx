@@ -171,7 +171,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         }
       >
         <Tag
-          color={needsAuth ? 'error' : ENTITY_PILL_COLORS.mcp}
+          color={needsAuth ? 'warning' : ENTITY_PILL_COLORS.mcp}
           icon={
             needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
           }

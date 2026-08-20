@@ -7,7 +7,7 @@ import type {
   Session,
 } from '@agor-live/client';
 import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
-import { App, ConfigProvider } from 'antd';
+import { App, ConfigProvider, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
@@ -242,6 +242,22 @@ describe('SessionFooter', () => {
     const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
+  });
+
+  it('tones the MCP badge count as a warning (not an error) when servers need attention', () => {
+    const { result } = renderHook(() => theme.useToken(), { wrapper: Wrapper });
+    const warningProbe = document.createElement('div');
+    warningProbe.style.backgroundColor = result.current.token.colorWarningBg;
+    const errorProbe = document.createElement('div');
+    errorProbe.style.backgroundColor = result.current.token.colorErrorBg;
+
+    render(<SessionFooter {...baseProps} sessionMcpServerIds={['a', 'b', 'c']} />, {
+      wrapper: Wrapper,
+    });
+    const count = within(screen.getByTitle(/3 MCP servers need attention/)).getByText('3');
+
+    expect(count.style.backgroundColor).toBe(warningProbe.style.backgroundColor);
+    expect(count.style.backgroundColor).not.toBe(errorProbe.style.backgroundColor);
   });
 
   it('centers the MCP count chip against the label instead of its baseline', () => {
