@@ -46,6 +46,9 @@ export const AGENTIC_TOOL_NAMES = [
 
 export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
 
+/** Default used only while a user has not chosen a primary agentic tool. */
+export const DEFAULT_AGENTIC_TOOL_NAME: AgenticToolName = 'claude-code';
+
 /**
  * Removed tool identifiers that may still exist on persisted historical rows.
  *

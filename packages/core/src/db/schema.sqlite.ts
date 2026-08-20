@@ -1117,6 +1117,7 @@ export const users = sqliteTable(
             permissionMode?: string;
           };
         };
+        primary_agentic_tool?: import('../types/agentic-tool').AgenticToolName;
         default_mcp_server_ids?: string[];
         default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()

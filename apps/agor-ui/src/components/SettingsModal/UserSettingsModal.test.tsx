@@ -1028,6 +1028,39 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     }, ASYNC);
   });
 
+  it('shows and saves the primary coding agent from Preferences', async () => {
+    const user = makeUser({ primary_agentic_tool: 'codex' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="preferences"
+      />
+    );
+
+    const picker = await screen.findByRole('combobox', { name: 'Primary coding agent' });
+    fireEvent.mouseDown(picker);
+    const geminiOption = (await screen.findAllByText('Gemini')).find((element) =>
+      element.closest('.ant-select-item-option')
+    );
+    expect(geminiOption).toBeDefined();
+    fireEvent.click(geminiOption as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(
+        user.user_id,
+        expect.objectContaining({ primary_agentic_tool: 'gemini' })
+      );
+    }, ASYNC);
+  });
+
   it('opens a provider search hit on its own sub-tab (Session defaults, not Authentication)', async () => {
     const user = makeUser();
     renderWithApp(

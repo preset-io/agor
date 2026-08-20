@@ -39,6 +39,8 @@ import {
   hash,
   insert,
   isExecutionHomeKeyAvailable,
+  isNull,
+  jsonExtract,
   select,
   sql,
   type TenantScopeAwareDatabase,
@@ -75,6 +77,7 @@ import {
   extractAgenticToolsPublicValues,
   hasMinimumRole,
   hasRoleAuthorityOver,
+  isAgenticToolName,
   isUserRole,
   isValidExecutionHomeKey,
   normalizeRole,
@@ -82,6 +85,7 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { lockUserAuthorityMutation } from './user-authority-lock.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 import {
@@ -142,6 +146,7 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'getPrimaryTeammateCandidates',
   'setPrimaryTeammate',
   'setPrimaryTeammateIfUnset',
+  'setPrimaryAgenticToolIfUnset',
 ] as const;
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
@@ -311,6 +316,7 @@ interface UpdateUserData {
   // changes in the same PATCH. Scope for a var that doesn't exist is a no-op.
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configurations
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
   default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
   default_mcp_server_ids?: string[];
@@ -796,6 +802,9 @@ export class UsersService {
     assertSingleUserMutation(data);
     this.assertPatchAllowed(data);
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (data.primary_agentic_tool !== undefined && !isAgenticToolName(data.primary_agentic_tool)) {
+      throw new BadRequest('Invalid primary agentic tool');
+    }
     if (
       data.unix_username &&
       !(await isExecutionHomeKeyAvailable(this.db, data.unix_username, id))
@@ -852,6 +861,7 @@ export class UsersService {
       data.agentic_auth_methods ||
       data.env_vars ||
       data.env_var_scopes ||
+      data.primary_agentic_tool !== undefined ||
       data.default_agentic_config ||
       data.default_agentic_selection ||
       data.default_mcp_server_ids !== undefined
@@ -873,6 +883,7 @@ export class UsersService {
         agentic_tools?: StoredAgenticTools;
         agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
         env_vars?: Record<string, string | StoredEnvVar>;
+        primary_agentic_tool?: AgenticToolName;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
         default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
         default_mcp_server_ids?: string[];
@@ -1062,6 +1073,7 @@ export class UsersService {
             ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
             : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
+        primary_agentic_tool: data.primary_agentic_tool ?? current.primary_agentic_tool,
         default_agentic_config: nextDefaultAgenticConfig,
         default_agentic_selection: nextDefaultAgenticSelection,
         default_mcp_server_ids: data.default_mcp_server_ids ?? current.default_mcp_server_ids,
@@ -1416,13 +1428,85 @@ export class UsersService {
         });
   }
 
-  private requirePrimaryTeammateMember(params?: Params): UserID {
+  /**
+   * Seed the caller's primary coding agent after onboarding or their first
+   * successful session creation. The conditional update makes the first
+   * successful choice win without overwriting an explicit Settings change.
+   */
+  async setPrimaryAgenticToolIfUnset(
+    data: { tool: AgenticToolName },
+    params?: Params
+  ): Promise<User> {
+    const userId = this.requireMemberCaller(params, 'set a primary coding agent');
+    const tool = data?.tool;
+    if (!isAgenticToolName(tool)) {
+      throw new BadRequest('Invalid primary agentic tool');
+    }
+
+    await lockUserAuthorityMutation(this.db, params);
+    const currentRow = await select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.user_id, userId)))
+      .one();
+    if (!currentRow) throw new Forbidden(USER_AUTHORITY_DENIED);
+
+    const currentData = currentRow.data as Record<string, unknown> & {
+      primary_agentic_tool?: AgenticToolName;
+    };
+    if (currentData.primary_agentic_tool !== undefined) {
+      return this.rowToUser(currentRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+    }
+
+    const updatedRow = await update(this.db, users)
+      .set({
+        updated_at: new Date(),
+        data: { ...currentData, primary_agentic_tool: tool },
+      })
+      .where(
+        withTenantPredicate(
+          params,
+          and(
+            eq(users.user_id, userId),
+            isNull(jsonExtract(this.db, users.data, 'primary_agentic_tool'))
+          )
+        )
+      )
+      .returning()
+      .one();
+
+    const effectiveRow =
+      updatedRow ??
+      (await select(this.db)
+        .from(users)
+        .where(withTenantPredicate(params, eq(users.user_id, userId)))
+        .one());
+    if (!effectiveRow) throw new Forbidden(USER_AUTHORITY_DENIED);
+
+    if (updatedRow && this.app) {
+      emitServiceEvent(this.app, {
+        path: 'users',
+        event: 'patched',
+        id: userId,
+        // Owner-only decrypted presentation values must never ride a broadcast.
+        data: this.rowToUser(updatedRow, false, undefined, false),
+        params,
+      });
+    }
+
+    return this.rowToUser(effectiveRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+  }
+
+  private requireMemberCaller(params: Params | undefined, action: string): UserID {
     const userId = requireCallerId(params);
     const caller = (params as AuthenticatedParams | undefined)?.user;
     if (!hasMinimumRole(caller?.role, ROLES.MEMBER)) {
-      throw new Forbidden('Member role or higher is required to create assistant sessions');
+      throw new Forbidden(`Member role or higher is required to ${action}`);
     }
     return userId;
+  }
+
+  private requirePrimaryTeammateMember(params?: Params): UserID {
+    return this.requireMemberCaller(params, 'create assistant sessions');
   }
 
   /**
@@ -1453,6 +1537,7 @@ export class UsersService {
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
+      primary_agentic_tool?: AgenticToolName;
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
       default_mcp_server_ids?: string[];
@@ -1499,6 +1584,9 @@ export class UsersService {
       // Return env var metadata (presence + scope), NOT actual values
       env_vars: envVarMetadata,
       // Return default agentic config
+      primary_agentic_tool: isAgenticToolName(data.primary_agentic_tool)
+        ? data.primary_agentic_tool
+        : undefined,
       default_agentic_config: data.default_agentic_config,
       default_agentic_selection: data.default_agentic_selection,
       default_mcp_server_ids: data.default_mcp_server_ids,

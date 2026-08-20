@@ -97,6 +97,7 @@ describe('isTenantWriteMethodName', () => {
       'remove',
       'upsertBoardObject',
       'markConsumed',
+      'setPrimaryAgenticToolIfUnset',
       'setPrimaryTeammate',
       'setPrimaryTeammateIfUnset',
       'ensurePrimaryTeammateDefault',

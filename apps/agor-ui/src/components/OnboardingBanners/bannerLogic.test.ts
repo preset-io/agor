@@ -129,6 +129,17 @@ describe('decideBanner — onboarding gate', () => {
 });
 
 describe('resolveProbeAgent', () => {
+  it('prefers the explicit primary coding agent', () => {
+    expect(
+      resolveProbeAgent(
+        asUser({
+          primary_agentic_tool: 'gemini',
+          agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
+        })
+      )
+    ).toBe('gemini');
+  });
+
   it('prefers the tool a stored DB key points at', () => {
     expect(resolveProbeAgent(asUser({ agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } } }))).toBe(
       'codex'

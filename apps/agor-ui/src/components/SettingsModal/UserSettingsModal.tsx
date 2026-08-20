@@ -208,7 +208,8 @@ const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keyword
   preferences: {
     title: 'Preferences',
     icon: <BellOutlined />,
-    keywords: 'assistant teammate audio sound notification chime event stream',
+    keywords:
+      'assistant teammate primary coding agent agentic tool audio sound notification chime event stream',
   },
   security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
   tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
@@ -366,6 +367,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
   const [audioForm] = Form.useForm();
+  const [primaryToolForm] = Form.useForm();
 
   const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
     () => ({
@@ -464,8 +466,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
         must_change_password: userData.must_change_password ?? false,
       });
+      primaryToolForm.setFieldValue('primaryAgenticTool', userData.primary_agentic_tool);
     },
-    [form, initialTab]
+    [form, initialTab, primaryToolForm]
   );
 
   const loadUserGroups = useCallback(async () => {
@@ -756,6 +759,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           minDurationSeconds: audioValues.minDurationSeconds,
         };
         nextPreferences.eventStream = { enabled: form.getFieldValue('eventStreamEnabled') ?? true };
+        const primaryAgenticTool = primaryToolForm.getFieldValue('primaryAgenticTool') as
+          | AgenticToolName
+          | undefined;
+        if (primaryAgenticTool !== undefined) {
+          updates.primary_agentic_tool = primaryAgenticTool;
+        }
         preferencesTouched = true;
       }
 
@@ -1223,6 +1232,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         keywords: 'teammate default agent personal ambient work',
         panelKey: 'preferences',
       });
+      entries.push({
+        label: 'Primary coding agent',
+        kind: 'setting',
+        keywords: 'agentic tool default claude codex gemini opencode copilot cursor',
+        panelKey: 'preferences',
+      });
     }
     if (isSelf && onRestartOnboarding) {
       entries.push({
@@ -1663,6 +1678,44 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             currentUserId={currentUser?.user_id}
             compact
           />
+
+          <SectionDivider label="Coding sessions" />
+          <Form
+            form={primaryToolForm}
+            layout="vertical"
+            onValuesChange={() => markMainPanelDirty('preferences')}
+          >
+            <FieldRow
+              name="primaryAgenticTool"
+              label="Primary coding agent"
+              help={
+                user?.primary_agentic_tool
+                  ? 'Preselected for new sessions. Choosing another agent while composing affects only that session.'
+                  : 'Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
+              }
+              style={{ maxWidth: 560, marginBottom: 0 }}
+            >
+              <Select
+                placeholder="Not set — Claude Code is used initially"
+                loading={!tenantToolSettingsHydrated}
+                disabled={!tenantToolSettingsHydrated}
+                options={AGENTIC_TOOL_TABS.map((tool) => ({
+                  value: tool,
+                  disabled:
+                    tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false,
+                  label: (
+                    <Space size={8}>
+                      <ToolIcon tool={tool} size={16} />
+                      <span>{AGENTIC_TOOL_DISPLAY_NAMES[tool]}</span>
+                      {tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false && (
+                        <Typography.Text type="secondary">Disabled</Typography.Text>
+                      )}
+                    </Space>
+                  ),
+                }))}
+              />
+            </FieldRow>
+          </Form>
         </SettingsSection>
       )}
 

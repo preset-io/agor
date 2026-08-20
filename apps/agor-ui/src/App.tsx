@@ -27,6 +27,7 @@ import {
   boardPath,
   ENTITY_PATH_SEGMENTS,
   hasMinimumRole,
+  isAgenticToolName,
   ROLES,
   sessionPath,
 } from '@agor-live/client';
@@ -48,6 +49,7 @@ import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import type {
   NewSessionConfig,
   SessionInitializationResult,
@@ -836,6 +838,19 @@ function AppContent() {
     // homepage while the async work runs.
     if (!currentUser || !client) throw new Error('Not connected - try again when Agor reconnects.');
 
+    // Completing onboarding is an explicit tool choice. Seed it only while the
+    // preference is unset; a Settings selection made concurrently always wins.
+    if (result.agent && client) {
+      try {
+        await setPrimaryAgenticToolIfUnset(client, currentUser, result.agent);
+      } catch (error) {
+        console.warn(
+          '[onboarding] Failed to seed primary coding agent:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+
     // Seed the user's first AI teammate on the board they just named. The
     // framework repo has been cloning in the background since the wizard opened
     // (useEnsureFrameworkRepo above). This is best-effort: any failure must NOT
@@ -1217,7 +1232,17 @@ function AppContent() {
     if (!ownerId || sessionInitializationRecoveryRef.current.ownerId !== ownerId) return null;
     const retry = sessionInitializationRecoveryRef.current.retries.get(sessionId);
     if (!retry) return null;
-    return initializeSession(sessionId, retry);
+    const outcome = await initializeSession(sessionId, retry);
+    const tool = agorStore.getState().sessionById.get(sessionId)?.agentic_tool;
+    if (outcome.status === 'complete' && isAgenticToolName(tool)) {
+      void setPrimaryAgenticToolIfUnset(client, currentUser, tool).catch((error) => {
+        console.warn(
+          '[sessions] Failed to seed primary coding agent:',
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    }
+    return outcome;
   };
 
   // Handle session creation
@@ -1259,7 +1284,7 @@ function AppContent() {
     // never collapse back to null and invite a duplicate create.
     sessionCreated(session);
     showSuccess('Session created!');
-    return initializeSession(session.session_id, {
+    const outcome = await initializeSession(session.session_id, {
       mcpServerIds: config.mcpServerIds,
       envVarNames: config.envVarNames,
       content: {
@@ -1269,6 +1294,17 @@ function AppContent() {
         idempotencyKey: createPromptIdempotencyKey(),
       },
     });
+    if (outcome.status === 'complete' && isAgenticToolName(config.agent)) {
+      // Preference bootstrapping is deliberately non-blocking: initialization
+      // succeeded, and a profile-sync failure must not strand the new session.
+      void setPrimaryAgenticToolIfUnset(client, currentUser, config.agent).catch((error) => {
+        console.warn(
+          '[sessions] Failed to seed primary coding agent:',
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    }
+    return outcome;
   };
 
   // Update draft for a specific session

@@ -9,9 +9,11 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  DEFAULT_AGENTIC_TOOL_NAME,
   getDefaultPermissionMode,
   getTeammateConfig,
   mapToCodexPermissionConfig,
+  resolveUserPrimaryAgenticTool,
 } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -50,7 +52,6 @@ import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 
-const DEFAULT_TOOL: AgenticToolName = 'claude-code';
 const HINT_DISMISSED_KEY = 'agor:compose-hint-dismissed';
 
 type SendMode = 'open' | 'background';
@@ -112,7 +113,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [resolving, setResolving] = useState(false);
   const [resolveFailed, setResolveFailed] = useState(false);
   const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_TOOL);
+  const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_AGENTIC_TOOL_NAME);
   const [prompt, setPrompt] = useState('');
   const [pendingSend, setPendingSend] = useState<SendMode | null>(null);
   const [submitting, setSubmitting] = useState<SendMode | null>(null);
@@ -196,12 +197,13 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!open) return;
     mcpEditedRef.current = false;
     mcpInitializedBranchIdRef.current = null;
-    setSelectedAgent(DEFAULT_TOOL);
-    const agentDefaults = getUserAgenticToolDefault(currentUser, DEFAULT_TOOL).configuration;
+    const primaryTool = resolveUserPrimaryAgenticTool(currentUser);
+    setSelectedAgent(primaryTool);
+    const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
     form.resetFields();
     form.setFieldsValue({
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, DEFAULT_TOOL),
-      ...getFormValuesFromConfig(DEFAULT_TOOL, agentDefaults),
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, primaryTool),
+      ...getFormValuesFromConfig(primaryTool, agentDefaults),
       mcpServerIds: currentUser?.default_mcp_server_ids,
     });
   }, [open, form]);

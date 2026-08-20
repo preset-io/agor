@@ -1,9 +1,5 @@
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexNetworkAccess,
-  CodexSandboxMode,
-} from './agentic-tool';
+import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
+import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
 import type { UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
@@ -552,6 +548,8 @@ export interface User extends BaseUserFields {
   // tolerated on read but not yet exposed by the UI.
   env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.
@@ -572,6 +570,20 @@ export type UserAuthMetadata = object & {
 };
 
 export type InternalUser = User & UserAuthMetadata;
+
+/**
+ * Read an explicitly stored primary coding agent, tolerating malformed JSON.
+ */
+export function getUserPrimaryAgenticTool(
+  user: User | null | undefined
+): AgenticToolName | undefined {
+  return isAgenticToolName(user?.primary_agentic_tool) ? user.primary_agentic_tool : undefined;
+}
+
+/** Resolve the primary coding agent, falling back only while it is unset. */
+export function resolveUserPrimaryAgenticTool(user: User | null | undefined): AgenticToolName {
+  return getUserPrimaryAgenticTool(user) ?? DEFAULT_AGENTIC_TOOL_NAME;
+}
 
 /**
  * Env var scope values.
@@ -696,6 +708,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.

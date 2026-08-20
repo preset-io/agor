@@ -856,7 +856,8 @@ describe('createClient', () => {
         'ensurePrimaryTeammateDefault',
         'getPrimaryTeammateCandidates',
         'setPrimaryTeammate',
-        'setPrimaryTeammateIfUnset'
+        'setPrimaryTeammateIfUnset',
+        'setPrimaryAgenticToolIfUnset'
       );
     });
 

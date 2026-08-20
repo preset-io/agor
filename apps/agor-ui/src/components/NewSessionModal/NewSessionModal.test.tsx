@@ -59,8 +59,14 @@ vi.mock('../AutocompleteTextarea', () => ({
 
 // Heavy children that need a live client/store are irrelevant to this test.
 vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
-  AgentSelectionGrid: ({ onSelect }: { onSelect: (id: string) => void }) => (
-    <div data-testid="agent-grid">
+  AgentSelectionGrid: ({
+    onSelect,
+    selectedAgentId,
+  }: {
+    onSelect: (id: string) => void;
+    selectedAgentId: string;
+  }) => (
+    <div data-testid="agent-grid" data-selected={selectedAgentId}>
       <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
         codex
       </button>
@@ -85,10 +91,12 @@ vi.mock('../AgenticToolConfigurationPicker', () => ({
 }));
 vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: ({
+    tool,
     onConfigValidityChange,
     branchId,
     validateModelSelection,
   }: {
+    tool: string;
     onConfigValidityChange?: (valid: boolean, reason?: string) => void;
     branchId?: string;
     validateModelSelection?: boolean;
@@ -98,6 +106,7 @@ vi.mock('../AgenticConfigChipRow', () => ({
     return (
       <div
         data-testid="config-chip-row"
+        data-tool={tool}
         data-branch-id={branchId}
         data-validates-model={String(Boolean(validateModelSelection))}
       >
@@ -142,6 +151,23 @@ vi.mock('../../utils/message', () => ({
 // Antd Modal mount + async validateFields can exceed the default under the
 // full CI suite (see ForkSpawnModal.test.tsx).
 describe('NewSessionModal attachment intake', { timeout: 30_000 }, () => {
+  it('opens on the user primary coding agent', async () => {
+    render(
+      <NewSessionModal
+        open
+        onClose={vi.fn()}
+        onCreate={vi.fn(async () => null)}
+        availableAgents={[]}
+        branchId="branch-1"
+        currentUser={{ primary_agentic_tool: 'codex' } as never}
+        client={null}
+      />
+    );
+
+    expect(await screen.findByTestId('agent-grid')).toHaveAttribute('data-selected', 'codex');
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex');
+  });
+
   it('refuses file intake while a session is being created', async () => {
     // onCreate never resolves, so the modal stays open with isCreating latched.
     const onCreate = vi.fn(() => new Promise<void>(() => {}));

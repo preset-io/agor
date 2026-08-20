@@ -330,6 +330,18 @@ describe('NavbarComposeButton', () => {
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ agent: 'codex' });
   });
 
+  it('opens on the user primary coding agent', async () => {
+    renderCompose({
+      primary: primaryBranch,
+      currentUser: { primary_agentic_tool: 'codex' } as User,
+    });
+
+    openPopover();
+
+    expect(await screen.findByTestId('agent-grid')).toHaveAttribute('data-selected', 'codex');
+    expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex');
+  });
+
   it('renders the agent picker as the compact select variant, co-located with the config row', async () => {
     renderCompose({ primary: primaryBranch });
     openPopover();
