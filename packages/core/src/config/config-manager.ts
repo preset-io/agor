@@ -28,6 +28,7 @@ import {
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
 import { assertValidMultiTenancyConfig } from './multitenancy';
+import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
   AgorExternalIdentityProvider,
@@ -415,7 +416,14 @@ function resolveUnknownConfigKeyPolicy(): UnknownConfigKeyPolicy {
   );
 }
 
+function requirePlainConfigRecord(value: unknown, path: string): void {
+  if (!isPlainConfigRecord(value)) {
+    throw new Error(`Config error: ${path} must be an object`);
+  }
+}
+
 function validateConfig(config: AgorConfig): void {
+  requirePlainConfigRecord(config, 'config');
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
     ?.plugins;
   const removedModulePluginIndex = configuredAnalyticsPlugins?.findIndex(
@@ -522,14 +530,11 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const unknownPaths: string[] = [];
-  const requireObject = (value: unknown, path: string) => {
-    if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) {
-      throw new Error(`Config error: ${path} must be an object`);
-    }
-  };
   const only = (value: unknown, path: string, allowed: readonly string[]) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-    for (const key of Object.keys(value)) {
+    if (value === undefined) return;
+    requirePlainConfigRecord(value, path);
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
       if (!allowed.includes(key)) unknownPaths.push(`${path}.${key}`);
     }
   };
@@ -661,9 +666,6 @@ function validateConfig(config: AgorConfig): void {
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
-  requireObject(config.external_launch, 'external_launch');
-  requireObject(config.identity, 'identity');
-  requireObject(config.identity?.external, 'identity.external');
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',
@@ -1019,14 +1021,6 @@ function validateConfig(config: AgorConfig): void {
   }
 
   assertValidMultiTenancyConfig(config);
-
-  validateOptionalHttpUrl(
-    config.external_launch as Record<string, unknown> | undefined,
-    'login_redirect_url',
-    'external_launch.login_redirect_url'
-  );
-
-  validateExternalLaunchReturnHostParam(config);
 }
 
 /**
@@ -1047,55 +1041,6 @@ export function requireDeploymentId(config: AgorConfig): string {
     throw new Error("Config error: 'daemon.deployment_id' is required and must be a valid UUID");
   }
   return deploymentId;
-}
-
-/**
- * Query-parameter name the UI reserves for the relative deep-link it forwards
- * to the launch-init endpoint (see apps/agor-ui/src/utils/launchInitUrl.ts). The
- * host param must never reuse this name: the UI sets `return_to` first and then
- * the host param, so an equal name would overwrite the deep-link with the host.
- */
-const RESERVED_RETURN_TO_PARAM = 'return_to';
-
-function validateExternalLaunchReturnHostParam(config: AgorConfig): void {
-  const raw = config.external_launch?.return_host_param;
-  if (raw === undefined) return;
-  if (typeof raw !== 'string') {
-    throw new Error('Config error: external_launch.return_host_param must be a string');
-  }
-  // An empty value intentionally falls back to the default (`return_host`) at
-  // resolve time, so it is left untouched here.
-  if (raw === '') return;
-  if (raw === RESERVED_RETURN_TO_PARAM) {
-    throw new Error(
-      `Config error: external_launch.return_host_param must not be "${RESERVED_RETURN_TO_PARAM}" — ` +
-        'that name is reserved for the relative deep-link the UI forwards to the launch-init ' +
-        'endpoint, and reusing it would overwrite the deep-link with the return host.'
-    );
-  }
-  // Conservative query-parameter-name charset: the value becomes a URL query
-  // key, so restrict it to opaque identifier characters and reject separators.
-  if (!/^[A-Za-z0-9_.-]+$/.test(raw)) {
-    throw new Error(
-      'Config error: external_launch.return_host_param may only contain letters, digits, ' +
-        'underscore, hyphen, and dot'
-    );
-  }
-}
-
-function validateOptionalHttpUrl(
-  container: Record<string, unknown> | undefined,
-  key: string,
-  configPath: string
-): void {
-  if (!container || container[key] === undefined) return;
-
-  const raw = container[key];
-  if (typeof raw !== 'string') {
-    throw new Error(`Config error: ${configPath} must be an HTTP(S) URL string`);
-  }
-
-  container[key] = validateHttpUrlString(raw, configPath);
 }
 
 function validateHttpUrlString(

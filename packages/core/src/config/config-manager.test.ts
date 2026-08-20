@@ -956,6 +956,14 @@ describe('loadConfig', () => {
 
     await fs.writeFile(configPath, 'external_launch: enabled\n', 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/external_launch must be an object/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, 'identity: 2026-08-20\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/identity must be an object/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, 'external_launch: 2026-08-20\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/external_launch must be an object/);
   });
 
   it('accepts an HTTP(S) external launch login redirect URL', async () => {
@@ -975,7 +983,8 @@ describe('loadConfig', () => {
     );
 
     const loaded = await loadConfig();
-    expect(loaded.external_launch?.login_redirect_url).toBe('https://workspace.example.com/open');
+    // Validation is non-mutating; startup's retained provider owns normalization.
+    expect(loaded.external_launch?.login_redirect_url).toBe(' https://workspace.example.com/open ');
   });
 
   it('rejects a non-HTTP(S) external launch login redirect URL', async () => {

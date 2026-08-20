@@ -52,6 +52,11 @@ describe('identity authority', () => {
     expect(() => assertValidRawConfig(scalarExternal)).toThrow(
       /Config error: identity\.external must be an object/i
     );
+
+    class IdentitySettings {}
+    expect(() =>
+      assertValidRawConfig({ identity: new IdentitySettings() } as unknown as AgorConfig)
+    ).toThrow(/Config error: identity must be an object/i);
   });
 
   it('derives externally managed capabilities from the coherent external profile', () => {

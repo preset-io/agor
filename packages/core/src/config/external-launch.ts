@@ -1,9 +1,9 @@
 import { createPublicKey, type KeyObject } from 'node:crypto';
+import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
   AgorExternalLaunchAlgorithm,
   type AgorExternalLaunchSettings,
-  type ResolvedExternalLaunchSettings,
 } from './types';
 
 export const EXTERNAL_LAUNCH_DEFAULT_TIMEOUT_MS = 10_000;
@@ -37,10 +37,6 @@ function booleanEnvironmentValue(value: string | undefined, name: string): boole
   if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
   if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   throw new Error(`Config error: ${name} must be one of: true, false, 1, 0, yes, no, on, off`);
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function requiredString(
@@ -90,9 +86,7 @@ function httpUrl(
   return value;
 }
 
-function parseAlgorithms(
-  raw: Record<string, unknown>
-): ResolvedExternalLaunchSettings['algorithms'] {
+function parseAlgorithms(raw: Record<string, unknown>): AgorExternalLaunchAlgorithm[] | undefined {
   const algorithms = raw.algorithms;
   if (algorithms === undefined) return undefined;
   if (!Array.isArray(algorithms) || algorithms.length === 0) {
@@ -102,7 +96,7 @@ function parseAlgorithms(
   if (algorithms.some((algorithm) => typeof algorithm !== 'string' || !supported.has(algorithm))) {
     throw new Error(`external_launch.algorithms may only contain: ${[...supported].join(', ')}`);
   }
-  return algorithms as ResolvedExternalLaunchSettings['algorithms'];
+  return [...algorithms] as AgorExternalLaunchAlgorithm[];
 }
 
 const DEFAULT_HMAC_ALGORITHMS = [AgorExternalLaunchAlgorithm.HS256];
@@ -120,8 +114,8 @@ const EC_CURVE_ALGORITHM = new Map<string, AgorExternalLaunchAlgorithm>([
 
 function publicKeyAlgorithms(
   key: KeyObject,
-  configured: ResolvedExternalLaunchSettings['algorithms']
-): ResolvedExternalLaunchSettings['algorithms'] {
+  configured: AgorExternalLaunchAlgorithm[] | undefined
+): AgorExternalLaunchAlgorithm[] {
   if (key.asymmetricKeyType === 'rsa') {
     const algorithms = configured ?? DEFAULT_RSA_ALGORITHMS;
     if (
@@ -152,12 +146,35 @@ function publicKeyAlgorithms(
   );
 }
 
+/** Node-only provider model retained for the daemon's full process lifetime. */
+export interface ResolvedExternalLaunchProvider {
+  readonly enabled: boolean;
+  readonly exchangeUrl?: string;
+  readonly audience?: string;
+  readonly issuer?: string;
+  readonly instanceId?: string;
+  readonly providerId?: string;
+  readonly jwksUrl?: string;
+  /** Parsed once after environment projection; the PEM is not retained. */
+  readonly publicKey?: KeyObject;
+  readonly devSharedSecret?: string;
+  readonly serviceCredential?: string;
+  readonly allowAdminRoles: boolean;
+  readonly trustVerifiedEmailForLinking: boolean;
+  readonly requestTimeoutMs: number;
+  readonly algorithms?: readonly AgorExternalLaunchAlgorithm[];
+  readonly forwardRequestHost: boolean;
+  readonly trustedHostHeader: string;
+  readonly loginRedirectUrl?: string;
+  readonly returnHostParam?: string;
+}
+
 function parseExternalLaunchSettings(
   config: AgorConfig,
-  options: { requireCompleteProvider?: boolean } = {}
-): ResolvedExternalLaunchSettings {
+  options: { requireCompleteProvider?: boolean; resolvePublicKey?: boolean } = {}
+): ResolvedExternalLaunchProvider {
   const rawValue = config.external_launch as unknown;
-  if (rawValue !== undefined && !isObject(rawValue)) {
+  if (rawValue !== undefined && !isPlainConfigRecord(rawValue)) {
     throw new Error('external_launch must be an object');
   }
   const raw = rawValue ?? {};
@@ -173,7 +190,7 @@ function parseExternalLaunchSettings(
   const jwksUrl = httpUrl(requiredString(raw, 'jwks_url'), 'external_launch.jwks_url', {
     rejectUserinfo: true,
   });
-  const publicKey = requiredString(raw, 'public_key', { preserveWhitespace: true });
+  const publicKeyPem = requiredString(raw, 'public_key', { preserveWhitespace: true });
   const devSharedSecret = requiredString(raw, 'dev_shared_secret', { preserveWhitespace: true });
   const serviceCredential = requiredString(raw, 'service_credential', {
     preserveWhitespace: true,
@@ -237,7 +254,7 @@ function parseExternalLaunchSettings(
     );
   }
 
-  const verificationMethods = [jwksUrl, publicKey, devSharedSecret].filter(Boolean);
+  const verificationMethods = [jwksUrl, publicKeyPem, devSharedSecret].filter(Boolean);
   const requireCompleteProvider = options.requireCompleteProvider ?? true;
   if (requireCompleteProvider && enabled && !exchangeUrl) {
     throw new Error('external_launch.exchange_url is required when external launch is enabled');
@@ -253,14 +270,14 @@ function parseExternalLaunchSettings(
   if (verificationMethods.length > 1) {
     throw new Error('external_launch must not configure multiple assertion verification methods');
   }
-  if (publicKey) {
-    let key: KeyObject;
+  let publicKey: KeyObject | undefined;
+  if (publicKeyPem && (options.resolvePublicKey ?? true)) {
     try {
-      key = createPublicKey(publicKey);
+      publicKey = createPublicKey(publicKeyPem);
     } catch {
       throw new Error('external_launch.public_key must be a valid public key');
     }
-    algorithms = publicKeyAlgorithms(key, algorithms);
+    algorithms = publicKeyAlgorithms(publicKey, algorithms);
   }
   if (algorithms) {
     const hasHsAlgorithm = algorithms.some((algorithm) => algorithm.startsWith('HS'));
@@ -268,7 +285,7 @@ function parseExternalLaunchSettings(
     if (devSharedSecret && hasNonHsAlgorithm) {
       throw new Error('external_launch symmetric verification may only use HS* algorithms');
     }
-    if ((jwksUrl || publicKey) && hasHsAlgorithm) {
+    if ((jwksUrl || publicKeyPem) && hasHsAlgorithm) {
       throw new Error('external_launch asymmetric verification cannot use HS* algorithms');
     }
   }
@@ -300,11 +317,11 @@ function parseExternalLaunchSettings(
 }
 
 export interface ExternalLaunchSettingsResolution {
-  settings: ResolvedExternalLaunchSettings;
+  settings: ResolvedExternalLaunchProvider;
   error?: string;
 }
 
-const DISABLED_LAUNCH_SETTINGS: ResolvedExternalLaunchSettings = {
+const DISABLED_LAUNCH_SETTINGS: ResolvedExternalLaunchProvider = {
   enabled: false,
   allowAdminRoles: false,
   trustVerifiedEmailForLinking: false,
@@ -314,9 +331,8 @@ const DISABLED_LAUNCH_SETTINGS: ResolvedExternalLaunchSettings = {
 };
 
 /**
- * Parse the complete provider profile once through the same fail-closed
- * contract used by startup and request handling. Invalid raw values never
- * escape into auth code as partially trusted settings.
+ * Parse one provider profile through the canonical fail-closed contract.
+ * Daemon startup promotes a successful result into its retained runtime model.
  */
 export function resolveExternalLaunchSettings(
   config: AgorConfig
@@ -401,7 +417,7 @@ export function assertValidRawExternalLaunchConfig(configured: unknown): void {
   try {
     parseExternalLaunchSettings(
       { external_launch: configured as AgorConfig['external_launch'] },
-      { requireCompleteProvider: false }
+      { requireCompleteProvider: false, resolvePublicKey: false }
     );
   } catch (error) {
     const message =
@@ -410,17 +426,14 @@ export function assertValidRawExternalLaunchConfig(configured: unknown): void {
   }
 }
 
-/**
- * Return the single startup/request-time validation result used by both the
- * config boundary and launch service. Keeping this pure prevents the two
- * enforcement points from accepting different provider configurations.
- */
-export function externalLaunchConfigurationError(config: AgorConfig): string | undefined {
-  return resolveExternalLaunchSettings(config).error;
-}
-
-/** Fail startup before database initialization when enabled launch auth is unusable. */
-export function assertValidEffectiveExternalLaunchConfig(config: AgorConfig): void {
-  const error = externalLaunchConfigurationError(config);
+/** Resolve and retain the one validated Node runtime provider model. */
+export function resolveValidExternalLaunchProvider(
+  config: AgorConfig
+): ResolvedExternalLaunchProvider {
+  const { settings, error } = resolveExternalLaunchSettings(config);
   if (error) throw new Error(`Config error: ${error}`);
+  const algorithms = settings.algorithms
+    ? (Object.freeze([...settings.algorithms]) as AgorExternalLaunchAlgorithm[])
+    : undefined;
+  return Object.freeze({ ...settings, algorithms });
 }

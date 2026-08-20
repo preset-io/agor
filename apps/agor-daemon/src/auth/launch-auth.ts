@@ -4,8 +4,7 @@ import {
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
-  type ResolvedExternalLaunchSettings,
-  resolveExternalLaunchSettings,
+  type ResolvedExternalLaunchProvider,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveTenantContext,
@@ -83,42 +82,36 @@ export interface LaunchAuthResult {
 export interface LaunchAuthServiceOptions {
   db: TenantScopeAwareDatabase;
   config: AgorConfig;
+  provider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
   usersService: { get(id: UserID, params?: Params): Promise<User> };
 }
 
-export function resolveLaunchSettings(config: AgorConfig): ResolvedExternalLaunchSettings {
-  return resolveExternalLaunchSettings(config).settings;
-}
-
-export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunchAuthSettings {
-  const { settings, error } = resolveExternalLaunchSettings(config);
-  const enabled = settings.enabled && !error;
+export function resolvePublicLaunchAuthSettings(
+  provider: ResolvedExternalLaunchProvider
+): PublicLaunchAuthSettings {
+  const enabled = provider.enabled;
 
   return {
     enabled,
-    ...(enabled && settings.loginRedirectUrl
-      ? { loginRedirectUrl: settings.loginRedirectUrl }
+    ...(enabled && provider.loginRedirectUrl
+      ? { loginRedirectUrl: provider.loginRedirectUrl }
       : {}),
-    ...(enabled && settings.returnHostParam ? { returnHostParam: settings.returnHostParam } : {}),
+    ...(enabled && provider.returnHostParam ? { returnHostParam: provider.returnHostParam } : {}),
   };
 }
 
-function assertConfigured(
-  settings: ResolvedExternalLaunchSettings,
-  configurationError?: string
-): void {
+function assertConfigured(settings: ResolvedExternalLaunchProvider): void {
   const rejectConfig = (reason: string): never => {
     console.warn(`[auth/launch] ${reason}`);
     throw new NotAuthenticated('One-time launch authentication is unavailable');
   };
 
   if (!settings.enabled) {
-    rejectConfig(configurationError ?? 'disabled');
+    rejectConfig('disabled');
   }
-  if (configurationError) rejectConfig(configurationError);
 }
 
 function identityKey(provider: string, issuer: string, subject: string): string {
@@ -183,7 +176,7 @@ function normalizeLaunchEmail(value: string | undefined): string | undefined {
 
 function mapRole(
   claimedRole: string | undefined,
-  settings: ResolvedExternalLaunchSettings,
+  settings: ResolvedExternalLaunchProvider,
   allowSuperadmin: boolean | undefined,
   existingRole?: UserRole,
   roleAuthority: AgorRoleAuthority = AgorRoleAuthority.INTERNAL
@@ -248,7 +241,7 @@ async function findUserByTrustedEmail(
   db: TenantScopedDatabase,
   email: string | undefined,
   key: string,
-  settings: ResolvedExternalLaunchSettings,
+  settings: ResolvedExternalLaunchProvider,
   claims: LaunchClaims
 ): Promise<typeof users.$inferSelect | null> {
   if (!settings.trustVerifiedEmailForLinking || claims.email_verified !== true || !email) {
@@ -277,7 +270,7 @@ async function projectLaunchUser(
   const { config } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
-  const settings = resolveLaunchSettings(config);
+  const settings = options.provider;
   const identityAuthority = resolveIdentityAuthority(config);
   const provider = claims.provider || settings.providerId || issuer;
   const key = identityKey(provider, issuer, subject);
@@ -440,7 +433,7 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
  * when forwarding is enabled but no unambiguous host is available.
  */
 export function resolveRequestHost(
-  settings: ResolvedExternalLaunchSettings,
+  settings: ResolvedExternalLaunchProvider,
   headers: Record<string, unknown> | undefined
 ): string | undefined {
   if (!settings.forwardRequestHost) return undefined;
@@ -472,7 +465,7 @@ export function resolveRequestHost(
 
 async function exchangeLaunchCode(
   launchCode: string,
-  settings: ResolvedExternalLaunchSettings,
+  settings: ResolvedExternalLaunchProvider,
   requestHost: string | undefined
 ): Promise<LaunchExchangeResponse> {
   const headers: Record<string, string> = {
@@ -504,7 +497,7 @@ async function exchangeLaunchCode(
 
 async function resolveVerificationKey(
   header: JwtHeader,
-  settings: ResolvedExternalLaunchSettings
+  settings: ResolvedExternalLaunchProvider
 ): Promise<string | KeyObject> {
   if (settings.devSharedSecret) return settings.devSharedSecret;
   if (settings.publicKey) return settings.publicKey;
@@ -528,7 +521,7 @@ async function resolveVerificationKey(
 
 async function verifyLaunchAssertion(
   assertion: string,
-  settings: ResolvedExternalLaunchSettings
+  settings: ResolvedExternalLaunchProvider
 ): Promise<LaunchClaims> {
   const decoded = jwt.decode(assertion, { complete: true });
   if (!decoded || typeof decoded !== 'object') {
@@ -544,7 +537,9 @@ async function verifyLaunchAssertion(
   // The shared config parser supplies a key-compatible algorithm allow-list.
   // These fallbacks are defensive for callers constructing resolved settings
   // outside that parser; they preserve the historical JWKS/dev defaults.
-  const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : ['RS256']);
+  const algorithms = [
+    ...(settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : ['RS256'])),
+  ];
   const claims = jwt.verify(assertion, key, {
     issuer: settings.issuer,
     audience: settings.audience,
@@ -557,7 +552,7 @@ async function verifyLaunchAssertion(
 
 function validateLaunchClaims(
   claims: LaunchClaims,
-  settings: ResolvedExternalLaunchSettings
+  settings: ResolvedExternalLaunchProvider
 ): void {
   if (!claims.iss || claims.iss !== settings.issuer) {
     throw new NotAuthenticated('Invalid one-time launch assertion issuer');
@@ -715,9 +710,8 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         throw new BadRequest('launchCode is too long');
       }
 
-      const resolvedSettings = resolveExternalLaunchSettings(options.config);
-      const settings = resolvedSettings.settings;
-      assertConfigured(settings, resolvedSettings.error);
+      const settings = options.provider;
+      assertConfigured(settings);
 
       try {
         // Resolve the browser Host from the trusted local request context BEFORE

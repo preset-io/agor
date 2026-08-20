@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
   createDatabase,
@@ -36,6 +36,11 @@ function baseConfig(): AgorConfig {
       service_credential: 'exchange-credential',
     },
   };
+}
+
+function publicLaunchAuthSettings(config: AgorConfig) {
+  const { settings } = resolveExternalLaunchSettings(config);
+  return resolvePublicLaunchAuthSettings(settings);
 }
 
 function externalAuthorityConfig(): AgorConfig {
@@ -127,9 +132,11 @@ describe('one-time launch auth service', () => {
   });
 
   function service(config = baseConfig(), usersService = makeUsersService(db)) {
+    const { settings } = resolveExternalLaunchSettings(config);
     return createLaunchAuthService({
       db,
       config,
+      provider: settings,
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
@@ -784,7 +791,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('returns only the public external launch shape', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://workspace.example.test/open',
@@ -803,7 +810,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('exposes a default return-host param alongside a login redirect', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://console.example.test/launch-init',
@@ -813,7 +820,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('honors a configured return-host param name', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://console.example.test/launch-init',
@@ -824,14 +831,14 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('does not expose a return-host param without a login redirect', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: { ...baseConfig().external_launch },
     });
     expect(result).not.toHaveProperty('returnHostParam');
   });
 
   it('never exposes the exchange service credential in public settings', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         service_credential: 'exchange-only-credential',
@@ -843,7 +850,7 @@ describe('public one-time launch auth settings', () => {
 
   it('does not expose an inactive login redirect URL', () => {
     expect(
-      resolvePublicLaunchAuthSettings({
+      publicLaunchAuthSettings({
         external_launch: {
           ...baseConfig().external_launch,
           enabled: false,

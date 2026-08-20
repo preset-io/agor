@@ -37,7 +37,6 @@ import {
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
   assertValidEffectiveExecutionConfig,
-  assertValidEffectiveExternalLaunchConfig,
   assertValidEffectiveIdentityConfig,
   assertValidRawConfig,
   getConfigPath,
@@ -52,6 +51,7 @@ import {
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveSecurity,
+  resolveValidExternalLaunchProvider,
 } from '@agor/core/config';
 import { generateId, resolveDatabaseUrl } from '@agor/core/db';
 import {
@@ -200,7 +200,7 @@ async function startDaemonWithOwnedMetrics(
   config = resolveEffectiveConfig(config);
   const deploymentId = requireDeploymentId(config);
   assertValidEffectiveExecutionConfig(config);
-  assertValidEffectiveExternalLaunchConfig(config);
+  const externalLaunchProvider = resolveValidExternalLaunchProvider(config);
   assertValidEffectiveIdentityConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
@@ -860,6 +860,7 @@ async function startDaemonWithOwnedMetrics(
     db,
     app,
     config: effectiveConfig,
+    externalLaunchProvider,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,

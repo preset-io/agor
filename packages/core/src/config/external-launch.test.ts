@@ -1,9 +1,10 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  assertValidEffectiveExternalLaunchConfig,
+  assertValidRawExternalLaunchConfig,
   resolveEffectiveExternalLaunchConfig,
   resolveExternalLaunchSettings,
+  resolveValidExternalLaunchProvider,
 } from './external-launch';
 import type { AgorConfig } from './types';
 
@@ -71,10 +72,10 @@ describe('external launch effective config', () => {
 
   it('fails startup for incomplete or ambiguous enabled providers', () => {
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig({ external_launch: { enabled: true } })
+      resolveValidExternalLaunchProvider({ external_launch: { enabled: true } })
     ).toThrow(/exchange_url/);
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig({
+      resolveValidExternalLaunchProvider({
         external_launch: {
           enabled: true,
           exchange_url: 'https://issuer.example.test/exchange',
@@ -89,7 +90,7 @@ describe('external launch effective config', () => {
 
   it('accepts one complete effective provider configuration', () => {
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig({
+      resolveValidExternalLaunchProvider({
         external_launch: {
           enabled: true,
           exchange_url: 'https://issuer.example.test/exchange',
@@ -128,13 +129,13 @@ describe('external launch effective config', () => {
     ['non-boolean host forwarding', { forward_request_host: 'yes' }, /must be a boolean/i],
   ])('fails startup for an enabled provider with %s', (_label, override, expected) => {
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig(unsafeConfig({ ...completeProvider, ...override }))
+      resolveValidExternalLaunchProvider(unsafeConfig({ ...completeProvider, ...override }))
     ).toThrow(expected);
   });
 
   it('requires configured algorithms to match the verification key family', () => {
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig(
+      resolveValidExternalLaunchProvider(
         unsafeConfig({
           ...completeProvider,
           jwks_url: undefined,
@@ -146,7 +147,7 @@ describe('external launch effective config', () => {
   });
 
   it('derives a curve-compatible default for an EC public key', () => {
-    const result = resolveExternalLaunchSettings(
+    const settings = resolveValidExternalLaunchProvider(
       unsafeConfig({
         ...completeProvider,
         jwks_url: undefined,
@@ -154,8 +155,11 @@ describe('external launch effective config', () => {
       })
     );
 
-    expect(result.error).toBeUndefined();
-    expect(result.settings.algorithms).toEqual(['ES256']);
+    expect(settings.algorithms).toEqual(['ES256']);
+    expect(settings.publicKey).toMatchObject({ type: 'public', asymmetricKeyType: 'ec' });
+    expect(typeof settings.publicKey).not.toBe('string');
+    expect(Object.isFrozen(settings)).toBe(true);
+    expect(Object.isFrozen(settings.algorithms)).toBe(true);
   });
 
   it.each([
@@ -175,7 +179,7 @@ describe('external launch effective config', () => {
     ['an unsupported key type', publicKeyPem('ed25519'), ['RS256'], /unsupported key type/i],
   ])('rejects %s', (_label, publicKey, algorithms, expected) => {
     expect(() =>
-      assertValidEffectiveExternalLaunchConfig(
+      resolveValidExternalLaunchProvider(
         unsafeConfig({
           ...completeProvider,
           jwks_url: undefined,
@@ -193,6 +197,20 @@ describe('external launch effective config', () => {
         {}
       )
     ).toThrow(/Config error: external_launch\.service_credential_env must be a non-empty string/i);
+  });
+
+  it('validates raw launch settings without mutating caller-owned config', () => {
+    const configured = {
+      login_redirect_url: ' https://workspace.example.test/open ',
+      return_host_param: ' workspace_host ',
+    };
+
+    assertValidRawExternalLaunchConfig(configured);
+
+    expect(configured).toEqual({
+      login_redirect_url: ' https://workspace.example.test/open ',
+      return_host_param: ' workspace_host ',
+    });
   });
 
   it('returns the normalized settings consumed by request handling', () => {

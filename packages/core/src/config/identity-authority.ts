@@ -1,3 +1,4 @@
+import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
   AgorExternalIdentityProvider,
@@ -53,15 +54,12 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
 export function assertValidEffectiveIdentityConfig(config: AgorConfig): void {
   const identityValue = config.identity as unknown;
   if (identityValue === undefined) return;
-  if (!identityValue || typeof identityValue !== 'object' || Array.isArray(identityValue)) {
+  if (!isPlainConfigRecord(identityValue)) {
     throw new Error('identity must be an object');
   }
   const identity = identityValue as NonNullable<AgorConfig['identity']>;
   const externalValue = identity.external as unknown;
-  if (
-    externalValue !== undefined &&
-    (!externalValue || typeof externalValue !== 'object' || Array.isArray(externalValue))
-  ) {
+  if (externalValue !== undefined && !isPlainConfigRecord(externalValue)) {
     throw new Error('identity.external must be an object');
   }
 

@@ -274,28 +274,6 @@ export const AgorExternalLaunchAlgorithm = {
 export type AgorExternalLaunchAlgorithm =
   (typeof AgorExternalLaunchAlgorithm)[keyof typeof AgorExternalLaunchAlgorithm];
 
-/** Fully normalized launch settings consumed by startup and request handling. */
-export interface ResolvedExternalLaunchSettings {
-  enabled: boolean;
-  exchangeUrl?: string;
-  audience?: string;
-  issuer?: string;
-  instanceId?: string;
-  providerId?: string;
-  jwksUrl?: string;
-  publicKey?: string;
-  devSharedSecret?: string;
-  serviceCredential?: string;
-  allowAdminRoles: boolean;
-  trustVerifiedEmailForLinking: boolean;
-  requestTimeoutMs: number;
-  algorithms?: AgorExternalLaunchAlgorithm[];
-  forwardRequestHost: boolean;
-  trustedHostHeader: string;
-  loginRedirectUrl?: string;
-  returnHostParam?: string;
-}
-
 /** Which system may create and remove user projections in this daemon. */
 export const AgorUserLifecycleAuthority = {
   INTERNAL: 'internal',
