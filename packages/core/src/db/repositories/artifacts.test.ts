@@ -65,6 +65,33 @@ describe('ArtifactRepository.findAll', () => {
     expect(onBoardA.map((a) => a.name).sort()).toEqual(['a1', 'a2']);
   });
 
+  dbTest('projects metadata without materializing artifact source blobs', async ({ db }) => {
+    const repo = new ArtifactRepository(db);
+    const board = await createBoard(db);
+    await repo.create({
+      artifact_id: generateId(),
+      board_id: board,
+      name: 'projected',
+      files: { '/src/App.tsx': 'large source' },
+      dependencies: { react: '18.3.1' },
+      required_env_vars: ['API_TOKEN'],
+    });
+
+    const [metadata] = await repo.findAll({ board_id: board, projection: 'metadata' });
+    expect(metadata).toMatchObject({ name: 'projected' });
+    expect(metadata.files).toBeUndefined();
+    expect(metadata.dependencies).toBeUndefined();
+    expect(metadata.required_env_vars).toBeUndefined();
+
+    const [withoutFiles] = await repo.findAll({
+      board_id: board,
+      projection: 'without-files',
+    });
+    expect(withoutFiles.files).toBeUndefined();
+    expect(withoutFiles.dependencies).toEqual({ react: '18.3.1' });
+    expect(withoutFiles.required_env_vars).toEqual(['API_TOKEN']);
+  });
+
   dbTest('filters by exact archived state', async ({ db }) => {
     const repo = new ArtifactRepository(db);
     const board = await createBoard(db);

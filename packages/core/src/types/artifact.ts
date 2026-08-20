@@ -230,6 +230,35 @@ export interface Artifact {
   url?: string | null;
 }
 
+/** Artifact list response fields that preserve the legacy DTO while omitting source files. */
+export const ARTIFACT_LIST_FIELDS_WITHOUT_FILES = [
+  'artifact_id',
+  'branch_id',
+  'source_session_id',
+  'board_id',
+  'name',
+  'description',
+  'path',
+  'template',
+  'build_status',
+  'build_errors',
+  'content_hash',
+  'dependencies',
+  'entry',
+  'sandpack_config',
+  'required_env_vars',
+  'agor_grants',
+  'agor_runtime',
+  'public',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'archived',
+  'archived_at',
+  'fullscreen_url',
+  'url',
+] as const satisfies readonly (keyof Artifact)[];
+
 /**
  * Artifact payload served to frontend via REST.
  *

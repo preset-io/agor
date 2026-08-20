@@ -1732,6 +1732,48 @@ describe('ArtifactsService.find SQL pushdown', () => {
     expect(result.data.every((a) => a.files !== undefined)).toBe(true);
   });
 
+  dbTest('pushes metadata-only $select into the SQL projection', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        board_id: boardA,
+        $select: ['artifact_id', 'name', 'updated_at'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id' | 'name' | 'updated_at'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA, projection: 'metadata' });
+    expect(result.total).toBe(3);
+    expect(result.data).toHaveLength(3);
+    expect(result.data.every((artifact) => Object.keys(artifact).length === 3)).toBe(true);
+  });
+
+  dbTest('keeps non-file runtime fields when only files are excluded', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        board_id: boardA,
+        $select: ['artifact_id', 'dependencies'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id' | 'dependencies'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      board_id: boardA,
+      projection: 'without-files',
+    });
+    expect(result.total).toBe(3);
+    expect(result.data).toHaveLength(3);
+  });
+
   dbTest(
     'pushes board_id + accessible branch_id $in and excludes orphans (rbac on)',
     async ({ db }) => {

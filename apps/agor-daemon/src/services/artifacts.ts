@@ -170,6 +170,17 @@ export type ArtifactParams = QueryParams<{
 
 const MAX_CONSOLE_ENTRIES = 100;
 
+const ARTIFACT_HEAVY_LIST_FIELDS = [
+  'files',
+  'dependencies',
+  'entry',
+  'sandpack_config',
+  'required_env_vars',
+  'agor_grants',
+  'agor_runtime',
+] as const satisfies readonly (keyof Artifact)[];
+const ARTIFACT_HEAVY_LIST_FIELD_SET = new Set<string>(ARTIFACT_HEAVY_LIST_FIELDS);
+
 /** Path the synthesized .env file lands at in the file map. */
 const SYNTHESIZED_ENV_PATH = '/.env';
 
@@ -301,12 +312,27 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
+      projection?: 'metadata' | 'without-files';
     } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
     if (typeof query.archived === 'boolean') filter.archived = query.archived;
     if (params?._agorSqlBranchAccessUserId) {
       filter.visibleToUserId = params._agorSqlBranchAccessUserId;
+    }
+
+    // `$select` used to run only after `SELECT *` and JSON decoding, so even a
+    // metadata-only initial hydration pulled every source file over the DB
+    // connection. Keep full-row reads as the default, but when the caller has
+    // explicitly excluded `files`, select either the complete legacy list DTO
+    // without files or the smaller metadata shape directly in SQL.
+    const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
+    if (selectedFields && !selectedFields.includes('files')) {
+      filter.projection = selectedFields.some(
+        (field) => field !== 'files' && ARTIFACT_HEAVY_LIST_FIELD_SET.has(field)
+      )
+        ? 'without-files'
+        : 'metadata';
     }
 
     const branchId = query.branch_id;

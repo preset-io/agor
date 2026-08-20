@@ -21,6 +21,7 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
+import { ARTIFACT_LIST_FIELDS_WITHOUT_FILES } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -720,6 +721,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
           $limit: limit,
           $skip: offset,
           $sort: { created_at: -1, artifact_id: 1 },
+          $select: [...ARTIFACT_LIST_FIELDS_WITHOUT_FILES],
         },
         ...ctx.baseServiceParams,
       });
