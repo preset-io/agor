@@ -229,8 +229,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                 backgroundColor: token.colorBgElevated,
                 borderRadius: token.borderRadiusLG,
                 boxShadow: token.boxShadowSecondary,
-                minWidth: 248,
-                maxWidth: 456,
+                width: 320,
               }}
             >
               <div

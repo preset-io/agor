@@ -62,9 +62,12 @@ palette into a constants file just to avoid tokens.
 Any component that renders user-supplied text — board, teammate, card, and session names,
 filenames, repo slugs, and similar — MUST keep that text from breaking its layout:
 
-1. **Bound the width.** Give the container a `maxWidth` (and usually a `minWidth`) so it never
-   grows arbitrarily with content. Reference roughly `min 248px` / `max 456px`, adapted to the
-   nearest existing sizing token rather than a bare literal where one fits.
+1. **Bound the width.** Keep the container from growing arbitrarily with content. Pick the shape
+   by surface: a **compact nav/menu dropdown uses a single fixed width** (~280–360px; the board
+   switcher is 320px) so the panel stays predictable and never feels like a data selector —
+   truncation, not width, absorbs long names. Reserve a wider `minWidth` / `maxWidth` range (up
+   to roughly `max 456px`) for wide data-selector or overflow surfaces. Adapt to the nearest
+   existing sizing token rather than a bare literal where one fits.
 2. **Truncate to a single line.** The label needs `overflow: hidden; text-overflow: ellipsis;
    white-space: nowrap`, and — the classic gotcha — `min-width: 0` on the flex child, or the
    ellipsis never triggers. Fixed neighbors (icons, badges, counts) get `flex-shrink: 0` so only
