@@ -1,4 +1,13 @@
 import type { UserPreferences } from '@agor-live/client';
+import {
+  BuildOutlined,
+  FileTextOutlined,
+  RocketOutlined,
+  SearchOutlined,
+  TeamOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
+import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 
 /**
  * Canonical onboarding goal cards.
@@ -23,6 +32,8 @@ export interface OnboardingGoal {
   id: string;
   title: string;
   description: string;
+  /** antd icon rendered as the goal card's subtle accent tile (no category color). */
+  icon: React.ComponentType<Partial<AntdIconProps>>;
   /** Recommended MCP integration ids, in priority order (see MCP_RECOMMENDATIONS). */
   mcpRecs: string[];
   /** One line telling the first teammate session what this user wants and how to open. */
@@ -118,6 +129,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'personal-teammate',
     title: 'Get a personal teammate',
     description: 'Keeps up with Slack so you don’t have to.',
+    icon: UserOutlined,
     mcpRecs: ['slack'],
     bootstrapLine:
       'Desired outcome: a useful recurring brief from connected sources. A first win is a Slack digest based on the channels they care about.',
@@ -126,6 +138,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'status-updates',
     title: 'Never chase an update',
     description: 'Meeting notes and status, drafted for you.',
+    icon: FileTextOutlined,
     mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
     bootstrapLine:
       'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
@@ -134,6 +147,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'ship-without-busywork',
     title: 'Ship without the busywork',
     description: 'PRs, bug triage, release notes — handled.',
+    icon: RocketOutlined,
     mcpRecs: ['github', 'sentry', 'datadog'],
     bootstrapLine:
       'Desired outcome: less shipping busywork. A first win is scanning the relevant repo for an actionable issue or pull request.',
@@ -142,6 +156,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'team-teammate',
     title: 'A teammate for the team',
     description: "Knows the whole team's Slack, docs, and boards.",
+    icon: TeamOutlined,
     mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
     bootstrapLine:
       'Desired outcome: a shared teammate for repeated team work. A first win is identifying one repeated workflow to run from the team board.',
@@ -150,6 +165,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'hand-off-build',
     title: 'Spin up a build',
     description: 'A working app or dashboard on a live test env.',
+    icon: BuildOutlined,
     mcpRecs: ['github', 'figma'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
@@ -158,6 +174,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     id: 'dig-into-anything',
     title: 'Dig into anything',
     description: 'Ask a question, get real research back.',
+    icon: SearchOutlined,
     mcpRecs: ['amplitude', 'hubspot'],
     bootstrapLine:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',

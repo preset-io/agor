@@ -25,17 +25,11 @@ export interface TeammateGalleryProps {
    */
   onChange: (templateId: string | null) => void;
   /**
-   * Optional content pinned above the filter chips inside the sticky header
-   * (e.g. a name field + section label). It stays visible while only the card
-   * grid scrolls beneath it.
+   * Optional content placed above the filter chips inside the non-scrolling
+   * header region (e.g. a title/intro + name field + section label). It stays
+   * fixed while only the card grid scrolls, in its own region below.
    */
   header?: React.ReactNode;
-  /**
-   * Opaque background for the sticky header, so scrolling cards never show
-   * through it. Pass the host surface's color/gradient; defaults to the elevated
-   * surface token for standalone use.
-   */
-  stickyHeaderBackground?: string;
 }
 
 /**
@@ -72,14 +66,12 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
   onClear,
 }) => {
   const { token } = theme.useToken();
-  const Icon = template.icon;
 
   // Category accent from the shared avatar palette; the blank starter has no
-  // category and falls back to neutral tokens.
+  // category and falls back to neutral tokens. The colored category tag (below)
+  // is now the sole carrier of the category hue — the icon tile was removed.
   const category = getCategory(template.category);
   const accent = category?.color;
-  const iconColor = accent ?? token.colorTextSecondary;
-  const tileBg = accent ? `${accent}22` : token.colorFillTertiary;
 
   // Softened, category-colored selection: a 1px accent border (constant width in
   // both states → no layout shift) plus a faint same-hue background wash. No loud
@@ -111,41 +103,28 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
       styles={{ body: { padding: token.paddingSM } }}
     >
       <Flex vertical gap={token.marginXS}>
-        {/* Tidy top row: colored icon tile + category pill on the left, the
-            distinct Recommended badge (blue "processing") on the right. */}
+        {/* Tidy top row: the colored category pill on the left carries the category
+            hue (the icon tile was removed); the distinct Recommended badge (blue
+            "processing") sits on the right. */}
         <Flex align="center" justify="space-between" gap={token.marginXXS}>
-          <Flex align="center" gap={token.marginXS}>
-            <span
+          {category && accent ? (
+            // Category pill in the category hue. Fills solid when the card is
+            // selected (an extra, quiet selection cue).
+            <Tag
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                // Match the category pill's height so icon + pill + badge form one
-                // clean, equal-height row (the tile used to be noticeably taller).
-                width: 22,
-                height: 22,
-                borderRadius: token.borderRadiusSM,
-                background: tileBg,
+                margin: 0,
+                fontSize: token.fontSizeSM,
+                color: selected ? token.colorTextLightSolid : accent,
+                background: selected ? accent : `${accent}22`,
+                borderColor: selected ? accent : `${accent}55`,
               }}
             >
-              <Icon style={{ fontSize: token.fontSize, color: iconColor }} />
-            </span>
-            {category && accent && (
-              // Category pill in the same hue as the icon. Fills solid when the
-              // card is selected (an extra, quiet selection cue).
-              <Tag
-                style={{
-                  margin: 0,
-                  fontSize: token.fontSizeSM,
-                  color: selected ? token.colorTextLightSolid : accent,
-                  background: selected ? accent : `${accent}22`,
-                  borderColor: selected ? accent : `${accent}55`,
-                }}
-              >
-                {category.label}
-              </Tag>
-            )}
-          </Flex>
+              {category.label}
+            </Tag>
+          ) : (
+            // Keep the badge right-aligned even when there's no category pill.
+            <span />
+          )}
           {recommended && (
             <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
               Recommended
@@ -252,14 +231,20 @@ const BlankCard: React.FC<{
  * non-All chip is active) resets to All. The blank starter shows only under All
  * and stays last.
  *
- * Each card carries a category pill and color-coded icon in a shared avatar-
- * palette hue; selecting a card gives it a quiet same-hue border + background
- * wash (no loud blue outline). The grid holds three columns at the modal width,
- * stepping down to two (then one) only as the container narrows, shows full
- * untruncated descriptions, and keeps row-mates equal height. It sits inside the
- * modal's own vertically-scrollable content region so every card is reachable while the wizard footer
- * stays on-screen; the chips row (plus any `header` content) is pinned as a
- * sticky header so only the grid scrolls under it.
+ * Each card carries a category pill in a shared avatar-palette hue (no icon
+ * tile); selecting a card gives it a quiet same-hue border + background wash (no
+ * loud blue outline). The grid holds three columns at the modal width, stepping
+ * down to two (then one) only as the container narrows, shows full untruncated
+ * descriptions, and keeps row-mates equal height.
+ *
+ * Layout is TWO PHYSICAL REGIONS in a flex column that fills its parent's
+ * height: a non-scrolling header block (`flex: 0 0 auto`) holding any `header`
+ * content plus the filter chips, and a separate scroll region
+ * (`flex: 1 1 auto; min-height: 0; overflow-y: auto`) holding ONLY the card
+ * grid. Because the grid lives in its own `overflow` container, the browser
+ * clips the cards to it — they can never paint over the header in any engine (a
+ * structural guarantee that replaces the earlier, engine-dependent
+ * `position: sticky` + z-index approach).
  *
  * Standalone and theme-token driven so it renders correctly both on the
  * onboarding wizard's dark-glass surface and on the standard create-teammate
@@ -270,7 +255,6 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
   value,
   onChange,
   header,
-  stickyHeaderBackground,
 }) => {
   const { token } = theme.useToken();
   const goalList = useMemo(() => goals ?? [], [goals]);
@@ -289,22 +273,17 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
   ];
 
   return (
-    <Flex vertical gap={token.marginSM}>
-      {/* Sticky header: the optional host content (name field + label) plus the
-          filter chips stay pinned to the top of the modal's scroll region while
-          only the card grid scrolls under them. Opaque background + z-index keep
-          scrolling cards from bleeding through; a hairline separates it. */}
+    // Two physical regions in a flex column that fills the parent's height (the
+    // host mounts it inside a flex column). The header block never scrolls; the
+    // grid lives in its own overflow container below, so cards are clipped to it
+    // and can never paint over the header.
+    <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
+      {/* Non-scrolling header: the optional host content (title/intro + name
+          field + label) plus the filter chips stay fixed above the card region. */}
       <Flex
         vertical
         gap={token.marginSM}
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 2,
-          background: stickyHeaderBackground ?? token.colorBgElevated,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          paddingBottom: token.paddingSM,
-        }}
+        style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}
       >
         {header}
         <Flex
@@ -353,48 +332,46 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
         </Flex>
       </Flex>
 
-      <div
-        role="radiogroup"
-        aria-label="Teammate template"
-        style={{
-          display: 'grid',
-          // Three columns at the ~730px modal width; each column floors at 190px so
-          // the row steps down to 2 (then 1) only on a narrower container. 190px is
-          // the widest floor that still packs 3 columns into the step-2 content
-          // width without ever admitting a 4th.
-          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-          gap: token.marginSM,
-          // Room for card focus rings at the grid edges.
-          padding: token.paddingXXS,
-          // Confine the cards to their own stacking context so a scrolled card can
-          // never paint above the sticky header. antd Cards are `position: relative`
-          // (and z-indexed on hover), so without this the grid shares the scroll
-          // container's stacking context and, in some engines, a card's bottom edge
-          // renders over the pinned controls. `isolation` traps every card below
-          // the grid's context, which sits below the sticky header (z-index 2).
-          isolation: 'isolate',
-        }}
-      >
-        {cards.map((template) =>
-          template.id === BLANK_TEMPLATE_ID ? (
-            <BlankCard
-              key={template.id}
-              template={template}
-              selected={value === template.id}
-              onSelect={() => onChange(template.id)}
-              onClear={() => onChange(null)}
-            />
-          ) : (
-            <GalleryCard
-              key={template.id}
-              template={template}
-              selected={value === template.id}
-              recommended={recommendedIds.has(template.id)}
-              onSelect={() => onChange(template.id)}
-              onClear={() => onChange(null)}
-            />
-          )
-        )}
+      {/* Scroll region: its OWN overflow container, so the browser clips the
+          cards to it. This is what makes overlap impossible by construction —
+          a card can never render above the sibling header block. */}
+      <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+        <div
+          role="radiogroup"
+          aria-label="Teammate template"
+          style={{
+            display: 'grid',
+            // Three columns at the ~730px modal width; each column floors at 190px
+            // so the row steps down to 2 (then 1) only on a narrower container.
+            // 190px is the widest floor that still packs 3 columns into the step-2
+            // content width without ever admitting a 4th.
+            gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+            gap: token.marginSM,
+            // Room for card focus rings at the grid edges.
+            padding: token.paddingXXS,
+          }}
+        >
+          {cards.map((template) =>
+            template.id === BLANK_TEMPLATE_ID ? (
+              <BlankCard
+                key={template.id}
+                template={template}
+                selected={value === template.id}
+                onSelect={() => onChange(template.id)}
+                onClear={() => onChange(null)}
+              />
+            ) : (
+              <GalleryCard
+                key={template.id}
+                template={template}
+                selected={value === template.id}
+                recommended={recommendedIds.has(template.id)}
+                onSelect={() => onChange(template.id)}
+                onClear={() => onChange(null)}
+              />
+            )
+          )}
+        </div>
       </div>
     </Flex>
   );

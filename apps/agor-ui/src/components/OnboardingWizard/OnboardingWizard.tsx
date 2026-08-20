@@ -1112,6 +1112,7 @@ export function OnboardingWizard({
             const isSelected = selectedGoals.includes(goal.id);
             // At the cap, unselected cards can't be added until one is dropped.
             const isDisabled = !isSelected && atCap;
+            const GoalIcon = goal.icon;
             // aria-disabled (not the native `disabled` attribute) keeps the card
             // focusable and lets the Tooltip trigger on hover AND keyboard focus;
             // the click is guarded to a no-op instead.
@@ -1145,6 +1146,24 @@ export function OnboardingWizard({
                 >
                   {/* Selection is shown by the border + background highlight alone
                       (no checkmark) — the border/highlight already read clearly. */}
+                  {/* A single subtle accent tile — goals have no category, so it's an
+                      understated neutral glass chip (no per-goal color), rendered as a
+                      <span> so the title stays the card's first <div>. */}
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 30,
+                      height: 30,
+                      borderRadius: 8,
+                      marginBottom: 11,
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                    }}
+                  >
+                    <GoalIcon style={{ fontSize: 15, color: 'rgba(255,255,255,0.72)' }} />
+                  </span>
                   {/* Title flows at its natural height (one or two lines) with a
                       single consistent gap to the description below. No min-height:
                       reserving a blank second line made one-line-title cards show a
@@ -1553,25 +1572,22 @@ export function OnboardingWizard({
   };
 
   const renderWorkspace = () => (
-    <div>
-      {/* Title + intro are normal scroll content: they scroll up and away as the
-          cards scroll. Only the name field + section label + filter chips (the
-          gallery's `header` + chips) stay pinned; the grid scrolls under them.
-          The sticky header background defaults to the modal's real content surface
-          (colorBgElevated) for a seamless pin — MODAL_BG is occluded behind
-          .ant-modal-content and mismatches. */}
-      {renderStepBadge('Build your teammate')}
-      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Name your teammate and pick a starter template to shape what they do — or start blank.
-        Change anything later.
-      </Paragraph>
-
+    // Fills the (non-scrolling) step container as a flex column so the gallery's
+    // card region is the ONLY thing that scrolls. The step title + intro live in
+    // the gallery's fixed header now, so they no longer scroll away — the
+    // intended tradeoff for a header the cards can never overlap.
+    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
       <TeammateGallery
         goals={selectedGoals}
         value={selectedTemplateId}
         onChange={applyTemplate}
         header={
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {renderStepBadge('Build your teammate')}
+            <Paragraph style={{ color: TEXT_SECONDARY, margin: 0 }}>
+              Name your teammate and pick a starter template to shape what they do — or start blank.
+              Change anything later.
+            </Paragraph>
             <div>
               <Text
                 style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
@@ -1613,7 +1629,14 @@ export function OnboardingWizard({
         }
       />
 
-      {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
+      {boardError && (
+        <Alert
+          type="error"
+          message={boardError}
+          showIcon
+          style={{ marginTop: 16, flex: '0 0 auto' }}
+        />
+      )}
     </div>
   );
 
@@ -1963,9 +1986,15 @@ export function OnboardingWizard({
               // viewports so the goals grid + footer are never clipped.
               height: 460,
               maxHeight: '76vh',
-              overflowY: 'auto',
               position: 'relative',
               zIndex: 1,
+              // Step 2 owns its scrolling via an inner two-region layout (fixed
+              // header + a card region that is the only scroller), so this
+              // container must NOT scroll — it becomes a flex column that clips.
+              // Every other step scrolls as one block here.
+              ...(currentStep === 'workspace'
+                ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+                : { overflowY: 'auto' }),
             }}
           >
             {currentStep === 'goals' && renderGoals()}

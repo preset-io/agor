@@ -138,21 +138,28 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it('pins header content + chips in a sticky block; the grid scrolls as a sibling', () => {
+  it('puts header content + chips in a non-scrolling header, and the card grid in a separate overflow scroll region', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} header={<div>NAME FIELD</div>} />);
     // Host header content renders inside the gallery.
     expect(screen.getByText('NAME FIELD')).toBeInTheDocument();
 
-    // The chip row's container is position:sticky at top:0.
-    const stickyBlock = chipRow().parentElement as HTMLElement;
-    const style = stickyBlock.getAttribute('style') ?? '';
-    expect(style).toContain('position: sticky');
-    expect(style).toContain('top: 0');
-    // Header content lives inside the sticky block…
-    expect(stickyBlock).toContainElement(screen.getByText('NAME FIELD'));
-    // …while the scrolling grid is a sibling, not nested inside it.
+    // The header block holds the host content + the chip row and does NOT scroll.
+    const headerBlock = chipRow().parentElement as HTMLElement;
+    expect(headerBlock).toContainElement(screen.getByText('NAME FIELD'));
+    expect(headerBlock.getAttribute('style') ?? '').not.toContain('overflow');
+
+    // The card grid lives inside its OWN overflow-y:auto scroll container — the
+    // structural guarantee that cards are clipped to it and can never paint over
+    // the header (replacing the old, engine-dependent position:sticky approach).
     const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
-    expect(stickyBlock.contains(grid)).toBe(false);
+    const scrollRegion = grid.parentElement as HTMLElement;
+    expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
+
+    // Header block and scroll region are SEPARATE SIBLINGS; neither nests the
+    // other, so overlap is impossible by construction.
+    expect(headerBlock.contains(grid)).toBe(false);
+    expect(scrollRegion.contains(headerBlock)).toBe(false);
+    expect(scrollRegion.parentElement).toBe(headerBlock.parentElement);
   });
 
   it('badges up to two goal-recommended templates and never the blank card', () => {
@@ -207,28 +214,23 @@ describe('TeammateGallery', () => {
     expect(order.at(-1)).toBe('Start blank');
   });
 
-  it('color-codes each card icon with its category palette color', () => {
+  it('shows a category pill per card in the category color (no icon tile); blank has none', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     const growRgb = rgbOf(getCategoryColor('grow') ?? '');
     const operateRgb = rgbOf(getCategoryColor('operate') ?? '');
 
-    // Read the raw inline style: toHaveStyle would trip the cssstyle crash on the
-    // antd Card's CSS-var border shorthand (see file header).
-    const growIcon = cardFor('Competitive Analyst').querySelector('.anticon');
-    const operateIcon = cardFor('Legal Analyst').querySelector('.anticon');
-    expect(growIcon?.getAttribute('style')).toContain(growRgb);
-    expect(operateIcon?.getAttribute('style')).toContain(operateRgb);
-    // Different categories render different icon colors.
+    // The colored category pill is now the sole carrier of the category hue — the
+    // per-card icon tile was removed, so template cards render no icon.
+    const growCard = cardFor('Competitive Analyst');
+    expect(growCard.querySelector('.anticon')).toBeNull();
+
+    // Grow card carries a "Grow" pill tinted the grow accent; a different category
+    // (Operate) renders its own distinct hue.
+    const growPill = within(growCard).getByText('Grow');
+    expect(growPill.getAttribute('style')).toContain(growRgb);
+    const operatePill = within(cardFor('Legal Analyst')).getByText('Operate');
+    expect(operatePill.getAttribute('style')).toContain(operateRgb);
     expect(growRgb).not.toBe(operateRgb);
-  });
-
-  it('shows a category pill per card in the category color; blank has none', () => {
-    render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    const growRgb = rgbOf(getCategoryColor('grow') ?? '');
-
-    // Grow card carries a "Grow" pill tinted the grow accent.
-    const pill = within(cardFor('Competitive Analyst')).getByText('Grow');
-    expect(pill.getAttribute('style')).toContain(growRgb);
 
     // The blank starter has no category → no category pill.
     const blank = cardFor('Start blank');

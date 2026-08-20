@@ -542,6 +542,30 @@ describe('OnboardingWizard', () => {
     ).toBeTruthy();
   });
 
+  it('renders step 2 as two regions: a non-scrolling header and a separate overflow scroll region holding the card grid', () => {
+    // Structural (jsdom) replacement for the old real-browser overlap test. The
+    // cards live in their OWN overflow-y:auto container, a separate sibling from
+    // the header block — so a card can never paint over the pinned header in ANY
+    // browser (the guarantee is the DOM structure, not sticky/z-index).
+    renderWizard({ initialStep: 'workspace' });
+
+    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const scrollRegion = grid.parentElement as HTMLElement;
+    expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
+
+    // The step title, the name field, and the filter chips are the fixed header —
+    // none of them live inside the scrolling card region.
+    expect(scrollRegion.contains(screen.getByText('Build your teammate'))).toBe(false);
+    expect(scrollRegion.contains(screen.getByLabelText('Teammate name'))).toBe(false);
+    const chipGroup = screen.getByRole('group', { name: 'Filter templates by category' });
+    expect(scrollRegion.contains(chipGroup)).toBe(false);
+
+    // The step container itself does not scroll — step 2 delegates all scrolling
+    // to the inner card region, so the header physically can't be overlapped.
+    const stepContainer = document.querySelector('.onb-step') as HTMLElement;
+    expect(stepContainer.getAttribute('style') ?? '').toContain('overflow: hidden');
+  });
+
   it('workspace step sets the avatar from a chosen template and flows its source branch on completion', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'workspace' });
