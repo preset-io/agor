@@ -90,7 +90,7 @@ import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
-import { getRouterBasename } from './utils/uiRoutes';
+import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -271,13 +271,23 @@ function DeviceRouter() {
       const isMobile = isMobileDevice();
       const isOnMobilePath = location.pathname.startsWith('/m');
 
+      const state = agorStore.getState();
+      const routeEntities = {
+        boards: state.boardById.values(),
+        sessions: state.sessionById.values(),
+      };
+
       // Redirect mobile devices to mobile site
       if (isMobile && !isOnMobilePath) {
-        navigate('/m', { replace: true });
+        navigate(responsiveRoutePath(location.pathname, 'mobile', routeEntities), {
+          replace: true,
+        });
       }
       // Redirect desktop devices away from mobile site
       else if (!isMobile && isOnMobilePath) {
-        navigate('/', { replace: true });
+        navigate(responsiveRoutePath(location.pathname, 'desktop', routeEntities), {
+          replace: true,
+        });
       }
     };
 
@@ -431,7 +441,8 @@ function AppContent() {
     [connected, connecting, outOfSync, capturedSha, currentSha]
   );
 
-  const directSessionIdFromPath = location.pathname.match(/^\/s\/([^/]+)\/?$/)?.[1] ?? null;
+  const directSessionIdFromPath =
+    location.pathname.match(/^\/(?:s|m\/session)\/([^/]+)\/?$/)?.[1] ?? null;
 
   // Pass the stable client lifetime, not `connected ? client : null`:
   // useAgorData owns reconnect refetches and `null` is reserved for logout /

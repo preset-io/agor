@@ -114,30 +114,34 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   renderItem={(session) => {
                     const branch = branchById.get(session.branch_id);
                     return (
-                      <List.Item
-                        onClick={() => navigate(`/m/session/${session.session_id}`)}
-                        style={{ cursor: 'pointer', paddingInline: token.paddingSM }}
-                      >
-                        <List.Item.Meta
-                          avatar={
-                            <Badge
-                              status={session.status === 'running' ? 'processing' : 'default'}
-                            />
-                          }
-                          title={
-                            <Text ellipsis>
-                              {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                            </Text>
-                          }
-                          description={
-                            <Space size={token.marginXS} wrap>
-                              {branch && <Text type="secondary">{branch.name}</Text>}
-                              <Text type="secondary">
-                                {formatRelativeTime(session.last_updated)}
+                      <List.Item style={{ padding: 0 }}>
+                        <Button
+                          type="text"
+                          block
+                          onClick={() => navigate(`/m/session/${session.session_id}`)}
+                          style={{ height: 'auto', padding: token.paddingSM, textAlign: 'start' }}
+                        >
+                          <List.Item.Meta
+                            avatar={
+                              <Badge
+                                status={session.status === 'running' ? 'processing' : 'default'}
+                              />
+                            }
+                            title={
+                              <Text ellipsis>
+                                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
                               </Text>
-                            </Space>
-                          }
-                        />
+                            }
+                            description={
+                              <Space size={token.marginXS} wrap>
+                                {branch && <Text type="secondary">{branch.name}</Text>}
+                                <Text type="secondary">
+                                  {formatRelativeTime(session.last_updated)}
+                                </Text>
+                              </Space>
+                            }
+                          />
+                        </Button>
                       </List.Item>
                     );
                   }}
@@ -169,22 +173,28 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                       key={board.board_id}
                       size="small"
                       hoverable
-                      onClick={() => navigate(`/m/board/${board.board_id}`)}
-                      style={{ cursor: 'pointer' }}
+                      styles={{ body: { padding: 0 } }}
                     >
-                      <Flex align="center" gap={token.marginSM}>
-                        <span aria-hidden style={{ fontSize: 28 }}>
-                          {getBoardEmoji(board, branchById)}
-                        </span>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <Text strong ellipsis style={{ display: 'block' }}>
-                            {board.name}
-                          </Text>
-                          <Text type="secondary">
-                            {branchCount} {branchCount === 1 ? 'branch' : 'branches'}
-                          </Text>
-                        </div>
-                      </Flex>
+                      <Button
+                        type="text"
+                        block
+                        onClick={() => navigate(`/m/board/${board.board_id}`)}
+                        style={{ height: 'auto', padding: token.paddingSM, textAlign: 'start' }}
+                      >
+                        <Flex align="center" gap={token.marginSM}>
+                          <span aria-hidden style={{ fontSize: 28 }}>
+                            {getBoardEmoji(board, branchById)}
+                          </span>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <Text strong ellipsis style={{ display: 'block' }}>
+                              {board.name}
+                            </Text>
+                            <Text type="secondary">
+                              {branchCount} {branchCount === 1 ? 'branch' : 'branches'}
+                            </Text>
+                          </div>
+                        </Flex>
+                      </Button>
                     </Card>
                   );
                 })}

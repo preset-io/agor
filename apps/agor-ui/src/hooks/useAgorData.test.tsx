@@ -209,6 +209,34 @@ function deferred() {
 }
 
 describe('useAgorData — socket-event bailouts', () => {
+  it('heals a cold mobile session outside the recent slice before resolving board scope', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
+    const branchId = '01a012d8-3e4f-7b21-8c99-5d2e6f708a1b';
+    const directSession = makeSession({
+      session_id: sessionId,
+      branch_id: branchId,
+      branch_board_id: boardId,
+    });
+    const directBranch = makeBranch({ branch_id: branchId, board_id: boardId });
+    const boardObject = makeBoardObject({ board_id: boardId, branch_id: branchId });
+    const { client } = makeMockClient({
+      sessions: [],
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      'sessions:get': directSession,
+      'branches:get': directBranch,
+      'board-objects': [boardObject],
+    });
+    window.history.pushState({}, '', `/m/session/${sessionId}`);
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: sessionId }));
+    await waitForInitialLoad(result);
+
+    expect(agorStore.getState().sessionById.get(sessionId)).toMatchObject({ branch_id: branchId });
+    expect(agorStore.getState().boardObjectById.get('bo-1')).toMatchObject({ board_id: boardId });
+    window.history.pushState({}, '', '/');
+  });
+
   it('hydrates a direct archived session by id without broadening active board lists', async () => {
     const archivedSession = makeSession({
       session_id: 's-archived-full',

@@ -38,6 +38,10 @@ export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActi
       }}
       items={items.map(({ key, board, emoji, badge, children }) => ({
         key,
+        // The header also contains board/comment action buttons. Restrict the
+        // collapse affordance to its chevron so those controls are not nested
+        // inside another interactive header target.
+        collapsible: 'icon',
         label: (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <BoardTile emoji={emoji} size={20} />

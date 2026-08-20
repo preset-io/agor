@@ -1,4 +1,3 @@
-import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
 import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
@@ -71,8 +70,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
-  const externallyManaged =
-    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
   const canCreateUsers =
     isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
   const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
@@ -300,7 +297,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               style={{ width: compact ? '100%' : 320, flex: compact ? '1 1 100%' : undefined }}
             />
             {canCreateUsers && (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateModalOpen(true)}
+              >
                 New User
               </Button>
             )}
@@ -321,19 +322,19 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       {canCreateUsers && (
         <AdaptiveSettingsModal
           title="Create User"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={() => {
-          form.resetFields();
-          setCreateModalOpen(false);
-        }}
-        okText="Create"
-        width={800}
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
-            <Input placeholder="John Doe" />
-          </Form.Item>
+          open={createModalOpen}
+          onOk={handleCreate}
+          onCancel={() => {
+            form.resetFields();
+            setCreateModalOpen(false);
+          }}
+          okText="Create"
+          width={800}
+        >
+          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+            <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
+              <Input placeholder="John Doe" />
+            </Form.Item>
 
             <Form.Item
               label="Email"
@@ -388,10 +389,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
               />
             </Form.Item>
 
-          <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
-            <Checkbox>Force password change on first login</Checkbox>
-          </Form.Item>
-        </Form>
+            <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+              <Checkbox>Force password change on first login</Checkbox>
+            </Form.Item>
+          </Form>
         </AdaptiveSettingsModal>
       )}
 

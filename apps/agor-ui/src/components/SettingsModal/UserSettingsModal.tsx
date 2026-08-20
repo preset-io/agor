@@ -2185,6 +2185,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         open={open}
         onClose={handleClose}
         title={null}
+        aria-label="User settings"
         closable={false}
         placement="bottom"
         size="94dvh"

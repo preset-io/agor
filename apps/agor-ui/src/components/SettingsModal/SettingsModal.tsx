@@ -348,10 +348,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       { label: 'Workspace · Teammates', value: 'teammates' },
       { label: 'Workspace · Cards (Beta)', value: 'cards' },
       { label: 'Workspace · Artifacts', value: 'artifacts' },
+      { label: 'Integrations · MCP Servers', value: 'mcp' },
       ...(isAdmin
         ? [
             { label: 'Integrations · Agentic Tools', value: 'agentic-tools' },
-            { label: 'Integrations · MCP Servers', value: 'mcp' },
             { label: 'Integrations · Gateway Channels', value: 'gateway' },
             { label: 'Admin · Groups', value: 'groups' },
           ]
@@ -501,6 +501,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     return (
       <Drawer
         title={null}
+        aria-label="Workspace settings"
         closable={false}
         placement="bottom"
         size="94dvh"
@@ -565,7 +566,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           onUpdateBranch={onUpdateBranch}
           onUpdateRepo={onUpdateRepo}
           onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-          onOpenSettings={onClose}
+          onOpenSettings={() => {
+            handleBranchModalClose();
+            onTabChange?.('repos');
+          }}
           presentation="bottom-sheet"
         />
       </Drawer>
@@ -665,7 +669,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         onUpdateBranch={onUpdateBranch}
         onUpdateRepo={onUpdateRepo}
         onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-        onOpenSettings={onClose} // Close branch modal and keep settings modal open
+        onOpenSettings={() => {
+          handleBranchModalClose();
+          onTabChange?.('repos');
+        }}
       />
     </Modal>
   );

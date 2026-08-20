@@ -2462,6 +2462,7 @@ export function KnowledgePage({
         { editing: false }
       )}`
     );
+    setMobileBrowserOpen(false);
   };
 
   const selectKnowledgeSearchResult = async (result: KnowledgeSearchResult) => {
@@ -2489,6 +2490,7 @@ export function KnowledgePage({
     const targetPath =
       activeSpace === 'all' ? routeBasePath : buildKnowledgeRoutePath(routeBasePath, activeSpace);
     navigate(`${targetPath}${buildKnowledgeSearch({ editing: false })}`);
+    setMobileBrowserOpen(false);
   };
 
   const openGraphDoc = async (documentId: string) => {
@@ -3704,9 +3706,6 @@ export function KnowledgePage({
                 background: token.colorFillQuaternary,
                 borderRadius: token.borderRadiusLG,
                 padding: 4,
-              }}
-              onClick={(event) => {
-                if ((event.target as HTMLElement).closest('button')) setMobileBrowserOpen(false);
               }}
             >
               <button
