@@ -39,6 +39,15 @@ describe('responsiveRoutePath', () => {
     );
     expect(
       responsiveRoutePath('/m/session/01a012d8-4f50-7c32-9daa-6e3f70819b2c', 'desktop', entities)
-    ).toBe('/s/01a012d8/');
+    ).toBe('/s/01a012d84f507c329daa6e3f/');
+  });
+
+  // A board the store hasn't hydrated yet has no slug to route by, so the
+  // desktop path has to fall back to the canonical short id rather than the
+  // raw UUID the mobile route carries.
+  it('falls back to the canonical short id when the board is unknown', () => {
+    expect(
+      responsiveRoutePath('/m/board/01a012d8-9999-7909-b6f4-2024dfc7c51e', 'desktop', entities)
+    ).toBe('/b/01a012d899997909b6f42024/');
   });
 });

@@ -1,3 +1,4 @@
+import { type BoardID, boardPath, type SessionID, sessionPath } from '@agor-live/client';
 import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
 
 function currentPathname(): string {
@@ -50,7 +51,9 @@ export function responsiveRoutePath(
   const match = pathname.match(/^\/m\/(board|comments|session)\/([^/]+)\/?$/);
   if (!match) return '/';
   const [, kind, id] = match;
-  if (kind === 'session') return `/s/${id.slice(0, 8)}/`;
+  // Build the desktop targets with the same helpers the rest of the app uses, so
+  // the short-id form here can't drift from what `useUrlState` resolves.
+  if (kind === 'session') return sessionPath(id as SessionID);
   const board = Array.from(entities.boards).find((item) => item.board_id === id);
-  return `/b/${board?.slug ?? id.slice(0, 8)}/`;
+  return boardPath(id as BoardID, board?.slug);
 }
