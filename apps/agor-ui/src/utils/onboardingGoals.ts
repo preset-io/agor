@@ -117,7 +117,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'personal-teammate',
     title: 'Get a personal teammate',
-    description: 'Keeps up with Slack and your updates, so you don’t have to.',
+    description: 'Keeps up with Slack so you don’t have to.',
     mcpRecs: ['slack'],
     bootstrapLine:
       'Desired outcome: a useful recurring brief from connected sources. A first win is a Slack digest based on the channels they care about.',
@@ -125,7 +125,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'status-updates',
     title: 'Never chase an update',
-    description: 'Notes, action items, and status — drafted for you.',
+    description: 'Meeting notes and status, drafted for you.',
     mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
     bootstrapLine:
       'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
@@ -141,7 +141,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'team-teammate',
     title: 'A teammate for the team',
-    description: "Knows everyone's Slack, docs, and boards — not just yours.",
+    description: "Knows the whole team's Slack, docs, and boards.",
     mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
     bootstrapLine:
       'Desired outcome: a shared teammate for repeated team work. A first win is identifying one repeated workflow to run from the team board.',
@@ -149,7 +149,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'hand-off-build',
     title: 'Hand off the build',
-    description: 'A working app or dashboard, spun up on a live test env.',
+    description: 'A working app or dashboard, ready to use.',
     mcpRecs: ['github', 'figma'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',

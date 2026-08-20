@@ -1091,8 +1091,8 @@ export function OnboardingWizard({
   const renderGoals = () => {
     const firstName = user?.name?.split(' ')[0];
     const goalsTitle = firstName
-      ? `${firstName}, what do you want done?`
-      : 'What do you want done?';
+      ? `${firstName}, what do you want to get done?`
+      : 'What do you want to get done?';
     const atCap = selectedGoals.length >= MAX_ONBOARDING_GOALS;
     return (
       <div>
@@ -1560,7 +1560,7 @@ export function OnboardingWizard({
           The sticky header background defaults to the modal's real content surface
           (colorBgElevated) for a seamless pin — MODAL_BG is occluded behind
           .ant-modal-content and mismatches. */}
-      {renderStepBadge('Name your AI teammate')}
+      {renderStepBadge('Build your teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
         Name your teammate and pick a starter template to shape what they do — or start blank.
         Change anything later.

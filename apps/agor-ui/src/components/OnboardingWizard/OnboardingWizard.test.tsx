@@ -151,7 +151,7 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
     expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
     expect(screen.getByText('Dig into anything')).toBeInTheDocument();
     // Goals step is optional — no back button on the first step.
@@ -161,7 +161,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
 
     // Goals now flows straight into the name + template gallery step.
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
@@ -173,7 +173,7 @@ describe('OnboardingWizard', () => {
     }
     // Title + description still render.
     expect(screen.getByText('Hand off the build')).toBeInTheDocument();
-    expect(screen.getByText('A working app or dashboard, spun up on a live test env.')).toBeInTheDocument();
+    expect(screen.getByText('A working app or dashboard, ready to use.')).toBeInTheDocument();
   });
 
   it('gives every goal card an even title→description gap and equal-height cards', () => {
@@ -312,11 +312,11 @@ describe('OnboardingWizard', () => {
     expect(continueButton).toBeDisabled();
 
     fireEvent.click(continueButton as HTMLButtonElement);
-    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
 
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
@@ -484,8 +484,8 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn(async () => undefined);
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
-    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
-    // The name is prefilled with a sensible default; the user renames it here.
+    expect(screen.getByText('Build your teammate')).toBeInTheDocument();
+    // The teammate name is empty by default — the user names their teammate.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
     clickButton(/^continue →/i);
@@ -525,7 +525,7 @@ describe('OnboardingWizard', () => {
     // The rejection surfaces as an inline Alert, not an uncaught exception —
     // the wizard stays on step 2 and the user can retry.
     expect(await screen.findByText('slug already exists')).toBeInTheDocument();
-    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    expect(screen.getByText('Build your teammate')).toBeInTheDocument();
     expect(screen.getByText(/^continue →/i)).toBeInTheDocument();
   });
 
@@ -638,7 +638,7 @@ describe('OnboardingWizard', () => {
 
     await waitFor(() => expect(boardsService.get).toHaveBeenCalledWith('board-deleted'));
     // Board not found — user can name a new teammate and create a board
-    await waitFor(() => expect(screen.getByText('Name your AI teammate')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Build your teammate')).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
     clickButton(/^continue →/i);
@@ -656,7 +656,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
 
     // workspace — name the teammate, which creates their board
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
 
@@ -705,7 +705,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue →/i);
 
     // workspace — name + template
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     const templateCard = screen.getByText('Product Manager').closest('[role="radio"]');
     fireEvent.click(templateCard as HTMLElement);
@@ -739,7 +739,7 @@ describe('OnboardingWizard', () => {
     renderWizard();
 
     clickButton(/skip for now/i); // goals
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     clickButton(/skip for now/i); // workspace — no name, no template
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i); // llm
@@ -755,13 +755,11 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { boardsService } = renderWizard({ onComplete });
 
-    expect(screen.getByText(/what do you want done/i)).toBeInTheDocument();
+    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
-    expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Teammate name')).toHaveValue('Scout');
-    clickButton(/^continue →/i);
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
@@ -817,10 +815,10 @@ describe('OnboardingWizard', () => {
 
     clickButton('Ship without the busywork');
     clickButton(/^continue/i);
-    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
 
     clickButton('Back');
-    expect(await screen.findByText(/what do you want done/i)).toBeInTheDocument();
+    expect(await screen.findByText(/what do you want to get done/i)).toBeInTheDocument();
     // The prior goal selection survives the round-trip.
     expect(screen.getByText('Ship without the busywork').closest('button')).toHaveAttribute(
       'aria-pressed',
@@ -911,7 +909,7 @@ describe('Codex ChatGPT login import', () => {
       await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
     ).toBeInTheDocument();
     expect(screen.getByText('Connect your AI')).toBeInTheDocument();
-    expect(screen.queryByText('Name your AI teammate')).not.toBeInTheDocument();
+    expect(screen.queryByText('Build your teammate')).not.toBeInTheDocument();
   });
 
   it('switching auth methods clears the pasted value and error state', async () => {
