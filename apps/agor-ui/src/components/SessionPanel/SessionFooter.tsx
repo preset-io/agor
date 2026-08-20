@@ -1527,13 +1527,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         )}
 
         {/* Unauthorized MCP servers block their tools silently. Surface it as a
-            gentle, dismissable warning note above the composer — not an alarm. */}
+            gentle, dismissable warning banner above the composer: a compact,
+            contained AntD Alert-style box (warning bg + border + radius) with the
+            close × sitting inside it, not a full-size alarm. Longhand border
+            props keep it token-driven without the CSS-var `border` shorthand that
+            trips jsdom's parser in tests. */}
         {showMcpNotice && (
           <Flex
             align="center"
-            gap={token.sizeXXS}
-            style={{ marginBottom: token.sizeUnit * 2 }}
+            gap={token.sizeXS}
             data-testid="mcp-disconnected-notice"
+            style={{
+              marginBottom: token.sizeUnit * 2,
+              padding: `${token.sizeXXS}px ${token.sizeSM}px`,
+              background: token.colorWarningBg,
+              borderWidth: token.lineWidth,
+              borderStyle: 'solid',
+              borderColor: token.colorWarningBorder,
+              borderRadius: token.borderRadiusSM,
+            }}
           >
             <ExclamationCircleOutlined
               style={{ fontSize: 12, color: token.colorWarning, flexShrink: 0 }}
@@ -1552,7 +1564,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 width: 20,
                 minWidth: 20,
                 height: 20,
-                color: token.colorTextTertiary,
+                color: token.colorWarning,
               }}
             />
           </Flex>
