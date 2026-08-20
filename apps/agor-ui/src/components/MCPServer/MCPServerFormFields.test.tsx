@@ -83,6 +83,7 @@ describe('MCPServerFormFields OAuth start', () => {
             authType="oauth"
             form={form}
             client={client}
+            authorityKey="user-a:admin:1"
             onPrepareOAuthStart={onPrepareOAuthStart}
             formRevision={formRevision}
           />
@@ -162,6 +163,7 @@ describe('MCPServerFormFields OAuth start', () => {
             authType="oauth"
             form={form}
             client={client}
+            authorityKey="user-a:admin:1"
             onPrepareOAuthStart={onPrepareOAuthStart}
             formRevision={formRevision}
           />
@@ -226,6 +228,7 @@ describe('MCPServerFormFields OAuth start', () => {
             authType="oauth"
             form={form}
             client={client}
+            authorityKey="user-a:admin:1"
             serverId="saved-server"
             onPrepareOAuthStart={vi.fn().mockResolvedValue('saved-server')}
             managedOAuthCompatibilityMode="marketplace"

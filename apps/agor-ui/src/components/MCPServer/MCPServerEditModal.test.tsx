@@ -75,7 +75,14 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     } as MCPServer;
 
     render(
-      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        authorityKey="user-a:admin:1"
+        mutationAllowed
+        onClose={vi.fn()}
+      />
     );
 
     fireEvent.change(await screen.findByLabelText('Description'), {
@@ -121,6 +128,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           server={server}
           open
           client={client}
+          authorityKey="user-a:admin:1"
           mutationAllowed
           onClose={vi.fn()}
         />
@@ -159,7 +167,14 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     } as MCPServer;
 
     render(
-      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={onClose} />
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        authorityKey="user-a:admin:1"
+        mutationAllowed
+        onClose={onClose}
+      />
     );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
@@ -206,7 +221,14 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     } as MCPServer;
 
     render(
-      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        authorityKey="user-a:admin:1"
+        mutationAllowed
+        onClose={vi.fn()}
+      />
     );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
@@ -248,7 +270,14 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     } as MCPServer;
 
     render(
-      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        authorityKey="user-a:admin:1"
+        mutationAllowed
+        onClose={vi.fn()}
+      />
     );
 
     fireEvent.change(await screen.findByLabelText('URL'), {
@@ -300,6 +329,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           server={server}
           open
           client={client}
+          authorityKey={mutationAllowed ? 'user-a:admin:1' : null}
           mutationAllowed={mutationAllowed}
           mutationBlockedReason="Connection authority changed"
           onClose={vi.fn()}

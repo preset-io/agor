@@ -152,6 +152,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   });
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
+  const durableAuthorityKey =
+    client && connectionReady && !policyPending && currentUser?.user_id && currentUser.role
+      ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}`
+      : null;
   const capability = useMemo<MCPServerCapabilityContext>(
     () => ({
       role: currentUser?.role,
@@ -759,6 +763,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onAuthTypeChange={setAuthType}
             form={createForm}
             client={client}
+            authorityKey={durableAuthorityKey}
             serverId={createdServerId ?? undefined}
             onTestConnection={handleCreateTestConnection}
             testing={testing}
@@ -776,9 +781,12 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         server={editingServer}
         open={editModalOpen}
         client={client}
+        authorityKey={durableAuthorityKey}
         offeredTransports={offeredTransports}
         offeredScopes={editableScopes}
-        mutationAllowed={!!editingServer && canEditMcpServer(editingServer, capability)}
+        mutationAllowed={
+          !!editingServer && !policyPending && canEditMcpServer(editingServer, capability)
+        }
         mutationBlockedReason={
           policyPending ? policyPendingHint : explainManageRestriction(capability)
         }

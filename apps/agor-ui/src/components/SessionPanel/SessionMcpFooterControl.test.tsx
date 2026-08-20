@@ -5,11 +5,18 @@ import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
-const permissionState = vi.hoisted(() => ({ isAdmin: true }));
-const connectionState = vi.hoisted(() => ({ connected: true, connecting: false }));
+const permissionState = vi.hoisted(() => ({ isAdmin: true, role: 'admin' }));
+const connectionState = vi.hoisted(() => ({
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+}));
 
 vi.mock('@/hooks/usePermissions', () => ({
-  usePermissions: () => permissionState,
+  usePermissions: () => ({
+    ...permissionState,
+    hasRole: () => permissionState.role !== 'viewer',
+  }),
 }));
 
 vi.mock('@/contexts/ConnectionContext', () => ({
@@ -43,8 +50,10 @@ const client = {
 describe('SessionMcpFooterControl overlay lifecycle', () => {
   beforeEach(() => {
     permissionState.isAdmin = true;
+    permissionState.role = 'admin';
     connectionState.connected = true;
     connectionState.connecting = false;
+    connectionState.authGeneration = 1;
     vi.clearAllMocks();
   });
 
@@ -52,6 +61,7 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     render(
       <SessionMcpFooterControl
         client={client}
+        currentUserId="user-a"
         sessionId="session-id"
         sessionMcpServerIds={[server.mcp_server_id]}
         mcpServerById={new Map([[server.mcp_server_id, server]])}
@@ -114,6 +124,7 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
   it('fails an open editor closed across disconnect and demotion', async () => {
     const props = {
       client,
+      currentUserId: 'user-a',
       sessionId: 'session-id',
       sessionMcpServerIds: [server.mcp_server_id],
       mcpServerById: new Map([[server.mcp_server_id, server]]),
@@ -139,7 +150,9 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.connected = false;
     connectionState.connecting = true;
     rerender(<SessionMcpFooterControl {...props} />);
-    expect(await within(editDialog).findByText(/Reconnect to the Agor daemon/)).toBeVisible();
+    await waitFor(() =>
+      expect(within(editDialog).getByText(/Reconnect to the Agor daemon/)).toBeVisible()
+    );
     const save = within(editDialog).getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
     fireEvent.click(save);
@@ -148,8 +161,11 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.connected = true;
     connectionState.connecting = false;
     permissionState.isAdmin = false;
+    permissionState.role = 'viewer';
     rerender(<SessionMcpFooterControl {...props} />);
-    expect(await within(editDialog).findByText(/account can no longer change/)).toBeVisible();
+    await waitFor(() =>
+      expect(within(editDialog).getByText(/account can no longer change/)).toBeVisible()
+    );
     expect(save).toBeDisabled();
     fireEvent.click(save);
     expect(patchServer).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
+import { ROLES } from '@agor-live/client';
 import { ApiOutlined } from '@ant-design/icons';
 import { Tag as AntTag, Space, Typography, theme } from 'antd';
 import React from 'react';
@@ -14,6 +15,7 @@ import { Tag } from '../Tag';
 
 export interface SessionMcpFooterControlProps {
   client: AgorClient | null;
+  currentUserId?: string;
   sessionId: string;
   sessionMcpServerIds: string[];
   mcpServerById: Map<string, MCPServer>;
@@ -22,6 +24,7 @@ export interface SessionMcpFooterControlProps {
 
 export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = ({
   client,
+  currentUserId,
   sessionId,
   sessionMcpServerIds,
   mcpServerById,
@@ -29,9 +32,38 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
-  const { isAdmin } = usePermissions();
-  const { connected, connecting } = useConnectionState();
-  const editMutationAllowed = isAdmin && connected && !connecting;
+  const { hasRole, isAdmin, role } = usePermissions();
+  const { connected, connecting, authGeneration } = useConnectionState();
+  const connectionReady = connected && !connecting;
+  const identityRoleKey = currentUserId && role ? `${currentUserId}:${role}` : null;
+  const establishedAuthorityRef = React.useRef<{
+    client: AgorClient;
+    identityRoleKey: string;
+    authGeneration: number;
+  } | null>(null);
+  const establishedAuthority = establishedAuthorityRef.current;
+  const authorityMatchesEstablished =
+    !!establishedAuthority &&
+    establishedAuthority.client === client &&
+    establishedAuthority.identityRoleKey === identityRoleKey &&
+    authGeneration >= establishedAuthority.authGeneration;
+  const authorityHasNewAuthentication =
+    !establishedAuthority || authGeneration > establishedAuthority.authGeneration;
+  const callerAuthorityReady =
+    !!client &&
+    connectionReady &&
+    !!identityRoleKey &&
+    (authorityMatchesEstablished || authorityHasNewAuthentication);
+  React.useLayoutEffect(() => {
+    if (!callerAuthorityReady || !client || !identityRoleKey) return;
+    establishedAuthorityRef.current = { client, identityRoleKey, authGeneration };
+  }, [authGeneration, callerAuthorityReady, client, identityRoleKey]);
+  const oauthActionAllowed = callerAuthorityReady && hasRole(ROLES.MEMBER);
+  const durableAuthorityKey =
+    client && oauthActionAllowed && currentUserId && role
+      ? `${currentUserId}:${role}:${authGeneration}`
+      : null;
+  const editMutationAllowed = isAdmin && callerAuthorityReady;
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
@@ -148,6 +180,13 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
                 server={server}
                 needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
                 client={client}
+                authorityKey={durableAuthorityKey}
+                actionAllowed={oauthActionAllowed}
+                actionBlockedReason={
+                  !connectionReady
+                    ? 'Reconnect to the Agor daemon before changing OAuth credentials.'
+                    : 'Your account can no longer change OAuth credentials.'
+                }
                 onEdit={handleEditServer}
               />
             ))}
@@ -271,6 +310,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           server={editingServer}
           open={editModalOpen}
           client={client}
+          authorityKey={durableAuthorityKey}
           mutationAllowed={editMutationAllowed}
           mutationBlockedReason={
             !connected || connecting

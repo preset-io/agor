@@ -63,6 +63,8 @@ export interface MCPServerFormFieldsProps {
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
   client: AgorClient | null;
+  /** Current identity/role/auth generation, null while authority is unavailable. */
+  authorityKey: string | null;
   serverId?: string;
   onTestConnection?: () => Promise<void>;
   testing?: boolean;
@@ -113,6 +115,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onAuthTypeChange,
   form,
   client,
+  authorityKey,
   serverId,
   onTestConnection,
   testing = false,
@@ -130,6 +133,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
+  const oauthStartAllowed = mutationAllowed && authorityKey !== null;
 
   // `Start OAuth Flow` writes the server row before it redirects, so it needs
   // everything a save needs — not just the URL it puts in the request. Read
@@ -149,12 +153,13 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     startingOAuthFlow,
   } = useMCPServerOAuthStart({
     client,
+    authorityKey,
     onPrepareOAuthStart,
     onOAuthSucceeded: () => setOauthBrowserFlowAvailable(false),
     showError,
     showInfo,
     showSuccess,
-    startAllowed: mutationAllowed,
+    startAllowed: oauthStartAllowed,
     startBlockedReason: mutationBlockedReason,
   });
 
@@ -579,13 +584,13 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
             {authType === 'oauth' &&
               oauthBrowserFlowAvailable &&
-              (!mutationAllowed || missingRequiredFields.length > 0 ? (
+              (!oauthStartAllowed || missingRequiredFields.length > 0 ? (
                 // Disabled rather than hidden: the user has already earned this
                 // button with a successful auth test, so it has to say what is
                 // still holding it back.
                 <Tooltip
                   title={
-                    !mutationAllowed
+                    !oauthStartAllowed
                       ? mutationBlockedReason
                       : describeMissingForOAuth(missingRequiredFields)
                   }

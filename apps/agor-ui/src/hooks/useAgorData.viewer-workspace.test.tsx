@@ -7,7 +7,8 @@
  * a direct AppHeader render would miss the full-screen failure this guards.
  */
 
-import type { AgorClient, User } from '@agor-live/client';
+import { EventEmitter } from 'node:events';
+import type { AgorClient, Session, User } from '@agor-live/client';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -50,7 +51,7 @@ function makeWorkspaceClient(failurePaths: FailurePath | FailurePath[] | null) {
   const service = (path: string) => {
     const existing = services.get(path);
     if (existing) return existing;
-    const value = {
+    const value: Record<string, unknown> = {
       findAll:
         path === 'users'
           ? usersFindAll
@@ -172,20 +173,41 @@ function transitionClient() {
   const usersFindAll = vi.fn(() => usersAnswers.shift() ?? Promise.resolve([]));
   const boardObjectsFindAll = vi.fn(() => boardObjectAnswers.shift() ?? Promise.resolve([]));
   const services = new Map<string, Record<string, unknown>>();
+  const serviceEmitters = new Map<string, EventEmitter>();
+  const failingServices = new Set<string>();
   const service = (path: string) => {
     const existing = services.get(path);
     if (existing) return existing;
+    const emitter = new EventEmitter();
+    serviceEmitters.set(path, emitter);
     const value = {
       findAll:
         path === 'users'
           ? usersFindAll
           : path === 'board-objects'
             ? boardObjectsFindAll
-            : vi.fn(async () => []),
-      find: vi.fn(async () => []),
-      get: vi.fn(async () => null),
-      on: vi.fn(),
-      removeListener: vi.fn(),
+            : vi.fn(async () => {
+                if (failingServices.has(path)) throw new Error(`${path} resync failed`);
+                return [];
+              }),
+      find: vi.fn(async () => {
+        if (failingServices.has(path)) throw new Error(`${path} resync failed`);
+        return [];
+      }),
+      get: vi.fn(async () => {
+        if (failingServices.has(path)) throw new Error(`${path} resync failed`);
+        return null;
+      }),
+      // Exercise the same EventEmitter subscription/removal/delivery timing as
+      // a Feathers service instead of merely recording inert `.on` calls.
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        emitter.on(event, listener);
+        return value;
+      }),
+      removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        emitter.removeListener(event, listener);
+        return value;
+      }),
     };
     services.set(path, value);
     return value;
@@ -212,6 +234,21 @@ function transitionClient() {
     emitConnect: () => {
       for (const listener of ioListeners.get('connect') ?? []) listener();
     },
+    emitService: (path: string, event: string, payload: unknown) => {
+      service(path);
+      serviceEmitters.get(path)?.emit(event, payload);
+    },
+    serviceListenerCount: (path: string, event: string) => {
+      service(path);
+      return serviceEmitters.get(path)?.listenerCount(event) ?? 0;
+    },
+    setServiceFailure: (path: string, failing: boolean) => {
+      if (failing) failingServices.add(path);
+      else failingServices.delete(path);
+    },
+    getService: (path: string) => service(path),
+    findAllCallCount: (path: string) =>
+      (service(path).findAll as ReturnType<typeof vi.fn> | undefined)?.mock.calls.length ?? 0,
   };
 }
 
@@ -319,5 +356,91 @@ describe('workspace authority generation ordering', () => {
     rerender({ ready: true, generation: 2 });
     await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(2));
     expect(result.current.error).toBeNull();
+  });
+
+  it('never flushes real queued service events across identity, disconnect, or role authority', async () => {
+    const seam = transitionClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { result, rerender } = renderHook(
+      ({
+        userId,
+        role,
+        ready,
+        generation,
+      }: {
+        userId: string;
+        role: string;
+        ready: boolean;
+        generation: number;
+      }) =>
+        useAgorData(seam.client, {
+          authenticatedUserId: userId,
+          authenticatedUserRole: role,
+          authGeneration: generation,
+          connectionReady: ready,
+        }),
+      {
+        initialProps: {
+          userId: 'user-a',
+          role: 'member',
+          ready: true,
+          generation: 1,
+        },
+      }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect(seam.serviceListenerCount('sessions', 'patched')).toBe(1));
+
+    const fromA = {
+      session_id: 'session-from-a',
+      branch_id: 'branch-a',
+      status: 'running',
+      archived: false,
+      created_at: '2026-08-20T00:00:00.000Z',
+    } as unknown as Session;
+    act(() => seam.emitService('sessions', 'patched', fromA));
+
+    // B's essential silent resync fails. The identity layout reset must remain
+    // empty even when A's old passive cleanup runs after that reset.
+    const beforeFailedResync = seam.findAllCallCount('sessions');
+    seam.setServiceFailure('sessions', true);
+    rerender({ userId: 'user-b', role: 'member', ready: true, generation: 2 });
+    await waitFor(() =>
+      expect(seam.findAllCallCount('sessions')).toBeGreaterThan(beforeFailedResync)
+    );
+    expect(agorStore.getState().sessionById.has('session-from-a')).toBe(false);
+    expect(agorStore.getState().sessionsByBranch.has('branch-a')).toBe(false);
+
+    // Let B re-establish a healthy generation, then queue one of B's patches
+    // and disconnect before the frame flushes. Reconnect must not replay it.
+    seam.setServiceFailure('sessions', false);
+    rerender({ userId: 'user-b', role: 'member', ready: true, generation: 3 });
+    await waitFor(() => expect(seam.serviceListenerCount('sessions', 'patched')).toBe(1));
+    const beforeDisconnect = {
+      ...fromA,
+      session_id: 'session-before-disconnect',
+      branch_id: 'branch-b',
+    } as Session;
+    act(() => seam.emitService('sessions', 'patched', beforeDisconnect));
+    rerender({ userId: 'user-b', role: 'member', ready: false, generation: 3 });
+    expect(agorStore.getState().sessionById.has('session-before-disconnect')).toBe(false);
+
+    rerender({ userId: 'user-b', role: 'member', ready: true, generation: 4 });
+    await waitFor(() => expect(seam.serviceListenerCount('sessions', 'patched')).toBe(1));
+    expect(agorStore.getState().sessionById.has('session-before-disconnect')).toBe(false);
+
+    // The same protection applies when a role changes before the replacement
+    // socket authentication generation is established.
+    const beforeDemotion = {
+      ...fromA,
+      session_id: 'session-before-demotion',
+      branch_id: 'branch-b',
+    } as Session;
+    act(() => seam.emitService('sessions', 'patched', beforeDemotion));
+    rerender({ userId: 'user-b', role: 'viewer', ready: true, generation: 4 });
+    rerender({ userId: 'user-b', role: 'viewer', ready: true, generation: 5 });
+    expect(agorStore.getState().sessionById.has('session-before-demotion')).toBe(false);
+
+    warn.mockRestore();
   });
 });

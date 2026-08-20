@@ -56,6 +56,7 @@ import {
   discardRealtimeNow,
   enqueueSessionPatch,
   flushRealtimeNow,
+  setRealtimeAuthorityScope,
   tombstoneSession,
   untombstoneSession,
 } from '../store/realtimeBatch';
@@ -322,6 +323,22 @@ export function useAgorData(
   // asynchronous apply below compares its captured scope against this value.
   const authorityScopeKeyRef = useRef(authorityScopeKey);
   authorityScopeKeyRef.current = authorityScopeKey;
+
+  // Advance the singleton realtime queue in the layout phase. React runs this
+  // before the authority-transition map reset below and before the previous
+  // subscription's passive cleanup, so that cleanup cannot flush a queued row
+  // from the previous identity/role/auth generation into the replacement
+  // authority's store. Socket callbacks also consult this scope synchronously,
+  // closing the short layout→passive-cleanup listener overlap.
+  useLayoutEffect(() => {
+    setRealtimeAuthorityScope(authorityScopeKey);
+  }, [authorityScopeKey]);
+
+  // On a true owner unmount, discard rather than preserve a final frame. The
+  // subscription cleanup cannot distinguish unmount from a same-authority
+  // resubscribe, while layout cleanup ordering can: it runs first and makes the
+  // later scoped flush a no-op.
+  useLayoutEffect(() => () => setRealtimeAuthorityScope(null), []);
 
   useLayoutEffect(() => {
     if (!hasAuthorityContext || !client || !connectionReady || !identityRoleKey) return;
@@ -1285,9 +1302,9 @@ export function useAgorData(
 
   // Subscribe to real-time updates
   //
-  // Every socket event is wired straight to the matching store action in
-  // `agorRealtimeActions` (module singletons → stable references, so cleanup
-  // `removeListener` matches). The store action does the
+  // Every socket event is wired through an authority-scoped stable wrapper to
+  // the matching store action in `agorRealtimeActions` (the wrappers live for
+  // this effect, so cleanup `removeListener` matches). The store action does the
   // `replaceIfChanged` / cascade / index-rebuild + per-collection `bumpRevision`.
   // OAuth + agor-query handlers stay local: they need `client` (async refetch)
   // or are pure window side-effects.
@@ -1298,6 +1315,21 @@ export function useAgorData(
       agorStore.getState().setLoadingStage('idle');
       return;
     }
+
+    const subscriptionAuthorityScope = authorityScopeKey;
+    const subscriptionIsCurrent = () => authorityScopeKeyRef.current === subscriptionAuthorityScope;
+    // All direct store handlers are authority-scoped too. Although only
+    // sessions are frame-batched, an old Feathers listener remains live until
+    // passive cleanup and must not write during the layout→cleanup overlap.
+    const scopedRealtime = Object.fromEntries(
+      Object.entries(realtime).map(([name, handler]) => [
+        name,
+        (...args: unknown[]) => {
+          if (!subscriptionIsCurrent()) return;
+          (handler as (...values: unknown[]) => void)(...args);
+        },
+      ])
+    ) as typeof realtime;
 
     // Subscribe to session events. `patched`/`updated` are the streaming hot
     // path (a patch per token batch), so they're coalesced into one keyed store
@@ -1310,19 +1342,22 @@ export function useAgorData(
     // hydration's quiet-window guard, and the queue's own stale-drop stamp, both
     // depend on the bump landing the instant the event does, not a frame later.
     const sessionPatchedBatched = (session: Session) => {
+      if (!subscriptionIsCurrent()) return;
       bumpRevision('sessions');
-      enqueueSessionPatch(session);
+      enqueueSessionPatch(subscriptionAuthorityScope, session);
     };
     // `created` clears any tombstone (remove-then-recreate in one frame) and
     // `removed` sets one + drops the id's queued patch, before the synchronous
     // store write.
     const sessionCreatedSync = (session: Session) => {
-      untombstoneSession(session.session_id);
-      realtime.sessionCreated(session);
+      if (!subscriptionIsCurrent()) return;
+      untombstoneSession(subscriptionAuthorityScope, session.session_id);
+      scopedRealtime.sessionCreated(session);
     };
     const sessionRemovedSync = (session: Session) => {
-      tombstoneSession(session.session_id);
-      realtime.sessionRemoved(session);
+      if (!subscriptionIsCurrent()) return;
+      tombstoneSession(subscriptionAuthorityScope, session.session_id);
+      scopedRealtime.sessionRemoved(session);
     };
     sessionsService.on('created', sessionCreatedSync);
     sessionsService.on('patched', sessionPatchedBatched);
@@ -1331,31 +1366,32 @@ export function useAgorData(
 
     // Subscribe to board events
     const boardsService = client.service('boards');
-    boardsService.on('created', realtime.boardCreated);
-    boardsService.on('patched', realtime.boardPatched);
-    boardsService.on('updated', realtime.boardPatched);
-    boardsService.on('removed', realtime.boardRemoved);
+    boardsService.on('created', scopedRealtime.boardCreated);
+    boardsService.on('patched', scopedRealtime.boardPatched);
+    boardsService.on('updated', scopedRealtime.boardPatched);
+    boardsService.on('removed', scopedRealtime.boardRemoved);
 
     // Subscribe to board object events
     const boardObjectsService = canUseMemberWorkspaceServices
       ? client.service('board-objects')
       : null;
-    boardObjectsService?.on('created', realtime.boardObjectCreated);
-    boardObjectsService?.on('patched', realtime.boardObjectPatched);
-    boardObjectsService?.on('updated', realtime.boardObjectPatched);
-    boardObjectsService?.on('removed', realtime.boardObjectRemoved);
+    boardObjectsService?.on('created', scopedRealtime.boardObjectCreated);
+    boardObjectsService?.on('patched', scopedRealtime.boardObjectPatched);
+    boardObjectsService?.on('updated', scopedRealtime.boardObjectPatched);
+    boardObjectsService?.on('removed', scopedRealtime.boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
-    reposService.on('created', realtime.repoCreated);
-    reposService.on('patched', realtime.repoPatched);
-    reposService.on('updated', realtime.repoPatched);
-    reposService.on('removed', realtime.repoRemoved);
+    reposService.on('created', scopedRealtime.repoCreated);
+    reposService.on('patched', scopedRealtime.repoPatched);
+    reposService.on('updated', scopedRealtime.repoPatched);
+    reposService.on('removed', scopedRealtime.repoRemoved);
 
     // Subscribe to branch events
     const branchesService = client.service('branches');
     const branchRemovedSync = (branch: Branch) => {
-      realtime.branchRemoved(branch);
+      if (!subscriptionIsCurrent()) return;
+      scopedRealtime.branchRemoved(branch);
       // Branch deletion cascades tasks/messages without child Feathers events.
       // Comments survive those cascades with task_id/message_id SET NULL, but
       // the branch tombstone does not contain the deleted descendant IDs.
@@ -1373,17 +1409,17 @@ export function useAgorData(
           }))
       );
     };
-    branchesService.on('created', realtime.branchCreated);
-    branchesService.on('patched', realtime.branchPatched);
-    branchesService.on('updated', realtime.branchPatched);
+    branchesService.on('created', scopedRealtime.branchCreated);
+    branchesService.on('patched', scopedRealtime.branchPatched);
+    branchesService.on('updated', scopedRealtime.branchPatched);
     branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
     const usersService = canListUsers ? client.service('users') : null;
-    usersService?.on('created', realtime.userCreated);
-    usersService?.on('patched', realtime.userPatched);
-    usersService?.on('updated', realtime.userPatched);
-    usersService?.on('removed', realtime.userRemoved);
+    usersService?.on('created', scopedRealtime.userCreated);
+    usersService?.on('patched', scopedRealtime.userPatched);
+    usersService?.on('updated', scopedRealtime.userPatched);
+    usersService?.on('removed', scopedRealtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
     // A single-row realtime event is an INCREMENTAL upsert, not a complete
@@ -1392,6 +1428,7 @@ export function useAgorData(
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
+      if (!subscriptionIsCurrent()) return;
       // Bump the live-write revision so a background full-fetch that raced this
       // upsert discards its (now-stale) snapshot instead of overwriting it.
       bumpRevision('agenticToolSettings');
@@ -1402,38 +1439,38 @@ export function useAgorData(
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
-    mcpServersService.on('created', realtime.mcpServerCreated);
-    mcpServersService.on('patched', realtime.mcpServerPatched);
-    mcpServersService.on('updated', realtime.mcpServerPatched);
-    mcpServersService.on('removed', realtime.mcpServerRemoved);
+    mcpServersService.on('created', scopedRealtime.mcpServerCreated);
+    mcpServersService.on('patched', scopedRealtime.mcpServerPatched);
+    mcpServersService.on('updated', scopedRealtime.mcpServerPatched);
+    mcpServersService.on('removed', scopedRealtime.mcpServerRemoved);
 
     // Subscribe to gateway channel events
     const gatewayChannelsService = client.service('gateway-channels');
-    gatewayChannelsService.on('created', realtime.gatewayChannelCreated);
-    gatewayChannelsService.on('patched', realtime.gatewayChannelPatched);
-    gatewayChannelsService.on('updated', realtime.gatewayChannelPatched);
-    gatewayChannelsService.on('removed', realtime.gatewayChannelRemoved);
+    gatewayChannelsService.on('created', scopedRealtime.gatewayChannelCreated);
+    gatewayChannelsService.on('patched', scopedRealtime.gatewayChannelPatched);
+    gatewayChannelsService.on('updated', scopedRealtime.gatewayChannelPatched);
+    gatewayChannelsService.on('removed', scopedRealtime.gatewayChannelRemoved);
 
     // Subscribe to card events
     const cardsService = client.service('cards');
-    cardsService.on('created', realtime.cardCreated);
-    cardsService.on('patched', realtime.cardPatched);
-    cardsService.on('updated', realtime.cardPatched);
-    cardsService.on('removed', realtime.cardRemoved);
+    cardsService.on('created', scopedRealtime.cardCreated);
+    cardsService.on('patched', scopedRealtime.cardPatched);
+    cardsService.on('updated', scopedRealtime.cardPatched);
+    cardsService.on('removed', scopedRealtime.cardRemoved);
 
     // Subscribe to card type events
     const cardTypesService = client.service('card-types');
-    cardTypesService.on('created', realtime.cardTypeCreated);
-    cardTypesService.on('patched', realtime.cardTypePatched);
-    cardTypesService.on('updated', realtime.cardTypePatched);
-    cardTypesService.on('removed', realtime.cardTypeRemoved);
+    cardTypesService.on('created', scopedRealtime.cardTypeCreated);
+    cardTypesService.on('patched', scopedRealtime.cardTypePatched);
+    cardTypesService.on('updated', scopedRealtime.cardTypePatched);
+    cardTypesService.on('removed', scopedRealtime.cardTypeRemoved);
 
     // Subscribe to artifact events
     const artifactsService = client.service('artifacts');
-    artifactsService.on('created', realtime.artifactCreated);
-    artifactsService.on('patched', realtime.artifactPatched);
-    artifactsService.on('updated', realtime.artifactPatched);
-    artifactsService.on('removed', realtime.artifactRemoved);
+    artifactsService.on('created', scopedRealtime.artifactCreated);
+    artifactsService.on('patched', scopedRealtime.artifactPatched);
+    artifactsService.on('updated', scopedRealtime.artifactPatched);
+    artifactsService.on('removed', scopedRealtime.artifactRemoved);
 
     // Agent-driven runtime queries: daemon emits when an MCP tool wants to
     // introspect the iframe DOM. ArtifactNode components listen for the
@@ -1446,21 +1483,22 @@ export function useAgorData(
       kind: string;
       args: Record<string, unknown>;
     }) => {
+      if (!subscriptionIsCurrent()) return;
       window.dispatchEvent(new CustomEvent('agor:artifact-runtime-query', { detail: event }));
     };
     artifactsService.on('agor-query', handleAgorQuery);
 
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
-    sessionMcpService.on('created', realtime.sessionMcpCreated);
-    sessionMcpService.on('removed', realtime.sessionMcpRemoved);
+    sessionMcpService.on('created', scopedRealtime.sessionMcpCreated);
+    sessionMcpService.on('removed', scopedRealtime.sessionMcpRemoved);
 
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
-    commentsService.on('created', realtime.commentCreated);
-    commentsService.on('patched', realtime.commentPatched);
-    commentsService.on('updated', realtime.commentPatched);
-    commentsService.on('removed', realtime.commentRemoved);
+    commentsService.on('created', scopedRealtime.commentCreated);
+    commentsService.on('patched', scopedRealtime.commentPatched);
+    commentsService.on('updated', scopedRealtime.commentPatched);
+    commentsService.on('removed', scopedRealtime.commentRemoved);
 
     // Realtime OAuth events are latency hints only. Correctness comes from
     // refetching the durable, authenticated token status and server record;
@@ -1559,11 +1597,11 @@ export function useAgorData(
 
     // Cleanup listeners on unmount
     return () => {
-      // APPLY (not discard) any frame-batched session patches here: this cleanup
-      // also runs when the effect merely re-subscribes (a dep changes), so
-      // dropping would lose live updates mid-session. The logout path discards
-      // explicitly instead (see the `client`-null effect above).
-      flushRealtimeNow();
+      // APPLY only when this is a same-authority resubscribe. The layout-phase
+      // scope transition has already discarded an identity/role/auth/connection
+      // queue, and makes this old passive cleanup a no-op. This preserves live
+      // updates on ordinary effect churn without crossing an authority boundary.
+      flushRealtimeNow(subscriptionAuthorityScope);
       client.io.off('oauth:completed', handleOAuthCompleted);
       client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
@@ -1573,66 +1611,66 @@ export function useAgorData(
       sessionsService.removeListener('updated', sessionPatchedBatched);
       sessionsService.removeListener('removed', sessionRemovedSync);
 
-      boardsService.removeListener('created', realtime.boardCreated);
-      boardsService.removeListener('patched', realtime.boardPatched);
-      boardsService.removeListener('updated', realtime.boardPatched);
-      boardsService.removeListener('removed', realtime.boardRemoved);
+      boardsService.removeListener('created', scopedRealtime.boardCreated);
+      boardsService.removeListener('patched', scopedRealtime.boardPatched);
+      boardsService.removeListener('updated', scopedRealtime.boardPatched);
+      boardsService.removeListener('removed', scopedRealtime.boardRemoved);
 
-      boardObjectsService?.removeListener('created', realtime.boardObjectCreated);
-      boardObjectsService?.removeListener('patched', realtime.boardObjectPatched);
-      boardObjectsService?.removeListener('updated', realtime.boardObjectPatched);
-      boardObjectsService?.removeListener('removed', realtime.boardObjectRemoved);
+      boardObjectsService?.removeListener('created', scopedRealtime.boardObjectCreated);
+      boardObjectsService?.removeListener('patched', scopedRealtime.boardObjectPatched);
+      boardObjectsService?.removeListener('updated', scopedRealtime.boardObjectPatched);
+      boardObjectsService?.removeListener('removed', scopedRealtime.boardObjectRemoved);
 
-      reposService.removeListener('created', realtime.repoCreated);
-      reposService.removeListener('patched', realtime.repoPatched);
-      reposService.removeListener('updated', realtime.repoPatched);
-      reposService.removeListener('removed', realtime.repoRemoved);
+      reposService.removeListener('created', scopedRealtime.repoCreated);
+      reposService.removeListener('patched', scopedRealtime.repoPatched);
+      reposService.removeListener('updated', scopedRealtime.repoPatched);
+      reposService.removeListener('removed', scopedRealtime.repoRemoved);
 
-      branchesService.removeListener('created', realtime.branchCreated);
-      branchesService.removeListener('patched', realtime.branchPatched);
-      branchesService.removeListener('updated', realtime.branchPatched);
+      branchesService.removeListener('created', scopedRealtime.branchCreated);
+      branchesService.removeListener('patched', scopedRealtime.branchPatched);
+      branchesService.removeListener('updated', scopedRealtime.branchPatched);
       branchesService.removeListener('removed', branchRemovedSync);
 
-      usersService?.removeListener('created', realtime.userCreated);
-      usersService?.removeListener('patched', realtime.userPatched);
-      usersService?.removeListener('updated', realtime.userPatched);
-      usersService?.removeListener('removed', realtime.userRemoved);
+      usersService?.removeListener('created', scopedRealtime.userCreated);
+      usersService?.removeListener('patched', scopedRealtime.userPatched);
+      usersService?.removeListener('updated', scopedRealtime.userPatched);
+      usersService?.removeListener('removed', scopedRealtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
       agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
 
-      mcpServersService.removeListener('created', realtime.mcpServerCreated);
-      mcpServersService.removeListener('patched', realtime.mcpServerPatched);
-      mcpServersService.removeListener('updated', realtime.mcpServerPatched);
-      mcpServersService.removeListener('removed', realtime.mcpServerRemoved);
+      mcpServersService.removeListener('created', scopedRealtime.mcpServerCreated);
+      mcpServersService.removeListener('patched', scopedRealtime.mcpServerPatched);
+      mcpServersService.removeListener('updated', scopedRealtime.mcpServerPatched);
+      mcpServersService.removeListener('removed', scopedRealtime.mcpServerRemoved);
 
-      sessionMcpService.removeListener('created', realtime.sessionMcpCreated);
-      sessionMcpService.removeListener('removed', realtime.sessionMcpRemoved);
+      sessionMcpService.removeListener('created', scopedRealtime.sessionMcpCreated);
+      sessionMcpService.removeListener('removed', scopedRealtime.sessionMcpRemoved);
 
-      commentsService.removeListener('created', realtime.commentCreated);
-      commentsService.removeListener('patched', realtime.commentPatched);
-      commentsService.removeListener('updated', realtime.commentPatched);
-      commentsService.removeListener('removed', realtime.commentRemoved);
+      commentsService.removeListener('created', scopedRealtime.commentCreated);
+      commentsService.removeListener('patched', scopedRealtime.commentPatched);
+      commentsService.removeListener('updated', scopedRealtime.commentPatched);
+      commentsService.removeListener('removed', scopedRealtime.commentRemoved);
 
-      gatewayChannelsService.removeListener('created', realtime.gatewayChannelCreated);
-      gatewayChannelsService.removeListener('patched', realtime.gatewayChannelPatched);
-      gatewayChannelsService.removeListener('updated', realtime.gatewayChannelPatched);
-      gatewayChannelsService.removeListener('removed', realtime.gatewayChannelRemoved);
+      gatewayChannelsService.removeListener('created', scopedRealtime.gatewayChannelCreated);
+      gatewayChannelsService.removeListener('patched', scopedRealtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('updated', scopedRealtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('removed', scopedRealtime.gatewayChannelRemoved);
 
-      cardsService.removeListener('created', realtime.cardCreated);
-      cardsService.removeListener('patched', realtime.cardPatched);
-      cardsService.removeListener('updated', realtime.cardPatched);
-      cardsService.removeListener('removed', realtime.cardRemoved);
+      cardsService.removeListener('created', scopedRealtime.cardCreated);
+      cardsService.removeListener('patched', scopedRealtime.cardPatched);
+      cardsService.removeListener('updated', scopedRealtime.cardPatched);
+      cardsService.removeListener('removed', scopedRealtime.cardRemoved);
 
-      cardTypesService.removeListener('created', realtime.cardTypeCreated);
-      cardTypesService.removeListener('patched', realtime.cardTypePatched);
-      cardTypesService.removeListener('updated', realtime.cardTypePatched);
-      cardTypesService.removeListener('removed', realtime.cardTypeRemoved);
+      cardTypesService.removeListener('created', scopedRealtime.cardTypeCreated);
+      cardTypesService.removeListener('patched', scopedRealtime.cardTypePatched);
+      cardTypesService.removeListener('updated', scopedRealtime.cardTypePatched);
+      cardTypesService.removeListener('removed', scopedRealtime.cardTypeRemoved);
 
-      artifactsService.removeListener('created', realtime.artifactCreated);
-      artifactsService.removeListener('patched', realtime.artifactPatched);
-      artifactsService.removeListener('updated', realtime.artifactPatched);
-      artifactsService.removeListener('removed', realtime.artifactRemoved);
+      artifactsService.removeListener('created', scopedRealtime.artifactCreated);
+      artifactsService.removeListener('patched', scopedRealtime.artifactPatched);
+      artifactsService.removeListener('updated', scopedRealtime.artifactPatched);
+      artifactsService.removeListener('removed', scopedRealtime.artifactRemoved);
       artifactsService.removeListener('agor-query', handleAgorQuery);
     };
   }, [

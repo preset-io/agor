@@ -62,8 +62,13 @@ export function oauthAttemptFailureMessage(status: MCPOAuthAttemptStatus): strin
 export async function refetchMCPOAuthDurableState(
   client: AgorClient,
   mcpServerId: string,
-  shouldApply: () => boolean = () => true
+  shouldApply: () => boolean
 ): Promise<void> {
+  // Avoid starting caller-private reads when the initiating authority already
+  // disappeared. The second check is still the security boundary: identity,
+  // role, connection, or auth generation can change while either request is in
+  // flight.
+  if (!shouldApply()) return;
   const [status, fresh] = await Promise.all([
     client.service('mcp-servers/oauth-status').find(),
     client.service('mcp-servers').get(mcpServerId),
@@ -89,7 +94,8 @@ export async function refetchMCPOAuthDurableState(
  */
 export async function refreshAndRefetchMCPOAuthGrant(
   client: AgorClient,
-  mcpServerId: string
+  mcpServerId: string,
+  shouldApply: () => boolean
 ): Promise<MCPOAuthRefreshResult> {
   let result: MCPOAuthRefreshResult | undefined;
   let refreshError: unknown;
@@ -102,7 +108,7 @@ export async function refreshAndRefetchMCPOAuthGrant(
   }
 
   try {
-    await refetchMCPOAuthDurableState(client, mcpServerId);
+    await refetchMCPOAuthDurableState(client, mcpServerId, shouldApply);
   } catch (refetchError) {
     if (!refreshError) throw refetchError;
   }

@@ -3,10 +3,15 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
+const oauthAttempt = vi.hoisted(() => ({
+  refetch: vi.fn(),
+  wait: vi.fn(),
+}));
+
 vi.mock('@/utils/mcpOAuthAttempt', () => ({
   oauthAttemptFailureMessage: vi.fn(),
-  refetchMCPOAuthDurableState: vi.fn(),
-  waitForMCPOAuthAttempt: vi.fn(),
+  refetchMCPOAuthDurableState: oauthAttempt.refetch,
+  waitForMCPOAuthAttempt: oauthAttempt.wait,
 }));
 
 const showError = vi.fn();
@@ -41,6 +46,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client,
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart,
         showError,
         showInfo,
@@ -74,6 +80,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result, unmount } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart,
         showError,
         showInfo,
@@ -112,6 +119,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result, unmount } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -149,6 +157,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -172,6 +181,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -185,5 +195,108 @@ describe('useMCPServerOAuthStart', () => {
       diagnostic: undefined,
       redirectUri: undefined,
     });
+  });
+
+  it.each([
+    {
+      transition: 'demotion',
+      nextAuthorityKey: 'user-a:viewer:2',
+      nextAllowed: false,
+    },
+    { transition: 'disconnect', nextAuthorityKey: null, nextAllowed: false },
+    {
+      transition: 'identity replacement',
+      nextAuthorityKey: 'user-b:admin:2',
+      nextAllowed: true,
+    },
+    {
+      transition: 'policy downgrade',
+      nextAuthorityKey: 'user-a:admin:1',
+      nextAllowed: false,
+    },
+  ])(
+    'guards the durable completion apply across $transition during its reads',
+    async ({ nextAuthorityKey, nextAllowed }) => {
+      let releaseRefetch!: () => void;
+      const refetchPending = new Promise<void>((resolve) => {
+        releaseRefetch = resolve;
+      });
+      oauthAttempt.wait.mockResolvedValue({
+        status: 'succeeded',
+        mcp_server_id: 'server-1',
+      });
+      oauthAttempt.refetch.mockImplementation(async () => refetchPending);
+      const startOAuth = vi.fn().mockResolvedValue({
+        success: true,
+        authorizationUrl: 'https://provider.example/authorize',
+        attempt_id: 'attempt-1',
+      });
+      const client = oauthClient(startOAuth);
+      const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const { result, rerender } = renderHook(
+        ({ authorityKey, startAllowed }: { authorityKey: string | null; startAllowed: boolean }) =>
+          useMCPServerOAuthStart({
+            client,
+            authorityKey,
+            onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+            showError,
+            showInfo,
+            showSuccess,
+            startAllowed,
+          }),
+        { initialProps: { authorityKey: 'user-a:admin:1', startAllowed: true } }
+      );
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      await waitFor(() => expect(oauthAttempt.refetch).toHaveBeenCalledOnce());
+      const shouldApply = oauthAttempt.refetch.mock.calls[0]?.[2] as () => boolean;
+      expect(shouldApply()).toBe(true);
+
+      rerender({ authorityKey: nextAuthorityKey, startAllowed: nextAllowed });
+      expect(shouldApply()).toBe(false);
+
+      await act(async () => {
+        releaseRefetch();
+        await refetchPending;
+      });
+      expect(showSuccess).not.toHaveBeenCalled();
+      windowOpen.mockRestore();
+    }
+  );
+
+  it('guards the durable completion apply when the OAuth owner unmounts during its reads', async () => {
+    let releaseRefetch!: () => void;
+    const refetchPending = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    oauthAttempt.wait.mockResolvedValue({ status: 'succeeded', mcp_server_id: 'server-1' });
+    oauthAttempt.refetch.mockImplementation(async () => refetchPending);
+    const startOAuth = vi.fn().mockResolvedValue({
+      success: true,
+      authorizationUrl: 'https://provider.example/authorize',
+      attempt_id: 'attempt-1',
+    });
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result, unmount } = renderHook(() =>
+      useMCPServerOAuthStart({
+        client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
+        onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+        showError,
+        showInfo,
+        showSuccess,
+      })
+    );
+
+    await act(async () => result.current.handleStartOAuthFlow());
+    await waitFor(() => expect(oauthAttempt.refetch).toHaveBeenCalledOnce());
+    const shouldApply = oauthAttempt.refetch.mock.calls[0]?.[2] as () => boolean;
+    unmount();
+    expect(shouldApply()).toBe(false);
+
+    releaseRefetch();
+    await refetchPending;
+    expect(showSuccess).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
   });
 });

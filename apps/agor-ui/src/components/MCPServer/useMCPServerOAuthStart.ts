@@ -21,6 +21,8 @@ interface OAuthStartSuccess {
 
 interface UseMCPServerOAuthStartOptions {
   client: AgorClient | null;
+  /** Opaque identity + role + successful-auth generation, null while disconnected. */
+  authorityKey: string | null;
   onPrepareOAuthStart: () => Promise<string | null>;
   onOAuthSucceeded?: () => void;
   showError: (message: string) => void;
@@ -33,6 +35,7 @@ interface UseMCPServerOAuthStartOptions {
 
 export function useMCPServerOAuthStart({
   client,
+  authorityKey,
   onPrepareOAuthStart,
   onOAuthSucceeded,
   showError,
@@ -49,6 +52,10 @@ export function useMCPServerOAuthStart({
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
   const startAllowedRef = useRef(startAllowed);
   startAllowedRef.current = startAllowed;
+  const authorityKeyRef = useRef(authorityKey);
+  authorityKeyRef.current = authorityKey;
+  const clientRef = useRef(client);
+  clientRef.current = client;
 
   const invalidateOAuthStart = useCallback(() => {
     oauthStartGenerationRef.current += 1;
@@ -56,17 +63,24 @@ export function useMCPServerOAuthStart({
     oauthCompletedCleanupRef.current?.();
   }, []);
 
-  useEffect(() => {
-    return invalidateOAuthStart;
-  }, [invalidateOAuthStart]);
+  // A long-lived socket client can survive identity, role, and token
+  // replacement. Abort the previous wait on any authority/client transition;
+  // render-time refs below close the window before this passive cleanup runs.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authority/client changes intentionally run cleanup
+  useEffect(
+    () => () => {
+      invalidateOAuthStart();
+    },
+    [authorityKey, client, invalidateOAuthStart]
+  );
 
   useEffect(() => {
-    if (!startAllowed) {
+    if (!startAllowed || !authorityKey || !client) {
       invalidateOAuthStart();
       setOauthCallbackModalVisible(false);
       setStartingOAuthFlow(false);
     }
-  }, [invalidateOAuthStart, startAllowed]);
+  }, [authorityKey, client, invalidateOAuthStart, startAllowed]);
 
   const clearOAuthFailure = useCallback(() => setOauthFailure(null), []);
 
@@ -82,14 +96,20 @@ export function useMCPServerOAuthStart({
       showError('Client not available');
       return;
     }
-    if (!startAllowedRef.current) {
+    const startAuthorityKey = authorityKeyRef.current;
+    if (!startAllowedRef.current || !startAuthorityKey) {
       showError(startBlockedReason);
       return;
     }
 
+    const startClient = client;
     oauthStartInFlightRef.current = true;
     const startGeneration = ++oauthStartGenerationRef.current;
-    const isCurrentStart = () => oauthStartGenerationRef.current === startGeneration;
+    const isCurrentStart = () =>
+      oauthStartGenerationRef.current === startGeneration &&
+      startAllowedRef.current &&
+      authorityKeyRef.current === startAuthorityKey &&
+      clientRef.current === startClient;
     setStartingOAuthFlow(true);
     setOauthFailure(null);
 
@@ -127,7 +147,7 @@ export function useMCPServerOAuthStart({
             if (!isCurrentStart()) return;
             if (attempt.status === 'succeeded') {
               try {
-                await refetchMCPOAuthDurableState(client, targetServerId);
+                await refetchMCPOAuthDurableState(client, targetServerId, isCurrentStart);
                 if (!isCurrentStart()) return;
               } catch {
                 if (isCurrentStart()) console.warn('[OAuth] Durable completion refetch failed');

@@ -50,7 +50,16 @@ describe('MCPServerPill OAuth recovery', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerPill server={server} needsAuth client={client} />);
+    render(
+      <MCPServerPill
+        server={server}
+        needsAuth
+        client={client}
+        authorityKey="user-a:member:1"
+        actionAllowed
+        actionBlockedReason="OAuth unavailable"
+      />
+    );
 
     const signIn = screen.getByRole('button', { name: 'Sign in to OAuth Server' });
     expect(signIn.tagName).toBe('BUTTON');
@@ -80,7 +89,17 @@ describe('MCPServerPill OAuth recovery', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerPill server={server} needsAuth client={null} onEdit={onEdit} />);
+    render(
+      <MCPServerPill
+        server={server}
+        needsAuth
+        client={null}
+        authorityKey={null}
+        actionAllowed={false}
+        actionBlockedReason="OAuth unavailable"
+        onEdit={onEdit}
+      />
+    );
 
     const edit = screen.getByRole('button', { name: 'Edit OAuth Server MCP server' });
     expect(edit).toBeInTheDocument();
@@ -101,7 +120,16 @@ describe('MCPServerPill OAuth recovery', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerPill server={server} needsAuth={false} client={client} />);
+    render(
+      <MCPServerPill
+        server={server}
+        needsAuth={false}
+        client={client}
+        authorityKey="user-a:member:1"
+        actionAllowed
+        actionBlockedReason="OAuth unavailable"
+      />
+    );
 
     const refresh = screen.getByRole('button', {
       name: 'Refresh OAuth credentials for OAuth Server',
@@ -114,8 +142,122 @@ describe('MCPServerPill OAuth recovery', () => {
     await waitFor(() =>
       expect(refreshAndRefetchMCPOAuthGrant).toHaveBeenCalledWith(
         client,
-        '01900000-0000-7000-8000-000000000006'
+        '01900000-0000-7000-8000-000000000006',
+        expect.any(Function)
       )
     );
+  });
+
+  it.each([
+    { transition: 'demotion', authorityKey: null, actionAllowed: false },
+    { transition: 'disconnect', authorityKey: null, actionAllowed: false },
+    {
+      transition: 'identity replacement',
+      authorityKey: 'user-b:member:2',
+      actionAllowed: true,
+    },
+  ])(
+    'guards refresh durable application across $transition while reads are in flight',
+    async ({ authorityKey, actionAllowed }) => {
+      let releaseRefresh!: () => void;
+      const refreshPending = new Promise<{ success: true; expires_at: number }>((resolve) => {
+        releaseRefresh = () => resolve({ success: true, expires_at: 123 });
+      });
+      refreshAndRefetchMCPOAuthGrant.mockImplementation(async () => refreshPending);
+      const client = {} as AgorClient;
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000007',
+        name: 'oauth-server',
+        display_name: 'OAuth Server',
+        transport: 'http',
+        scope: 'global',
+        enabled: true,
+        auth: { type: 'oauth' },
+      } as MCPServer;
+      const { rerender } = render(
+        <MCPServerPill
+          server={server}
+          needsAuth={false}
+          client={client}
+          authorityKey="user-a:member:1"
+          actionAllowed
+          actionBlockedReason="OAuth unavailable"
+        />
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Refresh OAuth credentials for OAuth Server' })
+      );
+      await waitFor(() => expect(refreshAndRefetchMCPOAuthGrant).toHaveBeenCalledOnce());
+      const shouldApply = refreshAndRefetchMCPOAuthGrant.mock.calls[0]?.[2] as () => boolean;
+      expect(shouldApply()).toBe(true);
+
+      rerender(
+        <MCPServerPill
+          server={server}
+          needsAuth={false}
+          client={client}
+          authorityKey={authorityKey}
+          actionAllowed={actionAllowed}
+          actionBlockedReason="OAuth unavailable"
+        />
+      );
+      expect(shouldApply()).toBe(false);
+
+      await act(async () => {
+        releaseRefresh();
+        await refreshPending;
+      });
+      expect(showSuccess).not.toHaveBeenCalled();
+      if (!actionAllowed) {
+        expect(
+          screen.queryByRole('button', {
+            name: 'Refresh OAuth credentials for OAuth Server',
+          })
+        ).not.toBeInTheDocument();
+        expect(screen.getByText('OAuth Server').closest('.ant-tag')).toHaveStyle({
+          cursor: 'default',
+        });
+      }
+    }
+  );
+
+  it('guards refresh durable application when the pill unmounts during reads', async () => {
+    let releaseRefresh!: () => void;
+    const refreshPending = new Promise<{ success: true }>((resolve) => {
+      releaseRefresh = () => resolve({ success: true });
+    });
+    refreshAndRefetchMCPOAuthGrant.mockImplementation(async () => refreshPending);
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000008',
+      name: 'oauth-server',
+      display_name: 'OAuth Server',
+      transport: 'http',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+    const { unmount } = render(
+      <MCPServerPill
+        server={server}
+        needsAuth={false}
+        client={{} as AgorClient}
+        authorityKey="user-a:member:1"
+        actionAllowed
+        actionBlockedReason="OAuth unavailable"
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh OAuth credentials for OAuth Server' })
+    );
+    await waitFor(() => expect(refreshAndRefetchMCPOAuthGrant).toHaveBeenCalledOnce());
+    const shouldApply = refreshAndRefetchMCPOAuthGrant.mock.calls[0]?.[2] as () => boolean;
+    unmount();
+    expect(shouldApply()).toBe(false);
+
+    releaseRefresh();
+    await refreshPending;
+    expect(showSuccess).not.toHaveBeenCalled();
   });
 });

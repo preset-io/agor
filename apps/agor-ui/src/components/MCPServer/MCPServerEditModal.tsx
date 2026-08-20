@@ -22,6 +22,8 @@ export interface MCPServerEditModalProps {
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
+  /** Current identity/role/auth generation, null while authority is unavailable. */
+  authorityKey: string | null;
   /**
    * The transports this editor may switch to. Omit to offer all of them — a
    * caller that knows the user is held to remote transports passes those, so
@@ -63,6 +65,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
   open,
   client,
+  authorityKey,
   offeredTransports,
   offeredScopes,
   mutationAllowed,
@@ -393,6 +396,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           onAuthTypeChange={setAuthType}
           form={form}
           client={client}
+          authorityKey={authorityKey}
           serverId={server?.mcp_server_id}
           onTestConnection={handleTestConnection}
           testing={testing}
