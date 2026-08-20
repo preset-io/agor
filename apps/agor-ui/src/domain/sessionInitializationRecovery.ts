@@ -49,3 +49,24 @@ export function pruneSessionInitializationRecovery(
   const retries = new Map([...state.retries].filter(([sessionId]) => sessionExists(sessionId)));
   return retries.size === state.retries.size ? state : { ...state, retries };
 }
+
+/** Return the canonical in-flight operation for one caller/session key. */
+export function runSessionInitializationSingleFlight<T>(
+  flights: Map<string, Promise<T>>,
+  key: string,
+  operation: () => Promise<T>,
+  onSettled?: (promise: Promise<T>) => void
+): Promise<T> {
+  const existing = flights.get(key);
+  if (existing) return existing;
+
+  const promise = operation();
+  flights.set(key, promise);
+  const settle = () => {
+    if (flights.get(key) !== promise) return;
+    flights.delete(key);
+    onSettled?.(promise);
+  };
+  void promise.then(settle, settle);
+  return promise;
+}

@@ -58,6 +58,7 @@ import {
   createSessionInitializationRecoveryState,
   pruneSessionInitializationRecovery,
   recordSessionInitializationResult,
+  runSessionInitializationSingleFlight,
   scopeSessionInitializationRecovery,
 } from './domain/sessionInitializationRecovery';
 import {
@@ -473,6 +474,17 @@ function AppContent() {
   const sessionInitializationRecoveryRef = useRef(sessionInitializationRecovery);
   const recoveryOwnerIdRef = useRef(recoveryOwnerId);
   recoveryOwnerIdRef.current = recoveryOwnerId;
+  const initializationGenerationOwnerRef = useRef(recoveryOwnerId);
+  const initializationGenerationRef = useRef(0);
+  if (initializationGenerationOwnerRef.current !== recoveryOwnerId) {
+    initializationGenerationOwnerRef.current = recoveryOwnerId;
+    initializationGenerationRef.current += 1;
+  }
+  const initializationFlightsRef = useRef(new Map<string, Promise<SessionInitializationResult>>());
+  const initializationAbortControllersRef = useRef(new Map<string, AbortController>());
+  const [sessionInitializationsInFlight, setSessionInitializationsInFlight] = useState<
+    ReadonlySet<string>
+  >(new Set());
 
   // Identity can rotate while the Feathers client remains mounted. Scope
   // retained prompts/files by caller. The render-time owner comparison keeps
@@ -483,6 +495,12 @@ function AppContent() {
       : EMPTY_SESSION_INITIALIZATION_RETRIES;
 
   useEffect(() => {
+    for (const controller of initializationAbortControllersRef.current.values()) {
+      controller.abort();
+    }
+    initializationAbortControllersRef.current.clear();
+    initializationFlightsRef.current.clear();
+    setSessionInitializationsInFlight(new Set());
     setSessionInitializationRecovery(() => {
       const next = scopeSessionInitializationRecovery(
         sessionInitializationRecoveryRef.current,
@@ -1056,62 +1074,101 @@ function AppContent() {
     );
   }
 
-  const initializeSession = async (
+  const initializeSession = (
     sessionId: string,
     initialization: SessionInitializationRetry
   ): Promise<SessionInitializationResult> => {
     const operationOwnerId = recoveryOwnerId;
-    const outcome = await initializeCreatedSession(sessionId, initialization, {
-      associateMcpServer: async (targetSessionId, serverId) => {
-        if (!client) throw new Error('Connection unavailable');
-        await client.service(`sessions/${targetSessionId}/mcp-servers`).create({
-          mcpServerId: serverId,
+    if (!operationOwnerId) {
+      return Promise.reject(new Error('Authenticated user required to initialize a session'));
+    }
+    const operationGeneration = initializationGenerationRef.current;
+    const operationAccessToken = accessToken;
+    const flightKey = `${operationOwnerId}:${sessionId}`;
+
+    return runSessionInitializationSingleFlight(
+      initializationFlightsRef.current,
+      flightKey,
+      async () => {
+        const abortController = new AbortController();
+        initializationAbortControllersRef.current.set(flightKey, abortController);
+        setSessionInitializationsInFlight((current) => new Set(current).add(sessionId));
+
+        const shouldContinue = () =>
+          !!operationOwnerId &&
+          recoveryOwnerIdRef.current === operationOwnerId &&
+          initializationGenerationRef.current === operationGeneration &&
+          !abortController.signal.aborted;
+
+        const outcome = await initializeCreatedSession(sessionId, initialization, {
+          shouldContinue,
+          associateMcpServer: async (targetSessionId, serverId) => {
+            if (!client) throw new Error('Connection unavailable');
+            await client.service(`sessions/${targetSessionId}/mcp-servers`).create({
+              mcpServerId: serverId,
+            });
+          },
+          updateEnvironmentVariables: async (targetSessionId, envVarNames) => {
+            if (!client) throw new Error('Connection unavailable');
+            await client.service(`sessions/${targetSessionId}/env-selections`).patch(null, {
+              envVarNames,
+            });
+          },
+          uploadAttachments: async (targetSessionId, prompt, files) => {
+            const uploaded = await uploadFilesToSession({
+              sessionId: targetSessionId,
+              daemonUrl: getDaemonUrl(),
+              files,
+              notifyAgent: false,
+              accessToken: operationAccessToken,
+              signal: abortController.signal,
+            });
+            return buildPromptWithAttachments(prompt, uploaded.files);
+          },
+          sendPrompt: (targetSessionId, prompt, permissionMode, idempotencyKey) =>
+            handleSendPrompt(targetSessionId, prompt, permissionMode, idempotencyKey),
+          onSetupError: (stage, error) => {
+            const label = stage === 'mcpServers' ? 'MCP servers' : 'environment variables';
+            showError(
+              `Failed to configure ${label}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          },
+          onAttachmentUploadError: (error) => {
+            showError(
+              `Failed to upload attachments: ${error instanceof Error ? error.message : String(error)}`
+            );
+          },
         });
-      },
-      updateEnvironmentVariables: async (targetSessionId, envVarNames) => {
-        if (!client) throw new Error('Connection unavailable');
-        await client.service(`sessions/${targetSessionId}/env-selections`).patch(null, {
-          envVarNames,
+        if (!shouldContinue()) return outcome;
+        setSessionInitializationRecovery(() => {
+          const next = recordSessionInitializationResult(
+            scopeSessionInitializationRecovery(
+              sessionInitializationRecoveryRef.current,
+              operationOwnerId
+            ),
+            operationOwnerId,
+            outcome,
+            agorStore.getState().sessionById.has(sessionId as SessionID)
+          );
+          sessionInitializationRecoveryRef.current = next;
+          return next;
         });
+        return outcome;
       },
-      uploadAttachments: async (targetSessionId, prompt, files) => {
-        const uploaded = await uploadFilesToSession({
-          sessionId: targetSessionId,
-          daemonUrl: getDaemonUrl(),
-          files,
-          notifyAgent: false,
-        });
-        return buildPromptWithAttachments(prompt, uploaded.files);
-      },
-      sendPrompt: (targetSessionId, prompt, permissionMode, idempotencyKey) =>
-        handleSendPrompt(targetSessionId, prompt, permissionMode, idempotencyKey),
-      onSetupError: (stage, error) => {
-        const label = stage === 'mcpServers' ? 'MCP servers' : 'environment variables';
-        showError(
-          `Failed to configure ${label}: ${error instanceof Error ? error.message : String(error)}`
-        );
-      },
-      onAttachmentUploadError: (error) => {
-        showError(
-          `Failed to upload attachments: ${error instanceof Error ? error.message : String(error)}`
-        );
-      },
-    });
-    if (!operationOwnerId || recoveryOwnerIdRef.current !== operationOwnerId) return outcome;
-    setSessionInitializationRecovery(() => {
-      const next = recordSessionInitializationResult(
-        scopeSessionInitializationRecovery(
-          sessionInitializationRecoveryRef.current,
-          operationOwnerId
-        ),
-        operationOwnerId,
-        outcome,
-        agorStore.getState().sessionById.has(sessionId as SessionID)
-      );
-      sessionInitializationRecoveryRef.current = next;
-      return next;
-    });
-    return outcome;
+      () => {
+        initializationAbortControllersRef.current.delete(flightKey);
+        if (
+          recoveryOwnerIdRef.current === operationOwnerId &&
+          initializationGenerationRef.current === operationGeneration
+        ) {
+          setSessionInitializationsInFlight((current) => {
+            const next = new Set(current);
+            next.delete(sessionId);
+            return next;
+          });
+        }
+      }
+    );
   };
 
   const retrySessionInitialization = async (
@@ -1971,6 +2028,7 @@ function AppContent() {
       onCreateSession={handleCreateSession}
       onRetrySessionInitialization={retrySessionInitialization}
       sessionInitializationRetries={sessionInitializationRetries}
+      sessionInitializationsInFlight={sessionInitializationsInFlight}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}

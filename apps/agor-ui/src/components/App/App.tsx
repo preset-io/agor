@@ -180,6 +180,8 @@ export interface AppProps {
   onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
   /** Session-scoped recovery payloads retained by the root creation seam. */
   sessionInitializationRetries?: ReadonlyMap<string, SessionInitializationRetry>;
+  /** Canonical caller/session initialization operations currently running. */
+  sessionInitializationsInFlight?: ReadonlySet<string>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -316,6 +318,7 @@ export const App: React.FC<AppProps> = ({
   onCreateSession,
   onRetrySessionInitialization,
   sessionInitializationRetries,
+  sessionInitializationsInFlight,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -1466,6 +1469,7 @@ export const App: React.FC<AppProps> = ({
           instanceDescription={instanceDescription}
           onCreateSession={stableOnCreateSession}
           onRetrySessionInitialization={stableOnRetrySessionInitialization}
+          sessionInitializationsInFlight={sessionInitializationsInFlight}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
@@ -1710,7 +1714,14 @@ export const App: React.FC<AppProps> = ({
                                 <Button
                                   size="small"
                                   loading={
-                                    retryingInitializationSessionId === effectiveSelectedSessionId
+                                    retryingInitializationSessionId ===
+                                      effectiveSelectedSessionId ||
+                                    sessionInitializationsInFlight?.has(effectiveSelectedSessionId)
+                                  }
+                                  disabled={
+                                    retryingInitializationSessionId ===
+                                      effectiveSelectedSessionId ||
+                                    sessionInitializationsInFlight?.has(effectiveSelectedSessionId)
                                   }
                                   onClick={async () => {
                                     if (!onRetrySessionInitialization) return;

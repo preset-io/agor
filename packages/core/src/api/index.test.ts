@@ -5,7 +5,8 @@
  * Does NOT test FeathersJS internals, Socket.io, or HTTP libraries.
  */
 
-import type { AuthenticationResult, Session } from '@agor/core/types';
+import type { AuthenticationResult, Session, Task } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import authClient from '@feathersjs/authentication-client';
 import type { Socket } from 'socket.io-client';
 import io from 'socket.io-client';
@@ -896,13 +897,23 @@ describe('createClient', () => {
       const client = createClient();
       const routeService = client.service('sessions/session-123/prompt');
       const createMock = routeService.create as unknown as MockedFunction<any>;
+      const admittedTask: Task = {
+        task_id: 'task-123' as Task['task_id'],
+        session_id: 'session-123' as Task['session_id'],
+        created_by: 'user-123',
+        full_prompt: 'Fix failing tests',
+        status: TaskStatus.DISPATCHING,
+        created_at: '2026-08-20T00:00:00.000Z',
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: '2026-08-20T00:00:00.000Z',
+        },
+        tool_use_count: 0,
+        git_state: { ref_at_start: 'feature', sha_at_start: 'abc123' },
+      };
 
-      createMock.mockResolvedValue({
-        success: true,
-        taskId: 'task-123',
-        status: 'running',
-        streaming: true,
-      });
+      createMock.mockResolvedValue(admittedTask);
 
       const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
         permissionMode: 'auto',
@@ -919,12 +930,7 @@ describe('createClient', () => {
         },
         undefined
       );
-      expect(result).toEqual({
-        success: true,
-        taskId: 'task-123',
-        status: 'running',
-        streaming: true,
-      });
+      expect(result).toBe(admittedTask);
     });
 
     // The pure-REST counterpart to client.sessions.prompt() — a thin wrapper

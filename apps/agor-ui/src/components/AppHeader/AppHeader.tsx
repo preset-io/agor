@@ -64,6 +64,7 @@ export interface AppHeaderProps {
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
+  sessionInitializationsInFlight?: ReadonlySet<string>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -142,6 +143,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   instanceDescription,
   onCreateSession,
   onRetrySessionInitialization,
+  sessionInitializationsInFlight,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -308,6 +310,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
             onRetrySessionInitialization={onRetrySessionInitialization}
+            sessionInitializationsInFlight={sessionInitializationsInFlight}
             disabled={mutationDisabled}
           />
         )}

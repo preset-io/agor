@@ -15,6 +15,9 @@ export interface UploadFilesToSessionOptions {
   files: File[];
   notifyAgent?: boolean;
   message?: string;
+  /** Explicit authentication snapshot for caller-owned long-running uploads. */
+  accessToken?: string | null;
+  signal?: AbortSignal;
 }
 
 export interface UploadFilesToSessionResult {
@@ -29,6 +32,8 @@ export async function uploadFilesToSession({
   files,
   notifyAgent = false,
   message = '',
+  accessToken: explicitAccessToken,
+  signal,
 }: UploadFilesToSessionOptions): Promise<UploadFilesToSessionResult> {
   const formData = new FormData();
 
@@ -39,7 +44,10 @@ export async function uploadFilesToSession({
   formData.append('message', message);
 
   const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
-  const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+  const accessToken =
+    explicitAccessToken === undefined
+      ? localStorage.getItem(ACCESS_TOKEN_KEY)
+      : explicitAccessToken;
   const headers: HeadersInit = {};
 
   if (accessToken) {
@@ -52,6 +60,7 @@ export async function uploadFilesToSession({
     method: 'POST',
     headers,
     body: formData,
+    signal,
     // Bearer-only endpoint; do not send cookies/credentials.
   });
 

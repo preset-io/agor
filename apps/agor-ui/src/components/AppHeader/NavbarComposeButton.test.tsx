@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -513,12 +513,10 @@ describe('NavbarComposeButton', () => {
       },
       retry,
     });
-    const onRetrySessionInitialization = vi.fn().mockResolvedValue({
-      status: 'complete',
-      sessionId: 'session-undelivered',
-      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
-      delivery: { prompt: 'delivered', attachments: 'not-requested' },
-    });
+    let finishRetry!: (outcome: SessionInitializationResult) => void;
+    const onRetrySessionInitialization = vi.fn(
+      () => new Promise<SessionInitializationResult>((resolve) => (finishRetry = resolve))
+    );
     renderCompose({ primary: primaryBranch, onCreateSession, onRetrySessionInitialization });
     openPopover();
     const prompt = await screen.findByTestId('compose-prompt');
@@ -533,6 +531,17 @@ describe('NavbarComposeButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
     await waitFor(() =>
       expect(onRetrySessionInitialization).toHaveBeenCalledWith('session-undelivered')
+    );
+    expect(screen.getByRole('button', { name: /Retry setup/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Retry setup/ }));
+    expect(onRetrySessionInitialization).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      finishRetry({
+        status: 'complete',
+        sessionId: 'session-undelivered',
+        setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
+        delivery: { prompt: 'delivered', attachments: 'not-requested' },
+      })
     );
     await waitFor(() =>
       expect(screen.queryByText('Session created, but setup is incomplete')).not.toBeInTheDocument()

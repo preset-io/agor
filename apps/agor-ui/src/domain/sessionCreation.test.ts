@@ -141,4 +141,40 @@ describe('initializeCreatedSession', () => {
       retry: { envVarNames: ['TOKEN'], content },
     });
   });
+
+  it('stops before later external stages when the initiating identity is invalidated', async () => {
+    let current = true;
+    const associateMcpServer = vi.fn(async () => {
+      current = false;
+    });
+    const updateEnvironmentVariables = vi.fn();
+    const uploadAttachments = vi.fn();
+    const sendPrompt = vi.fn();
+
+    const result = await initializeCreatedSession(
+      'session-1',
+      {
+        mcpServerIds: ['mcp-a'],
+        envVarNames: ['TOKEN'],
+        content: {
+          prompt: 'start',
+          attachmentFiles: [new File(['image'], 'shot.png')],
+          idempotencyKey: IDEMPOTENCY_KEY,
+        },
+      },
+      {
+        shouldContinue: () => current,
+        associateMcpServer,
+        updateEnvironmentVariables,
+        uploadAttachments,
+        sendPrompt,
+      }
+    );
+
+    expect(associateMcpServer).toHaveBeenCalledTimes(1);
+    expect(updateEnvironmentVariables).not.toHaveBeenCalled();
+    expect(uploadAttachments).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(result.status).toBe('retryable');
+  });
 });

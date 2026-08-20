@@ -75,6 +75,8 @@ export interface SessionInitializationDependencies extends InitialContentDeliver
 }
 
 export interface InitialContentDeliveryDependencies {
+  /** False once the initiating caller/authentication generation is no longer current. */
+  shouldContinue?: () => boolean;
   /** Upload files and return the exact prompt containing their durable references. */
   uploadAttachments: (sessionId: string, prompt: string, files: File[]) => Promise<string>;
   sendPrompt: (
@@ -97,6 +99,9 @@ export async function deliverInitialSessionContent(
   dependencies: InitialContentDeliveryDependencies
 ): Promise<InitialContentDeliveryResult> {
   const trimmedPrompt = content.prompt.trim();
+  if (dependencies.shouldContinue?.() === false) {
+    return { ...pendingContentDelivery(content), retry: content };
+  }
   if (content.attachmentFiles?.length) {
     try {
       const finalPrompt = await dependencies.uploadAttachments(
@@ -104,6 +109,17 @@ export async function deliverInitialSessionContent(
         content.prompt,
         content.attachmentFiles
       );
+      if (dependencies.shouldContinue?.() === false) {
+        return {
+          prompt: trimmedPrompt ? 'pending' : 'not-requested',
+          attachments: 'delivered',
+          retry: {
+            prompt: finalPrompt,
+            permissionMode: content.permissionMode,
+            idempotencyKey: content.idempotencyKey,
+          },
+        };
+      }
       const delivered = await dependencies.sendPrompt(
         sessionId,
         finalPrompt,
@@ -126,7 +142,9 @@ export async function deliverInitialSessionContent(
             },
           };
     } catch (error) {
-      dependencies.onAttachmentUploadError?.(error);
+      if (dependencies.shouldContinue?.() !== false) {
+        dependencies.onAttachmentUploadError?.(error);
+      }
       return {
         prompt: trimmedPrompt ? 'pending' : 'not-requested',
         attachments: 'failed',
@@ -172,12 +190,28 @@ export async function initializeCreatedSession(
   };
 
   const failedMcpServerIds: string[] = [];
-  for (const serverId of initialization.mcpServerIds ?? []) {
+  const mcpServerIds = initialization.mcpServerIds ?? [];
+  for (const [index, serverId] of mcpServerIds.entries()) {
+    if (dependencies.shouldContinue?.() === false) {
+      return {
+        status: 'retryable',
+        sessionId,
+        setup,
+        delivery: pendingContentDelivery(initialization.content),
+        retry: {
+          mcpServerIds: [...failedMcpServerIds, ...mcpServerIds.slice(index)],
+          envVarNames: initialization.envVarNames,
+          content: initialization.content,
+        },
+      };
+    }
     try {
       await dependencies.associateMcpServer(sessionId, serverId);
     } catch (error) {
       failedMcpServerIds.push(serverId);
-      dependencies.onSetupError?.('mcpServers', error);
+      if (dependencies.shouldContinue?.() !== false) {
+        dependencies.onSetupError?.('mcpServers', error);
+      }
     }
   }
   if (initialization.mcpServerIds?.length) {
@@ -200,13 +234,28 @@ export async function initializeCreatedSession(
     };
   }
 
+  if (dependencies.shouldContinue?.() === false) {
+    return {
+      status: 'retryable',
+      sessionId,
+      setup,
+      delivery: pendingContentDelivery(initialization.content),
+      retry: {
+        envVarNames: initialization.envVarNames,
+        content: initialization.content,
+      },
+    };
+  }
+
   if (initialization.envVarNames?.length) {
     try {
       await dependencies.updateEnvironmentVariables(sessionId, initialization.envVarNames);
       setup.environmentVariables = 'configured';
     } catch (error) {
       setup.environmentVariables = 'failed';
-      dependencies.onSetupError?.('environmentVariables', error);
+      if (dependencies.shouldContinue?.() !== false) {
+        dependencies.onSetupError?.('environmentVariables', error);
+      }
       return {
         status: 'retryable',
         sessionId,

@@ -65,6 +65,7 @@ export interface NavbarComposeButtonProps {
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
+  sessionInitializationsInFlight?: ReadonlySet<string>;
   disabled?: boolean;
 }
 
@@ -94,6 +95,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   currentBoardId,
   onCreateSession,
   onRetrySessionInitialization,
+  sessionInitializationsInFlight,
   disabled = false,
 }) => {
   const { token } = theme.useToken();
@@ -566,7 +568,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               description="Your complete draft is still here. Retry setup and delivery against the session that was already created."
               action={
                 <Space>
-                  <Button size="small" onClick={() => void retrySessionInitialization()}>
+                  <Button
+                    size="small"
+                    loading={
+                      submitting !== null ||
+                      sessionInitializationsInFlight?.has(deliveryFailure.sessionId)
+                    }
+                    disabled={
+                      submitting !== null ||
+                      sessionInitializationsInFlight?.has(deliveryFailure.sessionId)
+                    }
+                    onClick={() => void retrySessionInitialization()}
+                  >
                     Retry setup
                   </Button>
                   <Button
