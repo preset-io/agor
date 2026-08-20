@@ -1,45 +1,92 @@
-/** Caller-owned compose drafts keyed by session. */
+interface SessionPromptDraftEntry {
+  text: string;
+  revision: number;
+}
+
+/** Caller- and authentication-generation-owned compose drafts keyed by session. */
 export interface SessionPromptDraftState {
   ownerId: string | null;
-  drafts: ReadonlyMap<string, string>;
+  ownerGeneration: number;
+  entries: ReadonlyMap<string, SessionPromptDraftEntry>;
+  nextRevision: number;
 }
 
-export function createSessionPromptDraftState(ownerId: string | null): SessionPromptDraftState {
-  return { ownerId, drafts: new Map() };
+export interface SessionPromptDraftSnapshot {
+  ownerId: string | null;
+  ownerGeneration: number;
+  sessionId: string;
+  revision: number;
 }
 
-/** Switching identity drops drafts that belonged to the previous caller. */
+export function createSessionPromptDraftState(
+  ownerId: string | null,
+  ownerGeneration: number
+): SessionPromptDraftState {
+  return { ownerId, ownerGeneration, entries: new Map(), nextRevision: 1 };
+}
+
+/** Switching identity or logging in again drops drafts from the previous authentication. */
 export function scopeSessionPromptDraftState(
   state: SessionPromptDraftState,
-  ownerId: string | null
+  ownerId: string | null,
+  ownerGeneration: number
 ): SessionPromptDraftState {
-  return state.ownerId === ownerId ? state : createSessionPromptDraftState(ownerId);
+  return state.ownerId === ownerId && state.ownerGeneration === ownerGeneration
+    ? state
+    : createSessionPromptDraftState(ownerId, ownerGeneration);
+}
+
+export function readSessionPromptDrafts(
+  state: SessionPromptDraftState
+): ReadonlyMap<string, string> {
+  return new Map([...state.entries].map(([sessionId, entry]) => [sessionId, entry.text]));
 }
 
 export function updateSessionPromptDraft(
   state: SessionPromptDraftState,
   ownerId: string | null,
+  ownerGeneration: number,
   sessionId: string,
   draft: string
 ): SessionPromptDraftState {
-  const scoped = scopeSessionPromptDraftState(state, ownerId);
-  const drafts = new Map(scoped.drafts);
+  const scoped = scopeSessionPromptDraftState(state, ownerId, ownerGeneration);
+  const entries = new Map(scoped.entries);
   if (draft.trim()) {
-    drafts.set(sessionId, draft);
+    entries.set(sessionId, { text: draft, revision: scoped.nextRevision });
   } else {
-    drafts.delete(sessionId);
+    entries.delete(sessionId);
   }
-  return { ...scoped, drafts };
+  return { ...scoped, entries, nextRevision: scoped.nextRevision + 1 };
 }
 
-/** Ignore a delayed completion after its initiating caller no longer owns the state. */
+/** Capture the exact draft operation that is about to be admitted. */
+export function captureSessionPromptDraft(
+  state: SessionPromptDraftState,
+  ownerId: string | null,
+  ownerGeneration: number,
+  sessionId: string,
+  prompt: string
+): SessionPromptDraftSnapshot | undefined {
+  if (state.ownerId !== ownerId || state.ownerGeneration !== ownerGeneration) return undefined;
+  const entry = state.entries.get(sessionId);
+  if (!entry || entry.text.trim() !== prompt.trim()) return undefined;
+  return { ownerId, ownerGeneration, sessionId, revision: entry.revision };
+}
+
+/** Clear only the unchanged draft that initiated a completed operation. */
 export function clearSessionPromptDraft(
   state: SessionPromptDraftState,
-  operationOwnerId: string | null,
-  sessionId: string
+  snapshot: SessionPromptDraftSnapshot | undefined
 ): SessionPromptDraftState {
-  if (state.ownerId !== operationOwnerId || !state.drafts.has(sessionId)) return state;
-  const drafts = new Map(state.drafts);
-  drafts.delete(sessionId);
-  return { ...state, drafts };
+  if (
+    !snapshot ||
+    state.ownerId !== snapshot.ownerId ||
+    state.ownerGeneration !== snapshot.ownerGeneration ||
+    state.entries.get(snapshot.sessionId)?.revision !== snapshot.revision
+  ) {
+    return state;
+  }
+  const entries = new Map(state.entries);
+  entries.delete(snapshot.sessionId);
+  return { ...state, entries };
 }

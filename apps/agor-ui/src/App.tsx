@@ -65,8 +65,10 @@ import {
   scopeSessionInitializationRecovery,
 } from './domain/sessionInitializationRecovery';
 import {
+  captureSessionPromptDraft,
   clearSessionPromptDraft,
   createSessionPromptDraftState,
+  readSessionPromptDrafts,
   scopeSessionPromptDraftState,
   updateSessionPromptDraft,
 } from './domain/sessionPromptDrafts';
@@ -476,9 +478,16 @@ function AppContent() {
   }, [location.pathname, location.search]);
 
   const recoveryOwnerId = user?.user_id ?? null;
+  const initializationGenerationOwnerRef = useRef(recoveryOwnerId);
+  const initializationGenerationRef = useRef(0);
+  if (initializationGenerationOwnerRef.current !== recoveryOwnerId) {
+    initializationGenerationOwnerRef.current = recoveryOwnerId;
+    initializationGenerationRef.current += 1;
+  }
+  const authenticationGeneration = initializationGenerationRef.current;
   // Per-session prompt drafts persist across session switches, but never across callers.
   const [sessionPromptDraftState, setSessionPromptDraftState] = useState(() =>
-    createSessionPromptDraftState(recoveryOwnerId)
+    createSessionPromptDraftState(recoveryOwnerId, authenticationGeneration)
   );
   const [sessionInitializationRecovery, setSessionInitializationRecovery] = useState(() =>
     createSessionInitializationRecoveryState(recoveryOwnerId)
@@ -486,12 +495,6 @@ function AppContent() {
   const sessionInitializationRecoveryRef = useRef(sessionInitializationRecovery);
   const recoveryOwnerIdRef = useRef(recoveryOwnerId);
   recoveryOwnerIdRef.current = recoveryOwnerId;
-  const initializationGenerationOwnerRef = useRef(recoveryOwnerId);
-  const initializationGenerationRef = useRef(0);
-  if (initializationGenerationOwnerRef.current !== recoveryOwnerId) {
-    initializationGenerationOwnerRef.current = recoveryOwnerId;
-    initializationGenerationRef.current += 1;
-  }
   const initializationFlightsRef = useRef(new Map<string, Promise<SessionInitializationResult>>());
   const initializationAbortControllersRef = useRef(new Map<string, AbortController>());
   const [sessionInitializationsInFlight, setSessionInitializationsInFlight] = useState<
@@ -506,8 +509,9 @@ function AppContent() {
       ? sessionInitializationRecovery.retries
       : EMPTY_SESSION_INITIALIZATION_RETRIES;
   const promptDrafts =
-    sessionPromptDraftState.ownerId === recoveryOwnerId
-      ? sessionPromptDraftState.drafts
+    sessionPromptDraftState.ownerId === recoveryOwnerId &&
+    sessionPromptDraftState.ownerGeneration === authenticationGeneration
+      ? readSessionPromptDrafts(sessionPromptDraftState)
       : EMPTY_SESSION_PROMPT_DRAFTS;
 
   useEffect(() => {
@@ -517,7 +521,9 @@ function AppContent() {
     initializationAbortControllersRef.current.clear();
     initializationFlightsRef.current.clear();
     setSessionInitializationsInFlight(new Set());
-    setSessionPromptDraftState((current) => scopeSessionPromptDraftState(current, recoveryOwnerId));
+    setSessionPromptDraftState((current) =>
+      scopeSessionPromptDraftState(current, recoveryOwnerId, authenticationGeneration)
+    );
     setSessionInitializationRecovery(() => {
       const next = scopeSessionInitializationRecovery(
         sessionInitializationRecoveryRef.current,
@@ -526,7 +532,7 @@ function AppContent() {
       sessionInitializationRecoveryRef.current = next;
       return next;
     });
-  }, [recoveryOwnerId]);
+  }, [authenticationGeneration, recoveryOwnerId]);
 
   // Realtime deletion can happen in another browser, so prune independently
   // of this component's explicit delete handler without subscribing the shell
@@ -1267,15 +1273,20 @@ function AppContent() {
   // Update draft for a specific session
   const handleUpdateDraft = (sessionId: string, draft: string) => {
     setSessionPromptDraftState((current) =>
-      updateSessionPromptDraft(current, recoveryOwnerId, sessionId, draft)
+      updateSessionPromptDraft(current, recoveryOwnerId, authenticationGeneration, sessionId, draft)
     );
   };
 
   // Clear draft for a specific session
   const handleClearDraft = (sessionId: string) => {
-    setSessionPromptDraftState((current) =>
-      clearSessionPromptDraft(current, recoveryOwnerId, sessionId)
+    const snapshot = captureSessionPromptDraft(
+      sessionPromptDraftState,
+      recoveryOwnerId,
+      authenticationGeneration,
+      sessionId,
+      sessionPromptDraftState.entries.get(sessionId)?.text ?? ''
     );
+    setSessionPromptDraftState((current) => clearSessionPromptDraft(current, snapshot));
   };
 
   // Handle fork session
@@ -1345,6 +1356,14 @@ function AppContent() {
   ): Promise<boolean> => {
     if (!client) return false;
     const operationOwnerId = recoveryOwnerId;
+    const operationGeneration = authenticationGeneration;
+    const draftSnapshot = captureSessionPromptDraft(
+      sessionPromptDraftState,
+      operationOwnerId,
+      operationGeneration,
+      sessionId,
+      prompt
+    );
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
@@ -1353,12 +1372,13 @@ function AppContent() {
       });
 
       // Clear the draft after sending
-      setSessionPromptDraftState((current) =>
-        clearSessionPromptDraft(current, operationOwnerId, sessionId)
-      );
+      setSessionPromptDraftState((current) => clearSessionPromptDraft(current, draftSnapshot));
       return true;
     } catch (error) {
-      if (recoveryOwnerIdRef.current === operationOwnerId) {
+      if (
+        recoveryOwnerIdRef.current === operationOwnerId &&
+        initializationGenerationRef.current === operationGeneration
+      ) {
         showError(
           `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
         );
