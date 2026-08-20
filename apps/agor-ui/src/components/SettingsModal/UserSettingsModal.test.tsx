@@ -1388,3 +1388,93 @@ afterEach(() => {
   agorStore.getState().setAgenticToolSettings([]);
   vi.unstubAllGlobals();
 });
+
+/**
+ * Administrative fields are not self-edit profile data. `role` and
+ * `unix_username` were seeded from the user and sent whenever their panel was
+ * dirty — and the panel in view is marked dirty on open. These pin the payload,
+ * because that is where the defect lived; a disabled field is not a request
+ * boundary.
+ */
+describe('UserSettingsModal — administrative fields in save payloads', () => {
+  it('omits role when a member saves their own profile', async () => {
+    const user = makeUser({ role: 'member', unix_username: 'bob' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // No edit at all: the Profile panel is dirty from opening on it, which is
+    // exactly the path that used to 403.
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).not.toHaveProperty('role');
+    expect(updates).not.toHaveProperty('unix_username');
+    // The fields they may set still go, so this is a narrowing and not a mute.
+    expect(updates).toHaveProperty('name');
+    expect(updates).toHaveProperty('email');
+  });
+
+  it('does not submit the disabled role selector when an admin edits themselves', async () => {
+    const admin = makeUser({ role: 'admin' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={admin}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).not.toHaveProperty('role');
+    expect(updates).toHaveProperty('name');
+    expect(updates).toHaveProperty('email');
+  });
+
+  it('still sends role when an admin edits someone', async () => {
+    const target = makeUser({ user_id: 'user-2', role: 'member' });
+    const admin = makeUser({ user_id: 'user-1', role: 'admin' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).toHaveProperty('role', 'member');
+  });
+});

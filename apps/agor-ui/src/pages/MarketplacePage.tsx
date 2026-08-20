@@ -1,9 +1,9 @@
 /**
  * Marketplace surface: browse the MCP catalog and connect a server.
  *
- * A standalone surface rather than a workspace route — it reads the global
- * catalog table and does not need the tenant's boards, sessions or canvas, so
- * it keeps the same lightweight chrome as Knowledge.
+ * A standalone surface rather than a workspace route — it reads the checked-in
+ * curated catalog and does not need the tenant's boards, sessions or canvas,
+ * so it keeps the same lightweight chrome as Knowledge.
  *
  * The Catalog is the only tab in this slice. My Servers, Sessions and
  * Credentials arrive with the data models behind them.
@@ -99,7 +99,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
-          <CatalogTab client={client} connected={connected} currentUserId={currentUser?.user_id} />
+          <CatalogTab client={client} connected={connected} currentUser={currentUser} />
         </div>
       </Content>
     </Layout>

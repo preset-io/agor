@@ -43,6 +43,31 @@ export const MCP_MEMBER_POLICY_DESCRIPTIONS: Record<MCPMemberPolicy, MCPMemberPo
   },
 };
 
+/**
+ * What to say while the policy is not known.
+ *
+ * Until the read lands, a connect surface offers nothing and says only this.
+ * The restrictive value it falls back to is a safe assumption to act on, not a
+ * fact about this workspace to quote back as the reason.
+ *
+ * Shared so the Settings table and the Marketplace drawer — the two places a
+ * server can be attached — refuse in the same words.
+ */
+export const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
+export const POLICY_UNREADABLE_HINT =
+  "This workspace's MCP policy could not be read, so nothing is offered here.";
+
+/** Whether the policy is still unknown, and the hint that says which way. */
+export function policyPendingState(state: { loading: boolean; error: string | null }): {
+  pending: boolean;
+  hint: string;
+} {
+  return {
+    pending: state.loading || state.error !== null,
+    hint: state.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT,
+  };
+}
+
 export interface MCPServerCapabilityContext {
   /**
    * The role as the daemon reads it — raw, because the roles beneath member are

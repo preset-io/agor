@@ -45,6 +45,17 @@ describe('UsersTable role authority', () => {
     __setAuthConfigForTests({ requireAuth: true });
   });
 
+  it('offers a member only their own edit action', () => {
+    const member = user('member', 'member');
+    const other = user('other', 'member');
+    renderTable(member, [member, other]);
+
+    expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Edit other@example.test')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Delete /)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
+  });
+
   it('hides superadmin mutation actions from admins but keeps member actions', () => {
     const admin = user('admin', 'admin');
     const superadmin = user('superadmin', 'superadmin');

@@ -76,9 +76,9 @@ export const MARKETPLACE_SURFACE = defineSurface({
   id: 'marketplace',
   label: 'Marketplace',
   routePaths: MARKETPLACE_ROUTE_PATHS,
-  // Browsing the catalog reads a paginated global table, not the tenant's
-  // boards and sessions, so the workspace store stays cold until connect
-  // navigates into a session.
+  // Browsing the catalog reads the checked-in curated file the daemon serves
+  // whole, not the tenant's boards and sessions, so the workspace store stays
+  // cold until connect navigates into a session.
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,

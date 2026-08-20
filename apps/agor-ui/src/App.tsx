@@ -2172,8 +2172,8 @@ function AppContent() {
           ))}
 
           {/* MCP marketplace: browse the catalog and connect a server. Its own
-                surface because it reads the global catalog table, not the
-                tenant's board/session store. */}
+                surface because it reads the checked-in curated catalog, not
+                the tenant's board/session store. */}
           {MARKETPLACE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={marketplacePageElement} />
           ))}

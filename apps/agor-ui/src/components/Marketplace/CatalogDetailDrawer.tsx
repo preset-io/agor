@@ -32,6 +32,11 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import {
+  canAddMcpServer,
+  explainAddRestriction,
+  type MCPServerCapabilityContext,
+} from '../MCPServer/memberPolicy';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
 
 const { Title, Paragraph, Text, Link } = Typography;
@@ -69,6 +74,15 @@ export interface CatalogDetailDrawerProps {
    */
   credentialRequirement?: MCPCatalogCredentialRequirement | null;
   /**
+   * Connecting installs an MCP server, so the same server-provided capability
+   * that gates Settings must gate this action too. Catalog browsing itself
+   * remains available to every authenticated role.
+   */
+  connectCapability: MCPServerCapabilityContext;
+  /** The policy read has not landed; fail closed without claiming a policy value. */
+  policyPending: boolean;
+  policyPendingHint: string;
+  /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
    *
@@ -96,6 +110,9 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   connecting,
   connectError,
   credentialRequirement,
+  connectCapability,
+  policyPending,
+  policyPendingHint,
   onConnect,
 }) => {
   const { token } = theme.useToken();
@@ -206,8 +223,18 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     );
   }, [open, entryId, needsApiKey]);
 
+  const policyRefusal = policyPending
+    ? policyPendingHint
+    : canAddMcpServer(connectCapability)
+      ? undefined
+      : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || bearerToken)
+    !blockedReason &&
+      !policyRefusal &&
+      acknowledged &&
+      branchId &&
+      !connecting &&
+      (!needsApiKey || bearerToken)
   );
 
   return (
@@ -376,6 +403,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
 
               {branchesError && <Alert type="error" showIcon message={branchesError} />}
               {connectError && <Alert type="error" showIcon message={connectError} />}
+              {policyRefusal && <Alert type="info" showIcon message={policyRefusal} />}
 
               <Button
                 type="primary"

@@ -13,15 +13,17 @@ import type {
   MCPCatalogEntry,
 } from '@agor/core/types';
 import { readCredentialRequirement } from '@agor/core/types';
-import type { AgorClient } from '@agor-live/client';
-import { sessionPath } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { savePromptDraft } from '../../utils/promptDrafts';
+import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
@@ -87,12 +89,13 @@ const CatalogGrid = memo<{
 
 export interface CatalogTabProps {
   client: AgorClient | null;
-  currentUserId?: string;
   /** The socket has connected and authenticated, so reads will be answered. */
   connected: boolean;
+  /** Whose server-provided capability decides whether Connect is offered. */
+  currentUser?: User | null;
 }
 
-export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, currentUserId }) => {
+export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, currentUser }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   // Same set the session panel reads, so "is this install finished?" is one
@@ -127,6 +130,21 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, curre
     loading: branchesLoading,
     error: branchesError,
   } = useConnectTargets(client, connected && selected !== null);
+  // The standalone surface renders before socket authentication completes.
+  // Give the policy hook no client until reads can actually be answered so a
+  // pre-auth refusal cannot become the final capability state for this mount.
+  const memberPolicy = useMcpMemberPolicy(connected ? client : null);
+  const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
+  const connectCapability = useMemo<MCPServerCapabilityContext>(
+    () => ({
+      role: currentUser?.role,
+      isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
+      policy: memberPolicy.policy,
+      userId: currentUser?.user_id,
+      canConfigure: memberPolicy.canConfigure,
+    }),
+    [currentUser?.role, currentUser?.user_id, memberPolicy.policy, memberPolicy.canConfigure]
+  );
 
   // Any narrowing invalidates the current offset — page 4 of an unfiltered
   // catalog is usually past the end of a filtered one.
@@ -212,7 +230,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, curre
           result.starter_prompt &&
           !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
         ) {
-          savePromptDraft(currentUserId, result.session.session_id, result.starter_prompt);
+          savePromptDraft(currentUser?.user_id, result.session.session_id, result.starter_prompt);
         }
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
@@ -230,7 +248,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, curre
         setConnecting(false);
       }
     },
-    [client, currentUserId, navigate, selected, userAuthenticatedMcpServerIds]
+    [client, currentUser?.user_id, navigate, selected, userAuthenticatedMcpServerIds]
   );
 
   return (
@@ -319,6 +337,9 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, curre
         connecting={connecting}
         connectError={connectError}
         credentialRequirement={keyRequirement}
+        connectCapability={connectCapability}
+        policyPending={policyPending}
+        policyPendingHint={policyPendingHint}
         onConnect={handleConnect}
       />
     </Flex>

@@ -58,6 +58,7 @@ import {
   explainAddRestriction,
   explainManageRestriction,
   type MCPServerCapabilityContext,
+  policyPendingState,
 } from '../MCPServer/memberPolicy';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
@@ -77,10 +78,6 @@ interface MCPServersTableProps {
 /** How an unowned server reads: it is the workspace's, not nobody's. */
 const SHARED_OWNER_LABEL = 'Shared with workspace';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
-
-const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
-const POLICY_UNREADABLE_HINT =
-  "This workspace's MCP policy could not be read, so nothing is offered here.";
 
 const getServerHealth = (
   server: MCPServer,
@@ -384,8 +381,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // restrictive value it falls back to — while loading, or when the read failed
   // — is a safe assumption to act on, not a fact about this workspace to quote
   // back as the reason.
-  const policyPending = memberPolicy.loading || memberPolicy.error !== null;
-  const policyPendingHint = memberPolicy.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT;
+  const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
 
   const capability = useMemo<MCPServerCapabilityContext>(
     () => ({

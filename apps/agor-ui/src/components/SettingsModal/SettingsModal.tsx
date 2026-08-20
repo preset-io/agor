@@ -32,7 +32,7 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -215,6 +215,38 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
+  // The Users tab follows the MCP Servers pattern rather than the Agentic Tools
+  // one: the daemon deliberately serves the roster to members
+  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so seeing who is
+  // on the team is not something to take away. UsersTable separately exposes
+  // only the mutations the current role has authority to perform.
+  //
+  // Viewers rank below MEMBER, so the listing itself would 403 for them; they
+  // get no entry at all.
+  const canListUsers = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
+
+  // One answer for "may this role open this section", read by both the menu and
+  // the content below. Every gated section is routable via useSettingsRoute, so
+  // gating only the menu leaves the pane reachable by URL with nothing selected
+  // in the sidebar — which is what `groups`, `gateway` and `agentic-tools`
+  // already did. Deriving both from this set is what stops the two from
+  // drifting apart again the next time a section is gated.
+  const canSeeSection = useCallback(
+    (section: string): boolean => {
+      switch (section) {
+        case 'agentic-tools':
+        case 'gateway':
+        case 'groups':
+          return isAdmin;
+        case 'users':
+          return canListUsers;
+        default:
+          return true;
+      }
+    },
+    [isAdmin, canListUsers]
+  );
+
   // Menu items for left sidebar navigation
   const menuItems: MenuProps['items'] = useMemo(
     () => [
@@ -278,7 +310,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
-          ...(isAdmin
+          ...(canSeeSection('agentic-tools')
             ? [
                 {
                   key: 'agentic-tools',
@@ -292,7 +324,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'MCP Servers',
             icon: <ApiOutlined />,
           },
-          ...(isAdmin
+          ...(canSeeSection('gateway')
             ? [
                 {
                   key: 'gateway',
@@ -303,27 +335,37 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             : []),
         ],
       },
-      {
-        key: 'admin',
-        label: 'Admin',
-        type: 'group' as const,
-        children: [
-          ...(isAdmin
-            ? [
-                {
-                  key: 'groups',
-                  label: 'Groups',
-                  icon: <TeamOutlined />,
-                },
-              ]
-            : []),
-          {
-            key: 'users',
-            label: 'Users',
-            icon: <TeamOutlined />,
-          },
-        ],
-      },
+      // Rendered only when it has something under it — an "Admin" heading with
+      // an empty body is what a viewer would otherwise get.
+      ...(canSeeSection('groups') || canSeeSection('users')
+        ? [
+            {
+              key: 'admin',
+              label: 'Admin',
+              type: 'group' as const,
+              children: [
+                ...(canSeeSection('groups')
+                  ? [
+                      {
+                        key: 'groups',
+                        label: 'Groups',
+                        icon: <TeamOutlined />,
+                      },
+                    ]
+                  : []),
+                ...(canSeeSection('users')
+                  ? [
+                      {
+                        key: 'users',
+                        label: 'Users',
+                        icon: <TeamOutlined />,
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ]
+        : []),
       {
         key: 'system',
         label: 'System',
@@ -337,7 +379,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         ],
       },
     ],
-    [isAdmin, token]
+    [canSeeSection, token]
   );
 
   const mobileSectionOptions = useMemo(
@@ -349,21 +391,25 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       { label: 'Workspace · Cards (Beta)', value: 'cards' },
       { label: 'Workspace · Artifacts', value: 'artifacts' },
       { label: 'Integrations · MCP Servers', value: 'mcp' },
-      ...(isAdmin
-        ? [
-            { label: 'Integrations · Agentic Tools', value: 'agentic-tools' },
-            { label: 'Integrations · Gateway Channels', value: 'gateway' },
-            { label: 'Admin · Groups', value: 'groups' },
-          ]
+      ...(canSeeSection('agentic-tools')
+        ? [{ label: 'Integrations · Agentic Tools', value: 'agentic-tools' }]
         : []),
-      { label: 'Admin · Users', value: 'users' },
+      ...(canSeeSection('gateway')
+        ? [{ label: 'Integrations · Gateway Channels', value: 'gateway' }]
+        : []),
+      ...(canSeeSection('groups') ? [{ label: 'Admin · Groups', value: 'groups' }] : []),
+      ...(canSeeSection('users') ? [{ label: 'Admin · Users', value: 'users' }] : []),
       { label: 'System · About', value: 'about' },
     ],
-    [isAdmin]
+    [canSeeSection]
   );
 
   // Render content based on active section
   const renderContent = () => {
+    // A gated section is routable, so this is reachable by URL even with no
+    // menu entry to click. Same answer in both places.
+    if (!canSeeSection(activeTab)) return null;
+
     switch (activeTab) {
       case 'boards':
         return (

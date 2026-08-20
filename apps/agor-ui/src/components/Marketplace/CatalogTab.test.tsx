@@ -1,5 +1,5 @@
 import type { SessionID } from '@agor/core/types';
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -50,6 +50,10 @@ let catalogRows: (typeof DEEPWIKI)[];
 let connectCalls: Array<Record<string, unknown>>;
 let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let catalogFindError: Error | null;
+let memberPolicyAnswer: {
+  policy: 'use_existing_only' | 'allow_private_only' | 'allow_crud';
+  can_configure: boolean;
+};
 
 function makeClient(): AgorClient {
   const service = (path: string) => {
@@ -83,15 +87,24 @@ function makeClient(): AgorClient {
         },
       };
     }
+    if (path === 'mcp-member-policy') {
+      return { find: async () => memberPolicyAnswer };
+    }
     throw new Error(`unexpected service: ${path}`);
   };
   return { service } as unknown as AgorClient;
 }
 
-function renderTab({ connected = true }: { connected?: boolean } = {}) {
+function renderTab({
+  connected = true,
+  currentUser = { user_id: CURRENT_USER_ID, email: 'admin@agor.live', role: 'admin' } as User,
+}: {
+  connected?: boolean;
+  currentUser?: User | null;
+} = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} connected={connected} currentUserId={CURRENT_USER_ID} />
+      <CatalogTab client={makeClient()} connected={connected} currentUser={currentUser} />
     </MemoryRouter>
   );
 }
@@ -128,6 +141,7 @@ beforeEach(() => {
   catalogRows = [DEEPWIKI, LINEAR];
   catalogFindError = null;
   connectCalls = [];
+  memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
     session: { session_id: SESSION_ID },
@@ -485,7 +499,7 @@ describe('connect', () => {
 
   it('keeps the drawer open and reports why when connect fails', async () => {
     connectImpl = async () => {
-      throw new Error('DeepWiki requires authentication, which is not supported yet');
+      throw new Error('DeepWiki is temporarily unavailable');
     };
     const drawer = await openDrawer();
     const connect = drawer.getByRole('button', { name: /Connect/ });
@@ -494,7 +508,7 @@ describe('connect', () => {
 
     fireEvent.click(connect);
 
-    expect(await drawer.findByText(/requires authentication/)).toBeVisible();
+    expect(await drawer.findByText(/temporarily unavailable/)).toBeVisible();
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -511,5 +525,54 @@ describe('connect', () => {
     expect(drawer.getByText(/cannot be installed/)).toBeVisible();
     expect(drawer.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
     expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+});
+
+describe('connect capability reaches the drawer', () => {
+  const VIEWER = {
+    user_id: 'user-viewer',
+    email: 'viewer@agor.live',
+    role: 'viewer',
+  } as User;
+  const MEMBER = {
+    user_id: 'user-member',
+    email: 'member@agor.live',
+    role: 'member',
+  } as User;
+
+  async function openAndAcknowledge(currentUser: User) {
+    renderTab({ currentUser });
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    return drawer;
+  }
+
+  it('refuses a viewer before any connect request reaches the daemon', async () => {
+    memberPolicyAnswer = { policy: 'allow_crud', can_configure: false };
+
+    const drawer = await openAndAcknowledge(VIEWER);
+
+    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled());
+    expect(drawer.getByText(/read-only access/i)).toBeInTheDocument();
+    expect(connectCalls).toHaveLength(0);
+  });
+
+  it('refuses a member when the server says the policy is use-existing-only', async () => {
+    memberPolicyAnswer = { policy: 'use_existing_only', can_configure: false };
+
+    const drawer = await openAndAcknowledge(MEMBER);
+
+    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled());
+    expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(connectCalls).toHaveLength(0);
+  });
+
+  it('enables Connect when the server grants the member capability', async () => {
+    memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
+
+    const drawer = await openAndAcknowledge(MEMBER);
+
+    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
   });
 });
