@@ -84,6 +84,7 @@ import {
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
 import { cloneErrorHint } from './utils/cloneErrorHint';
+import { enrichAuthenticatedUser } from './utils/currentUserAuthority';
 import { isMobileDevice } from './utils/deviceDetection';
 import {
   completeForcedPasswordChange,
@@ -470,7 +471,10 @@ function AppContent() {
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
+    authenticatedUserId: user?.user_id,
     authenticatedUserRole: user?.role,
+    authGeneration,
+    connectionReady: connected && !connecting,
   });
 
   // Entity maps are NOT subscribed here. Each surface that needs a whole map
@@ -556,11 +560,10 @@ function AppContent() {
   );
   // A viewer cannot refresh the directory, so never let a row retained from a
   // prior member identity/role override the current authentication response.
-  const currentUser = user
-    ? authenticatedUserCanListUsers
-      ? storedCurrentUser || user
-      : user
-    : null;
+  const currentUser = enrichAuthenticatedUser(
+    user,
+    authenticatedUserCanListUsers ? storedCurrentUser : null
+  );
   const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.

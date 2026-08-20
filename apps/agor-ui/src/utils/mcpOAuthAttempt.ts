@@ -61,12 +61,14 @@ export function oauthAttemptFailureMessage(status: MCPOAuthAttemptStatus): strin
 /** Refetch and atomically apply both durable OAuth UI authorities. */
 export async function refetchMCPOAuthDurableState(
   client: AgorClient,
-  mcpServerId: string
+  mcpServerId: string,
+  shouldApply: () => boolean = () => true
 ): Promise<void> {
   const [status, fresh] = await Promise.all([
     client.service('mcp-servers/oauth-status').find(),
     client.service('mcp-servers').get(mcpServerId),
   ]);
+  if (!shouldApply()) return;
   const ids = (status as Partial<MCPOAuthStatusResult>)?.authenticated_server_ids ?? [];
   const server = fresh as MCPServer;
   agorStore.getState().applyMaps((prev) => {

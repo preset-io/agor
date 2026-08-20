@@ -1,6 +1,6 @@
 import { canConfigureMCPServers } from '@agor/core/mcp/member-policy';
 import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -139,6 +139,7 @@ async function openCreateForm(): Promise<void> {
   const addButton = screen.getByRole('button', { name: /New MCP Server/i });
   await waitFor(() => expect(addButton).toBeEnabled());
   fireEvent.click(addButton);
+  await screen.findByRole('dialog', { name: 'Add MCP Server' });
 }
 
 /**
@@ -428,6 +429,144 @@ describe('MCPServersTable member policy', () => {
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
     expect(find).toHaveBeenCalledTimes(1);
+  });
+});
+
+function renderTransitionTable(initial: {
+  currentUser: User;
+  policy: MCPMemberPolicy;
+  servers?: MCPServer[];
+}) {
+  let policy = initial.policy;
+  let role = initial.currentUser.role;
+  const policyListeners: Array<() => void> = [];
+  const find = vi.fn(async () => ({
+    policy,
+    can_configure: canConfigureMCPServers(role, policy),
+  }));
+  const serverCreate = vi.fn();
+  const serverPatch = vi.fn();
+  const mcpServersService = {
+    on: vi.fn((event: string, listener: () => void) => {
+      if (event === 'member-policy:changed') policyListeners.push(listener);
+    }),
+    removeListener: vi.fn(),
+    create: serverCreate,
+    patch: serverPatch,
+  };
+  const client = {
+    io: { on: vi.fn(), off: vi.fn() },
+    service: (path: string) => {
+      if (path === 'mcp-member-policy') return { find, patch: vi.fn() };
+      if (path === 'mcp-servers') return mcpServersService;
+      return { create: vi.fn() };
+    },
+  } as unknown as AgorClient;
+  const onCreate = vi.fn();
+  const servers = new Map((initial.servers ?? []).map((server) => [server.mcp_server_id, server]));
+
+  const view = (currentUser: User, connected: boolean, connecting: boolean, generation: number) => (
+    <AntdApp>
+      <ConnectionProvider
+        value={{
+          connected,
+          connecting,
+          authGeneration: generation,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={servers}
+          client={client}
+          userById={USER_BY_ID}
+          currentUser={currentUser}
+          onCreate={onCreate}
+        />
+      </ConnectionProvider>
+    </AntdApp>
+  );
+  const rendered = render(view(initial.currentUser, true, false, 1));
+
+  return {
+    find,
+    onCreate,
+    serverCreate,
+    serverPatch,
+    disconnect: () => rendered.rerender(view(initial.currentUser, false, true, 1)),
+    replaceRole: (currentUser: User, generation = 2) => {
+      role = currentUser.role;
+      rendered.rerender(view(currentUser, true, false, generation));
+    },
+    setPolicy: async (next: MCPMemberPolicy) => {
+      policy = next;
+      await act(async () => {
+        for (const listener of policyListeners) listener();
+      });
+    },
+  };
+}
+
+async function fillCreateRequirements(): Promise<void> {
+  fireEvent.change(await screen.findByLabelText('Name (Internal ID)'), {
+    target: { value: 'transition-server' },
+  });
+  const command = screen.queryByLabelText('Command');
+  if (command) {
+    fireEvent.change(command, { target: { value: 'npx transition-server' } });
+  } else {
+    fireEvent.change(screen.getByLabelText('URL'), {
+      target: { value: 'https://transition.example/mcp' },
+    });
+  }
+}
+
+describe('MCPServersTable open-dialog authority transitions', () => {
+  it('blocks an already-open create dialog immediately on disconnect', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    seam.disconnect();
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(screen.getByText(/MCP server changes are unavailable/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+  });
+
+  it('blocks an already-open create dialog immediately on demotion', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    seam.replaceRole(VIEWER);
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+  });
+
+  it('blocks an already-open member create dialog on a live policy downgrade', async () => {
+    const seam = renderTransitionTable({ currentUser: MEMBER, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    await seam.setPolicy('use_existing_only');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
   });
 });
 

@@ -417,6 +417,51 @@ describe('HA Feathers publication relay', () => {
     expect(app.emit).not.toHaveBeenCalled();
   });
 
+  it('re-applies service role floors on the receiving replica', async () => {
+    const viewer = { user: user('viewer', ROLES.VIEWER) };
+    const member = { user: user('member', ROLES.MEMBER) };
+    const admin = { user: user('admin', ROLES.ADMIN) };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [viewer, member, admin],
+      {},
+      { 'tenant:tenant-a': [viewer, member, admin] }
+    );
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {} as never,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    await remoteHandler?.({
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'users',
+      event: 'patched',
+      method: 'patch',
+      id: 'changed-user',
+      data: { user_id: 'changed-user', role: ROLES.MEMBER },
+    });
+
+    expect(app.emit).toHaveBeenCalledOnce();
+    const channel = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(channel.connections).toEqual([member, admin]);
+    expect(channel.connections).not.toContain(viewer);
+  });
+
   it('relays a branch tombstone snapshot and re-applies tenant/RBAC containment on the receiving replica', async () => {
     const allowed = { user: user('allowed') };
     const denied = { user: user('denied') };
@@ -2708,6 +2753,48 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       );
 
       expect(delivered(result)).toEqual([service]);
+    });
+
+    it('enforces the users read-role floor against adversarial viewer listeners', async () => {
+      const viewer = { user: user('viewer', ROLES.VIEWER) };
+      const member = { user: user('member', ROLES.MEMBER) };
+      const admin = { user: user('admin', ROLES.ADMIN) };
+      const service = { user: { _isServiceAccount: true, role: 'service' } };
+      const app = allowlistApp([viewer, member, admin, service]);
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: false,
+        ...repos({ branch: branch('b1'), permissions: {} }),
+      });
+
+      const result = await app.runPublish(
+        { user_id: 'changed-user', role: ROLES.ADMIN },
+        { path: 'users', method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([member, admin, service]);
+      expect(delivered(result)).not.toContain(viewer);
+    });
+
+    it('enforces the board-object read-role floor after branch visibility admits a viewer', async () => {
+      const viewer = { user: user('viewer', ROLES.VIEWER) };
+      const member = { user: user('member', ROLES.MEMBER) };
+      const admin = { user: user('admin', ROLES.ADMIN) };
+      const service = { user: { _isServiceAccount: true, role: 'service' } };
+      const app = allowlistApp([viewer, member, admin, service]);
+      const allowed = repos({
+        branch: branch('b1', 'view'),
+        permissions: { viewer: 'view', member: 'view', admin: 'view' },
+      });
+      configureRealtimePublish({ app, branchRbacEnabled: true, ...allowed });
+
+      const result = await app.runPublish(
+        { board_object_id: 'o1', branch_id: 'b1' },
+        { path: 'board-objects', method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([member, admin, service]);
+      expect(delivered(result)).not.toContain(viewer);
     });
 
     it.each([

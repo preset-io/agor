@@ -18,6 +18,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import {
+  Alert,
   Badge,
   Button,
   Descriptions,
@@ -31,7 +32,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { useAgorStore } from '@/store/agorStore';
@@ -150,6 +151,33 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     authGeneration,
   });
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
+  const capability = useMemo<MCPServerCapabilityContext>(
+    () => ({
+      role: currentUser?.role,
+      isAdmin,
+      connectionReady,
+      policy: memberPolicy.policy,
+      userId: currentUser?.user_id,
+      canConfigure: memberPolicy.canConfigure,
+    }),
+    [
+      isAdmin,
+      connectionReady,
+      currentUser?.role,
+      currentUser?.user_id,
+      memberPolicy.policy,
+      memberPolicy.canConfigure,
+    ]
+  );
+  const canAdd = !policyPending && canAddMcpServer(capability);
+  const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
+  const capabilityRef = useRef({ capability, policyPending, addRestriction });
+  capabilityRef.current = { capability, policyPending, addRestriction };
+  const addIsCurrentlyAllowed = () => {
+    const current = capabilityRef.current;
+    return !current.policyPending && canAddMcpServer(current.capability);
+  };
   // Which transports a user may configure turns on role alone, so this is known
   // before the policy fetch settles. The first entry is the default the create
   // form starts from — `MCP_TRANSPORTS` is ordered for that.
@@ -188,7 +216,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     : [];
   // Once the row exists the button only dismisses the modal, so nothing about
   // the form should be able to trap the user behind it.
-  const createBlocked = !createdServerId && missingRequiredFields.length > 0;
+  const createBlocked = !createdServerId && (!canAdd || missingRequiredFields.length > 0);
 
   // Sync editing server when mcpServerById updates (real-time WebSocket updates).
   // Also keeps the open edit modal in sync if the underlying record changes.
@@ -234,11 +262,20 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // daemon's tenant-scoped authority for provider URL and client credentials.
   const prepareOAuthStartForCreate = async (): Promise<string | null> => {
     if (!client) return null;
+    if (!addIsCurrentlyAllowed()) {
+      showError(capabilityRef.current.addRestriction);
+      return null;
+    }
     try {
       await createForm.validateFields();
+      if (!addIsCurrentlyAllowed()) {
+        showError(capabilityRef.current.addRestriction);
+        return null;
+      }
       const data = buildCreateData(createForm.getFieldsValue(true));
 
       if (!createdServerId) {
+        if (!addIsCurrentlyAllowed()) return null;
         const result = await client.service('mcp-servers').create(data);
         const newServerId = (result as MCPServer).mcp_server_id || null;
         setCreatedServerId(newServerId);
@@ -246,6 +283,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       }
 
       const { name: _name, source: _source, ...updates } = data;
+      if (!addIsCurrentlyAllowed()) return null;
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
       return createdServerId;
     } catch (error) {
@@ -274,9 +312,18 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       return;
     }
 
+    if (!addIsCurrentlyAllowed()) {
+      showError(capabilityRef.current.addRestriction);
+      return;
+    }
+
     createForm
       .validateFields()
       .then(() => {
+        if (!addIsCurrentlyAllowed()) {
+          showError(capabilityRef.current.addRestriction);
+          return;
+        }
         const data = buildCreateData(createForm.getFieldsValue(true));
         onCreate?.(data);
         resetCreateModal();
@@ -382,31 +429,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       onDelete?.(serverId);
     },
     [onDelete]
-  );
-
-  // Until the policy is known the table offers nothing and says only that. The
-  // restrictive value it falls back to — while loading, or when the read failed
-  // — is a safe assumption to act on, not a fact about this workspace to quote
-  // back as the reason.
-  const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
-
-  const capability = useMemo<MCPServerCapabilityContext>(
-    () => ({
-      role: currentUser?.role,
-      isAdmin,
-      connectionReady,
-      policy: memberPolicy.policy,
-      userId: currentUser?.user_id,
-      canConfigure: memberPolicy.canConfigure,
-    }),
-    [
-      isAdmin,
-      connectionReady,
-      currentUser?.role,
-      currentUser?.user_id,
-      memberPolicy.policy,
-      memberPolicy.canConfigure,
-    ]
   );
 
   // An editor must be able to show the scope a row already carries, including
@@ -638,8 +660,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     ]);
   }, [mcpServerById, searchTerm, describeOwner]);
 
-  const canAdd = !policyPending && canAddMcpServer(capability);
-
   const serversPane = (
     <>
       <ResponsiveSettingsHeader
@@ -697,7 +717,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             <Button onClick={resetCreateModal}>Cancel</Button>
             {/* A disabled button can't host a tooltip of its own — hence the span. */}
             <Tooltip
-              title={createBlocked ? describeMissingForSave(missingRequiredFields) : undefined}
+              title={
+                !createdServerId && !canAdd
+                  ? addRestriction
+                  : createBlocked
+                    ? describeMissingForSave(missingRequiredFields)
+                    : undefined
+              }
             >
               <span>
                 <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
@@ -708,6 +734,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Space>
         }
       >
+        {!canAdd && (
+          <Alert
+            type="warning"
+            showIcon
+            title="MCP server changes are unavailable"
+            description={addRestriction}
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form
           form={createForm}
           layout="vertical"
@@ -729,6 +764,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             testing={testing}
             testResult={testResult}
             onPrepareOAuthStart={prepareOAuthStartForCreate}
+            mutationAllowed={canAdd}
+            mutationBlockedReason={addRestriction}
             formRevision={formRevision}
           />
         </Form>
@@ -741,6 +778,10 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         client={client}
         offeredTransports={offeredTransports}
         offeredScopes={editableScopes}
+        mutationAllowed={!!editingServer && canEditMcpServer(editingServer, capability)}
+        mutationBlockedReason={
+          policyPending ? policyPendingHint : explainManageRestriction(capability)
+        }
         onClose={handleEditClose}
       />
 

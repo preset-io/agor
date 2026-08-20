@@ -6,9 +6,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 const permissionState = vi.hoisted(() => ({ isAdmin: true }));
+const connectionState = vi.hoisted(() => ({ connected: true, connecting: false }));
 
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: () => permissionState,
+}));
+
+vi.mock('@/contexts/ConnectionContext', () => ({
+  useConnectionState: () => connectionState,
 }));
 
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -29,14 +34,17 @@ const server = {
   auth: { type: 'none' },
 } as MCPServer;
 
+const patchServer = vi.fn();
 const client = {
-  service: vi.fn(() => ({ patch: vi.fn(), create: vi.fn() })),
+  service: vi.fn(() => ({ patch: patchServer, create: vi.fn() })),
   io: { on: vi.fn(), off: vi.fn() },
 } as unknown as AgorClient;
 
 describe('SessionMcpFooterControl overlay lifecycle', () => {
   beforeEach(() => {
     permissionState.isAdmin = true;
+    connectionState.connected = true;
+    connectionState.connecting = false;
     vi.clearAllMocks();
   });
 
@@ -101,5 +109,49 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole('dialog', { name: 'Session MCP servers' })).not.toBeInTheDocument();
     expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('fails an open editor closed across disconnect and demotion', async () => {
+    const props = {
+      client,
+      sessionId: 'session-id',
+      sessionMcpServerIds: [server.mcp_server_id],
+      mcpServerById: new Map([[server.mcp_server_id, server]]),
+      userAuthenticatedMcpServerIds: new Set<string>(),
+    };
+    const { rerender } = render(<SessionMcpFooterControl {...props} />, { wrapper: Wrapper });
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. 1 MCP server attached. Open to add or change MCP servers.',
+      })
+    );
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Session MCP servers' })).getByRole('button', {
+        name: 'Edit Portal Server MCP server',
+      })
+    );
+    const editDialog = await screen.findByRole('dialog', { name: 'Edit MCP Server' });
+    await waitFor(() =>
+      expect(within(editDialog).getByRole('button', { name: 'Save' })).toBeEnabled()
+    );
+
+    connectionState.connected = false;
+    connectionState.connecting = true;
+    rerender(<SessionMcpFooterControl {...props} />);
+    expect(await within(editDialog).findByText(/Reconnect to the Agor daemon/)).toBeVisible();
+    const save = within(editDialog).getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(patchServer).not.toHaveBeenCalled();
+
+    connectionState.connected = true;
+    connectionState.connecting = false;
+    permissionState.isAdmin = false;
+    rerender(<SessionMcpFooterControl {...props} />);
+    expect(await within(editDialog).findByText(/account can no longer change/)).toBeVisible();
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(patchServer).not.toHaveBeenCalled();
   });
 });

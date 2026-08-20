@@ -2,6 +2,8 @@ import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ApiOutlined } from '@ant-design/icons';
 import { Tag as AntTag, Space, Typography, theme } from 'antd';
 import React from 'react';
+import { useConnectionState } from '@/contexts/ConnectionContext';
+import { usePermissions } from '@/hooks/usePermissions';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -27,6 +29,9 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const { isAdmin } = usePermissions();
+  const { connected, connecting } = useConnectionState();
+  const editMutationAllowed = isAdmin && connected && !connecting;
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
@@ -266,6 +271,12 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           server={editingServer}
           open={editModalOpen}
           client={client}
+          mutationAllowed={editMutationAllowed}
+          mutationBlockedReason={
+            !connected || connecting
+              ? 'Reconnect to the Agor daemon before changing this MCP server.'
+              : 'Your account can no longer change this MCP server.'
+          }
           onClose={() => setEditModalOpen(false)}
           afterClose={finishEditModalClose}
           focusTriggerAfterClose={false}

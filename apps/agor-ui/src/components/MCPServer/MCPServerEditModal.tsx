@@ -5,8 +5,8 @@ import type {
   MCPTransport,
   UpdateMCPServerInput,
 } from '@agor-live/client';
-import { Button, Form, Modal, Space, Tooltip } from 'antd';
-import { useEffect, useState } from 'react';
+import { Alert, Button, Form, Modal, Space, Tooltip } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
@@ -30,6 +30,9 @@ export interface MCPServerEditModalProps {
   offeredTransports?: MCPTransport[];
   /** The scopes this editor may switch to, on the same terms. */
   offeredScopes?: MCPScope[];
+  /** Current server-side capability/connection decision from the owner. */
+  mutationAllowed: boolean;
+  mutationBlockedReason?: string;
   onClose: () => void;
   /** Runs after the portal has finished closing (for example, to restore focus). */
   afterClose?: () => void;
@@ -62,6 +65,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   client,
   offeredTransports,
   offeredScopes,
+  mutationAllowed,
+  mutationBlockedReason = 'You can no longer change this MCP server.',
   onClose,
   afterClose,
   focusTriggerAfterClose,
@@ -87,7 +92,9 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     open && formHydrated
       ? missingMCPFieldLabels(form.getFieldsValue(true), { mode: 'edit', transport, authType })
       : [];
-  const saveBlocked = missingRequiredFields.length > 0;
+  const saveBlocked = !mutationAllowed || missingRequiredFields.length > 0;
+  const mutationStateRef = useRef({ allowed: mutationAllowed, reason: mutationBlockedReason });
+  mutationStateRef.current = { allowed: mutationAllowed, reason: mutationBlockedReason };
 
   // Hydrate the form when the modal opens or the user swaps to a different
   // server. Intentionally NOT keyed on `server` itself — that would clobber
@@ -256,9 +263,17 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
 
   const saveFormValues = async (): Promise<boolean> => {
     if (!server || !client) return false;
+    if (!mutationStateRef.current.allowed) {
+      showError(mutationStateRef.current.reason);
+      return false;
+    }
 
     try {
       await form.validateFields();
+      if (!mutationStateRef.current.allowed) {
+        showError(mutationStateRef.current.reason);
+        return false;
+      }
       const values = form.getFieldsValue(true);
 
       const updates: UpdateMCPServerInput = {
@@ -286,6 +301,10 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         preserveAbsentGrantType,
       });
 
+      if (!mutationStateRef.current.allowed) {
+        showError(mutationStateRef.current.reason);
+        return false;
+      }
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
       return true;
     } catch (error) {
@@ -324,7 +343,15 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         <Space>
           <Button onClick={closeAndReset}>Cancel</Button>
           {/* A disabled button can't host a tooltip of its own — hence the span. */}
-          <Tooltip title={saveBlocked ? describeMissingForSave(missingRequiredFields) : undefined}>
+          <Tooltip
+            title={
+              !mutationAllowed
+                ? mutationBlockedReason
+                : saveBlocked
+                  ? describeMissingForSave(missingRequiredFields)
+                  : undefined
+            }
+          >
             <span>
               <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
                 Save
@@ -334,6 +361,15 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         </Space>
       }
     >
+      {!mutationAllowed && (
+        <Alert
+          type="warning"
+          showIcon
+          title="MCP server changes are unavailable"
+          description={mutationBlockedReason}
+          style={{ marginTop: 16 }}
+        />
+      )}
       <Form
         form={form}
         layout="vertical"
@@ -362,6 +398,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           testing={testing}
           testResult={testResult}
           onPrepareOAuthStart={prepareOAuthStart}
+          mutationAllowed={mutationAllowed}
+          mutationBlockedReason={mutationBlockedReason}
           formRevision={formRevision}
           managedOAuthCompatibilityMode={
             server?.oauth_compatibility_policy?.managed_by_catalog &&

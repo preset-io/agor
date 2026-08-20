@@ -74,7 +74,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       auth: { type: 'oauth' },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+    );
 
     fireEvent.change(await screen.findByLabelText('Description'), {
       target: { value: 'after' },
@@ -114,7 +116,15 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         },
       } as MCPServer;
 
-      render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+      render(
+        <MCPServerEditModal
+          server={server}
+          open
+          client={client}
+          mutationAllowed
+          onClose={vi.fn()}
+        />
+      );
 
       expect(await screen.findByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
       fireEvent.click(screen.getByRole('button', { name: action }));
@@ -148,7 +158,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={onClose} />);
+    render(
+      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={onClose} />
+    );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
       target: { value: 'fresh-client-id' },
@@ -193,7 +205,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+    );
 
     fireEvent.change(await screen.findByLabelText('Client ID'), {
       target: { value: 'fresh-client-id' },
@@ -233,7 +247,9 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       },
     } as MCPServer;
 
-    render(<MCPServerEditModal server={server} open client={client} onClose={vi.fn()} />);
+    render(
+      <MCPServerEditModal server={server} open client={client} mutationAllowed onClose={vi.fn()} />
+    );
 
     fireEvent.change(await screen.findByLabelText('URL'), {
       target: { value: 'https://current.example/mcp' },
@@ -261,4 +277,45 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     await waitFor(() => expect(preparedServerId).toHaveBeenCalledWith(server.mcp_server_id));
     expect(showError).not.toHaveBeenCalled();
   });
+
+  it.each(['Save', 'Start OAuth Flow'])(
+    'blocks %s after authority is lost while the edit dialog remains open',
+    async (action) => {
+      const patch = vi.fn().mockResolvedValue({});
+      const client = {
+        service: vi.fn().mockReturnValue({ patch }),
+        io: { on: vi.fn(), off: vi.fn() },
+      } as unknown as AgorClient;
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000099',
+        name: 'transition-oauth',
+        transport: 'http',
+        url: 'https://transition.example/mcp',
+        scope: 'global',
+        enabled: true,
+        auth: { type: 'oauth' },
+      } as MCPServer;
+      const view = (mutationAllowed: boolean) => (
+        <MCPServerEditModal
+          server={server}
+          open
+          client={client}
+          mutationAllowed={mutationAllowed}
+          mutationBlockedReason="Connection authority changed"
+          onClose={vi.fn()}
+        />
+      );
+      const rendered = render(view(true));
+      await screen.findByLabelText('URL');
+
+      rendered.rerender(view(false));
+      fireEvent.click(screen.getByRole('button', { name: action }));
+
+      expect(patch).not.toHaveBeenCalled();
+      expect(preparedServerId).not.toHaveBeenCalled();
+      if (action === 'Save') {
+        expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+      }
+    }
+  );
 });

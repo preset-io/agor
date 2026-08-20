@@ -26,6 +26,9 @@ interface UseMCPServerOAuthStartOptions {
   showError: (message: string) => void;
   showInfo: (message: string) => void;
   showSuccess: (message: string) => void;
+  /** Current authority to persist/start this OAuth configuration. */
+  startAllowed?: boolean;
+  startBlockedReason?: string;
 }
 
 export function useMCPServerOAuthStart({
@@ -35,6 +38,8 @@ export function useMCPServerOAuthStart({
   showError,
   showInfo,
   showSuccess,
+  startAllowed = true,
+  startBlockedReason = 'You can no longer change this MCP server.',
 }: UseMCPServerOAuthStartOptions) {
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
@@ -42,6 +47,8 @@ export function useMCPServerOAuthStart({
   const oauthStartInFlightRef = useRef(false);
   const oauthStartGenerationRef = useRef(0);
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
+  const startAllowedRef = useRef(startAllowed);
+  startAllowedRef.current = startAllowed;
 
   const invalidateOAuthStart = useCallback(() => {
     oauthStartGenerationRef.current += 1;
@@ -52,6 +59,14 @@ export function useMCPServerOAuthStart({
   useEffect(() => {
     return invalidateOAuthStart;
   }, [invalidateOAuthStart]);
+
+  useEffect(() => {
+    if (!startAllowed) {
+      invalidateOAuthStart();
+      setOauthCallbackModalVisible(false);
+      setStartingOAuthFlow(false);
+    }
+  }, [invalidateOAuthStart, startAllowed]);
 
   const clearOAuthFailure = useCallback(() => setOauthFailure(null), []);
 
@@ -67,6 +82,10 @@ export function useMCPServerOAuthStart({
       showError('Client not available');
       return;
     }
+    if (!startAllowedRef.current) {
+      showError(startBlockedReason);
+      return;
+    }
 
     oauthStartInFlightRef.current = true;
     const startGeneration = ++oauthStartGenerationRef.current;
@@ -78,6 +97,10 @@ export function useMCPServerOAuthStart({
       const targetServerId = await onPrepareOAuthStart();
       if (!isCurrentStart()) return;
       if (!targetServerId) return;
+      if (!startAllowedRef.current) {
+        showError(startBlockedReason);
+        return;
+      }
 
       showInfo('Starting OAuth authentication flow...');
       if (!isCurrentStart()) return;
@@ -151,7 +174,15 @@ export function useMCPServerOAuthStart({
         setStartingOAuthFlow(false);
       }
     }
-  }, [client, onOAuthSucceeded, onPrepareOAuthStart, showError, showInfo, showSuccess]);
+  }, [
+    client,
+    onOAuthSucceeded,
+    onPrepareOAuthStart,
+    showError,
+    showInfo,
+    showSuccess,
+    startBlockedReason,
+  ]);
 
   return {
     cancelOAuthWait,

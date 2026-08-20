@@ -1,3 +1,5 @@
+import type { UserRole } from '@agor/core/types';
+
 /**
  * The allowlist that decides which services may fan out over the socket at all.
  *
@@ -64,6 +66,15 @@ export type RealtimePublishAudience =
 
 export type RealtimePublishPolicy = {
   audience: RealtimePublishAudience;
+  /**
+   * Minimum authenticated browser role admitted to this event stream.
+   *
+   * This mirrors the service read floor at the publication boundary. Omitting
+   * a listener in the official UI is not authorization: an adversarial client
+   * can subscribe to any Feathers service event. Service-account connections
+   * remain admitted independently for internal runtime plumbing.
+   */
+  minimumRole?: UserRole;
   /**
    * Why this audience. For a fan-out audience, name the consumer that breaks
    * without it; for `'none'`, say what makes silence correct. Reviewers read
@@ -132,6 +143,7 @@ export const REALTIME_PUBLISH_POLICY = {
   // ---------------------------------------------------------------------------
   'board-objects': {
     audience: 'board-resource',
+    minimumRole: 'member',
     why: 'useAgorData and BoardBranchList track card/zone placement live.',
   },
   'board-comments': {
@@ -156,6 +168,7 @@ export const REALTIME_PUBLISH_POLICY = {
   repos: { audience: 'tenant', why: 'useAgorData and App.tsx track repo rows and clone progress.' },
   users: {
     audience: 'tenant',
+    minimumRole: 'member',
     why: 'useAgorData keeps the user directory current for attribution. rowToUser computes agentic_tools_public_values PER REQUESTER (decrypted plaintext, owner only), so redactUserOwnerOnlyFieldsForBroadcast strips it from context.dispatch — the audience is tenant-wide, so the payload must carry nothing the row owner alone may see.',
   },
   'mcp-servers': {

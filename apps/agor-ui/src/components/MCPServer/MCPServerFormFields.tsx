@@ -78,6 +78,9 @@ export interface MCPServerFormFieldsProps {
   } | null;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
+  /** Whether persistent mutations/OAuth preparation remain authorized. */
+  mutationAllowed?: boolean;
+  mutationBlockedReason?: string;
   /**
    * Changes whenever the owner's form values do. The connection actions read
    * the form store directly, so they need a reason to re-render — see
@@ -115,6 +118,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   testing = false,
   testResult,
   onPrepareOAuthStart,
+  mutationAllowed = true,
+  mutationBlockedReason = 'You can no longer change this MCP server.',
   // Consumed by re-rendering, not by reading — see `formRevision` above.
   formRevision: _formRevision,
   managedOAuthCompatibilityMode,
@@ -149,6 +154,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     showError,
     showInfo,
     showSuccess,
+    startAllowed: mutationAllowed,
+    startBlockedReason: mutationBlockedReason,
   });
 
   useEffect(() => {
@@ -196,6 +203,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
   const handleDisconnectOAuth = async () => {
+    if (!mutationAllowed) {
+      showError(mutationBlockedReason);
+      return;
+    }
     if (!client) {
       showError('Client not available');
       return;
@@ -568,11 +579,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
             {authType === 'oauth' &&
               oauthBrowserFlowAvailable &&
-              (missingRequiredFields.length > 0 ? (
+              (!mutationAllowed || missingRequiredFields.length > 0 ? (
                 // Disabled rather than hidden: the user has already earned this
                 // button with a successful auth test, so it has to say what is
                 // still holding it back.
-                <Tooltip title={describeMissingForOAuth(missingRequiredFields)}>
+                <Tooltip
+                  title={
+                    !mutationAllowed
+                      ? mutationBlockedReason
+                      : describeMissingForOAuth(missingRequiredFields)
+                  }
+                >
                   <span>
                     <Button type="primary" disabled>
                       {oauthStartLabel}
@@ -589,6 +606,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 type="default"
                 danger
                 loading={disconnectingOAuth}
+                disabled={!mutationAllowed}
                 onClick={handleDisconnectOAuth}
               >
                 Disconnect OAuth

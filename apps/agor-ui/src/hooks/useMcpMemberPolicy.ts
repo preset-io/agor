@@ -10,7 +10,7 @@
 
 import type { AgorClient, MCPMemberPolicy, User } from '@agor-live/client';
 import { DEFAULT_MCP_MEMBER_POLICY, MCP_MEMBER_POLICY_CHANGED_EVENT } from '@agor-live/client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 export interface McpMemberPolicyState {
   policy: MCPMemberPolicy;
@@ -71,13 +71,35 @@ export function useMcpMemberPolicy(
   const identityKey = currentUser
     ? `${currentUser.user_id}:${String(currentUser.role ?? '')}`
     : null;
-  const scopeKey =
-    client && connectionReady && identityKey
-      ? `${identityKey}:${authGeneration}:${policyGeneration}`
-      : null;
+  const establishedAuthorityRef = useRef<{
+    client: AgorClient;
+    identityKey: string;
+    authGeneration: number;
+  } | null>(null);
+  const establishedAuthority = establishedAuthorityRef.current;
+  const authorityMatchesEstablished =
+    !!establishedAuthority &&
+    establishedAuthority.client === client &&
+    establishedAuthority.identityKey === identityKey &&
+    authGeneration >= establishedAuthority.authGeneration;
+  const authorityHasNewAuthentication =
+    !establishedAuthority || authGeneration > establishedAuthority.authGeneration;
+  const callerAuthorityReady =
+    !!client &&
+    connectionReady &&
+    !!identityKey &&
+    (authorityMatchesEstablished || authorityHasNewAuthentication);
+  const scopeKey = callerAuthorityReady
+    ? `${identityKey}:${authGeneration}:${policyGeneration}`
+    : null;
   const [snapshot, setSnapshot] = useState<PolicySnapshot>(() =>
     restrictiveSnapshot(null, null, true)
   );
+
+  useLayoutEffect(() => {
+    if (!callerAuthorityReady || !client || !identityKey) return;
+    establishedAuthorityRef.current = { client, identityKey, authGeneration };
+  }, [authGeneration, callerAuthorityReady, client, identityKey]);
 
   // Policy writes can happen in another tab, browser, or daemon replica. The
   // daemon publishes an empty tenant-scoped invalidation only after commit;

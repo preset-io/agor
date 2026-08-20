@@ -265,6 +265,26 @@ function audienceFor(path: string | null | undefined): RealtimePublishAudience |
   return realtimePublishPolicyFor(path)?.audience;
 }
 
+/**
+ * Apply a service's read-role floor to realtime delivery.
+ *
+ * Channel membership proves authentication/tenant admission, not permission
+ * to read every service in that channel. Keeping this in the global publisher
+ * makes local and Redis-relayed events obey the same floor and prevents a raw
+ * Feathers listener from bypassing the service hook.
+ */
+function applyRealtimeRoleFloor(
+  channel: PublishChannel,
+  path: string | null | undefined
+): PublishChannel {
+  const minimumRole = realtimePublishPolicyFor(path)?.minimumRole;
+  if (!minimumRole) return channel;
+  return channel.filter((connection: unknown) => {
+    if (isServiceConnection(connection)) return true;
+    return hasMinimumRole(userFromConnection(connection)?.role, minimumRole);
+  });
+}
+
 // Authentication and credential control-plane results must never enter shared
 // Redis, even if a future service accidentally enables publication for them.
 export const REDIS_FEATHERS_DENIED_PATHS = new Set([
@@ -933,6 +953,12 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         throw error;
       }
     }
+
+    // Authentication/tenant channels are deliberately broad. Narrow them to
+    // the declared service read floor before ANY audience resolution so the
+    // global, branch, knowledge, streaming, and Redis-relay paths cannot
+    // accidentally widen the result again.
+    tenantScoped = applyRealtimeRoleFloor(tenantScoped, context.path);
 
     const isExecutorControlEvent =
       (context.path === 'tasks' && context.event === 'termination_requested') ||

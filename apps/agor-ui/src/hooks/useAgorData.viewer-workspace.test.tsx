@@ -8,11 +8,12 @@
  */
 
 import type { AgorClient, User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { AppHeader } from '../components/AppHeader';
 import { ConnectionProvider } from '../contexts/ConnectionContext';
+import { agorStore } from '../store/agorStore';
 import { useAgorData } from './useAgorData';
 
 vi.mock('../contexts/ThemeContext', () => ({
@@ -85,7 +86,12 @@ const VIEWER = {
 } as User;
 
 function WorkspaceBootstrap({ client, user }: { client: AgorClient; user: User }) {
-  const data = useAgorData(client, { authenticatedUserRole: user.role });
+  const data = useAgorData(client, {
+    authenticatedUserId: user.user_id,
+    authenticatedUserRole: user.role,
+    authGeneration: 1,
+    connectionReady: true,
+  });
   if (data.loading) return <div>Loading workspace</div>;
   if (data.error) return <div role="alert">{data.error}</div>;
   return (
@@ -156,5 +162,162 @@ describe('viewer-safe workspace bootstrap', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boards'));
     expect(screen.queryByRole('link', { name: 'Marketplace' })).not.toBeInTheDocument();
+  });
+});
+
+function transitionClient() {
+  const usersAnswers: Array<Promise<unknown[]>> = [];
+  const boardObjectAnswers: Array<Promise<unknown[]>> = [];
+  const ioListeners = new Map<string, Array<() => void>>();
+  const usersFindAll = vi.fn(() => usersAnswers.shift() ?? Promise.resolve([]));
+  const boardObjectsFindAll = vi.fn(() => boardObjectAnswers.shift() ?? Promise.resolve([]));
+  const services = new Map<string, Record<string, unknown>>();
+  const service = (path: string) => {
+    const existing = services.get(path);
+    if (existing) return existing;
+    const value = {
+      findAll:
+        path === 'users'
+          ? usersFindAll
+          : path === 'board-objects'
+            ? boardObjectsFindAll
+            : vi.fn(async () => []),
+      find: vi.fn(async () => []),
+      get: vi.fn(async () => null),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    services.set(path, value);
+    return value;
+  };
+  return {
+    client: {
+      service,
+      io: {
+        on: vi.fn((event: string, listener: () => void) =>
+          ioListeners.set(event, [...(ioListeners.get(event) ?? []), listener])
+        ),
+        off: vi.fn((event: string, listener: () => void) =>
+          ioListeners.set(
+            event,
+            (ioListeners.get(event) ?? []).filter((candidate) => candidate !== listener)
+          )
+        ),
+      },
+    } as unknown as AgorClient,
+    usersFindAll,
+    boardObjectsFindAll,
+    queueUsers: (answer: Promise<unknown[]>) => usersAnswers.push(answer),
+    queueBoardObjects: (answer: Promise<unknown[]>) => boardObjectAnswers.push(answer),
+    emitConnect: () => {
+      for (const listener of ioListeners.get('connect') ?? []) listener();
+    },
+  };
+}
+
+function deferredList() {
+  let resolve!: (value: unknown[]) => void;
+  const promise = new Promise<unknown[]>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe('workspace authority generation ordering', () => {
+  it('discards delayed member responses after demotion', async () => {
+    const seam = transitionClient();
+    const objects = deferredList();
+    seam.queueUsers(Promise.resolve([{ ...VIEWER, user_id: 'same-user', role: 'member' }]));
+    seam.queueBoardObjects(objects.promise);
+    const { result, rerender } = renderHook(
+      ({ role, ready, generation }: { role: string; ready: boolean; generation: number }) =>
+        useAgorData(seam.client, {
+          authenticatedUserId: 'same-user',
+          authenticatedUserRole: role,
+          authGeneration: generation,
+          connectionReady: ready,
+        }),
+      { initialProps: { role: 'member', ready: true, generation: 1 } }
+    );
+    await waitFor(() => expect(seam.boardObjectsFindAll).toHaveBeenCalledTimes(1));
+
+    // The role can render before useAgorClient publishes its reauthenticated
+    // generation. Even with a still-true connection bit, the old member fetch
+    // is invalid and no viewer-era resync may start.
+    rerender({ role: 'viewer', ready: true, generation: 1 });
+    await act(async () => {
+      objects.resolve([{ object_id: 'old-object', board_id: 'board-1' }]);
+      await objects.promise;
+    });
+    expect(agorStore.getState().userById.size).toBe(0);
+    expect(agorStore.getState().boardObjectById.size).toBe(0);
+
+    rerender({ role: 'viewer', ready: true, generation: 2 });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(agorStore.getState().userById.size).toBe(0);
+    expect(agorStore.getState().boardObjectById.size).toBe(0);
+  });
+
+  it('waits for member socket reauthentication before promotion resync', async () => {
+    const seam = transitionClient();
+    const promoted = { ...VIEWER, user_id: 'same-user', role: 'member' };
+    seam.queueUsers(Promise.resolve([promoted]));
+    seam.queueBoardObjects(Promise.resolve([{ object_id: 'member-object', board_id: 'board-1' }]));
+    const { result, rerender } = renderHook(
+      ({ role, ready, generation }: { role: string; ready: boolean; generation: number }) =>
+        useAgorData(seam.client, {
+          authenticatedUserId: 'same-user',
+          authenticatedUserRole: role,
+          authGeneration: generation,
+          connectionReady: ready,
+        }),
+      { initialProps: { role: 'viewer', ready: true, generation: 1 } }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(seam.usersFindAll).not.toHaveBeenCalled();
+
+    // Adversarial ordering: fresh identity renders before the connection hook
+    // has closed its gate. The unchanged auth generation must still withhold.
+    rerender({ role: 'member', ready: true, generation: 1 });
+    await act(async () => Promise.resolve());
+    expect(seam.usersFindAll).not.toHaveBeenCalled();
+
+    rerender({ role: 'member', ready: false, generation: 1 });
+    expect(seam.usersFindAll).not.toHaveBeenCalled();
+
+    rerender({ role: 'member', ready: true, generation: 2 });
+    await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(agorStore.getState().userById.get('same-user')).toBeDefined());
+    expect(agorStore.getState().boardObjectById.has('member-object')).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('ignores reconnect delivery until the new authenticated generation is ready', async () => {
+    const seam = transitionClient();
+    seam.queueUsers(Promise.resolve([]));
+    seam.queueBoardObjects(Promise.resolve([]));
+    const { result, rerender } = renderHook(
+      ({ ready, generation }: { ready: boolean; generation: number }) =>
+        useAgorData(seam.client, {
+          authenticatedUserId: 'member-user',
+          authenticatedUserRole: 'member',
+          authGeneration: generation,
+          connectionReady: ready,
+        }),
+      { initialProps: { ready: true, generation: 1 } }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(seam.usersFindAll).toHaveBeenCalledTimes(1);
+
+    rerender({ ready: false, generation: 1 });
+    act(() => seam.emitConnect());
+    await act(async () => Promise.resolve());
+    expect(seam.usersFindAll).toHaveBeenCalledTimes(1);
+
+    seam.queueUsers(Promise.resolve([]));
+    seam.queueBoardObjects(Promise.resolve([]));
+    rerender({ ready: true, generation: 2 });
+    await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(2));
+    expect(result.current.error).toBeNull();
   });
 });

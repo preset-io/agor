@@ -46,28 +46,57 @@ const MEMBER = { user_id: 'member-1', role: 'member' } as const;
 const OTHER_MEMBER = { user_id: 'member-2', role: 'member' } as const;
 
 describe('useMcpMemberPolicy caller scope', () => {
-  it('fails closed immediately on demotion and refetches for the new role', async () => {
+  it('fails closed immediately on demotion and waits for new socket authority', async () => {
     const next = deferred<MCPMemberPolicySetting>();
     const seam = makeClient({ policy: 'allow_crud', can_configure: true });
     seam.answerNext(next.promise);
     const { result, rerender } = renderHook(
-      ({ role }: { role: string }) =>
+      ({ role, authGeneration }: { role: string; authGeneration: number }) =>
         useMcpMemberPolicy(seam.client, {
           connectionReady: true,
           currentUser: { ...MEMBER, role },
-          authGeneration: 1,
+          authGeneration,
         }),
-      { initialProps: { role: 'member' } }
+      { initialProps: { role: 'member', authGeneration: 1 } }
     );
     await waitFor(() => expect(result.current.canConfigure).toBe(true));
 
-    rerender({ role: 'viewer' });
+    rerender({ role: 'viewer', authGeneration: 1 });
 
     expect(result.current).toMatchObject({ canConfigure: false, loading: true });
+    expect(seam.find).toHaveBeenCalledTimes(1);
+
+    rerender({ role: 'viewer', authGeneration: 2 });
     expect(seam.find).toHaveBeenCalledTimes(2);
     await act(() => next.resolve({ policy: 'allow_crud', can_configure: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.canConfigure).toBe(false);
+  });
+
+  it('does not issue a viewer-to-member policy read before socket reauthentication', async () => {
+    const next = deferred<MCPMemberPolicySetting>();
+    const seam = makeClient({ policy: 'allow_crud', can_configure: false });
+    seam.answerNext(next.promise);
+    const { result, rerender } = renderHook(
+      ({ role, authGeneration }: { role: string; authGeneration: number }) =>
+        useMcpMemberPolicy(seam.client, {
+          connectionReady: true,
+          currentUser: { ...MEMBER, role },
+          authGeneration,
+        }),
+      { initialProps: { role: 'viewer', authGeneration: 1 } }
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.canConfigure).toBe(false);
+
+    rerender({ role: 'member', authGeneration: 1 });
+    expect(result.current).toMatchObject({ canConfigure: false, loading: true });
+    expect(seam.find).toHaveBeenCalledTimes(1);
+
+    rerender({ role: 'member', authGeneration: 2 });
+    expect(seam.find).toHaveBeenCalledTimes(2);
+    await act(() => next.resolve({ policy: 'allow_crud', can_configure: true }));
+    await waitFor(() => expect(result.current.canConfigure).toBe(true));
   });
 
   it('fails closed across identity and token-generation replacement on a stable client', async () => {
