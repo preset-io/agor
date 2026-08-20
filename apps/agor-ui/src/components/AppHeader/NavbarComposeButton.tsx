@@ -31,11 +31,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import type {
-  NewSessionConfig,
-  SessionInitializationResult,
-  SessionInitializationRetry,
-} from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
@@ -68,10 +64,7 @@ export interface NavbarComposeButtonProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (
-    sessionId: string,
-    retry: SessionInitializationRetry
-  ) => Promise<SessionInitializationResult>;
+  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
   disabled?: boolean;
 }
 
@@ -128,7 +121,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     sessionId: string;
     branch: Branch;
     mode: SendMode;
-    retry: SessionInitializationRetry;
   } | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
@@ -317,7 +309,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       if (!outcome) return; // onCreateSession already surfaced the failure
       const { sessionId } = outcome;
       if (outcome.status === 'retryable') {
-        setDeliveryFailure({ sessionId, branch, mode, retry: outcome.retry });
+        setDeliveryFailure({ sessionId, branch, mode });
         return;
       }
       finishSuccessfulSend(mode, branch, sessionId);
@@ -351,9 +343,13 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     const failure = deliveryFailure;
     setSubmitting(failure.mode);
     try {
-      const outcome = await onRetrySessionInitialization(failure.sessionId, failure.retry);
+      const outcome = await onRetrySessionInitialization(failure.sessionId);
+      if (!outcome) {
+        setDeliveryFailure(null);
+        return;
+      }
       if (outcome.status === 'retryable') {
-        setDeliveryFailure({ ...failure, retry: outcome.retry });
+        setDeliveryFailure(failure);
         return;
       }
       setDeliveryFailure(null);

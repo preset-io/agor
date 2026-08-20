@@ -55,6 +55,12 @@ import type {
 } from './domain/sessionCreation';
 import { initializeCreatedSession } from './domain/sessionCreation';
 import {
+  createSessionInitializationRecoveryState,
+  pruneSessionInitializationRecovery,
+  recordSessionInitializationResult,
+  scopeSessionInitializationRecovery,
+} from './domain/sessionInitializationRecovery';
+import {
   IdentityContractState,
   useAgorClient,
   useAgorData,
@@ -106,6 +112,8 @@ const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
 // Stable empty-repo array so the onboarding framework-repo memo keeps a constant
 // identity while the wizard is closed (no framework repo resolved yet).
 const EMPTY_REPOS: Repo[] = [];
+const EMPTY_SESSION_INITIALIZATION_RETRIES: ReadonlyMap<string, SessionInitializationRetry> =
+  new Map();
 
 /**
  * Resolve the framework repo once it reaches `clone_status: 'ready'`, up to a
@@ -458,9 +466,51 @@ function AppContent() {
 
   // Per-session prompt drafts (persists across session switches)
   const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
-  const [sessionInitializationRetries, setSessionInitializationRetries] = useState<
-    Map<string, SessionInitializationRetry>
-  >(new Map());
+  const recoveryOwnerId = user?.user_id ?? null;
+  const [sessionInitializationRecovery, setSessionInitializationRecovery] = useState(() =>
+    createSessionInitializationRecoveryState(recoveryOwnerId)
+  );
+  const sessionInitializationRecoveryRef = useRef(sessionInitializationRecovery);
+  const recoveryOwnerIdRef = useRef(recoveryOwnerId);
+  recoveryOwnerIdRef.current = recoveryOwnerId;
+
+  // Identity can rotate while the Feathers client remains mounted. Scope
+  // retained prompts/files by caller. The render-time owner comparison keeps
+  // the previous caller's payload invisible before the clearing effect runs.
+  const sessionInitializationRetries =
+    sessionInitializationRecovery.ownerId === recoveryOwnerId
+      ? sessionInitializationRecovery.retries
+      : EMPTY_SESSION_INITIALIZATION_RETRIES;
+
+  useEffect(() => {
+    setSessionInitializationRecovery(() => {
+      const next = scopeSessionInitializationRecovery(
+        sessionInitializationRecoveryRef.current,
+        recoveryOwnerId
+      );
+      sessionInitializationRecoveryRef.current = next;
+      return next;
+    });
+  }, [recoveryOwnerId]);
+
+  // Realtime deletion can happen in another browser, so prune independently
+  // of this component's explicit delete handler without subscribing the shell
+  // to every session-map render.
+  useEffect(
+    () =>
+      agorStore.subscribe((state, previous) => {
+        if (state.sessionById === previous.sessionById) return;
+        setSessionInitializationRecovery(() => {
+          const next = pruneSessionInitializationRecovery(
+            sessionInitializationRecoveryRef.current,
+            (sessionId) => state.sessionById.has(sessionId as SessionID)
+          );
+          sessionInitializationRecoveryRef.current = next;
+          return next;
+        });
+      }),
+    []
+  );
 
   // Track if we've successfully loaded data at least once
   // This prevents UI from unmounting during reconnections
@@ -1010,6 +1060,7 @@ function AppContent() {
     sessionId: string,
     initialization: SessionInitializationRetry
   ): Promise<SessionInitializationResult> => {
+    const operationOwnerId = recoveryOwnerId;
     const outcome = await initializeCreatedSession(sessionId, initialization, {
       associateMcpServer: async (targetSessionId, serverId) => {
         if (!client) throw new Error('Connection unavailable');
@@ -1046,13 +1097,31 @@ function AppContent() {
         );
       },
     });
-    setSessionInitializationRetries((previous) => {
-      const next = new Map(previous);
-      if (outcome.status === 'retryable') next.set(sessionId, outcome.retry);
-      else next.delete(sessionId);
+    if (!operationOwnerId || recoveryOwnerIdRef.current !== operationOwnerId) return outcome;
+    setSessionInitializationRecovery(() => {
+      const next = recordSessionInitializationResult(
+        scopeSessionInitializationRecovery(
+          sessionInitializationRecoveryRef.current,
+          operationOwnerId
+        ),
+        operationOwnerId,
+        outcome,
+        agorStore.getState().sessionById.has(sessionId as SessionID)
+      );
+      sessionInitializationRecoveryRef.current = next;
       return next;
     });
     return outcome;
+  };
+
+  const retrySessionInitialization = async (
+    sessionId: string
+  ): Promise<SessionInitializationResult | null> => {
+    const ownerId = recoveryOwnerId;
+    if (!ownerId || sessionInitializationRecoveryRef.current.ownerId !== ownerId) return null;
+    const retry = sessionInitializationRecoveryRef.current.retries.get(sessionId);
+    if (!retry) return null;
+    return initializeSession(sessionId, retry);
   };
 
   // Handle session creation
@@ -1225,6 +1294,14 @@ function AppContent() {
   const handleDeleteSession = async (sessionId: string) => {
     const success = await deleteSession(sessionId as SessionID);
     if (success) {
+      setSessionInitializationRecovery(() => {
+        const next = pruneSessionInitializationRecovery(
+          sessionInitializationRecoveryRef.current,
+          (retainedSessionId) => retainedSessionId !== sessionId
+        );
+        sessionInitializationRecoveryRef.current = next;
+        return next;
+      });
       showSuccess('Session deleted successfully!');
     } else {
       showError('Failed to delete session');
@@ -1892,7 +1969,7 @@ function AppContent() {
         />
       }
       onCreateSession={handleCreateSession}
-      onRetrySessionInitialization={initializeSession}
+      onRetrySessionInitialization={retrySessionInitialization}
       sessionInitializationRetries={sessionInitializationRetries}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}

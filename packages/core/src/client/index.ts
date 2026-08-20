@@ -22,7 +22,6 @@ export type {
   SchedulesService,
   ServiceTypes,
   SessionPromptOptions,
-  SessionPromptResult,
   SessionsService,
   TaskRunOptions,
   TaskRunRequest,

@@ -8,11 +8,7 @@ import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import type {
-  NewSessionConfig,
-  SessionInitializationResult,
-  SessionInitializationRetry,
-} from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -67,10 +63,7 @@ export interface AppHeaderProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (
-    sessionId: string,
-    retry: SessionInitializationRetry
-  ) => Promise<SessionInitializationResult>;
+  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
 }
 
 const RecentBoardPills: React.FC<{

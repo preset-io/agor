@@ -177,10 +177,7 @@ export interface AppProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (
-    sessionId: string,
-    retry: SessionInitializationRetry
-  ) => Promise<SessionInitializationResult>;
+  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
   /** Session-scoped recovery payloads retained by the root creation seam. */
   sessionInitializationRetries?: ReadonlyMap<string, SessionInitializationRetry>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -1716,15 +1713,11 @@ export const App: React.FC<AppProps> = ({
                                     retryingInitializationSessionId === effectiveSelectedSessionId
                                   }
                                   onClick={async () => {
-                                    const retry = sessionInitializationRetries.get(
-                                      effectiveSelectedSessionId
-                                    );
-                                    if (!retry || !onRetrySessionInitialization) return;
+                                    if (!onRetrySessionInitialization) return;
                                     setRetryingInitializationSessionId(effectiveSelectedSessionId);
                                     try {
                                       await onRetrySessionInitialization(
-                                        effectiveSelectedSessionId,
-                                        retry
+                                        effectiveSelectedSessionId
                                       );
                                     } finally {
                                       setRetryingInitializationSessionId(null);

@@ -228,9 +228,8 @@ function renderShell(
   recovery?: {
     retries: ReadonlyMap<string, import('../../domain/sessionCreation').SessionInitializationRetry>;
     onRetry: (
-      sessionId: string,
-      retry: import('../../domain/sessionCreation').SessionInitializationRetry
-    ) => Promise<import('../../domain/sessionCreation').SessionInitializationResult>;
+      sessionId: string
+    ) => Promise<import('../../domain/sessionCreation').SessionInitializationResult | null>;
   }
 ) {
   // Mirror the real router: the same App element is mounted at the board,
@@ -439,7 +438,7 @@ describe('App quick-start — always shows the tool picker', () => {
 
     expect(await screen.findByText('Session created, but setup is incomplete')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
-    await waitFor(() => expect(onRetry).toHaveBeenCalledWith(SESSION_A, retry));
+    await waitFor(() => expect(onRetry).toHaveBeenCalledWith(SESSION_A));
   });
 
   it('passes only the selected tool user default into quick start', async () => {

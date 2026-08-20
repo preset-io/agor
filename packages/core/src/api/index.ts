@@ -124,33 +124,12 @@ export interface SessionPromptRequest {
   idempotencyKey?: string;
 }
 
-export interface QueuedSessionPromptResult {
-  success: true;
-  queued: true;
-  message: Message;
-  queue_position: number;
-}
-
-export interface RunningSessionPromptResult {
-  success: true;
-  taskId: string;
-  status: string;
-  streaming: boolean;
-  queued?: false;
-}
-
-export type SessionPromptResult = QueuedSessionPromptResult | RunningSessionPromptResult;
-
 export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt'> {
   params?: Params;
 }
 
 export interface SessionsClientHelpers {
-  prompt(
-    sessionId: string,
-    prompt: string,
-    options?: SessionPromptOptions
-  ): Promise<SessionPromptResult>;
+  prompt(sessionId: string, prompt: string, options?: SessionPromptOptions): Promise<Task>;
 }
 
 /**
@@ -1265,7 +1244,7 @@ function extendSessionsHelpers(client: AgorClient): void {
       const response = await client
         .service(`sessions/${sessionId}/prompt`)
         .create({ prompt, ...requestOptions } as SessionPromptRequest, params);
-      return response as SessionPromptResult;
+      return response as Task;
     },
   };
 

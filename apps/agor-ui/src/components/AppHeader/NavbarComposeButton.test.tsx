@@ -4,10 +4,7 @@ import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  SessionInitializationResult,
-  SessionInitializationRetry,
-} from '../../domain/sessionCreation';
+import type { SessionInitializationResult } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -211,10 +208,7 @@ function renderCompose(opts: {
     config: unknown,
     boardId: string
   ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (
-    sessionId: string,
-    retry: SessionInitializationRetry
-  ) => Promise<SessionInitializationResult>;
+  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
 }) {
   const onCreateSession =
     opts.onCreateSession ??
@@ -538,7 +532,7 @@ describe('NavbarComposeButton', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
     await waitFor(() =>
-      expect(onRetrySessionInitialization).toHaveBeenCalledWith('session-undelivered', retry)
+      expect(onRetrySessionInitialization).toHaveBeenCalledWith('session-undelivered')
     );
     await waitFor(() =>
       expect(screen.queryByText('Session created, but setup is incomplete')).not.toBeInTheDocument()
