@@ -19,7 +19,8 @@ workspace and open a fresh launch link. The UI appends a `return_to` query
 parameter containing the current Agor path, so launch providers can preserve
 deep links such as `/ui/s/<session>/` when issuing a fresh launch code. If the
 field is omitted, the normal local username/password login screen remains
-unchanged.
+unchanged. When external identity authority disables local authentication, no
+local-login fallback is offered.
 
 ## Configuration
 
@@ -63,6 +64,37 @@ external_launch:
   # an opaque return context for direct-host entry. Default: return_host.
   return_host_param: return_host
 ```
+
+### External user and role authority
+
+`external_launch` is only an authentication/provisioning mechanism by default.
+Deployments whose issuer also owns users and roles opt into the separate,
+fail-closed authority contract:
+
+```yaml
+identity:
+  user_lifecycle: external
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+Verified launches remain able to JIT-create a missing local projection and
+synchronize JWT-owned email, name, avatar, execution-home key, and role. The
+sync happens at successful launch, not on every request. Ordinary REST,
+Socket.IO, CLI, MCP, admin, and local-password paths cannot create/delete users
+or edit those fields. Preferences, onboarding, agentic-tool credentials and
+defaults, environment variables, API keys, and MCP selection/OAuth remain
+Agor-owned.
+
+Claims roles are required and exact in this mode. `allow_admin_roles` and
+`execution.allow_superadmin` remain explicit acceptance gates; disallowed roles
+fail the launch rather than being downgraded. Omitting `identity` preserves
+local behavior. External deactivation/revocation is not part of this first
+contract: the provider can prevent a new launch, but existing Agor credentials
+are not synchronized or revoked yet.
 
 For local development only, a symmetric assertion secret can be used:
 

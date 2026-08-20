@@ -37,6 +37,20 @@ function baseConfig(): AgorConfig {
   };
 }
 
+function externalAuthorityConfig(): AgorConfig {
+  return {
+    ...baseConfig(),
+    identity: {
+      user_lifecycle: 'external',
+      role_authority: 'claims',
+      local_auth: 'disabled',
+      external: { provider: 'external_launch', provisioning: 'jit' },
+    },
+    external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
+    execution: { allow_superadmin: true },
+  };
+}
+
 function signClaims(overrides: Record<string, unknown> = {}) {
   return jwt.sign(
     {
@@ -293,6 +307,79 @@ describe('one-time launch auth service', () => {
 
     expect(second.user.user_id).toBe(first.user.user_id);
     expect(second.user.name).toBe('Updated Name');
+  });
+
+  it('synchronizes claim-owned fields on each externally authoritative launch', async () => {
+    mockExchange(
+      signClaims({
+        email: 'first@example.test',
+        name: 'First Name',
+        role: 'admin',
+        avatar: 'https://cdn.example.test/first.png',
+        unix_username: 'first-home',
+      })
+    );
+    const first = await service(externalAuthorityConfig()).create({ launchCode: 'first' });
+    await update(db, users)
+      .set({
+        data: {
+          ...((await select(db).from(users).where(eq(users.user_id, first.user.user_id)).one())!
+            .data as Record<string, unknown>),
+          preferences: { audio: { enabled: false } },
+          default_mcp_server_ids: ['mcp-1'],
+        },
+      })
+      .where(eq(users.user_id, first.user.user_id))
+      .run();
+
+    mockExchange(
+      signClaims({
+        email: 'second@example.test',
+        name: 'Second Name',
+        role: 'viewer',
+        avatar: 'https://cdn.example.test/second.png',
+        unix_username: null,
+      })
+    );
+    const second = await service(externalAuthorityConfig()).create({ launchCode: 'second' });
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.user).toMatchObject({
+      email: 'second@example.test',
+      name: 'Second Name',
+      role: 'viewer',
+    });
+    const row = await select(db).from(users).where(eq(users.user_id, first.user.user_id)).one();
+    expect(row).toMatchObject({
+      email: 'second@example.test',
+      name: 'Second Name',
+      role: 'viewer',
+      unix_username: null,
+    });
+    expect(row?.data).toMatchObject({
+      avatar_url: 'https://cdn.example.test/second.png',
+      preferences: { audio: { enabled: false } },
+      default_mcp_server_ids: ['mcp-1'],
+    });
+  });
+
+  it('requires a recognized role before externally authoritative JIT creation', async () => {
+    mockExchange(
+      signClaims({ sub: 'missing-role', email: 'missing-role@example.test', role: undefined })
+    );
+
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'missing-role' })
+    ).rejects.toThrow(/role/);
+    expect(await select(db).from(users).all()).toHaveLength(0);
+
+    mockExchange(
+      signClaims({ sub: 'unknown-role', email: 'unknown-role@example.test', role: 'root' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'unknown-role' })
+    ).rejects.toThrow(/role/);
+    expect(await select(db).from(users).all()).toHaveLength(0);
   });
 
   it('uses token invalidation metadata for launch tokens without returning it', async () => {

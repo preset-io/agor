@@ -1,3 +1,4 @@
+import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
 import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
@@ -33,6 +34,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
@@ -60,6 +62,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
+  const { config: authConfig, identityContractState } = useAuthConfig();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -67,6 +70,14 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const externallyManaged =
+    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
+  const canCreateUsers =
+    isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
+  const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
+  const canManageAvatarSettings =
+    isAdmin &&
+    isIdentityCapabilityAvailable(authConfig, identityContractState, 'avatarSettingsWrite');
   const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
     canAssignUserRole(currentUser?.role, option.value)
   );
@@ -79,6 +90,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     !!currentUser &&
     currentUser.user_id !== target.user_id &&
     isAdmin &&
+    canDeleteUsers &&
     hasRoleAuthorityOver(currentUser.role, target.role);
 
   const loadGroups = useCallback(async () => {
@@ -283,7 +295,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           alignItems: 'center',
         }}
       >
-        <Typography.Text type="secondary">Manage user accounts and permissions.</Typography.Text>
+        <Typography.Text type="secondary">
+          {externallyManaged
+            ? 'User accounts and roles are managed by your identity provider.'
+            : 'Manage user accounts and permissions.'}
+        </Typography.Text>
         <Space>
           <Input
             allowClear
@@ -292,7 +308,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 320 }}
           />
-          {isAdmin && (
+          {canCreateUsers && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
               New User
             </Button>
@@ -309,80 +325,82 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       />
 
       {/* Create User Modal */}
-      <Modal
-        title="Create User"
-        open={createModalOpen}
-        onOk={handleCreate}
-        onCancel={() => {
-          form.resetFields();
-          setCreateModalOpen(false);
-        }}
-        okText="Create"
-        width={800}
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
-            <Input placeholder="John Doe" />
-          </Form.Item>
+      {canCreateUsers && (
+        <Modal
+          title="Create User"
+          open={createModalOpen}
+          onOk={handleCreate}
+          onCancel={() => {
+            form.resetFields();
+            setCreateModalOpen(false);
+          }}
+          okText="Create"
+          width={800}
+        >
+          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+            <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
+              <Input placeholder="John Doe" />
+            </Form.Item>
 
-          <Form.Item
-            label="Email"
-            name="email"
-            rules={[
-              { required: true, message: 'Please enter an email' },
-              { type: 'email', message: 'Please enter a valid email' },
-            ]}
-          >
-            <Input placeholder="user@example.com" />
-          </Form.Item>
+            <Form.Item
+              label="Email"
+              name="email"
+              rules={[
+                { required: true, message: 'Please enter an email' },
+                { type: 'email', message: 'Please enter a valid email' },
+              ]}
+            >
+              <Input placeholder="user@example.com" />
+            </Form.Item>
 
-          <Form.Item
-            label="Execution Home Key"
-            name="unix_username"
-            help="Optional transitional home key for delegated execution"
-            rules={[
-              {
-                pattern: EXECUTION_HOME_KEY_PATTERN,
-                message:
-                  'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
-              },
-              { max: 32, message: 'Execution home key must be 32 characters or less' },
-            ]}
-          >
-            <Input placeholder="johnsmith" maxLength={32} />
-          </Form.Item>
+            <Form.Item
+              label="Execution Home Key"
+              name="unix_username"
+              help="Optional transitional home key for delegated execution"
+              rules={[
+                {
+                  pattern: EXECUTION_HOME_KEY_PATTERN,
+                  message:
+                    'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
+                },
+                { max: 32, message: 'Execution home key must be 32 characters or less' },
+              ]}
+            >
+              <Input placeholder="johnsmith" maxLength={32} />
+            </Form.Item>
 
-          <Form.Item
-            label="Password"
-            name="password"
-            rules={[
-              { required: true, message: 'Please enter a password' },
-              { min: 8, message: 'Password must be at least 8 characters' },
-            ]}
-          >
-            <Input.Password placeholder="••••••••" />
-          </Form.Item>
+            <Form.Item
+              label="Password"
+              name="password"
+              rules={[
+                { required: true, message: 'Please enter a password' },
+                { min: 8, message: 'Password must be at least 8 characters' },
+              ]}
+            >
+              <Input.Password placeholder="••••••••" />
+            </Form.Item>
 
-          <Form.Item
-            label="Role"
-            name="role"
-            initialValue={ROLES.MEMBER}
-            rules={[{ required: true, message: 'Please select a role' }]}
-          >
-            <Select
-              options={assignableRoleOptions.map((opt) => ({
-                value: opt.value,
-                label: opt.label,
-                title: opt.description,
-              }))}
-            />
-          </Form.Item>
+            <Form.Item
+              label="Role"
+              name="role"
+              initialValue={ROLES.MEMBER}
+              rules={[{ required: true, message: 'Please select a role' }]}
+            >
+              <Select
+                options={assignableRoleOptions.map((opt) => ({
+                  value: opt.value,
+                  label: opt.label,
+                  title: opt.description,
+                }))}
+              />
+            </Form.Item>
 
-          <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
-            <Checkbox>Force password change on first login</Checkbox>
-          </Form.Item>
-        </Form>
-      </Modal>
+            <Form.Item name="must_change_password" valuePropName="checked" initialValue={false}>
+              <Checkbox>Force password change on first login</Checkbox>
+            </Form.Item>
+          </Form>
+        </Modal>
+      )}
 
       {/* Edit User Modal - reuses UserSettingsModal */}
       <UserSettingsModal
@@ -404,7 +422,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       defaultActiveKey="users"
       items={[
         { key: 'users', label: 'Users', children: usersTable },
-        ...(isAdmin
+        ...(canManageAvatarSettings
           ? [
               {
                 key: 'avatars',

@@ -22,6 +22,7 @@ interface LoginPageProps {
   error?: string | null;
   externalLaunchLoginRedirectUrl?: string;
   externalLaunchReturnHostParam?: string;
+  localLoginEnabled?: boolean;
 }
 
 export function LoginPage({
@@ -30,6 +31,7 @@ export function LoginPage({
   error,
   externalLaunchLoginRedirectUrl,
   externalLaunchReturnHostParam,
+  localLoginEnabled = true,
 }: LoginPageProps) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
@@ -39,7 +41,7 @@ export function LoginPage({
   const externalLaunchHref = externalLaunchLoginRedirectUrl
     ? buildLaunchInitUrl(externalLaunchLoginRedirectUrl, externalLaunchReturnHostParam)
     : undefined;
-  const showLoginForm = !useExternalLaunch || showLocalLogin;
+  const showLoginForm = localLoginEnabled && (!useExternalLaunch || showLocalLogin);
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
   const handleSubmit = async (values: { email: string; password: string }) => {
@@ -126,12 +128,21 @@ export function LoginPage({
             >
               Return to workspace
             </Button>
-            {!showLocalLogin && (
+            {localLoginEnabled && !showLocalLogin && (
               <Button type="link" block onClick={() => setShowLocalLogin(true)}>
                 Use local login instead
               </Button>
             )}
           </Space>
+        )}
+
+        {!localLoginEnabled && !useExternalLaunch && (
+          <Alert
+            type="info"
+            title="Sign-in is managed by your workspace"
+            description="Open Agor from your workspace to start a new session."
+            showIcon
+          />
         )}
 
         {/* Login Form */}

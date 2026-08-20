@@ -57,6 +57,41 @@ external_launch:
   return_host_param: return_host
 ```
 
+### External user and role authority
+
+External launch authentication does not disable Agor user administration by
+itself. A deployment whose launch provider is also authoritative for user
+lifecycle, profile fields, and roles must opt into the identity contract:
+
+```yaml
+identity:
+  user_lifecycle: external
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+With this profile, verified launches may still create a missing local user and
+synchronize JWT-owned email, name, avatar, execution-home key, and role. Those
+fields update when the next external launch succeeds; the daemon does not call
+the provider on every request. User and administrator calls through REST,
+Socket.IO, CLI, and MCP cannot create or delete users or edit those fields.
+Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
+environment variables, personal API keys, and MCP selections/OAuth grants stay
+editable.
+
+The role claim is required and exact in this mode. Administrative claims still
+require `external_launch.allow_admin_roles`; a `superadmin` claim also requires
+`execution.allow_superadmin`. A disabled role fails authentication rather than
+being silently downgraded.
+
+Omitting `identity` preserves normal local user, role, and password authority.
+The current contract does not synchronize external deactivation or revoke
+already-issued Agor credentials: the external provider can prevent a new
+launch, while cleanup and revocation remain a separate lifecycle concern.
+
 For local development only, a symmetric assertion secret can be used:
 
 ```yaml
@@ -80,7 +115,7 @@ fresh launch link from the external workspace. The button appends a `return_to`
 query parameter containing the current Agor path, allowing the launcher to
 preserve deep links such as `/ui/s/<session>/` when it issues a fresh
 `launch_code`. Local username/password login is still available as a secondary
-fallback.
+fallback unless external identity authority disables it.
 
 If `login_redirect_url` is omitted, the normal local login screen is unchanged.
 

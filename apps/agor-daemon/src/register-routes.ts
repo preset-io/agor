@@ -12,6 +12,7 @@ import {
   type ResolvedDeploymentConfig,
   requireDeploymentId,
   resolveBranchStorageConfig,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
@@ -4471,6 +4472,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
       const publicLaunchAuth = resolvePublicLaunchAuthSettings(config);
+      const identityAuthority = resolveIdentityAuthority(config);
       // `/health` stays 200 always (pre-login UI fetches must not throw), so the
       // DB signal rides on `status`: ok | degraded. /readyz is the one that 503s.
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
@@ -4498,6 +4500,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         auth: {
           requireAuth: true,
           externalLaunch: publicLaunchAuth,
+          identity: identityAuthority,
         },
         instance: {
           label: config.daemon?.instanceLabel,

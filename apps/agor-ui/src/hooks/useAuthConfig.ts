@@ -11,8 +11,27 @@ import { useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import type { BranchStorageConfig } from '../utils/branchStorage';
 
-interface AuthConfig {
+export interface IdentityAuthorityConfig {
+  contractVersion: 1;
+  userLifecycle: 'internal' | 'external';
+  roleAuthority: 'internal' | 'claims';
+  localAuth: 'enabled' | 'disabled';
+  capabilities: {
+    users: {
+      create: boolean;
+      delete: boolean;
+      identityWrite: boolean;
+      roleWrite: boolean;
+      passwordWrite: boolean;
+      avatarSettingsWrite: boolean;
+      selfConfigurationWrite: boolean;
+    };
+  };
+}
+
+export interface AuthConfig {
   requireAuth: boolean;
+  identity?: IdentityAuthorityConfig;
   externalLaunch?: {
     enabled?: boolean;
     loginRedirectUrl?: string;

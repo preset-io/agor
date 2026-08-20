@@ -894,6 +894,7 @@ function AppContent() {
             ? authConfig.externalLaunch.returnHostParam
             : undefined
         }
+        localLoginEnabled={authConfig?.identity?.localAuth !== 'disabled'}
       />
     );
   }

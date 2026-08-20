@@ -7,11 +7,22 @@
  * shaped bytes cannot persist in the database.
  */
 
+import type { AgorConfig } from '@agor/core/config';
 import { AgenticToolPresetRepository } from '@agor/core/db';
-import type { UserID } from '@agor/core/types';
+import type { Params, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { UsersService } from './users';
+import { markLocalAuthenticationLookup, UsersService } from './users';
+
+const externalIdentityConfig: AgorConfig = {
+  identity: {
+    user_lifecycle: 'external',
+    role_authority: 'claims',
+    local_auth: 'disabled',
+    external: { provider: 'external_launch', provisioning: 'jit' },
+  },
+  external_launch: { enabled: true },
+};
 
 async function makeUser(service: UsersService): Promise<UserID> {
   const user = await service.create({
@@ -113,6 +124,108 @@ describe('UsersService — delegated execution home key validation', () => {
       unix_username: '_alice-1',
     });
     expect(user.unix_username).toBe('_alice-1');
+  });
+});
+
+describe('UsersService — external identity authority', () => {
+  dbTest('rejects ordinary create and delete with a stable capability error', async ({ db }) => {
+    const local = new UsersService(db);
+    const userId = await makeUser(local);
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+
+    await expect(
+      external.create({ email: 'created-locally@test.local', password: 'test-password-1234' })
+    ).rejects.toMatchObject({
+      code: 403,
+      data: {
+        code: 'IDENTITY_EXTERNALLY_MANAGED',
+        capability: 'users.create',
+        authority: 'external',
+      },
+    });
+    await expect(external.remove(userId)).rejects.toMatchObject({
+      code: 403,
+      data: {
+        code: 'IDENTITY_EXTERNALLY_MANAGED',
+        capability: 'users.delete',
+        authority: 'external',
+      },
+    });
+  });
+
+  dbTest('rejects claim-owned fields atomically while preserving preferences', async ({ db }) => {
+    const local = new UsersService(db);
+    const userId = await makeUser(local);
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+
+    await expect(
+      external.patch(userId, {
+        email: 'drift@test.local',
+        preferences: { audio: { enabled: false } },
+      })
+    ).rejects.toMatchObject({
+      code: 403,
+      data: {
+        code: 'IDENTITY_EXTERNALLY_MANAGED',
+        capability: 'users.identity.write',
+      },
+    });
+
+    const unchanged = await external.get(userId);
+    expect(unchanged.email).not.toBe('drift@test.local');
+    expect(unchanged.preferences).toEqual({});
+  });
+
+  dbTest('rejects claim-owned role and password writes', async ({ db }) => {
+    const local = new UsersService(db);
+    const userId = await makeUser(local);
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+
+    await expect(external.patch(userId, { role: 'admin' })).rejects.toMatchObject({
+      data: { capability: 'users.role.write', authority: 'claims' },
+    });
+    await expect(
+      external.patch(userId, { password: 'replacement-password' })
+    ).rejects.toMatchObject({
+      data: { capability: 'users.password.write', authority: 'external' },
+    });
+  });
+
+  dbTest('keeps Agor-owned settings editable', async ({ db }) => {
+    const local = new UsersService(db);
+    const userId = await makeUser(local);
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+
+    const updated = await external.patch(userId, {
+      emoji: '🛠️',
+      onboarding_completed: true,
+      preferences: { audio: { enabled: false } },
+      default_mcp_server_ids: [],
+    });
+
+    expect(updated.emoji).toBe('🛠️');
+    expect(updated.onboarding_completed).toBe(true);
+    expect(updated.preferences).toEqual({ audio: { enabled: false } });
+    expect(updated.default_mcp_server_ids).toEqual([]);
+  });
+
+  dbTest('disables local password lookup and avatar mutation surfaces', async ({ db }) => {
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+    const params = { provider: 'rest', query: { email: 'person@test.local' } } as Params;
+    markLocalAuthenticationLookup(params);
+
+    await expect(external.find(params)).rejects.toMatchObject({
+      code: 401,
+      data: { code: 'LOCAL_AUTH_DISABLED' },
+    });
+    await expect(external.updateAvatarSettings({})).rejects.toMatchObject({
+      code: 403,
+      data: { capability: 'users.avatar-settings.write' },
+    });
+    await expect(external.syncAvatars()).rejects.toMatchObject({
+      code: 403,
+      data: { capability: 'users.avatar-settings.write' },
+    });
   });
 });
 

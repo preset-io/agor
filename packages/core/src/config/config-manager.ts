@@ -491,6 +491,7 @@ function validateConfig(config: AgorConfig): void {
     'ui',
     'database',
     'external_launch',
+    'identity',
     'execution',
     'security',
     'branches',
@@ -668,6 +669,38 @@ function validateConfig(config: AgorConfig): void {
     'trusted_host_header',
     'return_host_param',
   ]);
+  only(config.identity, 'identity', ['user_lifecycle', 'role_authority', 'local_auth', 'external']);
+  only(config.identity?.external, 'identity.external', ['provider', 'provisioning']);
+  if (
+    config.identity?.user_lifecycle !== undefined &&
+    !['internal', 'external'].includes(config.identity.user_lifecycle)
+  ) {
+    throw new Error('Config error: identity.user_lifecycle must be internal or external');
+  }
+  if (
+    config.identity?.role_authority !== undefined &&
+    !['internal', 'claims'].includes(config.identity.role_authority)
+  ) {
+    throw new Error('Config error: identity.role_authority must be internal or claims');
+  }
+  if (
+    config.identity?.local_auth !== undefined &&
+    !['enabled', 'disabled'].includes(config.identity.local_auth)
+  ) {
+    throw new Error('Config error: identity.local_auth must be enabled or disabled');
+  }
+  if (
+    config.identity?.external?.provider !== undefined &&
+    config.identity.external.provider !== 'external_launch'
+  ) {
+    throw new Error('Config error: identity.external.provider must be external_launch');
+  }
+  if (
+    config.identity?.external?.provisioning !== undefined &&
+    config.identity.external.provisioning !== 'jit'
+  ) {
+    throw new Error('Config error: identity.external.provisioning must be jit');
+  }
   if (config.uploads !== undefined) {
     if (
       typeof config.uploads.location !== 'undefined' &&

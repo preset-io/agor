@@ -10,11 +10,19 @@ import {
   normalizeAgenticToolModelConfiguration,
 } from '@agor/agentic-tools/config';
 import {
+  type AgorConfig,
+  type AgorIdentityCapability,
+  AgorLocalAuthMode,
+  AgorRoleAuthority,
+  AgorUserLifecycleAuthority,
   assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
   getEnvVarBlockReason,
+  AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  type ResolvedIdentityAuthority,
+  resolveIdentityAuthority,
   resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
@@ -29,6 +37,7 @@ import {
   generateId,
   hash,
   insert,
+  isExecutionHomeKeyAvailable,
   select,
   sql,
   type TenantScopeAwareDatabase,
@@ -353,13 +362,84 @@ function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
  */
 export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
+  private readonly identityAuthority: ResolvedIdentityAuthority;
 
   constructor(
     protected db: TenantScopeAwareDatabase,
-    app?: Application
+    app?: Application,
+    config?: AgorConfig
   ) {
+    const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
+    this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
       this.avatarSync = new UserAvatarSyncManager(db, app);
+    }
+  }
+
+  private externallyManaged(
+    capability: AgorIdentityCapability,
+    authority: typeof AgorUserLifecycleAuthority.EXTERNAL | typeof AgorRoleAuthority.CLAIMS
+  ): never {
+    throw new Forbidden('This user field is managed by the configured identity provider', {
+      code: 'IDENTITY_EXTERNALLY_MANAGED',
+      capability,
+      authority,
+    });
+  }
+
+  private assertCreateAllowed(): void {
+    if (!this.identityAuthority.capabilities.users.create) {
+      this.externallyManaged(IdentityCapability.USER_CREATE, AgorUserLifecycleAuthority.EXTERNAL);
+    }
+  }
+
+  private assertDeleteAllowed(): void {
+    if (!this.identityAuthority.capabilities.users.delete) {
+      this.externallyManaged(IdentityCapability.USER_DELETE, AgorUserLifecycleAuthority.EXTERNAL);
+    }
+  }
+
+  private assertPatchAllowed(data: UpdateUserData): void {
+    if (data.role !== undefined && !this.identityAuthority.capabilities.users.roleWrite) {
+      this.externallyManaged(IdentityCapability.USER_ROLE_WRITE, AgorRoleAuthority.CLAIMS);
+    }
+
+    const identityFields: Array<keyof UpdateUserData> = [
+      'email',
+      'name',
+      'unix_username',
+      'avatar_url',
+      'avatar',
+      'avatar_source',
+      'avatar_source_id',
+      'avatar_synced_at',
+    ];
+    if (
+      identityFields.some((field) => data[field] !== undefined) &&
+      !this.identityAuthority.capabilities.users.identityWrite
+    ) {
+      this.externallyManaged(
+        IdentityCapability.USER_IDENTITY_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
+
+    if (
+      (data.password !== undefined || data.must_change_password !== undefined) &&
+      !this.identityAuthority.capabilities.users.passwordWrite
+    ) {
+      this.externallyManaged(
+        IdentityCapability.USER_PASSWORD_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
+  }
+
+  private assertLocalAuthenticationAllowed(): void {
+    if (this.identityAuthority.localAuth === AgorLocalAuthMode.DISABLED) {
+      throw new NotAuthenticated('Local authentication is disabled', {
+        code: 'LOCAL_AUTH_DISABLED',
+      });
     }
   }
 
@@ -542,6 +622,7 @@ export class UsersService {
    *   `offset` for MCP/client ergonomics
    */
   async find(params?: Params): Promise<Paginated<User>> {
+    if (isLocalAuthenticationLookup(params)) this.assertLocalAuthenticationAllowed();
     const rawQuery = (params?.query ?? {}) as Record<string, unknown>;
 
     // Check if filtering by email (for authentication)
@@ -631,11 +712,14 @@ export class UsersService {
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
     assertSingleUserMutation(data);
+    this.assertCreateAllowed();
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (data.unix_username && !(await isExecutionHomeKeyAvailable(this.db, data.unix_username))) {
+      throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
+    }
     if (Object.hasOwn(data, 'role')) data.role = canonicalizeRoleWrite(data.role);
     await lockUserAuthorityMutation(this.db, params);
     await this.authorizeCreate(data, params);
-
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -693,7 +777,14 @@ export class UsersService {
       throw new BadRequest('Bulk user mutations are not supported');
     }
     assertSingleUserMutation(data);
+    this.assertPatchAllowed(data);
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (
+      data.unix_username &&
+      !(await isExecutionHomeKeyAvailable(this.db, data.unix_username, id))
+    ) {
+      throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
+    }
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizePatch(id, data, params);
     if (
@@ -704,7 +795,6 @@ export class UsersService {
     ) {
       await this.assertNotLastSuperadmin(authority.target, params);
     }
-
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 
@@ -990,6 +1080,7 @@ export class UsersService {
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
+    this.assertDeleteAllowed();
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizeRemove(id, params);
     await this.assertNotLastSuperadmin(authority.target, params);
@@ -1165,6 +1256,12 @@ export class UsersService {
     data: Partial<UserAvatarSettings>,
     params?: Params
   ): Promise<UserAvatarSettings> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
+      this.externallyManaged(
+        IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
     return this.requireAvatarSync().updateSettings(data, params);
   }
 
@@ -1172,10 +1269,17 @@ export class UsersService {
     data: UserAvatarSyncRequest = {},
     params?: Params
   ): Promise<UserAvatarSyncResult> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
+      this.externallyManaged(
+        IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
     return this.requireAvatarSync().syncAvatars(data, params);
   }
 
   async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) return null;
     return this.requireAvatarSync().refreshUserFromSettings(userId);
   }
 

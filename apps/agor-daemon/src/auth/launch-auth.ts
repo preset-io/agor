@@ -2,6 +2,7 @@ import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import {
   type AgorConfig,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -267,8 +268,29 @@ function mapRole(
   claimedRole: string | undefined,
   settings: ResolvedLaunchSettings,
   allowSuperadmin: boolean | undefined,
-  existingRole?: UserRole
+  existingRole?: UserRole,
+  roleAuthority: 'internal' | 'claims' = 'internal'
 ): UserRole {
+  if (roleAuthority === 'claims') {
+    if (
+      typeof claimedRole !== 'string' ||
+      !['viewer', 'member', 'admin', 'superadmin', 'owner'].includes(claimedRole)
+    ) {
+      throw new NotAuthenticated('Invalid one-time launch assertion role');
+    }
+    const authoritativeRole = normalizeRole(claimedRole);
+    if (
+      (authoritativeRole === ROLES.ADMIN || authoritativeRole === ROLES.SUPERADMIN) &&
+      !settings.allowAdminRoles
+    ) {
+      throw new NotAuthenticated('One-time launch assertion role is not enabled');
+    }
+    if (authoritativeRole === ROLES.SUPERADMIN && !allowSuperadmin) {
+      throw new NotAuthenticated('One-time launch assertion superadmin role is not enabled');
+    }
+    return authoritativeRole;
+  }
+
   const role = normalizeRole(claimedRole);
   const allowedRoles: UserRole[] = settings.allowAdminRoles
     ? [ROLES.VIEWER, ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN]
@@ -327,6 +349,7 @@ async function upsertLaunchUser(
   const issuer = claims.iss;
   const subject = claims.sub;
   const settings = resolveLaunchSettings(config);
+  const identityAuthority = resolveIdentityAuthority(config);
   const userLookupParams = {
     provider: undefined,
     ...(tenant ? { tenant } : {}),
@@ -336,6 +359,9 @@ async function upsertLaunchUser(
   const now = new Date();
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
+  if (identityAuthority.userLifecycle === 'external' && claims.email !== undefined && !email) {
+    throw new NotAuthenticated('Invalid one-time launch assertion email');
+  }
   const name = claims.name?.trim() || undefined;
   const unixUsername = claims.unix_username?.trim() || null;
   const avatar = claims.avatar || claims.picture;
@@ -357,7 +383,8 @@ async function upsertLaunchUser(
       claims.role,
       settings,
       config.execution?.allow_superadmin,
-      normalizeRole(existing.role ?? undefined)
+      normalizeRole(existing.role ?? undefined),
+      identityAuthority.roleAuthority
     );
     const data = (existing.data ?? {}) as UserDataWithExternalIdentities;
     const identities = getExternalIdentities(data);
@@ -370,9 +397,16 @@ async function upsertLaunchUser(
 
     await update(db, users)
       .set({
+        email:
+          identityAuthority.userLifecycle === 'external' && email !== undefined
+            ? email
+            : existing.email,
         name: name ?? existing.name,
         role,
-        unix_username: unixUsername ?? existing.unix_username,
+        unix_username:
+          identityAuthority.userLifecycle === 'external' && claims.unix_username !== undefined
+            ? unixUsername
+            : (unixUsername ?? existing.unix_username),
         updated_at: now,
         data: {
           ...data,
@@ -388,7 +422,13 @@ async function upsertLaunchUser(
     return usersService.get(existing.user_id as UserID, userLookupParams);
   }
 
-  const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);
+  const role = mapRole(
+    claims.role,
+    settings,
+    config.execution?.allow_superadmin,
+    undefined,
+    identityAuthority.roleAuthority
+  );
   const localEmail = await chooseLocalEmail(db, email, key, provider, issuer, subject);
   const userId = generateId() as UserID;
   const password = await hash(randomBytes(32).toString('hex'), 10);
@@ -628,6 +668,16 @@ const KNOWN_LAUNCH_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
   ['Invalid one-time launch assertion instance', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion id', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion nonce', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion role', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion email', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  [
+    'One-time launch assertion role is not enabled',
+    LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID,
+  ],
+  [
+    'One-time launch assertion superadmin role is not enabled',
+    LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID,
+  ],
   ['Ambiguous launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],
   ['Missing launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],
   ['Invalid launch request host', LAUNCH_FAILURE_REASONS.REQUEST_HOST_INVALID],

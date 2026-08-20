@@ -19,6 +19,23 @@ describe('useAuthConfig', () => {
           database: 'sqlite',
           auth: {
             requireAuth: true,
+            identity: {
+              contractVersion: 1,
+              userLifecycle: 'external',
+              roleAuthority: 'claims',
+              localAuth: 'disabled',
+              capabilities: {
+                users: {
+                  create: false,
+                  delete: false,
+                  identityWrite: false,
+                  roleWrite: false,
+                  passwordWrite: false,
+                  avatarSettingsWrite: false,
+                  selfConfigurationWrite: true,
+                },
+              },
+            },
             externalLaunch: {
               enabled: true,
               loginRedirectUrl: 'https://workspace.example.com/open',
@@ -35,6 +52,13 @@ describe('useAuthConfig', () => {
     expect(result.current.config?.externalLaunch).toEqual({
       enabled: true,
       loginRedirectUrl: 'https://workspace.example.com/open',
+    });
+    expect(result.current.config?.identity).toMatchObject({
+      contractVersion: 1,
+      userLifecycle: 'external',
+      roleAuthority: 'claims',
+      localAuth: 'disabled',
+      capabilities: { users: { create: false, selfConfigurationWrite: true } },
     });
   });
 });

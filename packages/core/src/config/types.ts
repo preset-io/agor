@@ -256,6 +256,38 @@ export interface AgorExternalLaunchSettings {
   return_host_param?: string;
 }
 
+/** Which system may create and remove user projections in this daemon. */
+export type AgorUserLifecycleAuthority = 'internal' | 'external';
+
+/** Which system owns the effective Agor role. */
+export type AgorRoleAuthority = 'internal' | 'claims';
+
+/** Whether password-based authentication is available on this daemon. */
+export type AgorLocalAuthMode = 'enabled' | 'disabled';
+
+/** External identity provisioning settings. */
+export interface AgorExternalIdentitySettings {
+  /** Verified authentication handoff that provisions users. */
+  provider?: 'external_launch';
+  /** Create/update a local projection when a verified external login succeeds. */
+  provisioning?: 'jit';
+}
+
+/**
+ * Deployment-owned authority contract for user identity.
+ *
+ * The section is optional. Omitting it preserves Agor's normal local user,
+ * role, and password authority. The only external profile supported in v1 is
+ * deliberately coherent: external lifecycle, claim-owned roles, disabled
+ * local login, and verified launch-time JIT provisioning.
+ */
+export interface AgorIdentitySettings {
+  user_lifecycle?: AgorUserLifecycleAuthority;
+  role_authority?: AgorRoleAuthority;
+  local_auth?: AgorLocalAuthMode;
+  external?: AgorExternalIdentitySettings;
+}
+
 /**
  * Database configuration settings
  */
@@ -1272,6 +1304,9 @@ export interface AgorConfig {
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
 
+  /** User identity, lifecycle, role, and local-login authority. */
+  identity?: AgorIdentitySettings;
+
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
@@ -1310,6 +1345,7 @@ export type ConfigKey =
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
   | `external_launch.${keyof AgorExternalLaunchSettings}`
+  | `identity.${keyof AgorIdentitySettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
   | `teammates.${keyof AgorTeammateSettings}`
