@@ -8,8 +8,10 @@ import {
   serviceTokenScopeForCurrentTenant,
 } from './spawn-executor';
 
+const LOCAL_RESPONSE_OPTIONS = { localResponseOriginUrl: 'http://localhost:3030' } as const;
+
 describe('executor service token scoping', () => {
-  beforeEach(() => configureExecutor(null));
+  beforeEach(() => configureExecutor(null, LOCAL_RESPONSE_OPTIONS));
 
   it('copies ambient tenant context into service token claims', () => {
     const token = runWithTenantContext('tenant-a', () =>
@@ -67,7 +69,7 @@ describe('executor service token scoping', () => {
   });
 
   it('fails closed without ambient tenant context when required', () => {
-    configureExecutor(null, { requireTenantContext: true });
+    configureExecutor(null, { ...LOCAL_RESPONSE_OPTIONS, requireTenantContext: true });
 
     expect(() => serviceTokenScopeForCurrentTenant()).toThrow(
       'Missing active tenant context for executor launch'

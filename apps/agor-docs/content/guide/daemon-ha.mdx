@@ -151,6 +151,10 @@ execution:
   executor_response:
     max_response_bytes: 8388608
     max_active_requests: 16
+    timeout_ms:
+      default: 300000
+      by_command:
+        branch.files.read: 60000
     external_protocol: executor-response-v1
     # In practice prefer the per-replica environment override described below.
     origin_url: http://agor-daemon-0.agor-daemon-headless:3030

@@ -222,6 +222,10 @@ execution:
   executor_response:
     max_response_bytes: 8388608
     max_active_requests: 16
+    timeout_ms:
+      default: 300000
+      by_command:
+        branch.files.read: 60000
     # Required for templated operations whose caller waits for a result.
     external_protocol: executor-response-v1
     # Must reach this exact daemon replica, never a load-balanced Service.
@@ -259,6 +263,11 @@ execution:
 ```
 
 ### Template Variables
+
+Executor command templates use literal `{variable}` substitution, not
+Handlebars evaluation. `{command}` is populated for both autonomous and
+request-mode launches, so a shell template may use it in a `case` statement
+when the external launcher needs command-specific behavior.
 
 | Variable          | Description                             | Example               |
 | ----------------- | --------------------------------------- | --------------------- |

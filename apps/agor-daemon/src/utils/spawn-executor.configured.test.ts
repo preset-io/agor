@@ -13,6 +13,7 @@ const { containMock, spawnMock, trackMock, untrackMock } = vi.hoisted(() => ({
 }));
 
 const OAUTH_DATA_HOME = '/private/synthetic-home';
+const LOCAL_RESPONSE_OPTIONS = { localResponseOriginUrl: 'http://localhost:3030' } as const;
 const OAUTH_REQUEST = {
   operation: 'connect-oauth',
   providerId: 'openai',
@@ -159,12 +160,15 @@ describe('configured executor spawning', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const { configureExecutor } = await import('./spawn-executor');
-    configureExecutor({
-      executor_response: {
-        origin_url: 'http://localhost:3030',
-        external_protocol: 'executor-response-v1',
+    configureExecutor(
+      {
+        executor_response: {
+          origin_url: 'http://localhost:3030',
+          external_protocol: 'executor-response-v1',
+        },
       },
-    });
+      LOCAL_RESPONSE_OPTIONS
+    );
   });
 
   it('uses execution.executor_command_template configured at startup', async () => {
@@ -172,9 +176,12 @@ describe('configured executor spawning', () => {
     spawnMock.mockReturnValue(proc);
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
 
-    configureExecutor({
-      executor_command_template: 'kubectl run executor-{task_id} --user {unix_user} -- {command}',
-    });
+    configureExecutor(
+      {
+        executor_command_template: 'kubectl run executor-{task_id} --user {unix_user} -- {command}',
+      },
+      LOCAL_RESPONSE_OPTIONS
+    );
 
     spawnExecutor({ command: 'prompt' }, { logPrefix: '[test]', delegatedHomeKey: 'agor-exec' });
 
@@ -199,9 +206,12 @@ describe('configured executor spawning', () => {
     spawnMock.mockReturnValue(proc);
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
 
-    configureExecutor({
-      executor_command_template: 'configured {unix_user} {command}',
-    });
+    configureExecutor(
+      {
+        executor_command_template: 'configured {unix_user} {command}',
+      },
+      LOCAL_RESPONSE_OPTIONS
+    );
 
     spawnExecutor(
       { command: 'git.clone' },
@@ -260,7 +270,7 @@ describe('configured executor spawning', () => {
     const onExit = vi.fn();
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
 
-    configureExecutor({ executor_command_template: 'echo {command}' });
+    configureExecutor({ executor_command_template: 'echo {command}' }, LOCAL_RESPONSE_OPTIONS);
     spawnExecutor({ command: 'git.clone' }, { onExit });
 
     proc.emit('exit', 17);
@@ -276,7 +286,7 @@ describe('configured executor spawning', () => {
     });
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
 
-    configureExecutor({ executor_command_template: 'echo {command}' });
+    configureExecutor({ executor_command_template: 'echo {command}' }, LOCAL_RESPONSE_OPTIONS);
     spawnExecutor({ command: 'git.clone' }, { onExit, logPrefix: '[test]' });
 
     proc.emit('exit', 17);
@@ -293,9 +303,12 @@ describe('configured executor spawning', () => {
     spawnMock.mockReturnValue(proc);
     const { configureExecutor, createConfiguredSpawner } = await import('./spawn-executor');
 
-    configureExecutor({
-      executor_command_template: 'global {command}',
-    });
+    configureExecutor(
+      {
+        executor_command_template: 'global {command}',
+      },
+      LOCAL_RESPONSE_OPTIONS
+    );
     const injectedSpawner = createConfiguredSpawner({
       executor_command_template: 'injected {unix_user} {command}',
     });
@@ -530,9 +543,12 @@ describe('configured executor spawning', () => {
 
   it('fails closed before launch when a templated request lacks a protocol declaration', async () => {
     const { configureExecutor, requestExecutor } = await import('./spawn-executor');
-    configureExecutor({
-      executor_response: { origin_url: 'http://daemon-0.internal:3030' },
-    });
+    configureExecutor(
+      {
+        executor_response: { origin_url: 'http://daemon-0.internal:3030' },
+      },
+      LOCAL_RESPONSE_OPTIONS
+    );
 
     await expect(
       requestExecutor(
@@ -603,9 +619,72 @@ describe('configured executor spawning', () => {
     }
   });
 
+  it('applies the configured default request timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+      configureExecutor(
+        { executor_response: { timeout_ms: { default: 1_000 } } },
+        LOCAL_RESPONSE_OPTIONS
+      );
+
+      const promise = requestExecutor({ command: 'branch.files.list' });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(proc.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(promise).resolves.toMatchObject({
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: 'Executor command timed out after 1000ms',
+        },
+      });
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a configured command timeout override a call-specific default', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+      configureExecutor(
+        {
+          executor_response: {
+            timeout_ms: {
+              default: 5_000,
+              by_command: { 'branch.files.read': 1_000 },
+            },
+          },
+        },
+        LOCAL_RESPONSE_OPTIONS
+      );
+
+      const promise = requestExecutor({ command: 'branch.files.read' }, { timeoutMs: 10_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(promise).resolves.toMatchObject({
+        success: false,
+        error: {
+          code: 'EXECUTOR_TIMEOUT',
+          message: 'Executor command timed out after 1000ms',
+        },
+      });
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refuses every unscoped executor launch when tenant context is required', async () => {
     const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
-    configureExecutor(null, { requireTenantContext: true });
+    configureExecutor(null, { ...LOCAL_RESPONSE_OPTIONS, requireTenantContext: true });
 
     expect(() => spawnExecutor({ command: 'prompt' })).toThrow(
       'Missing active tenant context for executor launch'
@@ -821,7 +900,7 @@ describe('configured executor spawning', () => {
     spawnMock.mockReturnValue(proc);
     const { configureExecutor } = await import('./spawn-executor');
     const { startOpenCodeOAuthExecutor } = await import('../integrations/opencode/oauth-executor');
-    configureExecutor({ executor_command_template: 'remote {command}' });
+    configureExecutor({ executor_command_template: 'remote {command}' }, LOCAL_RESPONSE_OPTIONS);
 
     const handle = startOpenCodeOAuthExecutor(OAUTH_DATA_HOME, OAUTH_REQUEST, {}, vi.fn());
 
@@ -1226,7 +1305,7 @@ describe('configured executor spawning', () => {
 
   it('rejects templated short commands that lack a remote cleanup contract', async () => {
     const { configureExecutor, startContainedExecutorCommand } = await import('./spawn-executor');
-    configureExecutor({ executor_command_template: 'remote {command}' });
+    configureExecutor({ executor_command_template: 'remote {command}' }, LOCAL_RESPONSE_OPTIONS);
 
     await expect(
       startContainedExecutorCommand({ command: 'test.inspect', params: {} }).result

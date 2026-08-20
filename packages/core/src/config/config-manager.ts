@@ -727,8 +727,13 @@ function validateConfig(config: AgorConfig): void {
   only(config.execution?.executor_response, 'execution.executor_response', [
     'max_response_bytes',
     'max_active_requests',
+    'timeout_ms',
     'origin_url',
     'external_protocol',
+  ]);
+  only(config.execution?.executor_response?.timeout_ms, 'execution.executor_response.timeout_ms', [
+    'default',
+    'by_command',
   ]);
   resolveExecutorResponseConfig(config.execution?.executor_response);
   only(config.execution?.sdk_watchdog, 'execution.sdk_watchdog', [

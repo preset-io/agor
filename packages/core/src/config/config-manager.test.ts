@@ -139,6 +139,10 @@ describe('resolveEffectiveConfig', () => {
       execution: {
         executor_response: {
           max_response_bytes: 2 * 1024 * 1024,
+          timeout_ms: {
+            default: 300_000,
+            by_command: { 'branch.files.read': 60_000 },
+          },
           origin_url: 'https://yaml-daemon.internal',
         },
       },
@@ -149,6 +153,10 @@ describe('resolveEffectiveConfig', () => {
 
     expect(resolved.execution?.executor_response).toEqual({
       max_response_bytes: 2 * 1024 * 1024,
+      timeout_ms: {
+        default: 300_000,
+        by_command: { 'branch.files.read': 60_000 },
+      },
       origin_url: 'http://daemon-2.agor.svc:3030',
     });
     expect(input.execution?.executor_response?.origin_url).toBe('https://yaml-daemon.internal');
@@ -777,11 +785,17 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(
       configPath,
-      yaml.dump({ daemon: { surprise: true }, execution: { branch_storage: { mystery: 1 } } }),
+      yaml.dump({
+        daemon: { surprise: true },
+        execution: {
+          branch_storage: { mystery: 1 },
+          executor_response: { timeout_ms: { unexpected: 1 } },
+        },
+      }),
       'utf-8'
     );
     await expect(loadConfig()).rejects.toThrow(
-      /daemon\.surprise.*execution\.branch_storage\.mystery/
+      /daemon\.surprise.*execution\.executor_response\.timeout_ms\.unexpected.*execution\.branch_storage\.mystery/
     );
   });
 

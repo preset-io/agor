@@ -81,8 +81,14 @@ execution:
   executor_response:
     # Total uncompressed NDJSON response-body bytes. Default: 8 MiB.
     max_response_bytes: 8388608
-    # In-flight waiters owned by one daemon. Default: 16.
+    # In-flight waiters owned by one daemon replica. Default: 16.
     max_active_requests: 16
+    # Request-mode timeouts in milliseconds. Default: 5 minutes.
+    timeout_ms:
+      default: 300000
+      # Optional overrides keyed by the exact executor payload command.
+      by_command:
+        branch.files.read: 60000
 
     # Both are required before executor_command_template may launch a
     # request-mode operation. The origin must route to this exact replica.
@@ -101,6 +107,13 @@ The response body is held only by the initiating process's bounded waiter. It
 is not relayed through Redis or recovered by another HA replica. A disconnect,
 timeout, daemon restart, or oversized result fails the request without an
 automatic retry; a user action may start a new invocation.
+
+`max_active_requests` is fail-fast admission control, not a queue. Each daemon
+replica counts its own in-memory waiters. Once the limit is reached, the daemon
+returns `EXECUTOR_RESPONSE_BUSY` before launching another executor. The user
+may retry after an existing request settles. For timeouts, a `by_command` value
+overrides that command's built-in call-specific default; otherwise the
+call-specific default wins over `timeout_ms.default`.
 
 ## Inspecting and materializing effective configuration
 

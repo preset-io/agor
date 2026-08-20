@@ -28,6 +28,7 @@ import {
   type AgorExecutionSettings,
   type ResolvedExecutorResponseConfig,
   resolveExecutorResponseConfig,
+  resolveExecutorResponseTimeoutMs,
 } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
 import {
@@ -88,13 +89,13 @@ let requireExecutorTenantContext = false;
 
 /** Set default executor template and sandbox policy from config. */
 export function configureExecutor(
-  config?: ExecutorConfig | null,
+  config: ExecutorConfig | null | undefined,
   options: {
+    /** Replica-local daemon listener origin used by locally spawned request executors. */
+    localResponseOriginUrl: string;
     requireTenantContext?: boolean;
     sandboxRuntimePaths?: SandboxRuntimePaths;
-    /** Replica-local fallback used only for locally spawned request executors. */
-    localResponseOriginUrl?: string;
-  } = {}
+  }
 ): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
@@ -105,10 +106,7 @@ export function configureExecutor(
   requireExecutorTenantContext = options.requireTenantContext === true;
   const response = configuredExecutorDefaults.executorResponse;
   configureExecutorResponseChannel({
-    originUrl:
-      response.originUrl ??
-      options.localResponseOriginUrl ??
-      `http://localhost:${process.env.PORT || '3030'}`,
+    originUrl: response.originUrl ?? options.localResponseOriginUrl,
     maxResponseBytes: response.maxResponseBytes,
     maxActiveRequests: response.maxActiveRequests,
   });
@@ -196,7 +194,7 @@ function observeExitCallback(
 
 export interface RunExecutorCommandOptions
   extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
-  /** Optional timeout for short-lived command execution. */
+  /** Built-in call-specific timeout; config `timeout_ms.by_command` may override it. */
   timeoutMs?: number;
   /** Suppress child stdout/stderr logs for credential-sensitive operations. */
   sensitiveOutput?: boolean;
@@ -810,9 +808,13 @@ export function startInteractiveExecutor(
     return failedInteractiveExecutorHandle(failures.localProcessRequired);
   }
 
-  const { timeoutMs = 10 * 60_000 } = options;
   const tenantId = resolveExecutorTenantId();
   const command = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    command,
+    options.timeoutMs
+  );
   const attemptId = crypto.randomUUID();
   const taskId = generateTaskId();
   const location = resolveLocalExecutorLocation(options);
@@ -980,8 +982,12 @@ export function startContainedExecutorCommand(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): ContainedExecutorCommandHandle {
-  const timeoutMs = options.timeoutMs ?? 60_000;
   const command = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    command,
+    options.timeoutMs
+  );
   const transport = startInteractiveExecutor(payload, {
     ...options,
     timeoutMs,
@@ -1052,9 +1058,14 @@ export async function requestExecutor(
   payload: Record<string, unknown>,
   options: RunExecutorCommandOptions = {}
 ): Promise<ExecutorCommandResult> {
-  const { templateVariables, logPrefix = '[Executor]', timeoutMs = 60_000 } = options;
+  const { templateVariables, logPrefix = '[Executor]' } = options;
   const tenantId = resolveExecutorTenantId();
   const commandName = String(payload.command ?? '?');
+  const timeoutMs = resolveExecutorResponseTimeoutMs(
+    configuredExecutorDefaults.executorResponse,
+    commandName,
+    options.timeoutMs
+  );
 
   const executorCommandTemplate =
     options.executorCommandTemplate !== undefined

@@ -44,4 +44,5 @@ export {
 export * from './storage-layout';
 export * from './tenant-agentic-tool-resolver';
 export * from './types';
+export * from './validation';
 export * from './variant-resolver';
