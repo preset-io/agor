@@ -391,11 +391,19 @@ function assertScopeUnchangedOrAllowed(
  * Refuse a write the tenant's policy does not permit.
  *
  * The marketplace gets its own sentence. Installing a curated entry is a much
- * narrower thing than configuring a server — the entry is chosen from a list,
- * remote, and unauthenticated — so somebody who clicked Connect and is told
- * their organization "does not allow members to configure MCP servers" is being
- * answered about a capability they did not ask for, and reasonably reads it as
- * the marketplace being broken.
+ * narrower thing than configuring an arbitrary server: the entry, endpoint,
+ * transport, and auth recipe come from the checked-in catalog and live probe.
+ * A pasted bearer token can go only to that pinned catalog endpoint and is
+ * stored on the caller-owned row; OAuth is fixed to `per_user`, and credential
+ * reuse can select only a live caller grant bound to the same resource and
+ * catalog policy. The internal `marketplace` compatibility policy is derived,
+ * never stored or accepted from this request, and survives only while the row
+ * still matches the current catalog prescription; explicit saved-row modes and
+ * configuration drift take the strict/general path instead. So somebody who
+ * clicked Connect and is told their
+ * organization "does not allow members to configure MCP servers" is being
+ * answered about a broader capability than they asked for, and reasonably
+ * reads it as the marketplace being broken.
  *
  * Neither sentence promises the grant is coming. `use_existing_only` refusing
  * the marketplace is the deliberate current state, not a gap waiting on a fix:

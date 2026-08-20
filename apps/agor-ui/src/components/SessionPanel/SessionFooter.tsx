@@ -249,8 +249,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     unauthedMcpServers.length > 0 && dismissedMcpSignature !== unauthedSignature;
   const mcpNoticeMessage =
     unauthedMcpServers.length === 1
-      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
-      : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`;
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open the MCP badge to connect it.`
+      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open the MCP badge to connect them.`;
 
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
   const composerUploadTooltip = 'Uploading files...';

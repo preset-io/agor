@@ -351,12 +351,20 @@ ${block}
   });
 
   it.each(['advertised', 'fallback'] as const)(
-    'accepts dcr_mode: %s with no client_id, because registration mints one',
+    'accepts dcr_mode: %s with no client_id, because registration can supply one',
     (dcrMode) => {
       const [entry] = parseCuratedCatalog(withOAuth(`      dcr_mode: ${dcrMode}`));
       expect(entry.oauth).toEqual({ dcr_mode: dcrMode });
     }
   );
+
+  it('accepts dcr_mode: disabled with the client_id it requires', () => {
+    const [entry] = parseCuratedCatalog(
+      withOAuth(`      client_id: public-client-123
+      dcr_mode: disabled`)
+    );
+    expect(entry.oauth).toEqual({ client_id: 'public-client-123', dcr_mode: 'disabled' });
+  });
 
   it('leaves the block absent when an entry states nothing', () => {
     const [entry] = parseCuratedCatalog(VALID_ENTRY);

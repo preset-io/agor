@@ -201,12 +201,12 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         rememberConnectBranchId(branchId);
         // A starter prompt is written to exercise the server it ships with, so
         // it is only worth arming the composer with once that server can answer
-        // it. Most of the catalog is OAuth, and an OAuth install lands with no
+        // it. A new OAuth install with no reusable grant lands without
         // credentials: staging the prompt there hands the user a loaded
         // composer whose only outcome is a tool-less answer, turning a
         // recoverable state into an invitation to hit the failure. The session
-        // says what is missing instead — see the unauthenticated-server alert
-        // above the composer and the red MCP badge beside it.
+        // says what is missing instead — see the unauthenticated-server notice
+        // above the composer and the warning MCP badge beside it.
         if (
           result.starter_prompt &&
           !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)

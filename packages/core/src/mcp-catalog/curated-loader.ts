@@ -71,8 +71,8 @@ const catalogEntryOAuthSchema = z
     message: 'must state at least one setting, or be omitted entirely',
   })
   // `disabled` is the one mode that has to bring its own client. The other two
-  // reach a registration endpoint and mint one, so an absent `client_id` there
-  // is the ordinary case; with registration off, nothing else can supply it and
+  // allow registration to supply one, so an absent `client_id` there is the
+  // ordinary case; with registration off, nothing else can supply it and
   // `startOAuthFlow` refuses the pair. That refusal lands per-user at sign-in,
   // long after the entry was reviewed, which is the wrong place to learn that a
   // combination could never have worked.

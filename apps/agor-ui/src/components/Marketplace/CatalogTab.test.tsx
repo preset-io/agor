@@ -411,15 +411,14 @@ describe('connect', () => {
   });
 
   /**
-   * 42 of the 48 catalog entries are OAuth, and an OAuth install lands with no
-   * credentials — the row is written before anyone signs in. A starter prompt
-   * is written to exercise the server it ships with, so arming the composer
-   * with one here means the modal outcome of pressing Connect is a loaded
-   * prompt whose only result is a tool-less answer.
+   * A new OAuth install with no reusable grant lands without credentials. A
+   * starter prompt is written to exercise the server it ships with, so arming
+   * the composer with one here means pressing Connect produces a loaded prompt
+   * whose only result is a tool-less answer.
    *
    * These pin the split. Landing in the session is unchanged: the session is
-   * where the sign-in lives (the alert above the composer, the red MCP badge,
-   * the pill that starts OAuth on click). Only the loaded gun is withheld.
+   * where the sign-in lives (the notice above the composer, the warning MCP badge,
+   * the pill that starts OAuth on activation). Only the loaded gun is withheld.
    */
   async function connectAndLand(mcpServer: Record<string, unknown>) {
     connectImpl = async () => ({

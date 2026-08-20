@@ -64,9 +64,9 @@ function formatRefreshError(error?: string): string {
 /**
  * Clickable MCP server pill.
  *
- *   - Unauthenticated: error/red + login icon, click starts OAuth.
+ *   - Unauthenticated: warning + login icon, activation starts OAuth.
  *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
- *                      click force-refreshes the token (even before it's due)
+ *                      activation force-refreshes the token (even before it's due)
  *                      so operators can probe per-provider refresh policy.
  *   - Admin only: a small pencil icon at the end opens the MCP edit modal
  *                 so operators can fix config without leaving the session view.
@@ -135,7 +135,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
           {verb} {phrase}
         </div>
         <div style={{ opacity: 0.75, fontSize: 12 }}>{formatAbsoluteTime(date)}</div>
-        <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
+        <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Activate to refresh now</div>
       </>
     );
   } else {
@@ -152,16 +152,29 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         <div style={{ opacity: 0.75, fontSize: 12 }}>
           Provider returned no expiry. Token is used until it stops working.
         </div>
-        <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Click to refresh now</div>
+        <div style={{ opacity: 0.75, fontSize: 12, marginTop: 4 }}>Activate to refresh now</div>
       </>
     );
   }
 
-  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Click to connect.`;
+  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Activate to sign in.`;
+
+  const label = server.display_name || server.name;
+  // The pill's own action, or nothing for a non-OAuth server. Named here
+  // because both the Tag's pointer target and the label button need to agree on
+  // whether there is one.
+  const primaryAction = needsAuth
+    ? () => void handleStartOAuthFlow()
+    : isOAuthServer
+      ? handleRefreshClick
+      : undefined;
 
   return (
     <>
       <Tooltip
+        // The label is a button for actionable pills, so the same explanation
+        // keyboard users receive on focus is available to pointer users on hover.
+        trigger={['hover', 'focus']}
         title={
           needsAuth
             ? startingOAuthFlow
@@ -173,29 +186,58 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
         <Tag
           color={needsAuth ? 'warning' : ENTITY_PILL_COLORS.mcp}
           icon={
-            needsAuth ? <LoginOutlined /> : refreshing ? <ReloadOutlined spin /> : <ApiOutlined />
+            needsAuth ? (
+              <LoginOutlined aria-hidden />
+            ) : refreshing ? (
+              <ReloadOutlined spin aria-hidden />
+            ) : (
+              <ApiOutlined aria-hidden />
+            )
           }
           style={{
             cursor:
               refreshing || startingOAuthFlow ? 'wait' : isOAuthServer ? 'pointer' : 'default',
           }}
-          onClick={
-            needsAuth
-              ? () => void handleStartOAuthFlow()
-              : isOAuthServer
-                ? handleRefreshClick
-                : undefined
-          }
+          onClick={primaryAction}
         >
-          {server.display_name || server.name}
+          {primaryAction ? (
+            // Tag is a span. Keep the whole visual pill as the pointer target,
+            // but give its primary action a native keyboard/focus target. Stop
+            // propagation so activating the button does not also fire Tag's
+            // pointer handler.
+            <button
+              type="button"
+              aria-label={
+                needsAuth ? `Sign in to ${label}` : `Refresh OAuth credentials for ${label}`
+              }
+              aria-busy={startingOAuthFlow || refreshing}
+              onClick={(event) => {
+                event.stopPropagation();
+                void primaryAction();
+              }}
+              style={{
+                margin: 0,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
+                font: 'inherit',
+                cursor: 'inherit',
+              }}
+            >
+              {label}
+            </button>
+          ) : (
+            label
+          )}
           {isAdmin && (
             // Real <button> for keyboard focus + screen-reader semantics.
             // Native `title` (not <Tooltip>) so we don't stack a second
             // AntD tooltip on top of the parent expiry/auth tooltip.
             <button
               type="button"
-              aria-label="Edit MCP server"
-              title="Edit MCP server"
+              aria-label={`Edit ${label} MCP server`}
+              title={`Edit ${label} MCP server`}
               onClick={(e) => {
                 e.stopPropagation();
                 setEditModalOpen(true);
@@ -218,13 +260,15 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({ server, needsAuth,
                 (e.currentTarget as HTMLElement).style.opacity = '0.55';
               }}
               onFocus={(e) => {
+                e.stopPropagation();
                 (e.currentTarget as HTMLElement).style.opacity = '1';
               }}
               onBlur={(e) => {
+                e.stopPropagation();
                 (e.currentTarget as HTMLElement).style.opacity = '0.55';
               }}
             >
-              <EditOutlined />
+              <EditOutlined aria-hidden />
             </button>
           )}
         </Tag>
