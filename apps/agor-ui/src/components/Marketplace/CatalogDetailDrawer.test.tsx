@@ -53,6 +53,7 @@ function renderDrawer(
   const { capability = ALLOWED, policyPending = false } = options;
   const view = render(
     <CatalogDetailDrawer
+      identityKey={capability.userId ?? null}
       entry={entry}
       open
       onClose={vi.fn()}
@@ -71,6 +72,7 @@ function renderDrawer(
   const show = (next: MCPCatalogEntry) =>
     view.rerender(
       <CatalogDetailDrawer
+        identityKey={capability.userId ?? null}
         entry={next}
         open
         onClose={vi.fn()}
@@ -242,8 +244,10 @@ function renderWithConnect(entry: MCPCatalogEntry) {
   const props = (
     shown: MCPCatalogEntry,
     open = true,
-    credentialRequirement: MCPCatalogCredentialRequirement | null = null
+    credentialRequirement: MCPCatalogCredentialRequirement | null = null,
+    identityKey = ALLOWED.userId ?? null
   ) => ({
+    identityKey,
     entry: shown,
     open,
     onClose: vi.fn(),
@@ -254,7 +258,7 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     connecting: false,
     connectError: null,
     credentialRequirement,
-    connectCapability: ALLOWED,
+    connectCapability: { ...ALLOWED, userId: identityKey ?? undefined },
     policyPending: false,
     policyPendingHint: POLICY_LOADING_HINT,
     onConnect,
@@ -270,12 +274,29 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     /** What `CatalogTab` does after a refusal that named a requirement. */
     answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+    replaceIdentity: (identityKey: string) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, null, identityKey)} />),
   };
 }
 
 const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
+  it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
+    const { onConnect, replaceIdentity } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'admin-a-private-key' } });
+    expect(connectButton()).toBeEnabled();
+
+    replaceIdentity('user-admin-b');
+
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
   it('offers a key field for an entry that needs one, and gates connect on it', () => {
     renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));

@@ -13,6 +13,13 @@ const ADMIN: User = {
   role: 'admin',
 } as User;
 
+const ADMIN_B: User = {
+  user_id: 'user-admin-b',
+  email: 'admin-b@agor.live',
+  name: 'Bea Admin',
+  role: 'admin',
+} as User;
+
 const MEMBER: User = {
   user_id: 'user-member',
   email: 'bob@agor.live',
@@ -29,6 +36,7 @@ const VIEWER: User = {
 
 const USER_BY_ID = new Map<string, User>([
   [ADMIN.user_id, ADMIN],
+  [ADMIN_B.user_id, ADMIN_B],
   [MEMBER.user_id, MEMBER],
 ]);
 
@@ -463,7 +471,7 @@ function renderTransitionTable(initial: {
     },
   } as unknown as AgorClient;
   const onCreate = vi.fn();
-  const servers = new Map((initial.servers ?? []).map((server) => [server.mcp_server_id, server]));
+  let servers = new Map((initial.servers ?? []).map((server) => [server.mcp_server_id, server]));
 
   const view = (currentUser: User, connected: boolean, connecting: boolean, generation: number) => (
     <AntdApp>
@@ -497,7 +505,23 @@ function renderTransitionTable(initial: {
     disconnect: () => rendered.rerender(view(initial.currentUser, false, true, 1)),
     replaceRole: (currentUser: User, generation = 2) => {
       role = currentUser.role;
+      rendered.rerender(
+        view(
+          { ...currentUser, user_id: initial.currentUser.user_id } as User,
+          true,
+          false,
+          generation
+        )
+      );
+    },
+    replaceIdentity: (currentUser: User, nextServers: MCPServer[] = [], generation = 2) => {
+      role = currentUser.role;
+      servers = new Map(nextServers.map((server) => [server.mcp_server_id, server]));
       rendered.rerender(view(currentUser, true, false, generation));
+    },
+    setServers: (nextServers: MCPServer[]) => {
+      servers = new Map(nextServers.map((server) => [server.mcp_server_id, server]));
+      rendered.rerender(view(initial.currentUser, true, false, 1));
     },
     setPolicy: async (next: MCPMemberPolicy) => {
       policy = next;
@@ -522,7 +546,142 @@ async function fillCreateRequirements(): Promise<void> {
   }
 }
 
+async function chooseSelect(label: string, option: string): Promise<void> {
+  const select = screen.getByLabelText(label);
+  fireEvent.mouseDown(select);
+  const optionContent = await screen.findByText(option, {
+    selector: '.ant-select-item-option-content',
+  });
+  fireEvent.click(optionContent);
+}
+
 describe('MCPServersTable open-dialog authority transitions', () => {
+  it('destroys an admin-A create form and raw credential before admin B can use it', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    fireEvent.change(screen.getByLabelText('Name (Internal ID)'), {
+      target: { value: 'admin-a-private-server' },
+    });
+    await chooseSelect('Transport', 'HTTP');
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://admin-a.example/mcp' },
+    });
+    await chooseSelect('Auth Type', 'Bearer Token');
+    fireEvent.change(await screen.findByLabelText('Token'), {
+      target: { value: 'admin-a-raw-bearer-token' },
+    });
+    const staleCreate = screen.getByRole('button', { name: 'Create' });
+    await waitFor(() => expect(staleCreate).toBeEnabled());
+
+    // Validation settles asynchronously. Replace the principal in the same
+    // turn so this proves the old continuation cannot submit A's secret as B.
+    fireEvent.click(staleCreate);
+    seam.replaceIdentity(ADMIN_B);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    );
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+
+    await openCreateForm();
+    expect(screen.getByLabelText('Name (Internal ID)')).toHaveValue('');
+    await chooseSelect('Transport', 'HTTP');
+    await chooseSelect('Auth Type', 'Bearer Token');
+    expect(await screen.findByLabelText('Token')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  }, 60_000);
+
+  it('closes an admin-A view and erases its unredacted environment on admin B', async () => {
+    const privateServer = makeServer({
+      name: 'admin-a-private-view',
+      display_name: 'Admin A Private View',
+      env: { PRIVATE_TOKEN: 'admin-a-env-secret' },
+    });
+    const replacementServer = makeServer({
+      mcp_server_id: 'server-b-view',
+      name: 'admin-b-view-server',
+      display_name: 'Admin B View Server',
+    });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    const [view] = Array.from(rowFor('Admin A Private View').querySelectorAll('button'));
+    fireEvent.click(view as HTMLButtonElement);
+    expect(await screen.findByText(/admin-a-env-secret/)).toBeInTheDocument();
+
+    seam.replaceIdentity(ADMIN_B, [replacementServer]);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'MCP Server Details' })).not.toBeInTheDocument()
+    );
+    expect(screen.queryByText(/admin-a-env-secret/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin A Private View')).not.toBeInTheDocument();
+    expect(screen.getByText('Admin B View Server')).toBeInTheDocument();
+  });
+
+  it('closes admin-A edit state when admin B receives a replacement map', async () => {
+    const privateServer = makeServer({
+      name: 'admin-a-private',
+      display_name: 'Admin A Private',
+      auth: { type: 'bearer', token: 'admin-a-bearer-secret' },
+    });
+    const replacementServer = makeServer({
+      mcp_server_id: 'server-b',
+      name: 'admin-b-server',
+      display_name: 'Admin B Server',
+    });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+
+    const edit = rowFor('Admin A Private').querySelector(
+      'button[title="Edit"]'
+    ) as HTMLButtonElement;
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit as HTMLButtonElement);
+    const token = await screen.findByLabelText('Token');
+    fireEvent.change(token, { target: { value: 'admin-a-edited-bearer-secret' } });
+    const staleSave = screen.getByRole('button', { name: 'Save' });
+
+    seam.replaceIdentity(ADMIN_B, [replacementServer]);
+
+    await waitFor(() => expect(screen.queryByText('Edit MCP Server')).not.toBeInTheDocument());
+    fireEvent.click(staleSave);
+    expect(seam.serverPatch).not.toHaveBeenCalled();
+    expect(screen.queryByText('Admin A Private')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('admin-a-edited-bearer-secret')).not.toBeInTheDocument();
+    expect(screen.getByText('Admin B Server')).toBeInTheDocument();
+  });
+
+  it('closes an editor when realtime replacement removes its selected server', async () => {
+    const privateServer = makeServer({ name: 'realtime-private' });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    const edit = rowFor('realtime-private').querySelector(
+      'button[title="Edit"]'
+    ) as HTMLButtonElement;
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit as HTMLButtonElement);
+    await screen.findByLabelText('URL');
+
+    seam.setServers([]);
+
+    await waitFor(() => expect(screen.queryByText('Edit MCP Server')).not.toBeInTheDocument());
+    expect(screen.queryByText('realtime-private')).not.toBeInTheDocument();
+  });
+
   it('blocks an already-open create dialog immediately on disconnect', async () => {
     const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
     await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));

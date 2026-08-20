@@ -22,6 +22,8 @@ export interface MCPServerEditModalProps {
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
+  /** Authenticated identity that owns the form contents and selected server. */
+  identityKey: string | null;
   /** Current identity/role/auth generation, null while authority is unavailable. */
   authorityKey: string | null;
   /**
@@ -61,10 +63,11 @@ interface TestResult {
  * both `MCPServersTable` (settings) and `SessionMcpFooterControl` (admin
  * shortcut).
  */
-export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
+const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   server,
   open,
   client,
+  identityKey: _identityKey,
   authorityKey,
   offeredTransports,
   offeredScopes,
@@ -88,6 +91,13 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   // animates in.
   const [formHydrated, setFormHydrated] = useState(false);
   const [formRevision, bumpFormRevision] = useFormRevision();
+  const identityActiveRef = useRef(true);
+  useEffect(() => {
+    identityActiveRef.current = true;
+    return () => {
+      identityActiveRef.current = false;
+    };
+  }, []);
 
   // Only ask the form once it is rendered and filled — an unmounted instance
   // warns, and a half-hydrated one would flash Save disabled.
@@ -183,6 +193,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   };
 
   const handleTestConnection = async () => {
+    if (!identityActiveRef.current) return;
     if (!client || !server) {
       // Pre-flight failure — no inline result UI yet, so a toast is the
       // only signal we have. Result-bearing failures below set testResult
@@ -204,9 +215,11 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     try {
       await form.validateFields(['headers']);
     } catch {
+      if (!identityActiveRef.current) return;
       showError('Please fix custom HTTP headers before testing');
       return;
     }
+    if (!identityActiveRef.current) return;
 
     setTesting(true);
     setTestResult(null);
@@ -231,6 +244,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         prompts?: Array<{ name: string; description: string }>;
       };
 
+      if (!identityActiveRef.current) return;
+
       if (data.success && data.capabilities) {
         setTestResult({
           success: true,
@@ -251,6 +266,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         });
       }
     } catch (error) {
+      if (!identityActiveRef.current) return;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setTestResult({
         success: false,
@@ -260,12 +276,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         error: errorMessage,
       });
     } finally {
-      setTesting(false);
+      if (identityActiveRef.current) setTesting(false);
     }
   };
 
   const saveFormValues = async (): Promise<boolean> => {
-    if (!server || !client) return false;
+    if (!server || !client || !identityActiveRef.current) return false;
     if (!mutationStateRef.current.allowed) {
       showError(mutationStateRef.current.reason);
       return false;
@@ -273,7 +289,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
 
     try {
       await form.validateFields();
-      if (!mutationStateRef.current.allowed) {
+      if (!identityActiveRef.current || !mutationStateRef.current.allowed) {
         showError(mutationStateRef.current.reason);
         return false;
       }
@@ -304,13 +320,14 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         preserveAbsentGrantType,
       });
 
-      if (!mutationStateRef.current.allowed) {
+      if (!identityActiveRef.current || !mutationStateRef.current.allowed) {
         showError(mutationStateRef.current.reason);
         return false;
       }
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
-      return true;
+      return identityActiveRef.current;
     } catch (error) {
+      if (!identityActiveRef.current) return false;
       // Name the field, rather than letting a rejected validation surface as
       // the generic message its non-Error shape would produce.
       const errorMessage =
@@ -323,6 +340,7 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
 
   const handleSave = async () => {
     if (await saveFormValues()) {
+      if (!identityActiveRef.current) return;
       showSuccess('MCP server updated successfully');
       closeAndReset();
     }
@@ -417,3 +435,17 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     </Modal>
   );
 };
+
+/**
+ * The form can contain raw OAuth/JWT/bearer credentials. Remount its entire
+ * state owner when the authenticated identity changes so another same-role
+ * caller cannot inherit a selected row or any registered Ant Form value.
+ * `authorityKey` remains a finer mutation gate; it intentionally does not key
+ * this owner, preserving same-user reconnect and token-refresh edits.
+ */
+export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = (props) => (
+  <MCPServerEditModalForIdentity
+    key={props.identityKey ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

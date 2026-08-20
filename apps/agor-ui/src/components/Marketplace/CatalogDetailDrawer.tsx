@@ -52,6 +52,8 @@ const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
 export interface CatalogDetailDrawerProps {
+  /** Authenticated identity that owns consent, selections, and pasted credentials. */
+  identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
   onClose: () => void;
@@ -99,7 +101,8 @@ export interface CatalogDetailDrawerProps {
   }) => void;
 }
 
-export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
+const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
+  identityKey: _identityKey,
   entry,
   open,
   onClose,
@@ -446,3 +449,16 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     </Drawer>
   );
 };
+
+/**
+ * Consent, branch/agent selections, and bearer credentials are caller-entered
+ * authority. A keyed state owner destroys all of them during the A -> B render,
+ * including the same-role/same-entry case that entry-keying alone cannot see.
+ * Connection/auth-generation churn for one identity deliberately keeps them.
+ */
+export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = (props) => (
+  <CatalogDetailDrawerForIdentity
+    key={props.identityKey ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

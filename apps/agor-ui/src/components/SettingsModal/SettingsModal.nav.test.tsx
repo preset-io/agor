@@ -9,13 +9,15 @@
  */
 
 import type { User } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { type SettingsSection, useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { SettingsModal } from './SettingsModal';
 
-vi.mock('./BoardsTable', () => ({ BoardsTable: () => <div data-testid="boards-table" /> }));
+vi.mock('./BoardsTable', () => ({
+  BoardsTable: () => <input aria-label="settings-private-draft" defaultValue="" />,
+}));
 
 function makeUser(role: string): User {
   return { user_id: `user-${role}`, email: `${role}@agor.live`, name: role, role } as User;
@@ -62,6 +64,28 @@ function menuLabels(): string[] {
 }
 
 describe('SettingsModal navigation gating', () => {
+  it('destroys the settings state tree on a same-role identity replacement', () => {
+    const adminA = { ...makeUser('admin'), user_id: 'admin-a' } as User;
+    const adminB = { ...makeUser('admin'), user_id: 'admin-b' } as User;
+    const view = (currentUser: User) => (
+      <SettingsModal
+        open
+        onClose={vi.fn()}
+        client={null}
+        currentUser={currentUser}
+        activeTab="boards"
+      />
+    );
+    const rendered = render(view(adminA));
+    fireEvent.change(screen.getByLabelText('settings-private-draft'), {
+      target: { value: 'admin-a-private-value' },
+    });
+
+    rendered.rerender(view(adminB));
+
+    expect(screen.getByLabelText('settings-private-draft')).toHaveValue('');
+  });
+
   it('offers an admin both Groups and Users', () => {
     renderNav('admin');
 

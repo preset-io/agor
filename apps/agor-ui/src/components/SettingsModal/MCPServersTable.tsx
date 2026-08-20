@@ -131,7 +131,7 @@ interface TestResult {
   prompts?: Array<{ name: string; description: string }>;
 }
 
-export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
   userById,
@@ -176,11 +176,23 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   );
   const canAdd = !policyPending && canAddMcpServer(capability);
   const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
+  // This component is keyed by authenticated user below. Async continuations
+  // from the unmounted caller must not submit a form or surface results after
+  // an in-place launch-auth replacement has installed another identity.
+  const identityActiveRef = useRef(true);
+  useEffect(() => {
+    identityActiveRef.current = true;
+    return () => {
+      identityActiveRef.current = false;
+    };
+  }, []);
   const capabilityRef = useRef({ capability, policyPending, addRestriction });
   capabilityRef.current = { capability, policyPending, addRestriction };
   const addIsCurrentlyAllowed = () => {
     const current = capabilityRef.current;
-    return !current.policyPending && canAddMcpServer(current.capability);
+    return (
+      identityActiveRef.current && !current.policyPending && canAddMcpServer(current.capability)
+    );
   };
   // Which transports a user may configure turns on role alone, so this is known
   // before the policy fetch settles. The first entry is the default the create
@@ -222,16 +234,31 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // the form should be able to trap the user behind it.
   const createBlocked = !createdServerId && (!canAdd || missingRequiredFields.length > 0);
 
-  // Sync editing server when mcpServerById updates (real-time WebSocket updates).
-  // Also keeps the open edit modal in sync if the underlying record changes.
+  // Sync modal records when mcpServerById updates (real-time WebSocket
+  // updates). An absent row is authoritative too: retaining the previous
+  // object would expose caller A's private server after caller B's replacement
+  // map has correctly omitted it.
   useEffect(() => {
-    if (editingServer && mcpServerById.has(editingServer.mcp_server_id)) {
-      const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
-      if (updatedServer && updatedServer !== editingServer) {
-        setEditingServer(updatedServer);
-      }
+    if (!editingServer) return;
+    const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
+    if (!updatedServer) {
+      setEditModalOpen(false);
+      setEditingServer(null);
+    } else if (updatedServer !== editingServer) {
+      setEditingServer(updatedServer);
     }
   }, [mcpServerById, editingServer]);
+
+  useEffect(() => {
+    if (!viewingServer) return;
+    const updatedServer = mcpServerById.get(viewingServer.mcp_server_id);
+    if (!updatedServer) {
+      setViewModalOpen(false);
+      setViewingServer(null);
+    } else if (updatedServer !== viewingServer) {
+      setViewingServer(updatedServer);
+    }
+  }, [mcpServerById, viewingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
     const data: CreateMCPServerInput = {
@@ -265,32 +292,35 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // Persist the current form before every OAuth start. The saved row is the
   // daemon's tenant-scoped authority for provider URL and client credentials.
   const prepareOAuthStartForCreate = async (): Promise<string | null> => {
-    if (!client) return null;
+    if (!client || !identityActiveRef.current) return null;
     if (!addIsCurrentlyAllowed()) {
       showError(capabilityRef.current.addRestriction);
       return null;
     }
     try {
       await createForm.validateFields();
-      if (!addIsCurrentlyAllowed()) {
+      if (!identityActiveRef.current || !addIsCurrentlyAllowed()) {
         showError(capabilityRef.current.addRestriction);
         return null;
       }
       const data = buildCreateData(createForm.getFieldsValue(true));
 
       if (!createdServerId) {
-        if (!addIsCurrentlyAllowed()) return null;
+        if (!identityActiveRef.current || !addIsCurrentlyAllowed()) return null;
         const result = await client.service('mcp-servers').create(data);
+        if (!identityActiveRef.current) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
       const { name: _name, source: _source, ...updates } = data;
-      if (!addIsCurrentlyAllowed()) return null;
+      if (!identityActiveRef.current || !addIsCurrentlyAllowed()) return null;
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
+      if (!identityActiveRef.current) return null;
       return createdServerId;
     } catch (error) {
+      if (!identityActiveRef.current) return null;
       // Say which field. Swallowing a validation rejection here left the OAuth
       // button doing nothing at all, with nothing on screen to explain it.
       showError(
@@ -324,7 +354,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     createForm
       .validateFields()
       .then(() => {
-        if (!addIsCurrentlyAllowed()) {
+        if (!identityActiveRef.current || !addIsCurrentlyAllowed()) {
           showError(capabilityRef.current.addRestriction);
           return;
         }
@@ -333,6 +363,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         resetCreateModal();
       })
       .catch((error) => {
+        if (!identityActiveRef.current) return;
         console.error('Form validation failed:', error);
         showError(firstFormErrorMessage(error) || 'Please fill in required fields');
       });
@@ -340,6 +371,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   // Test connection from create modal (always inline config, no persistence).
   const handleCreateTestConnection = async () => {
+    if (!identityActiveRef.current) return;
     if (!client) {
       showError('Client not available');
       return;
@@ -358,9 +390,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     try {
       await createForm.validateFields(['headers']);
     } catch {
+      if (!identityActiveRef.current) return;
       showError('Please fix custom HTTP headers before testing');
       return;
     }
+    if (!identityActiveRef.current) return;
 
     setTesting(true);
     setTestResult(null);
@@ -379,6 +413,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         resources?: Array<{ name: string; uri: string; mimeType?: string }>;
         prompts?: Array<{ name: string; description: string }>;
       };
+
+      if (!identityActiveRef.current) return;
 
       if (data.success && data.capabilities) {
         setTestResult({
@@ -400,6 +436,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         });
       }
     } catch (error) {
+      if (!identityActiveRef.current) return;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setTestResult({
         success: false,
@@ -409,7 +446,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         error: errorMessage,
       });
     } finally {
-      setTesting(false);
+      if (identityActiveRef.current) setTesting(false);
     }
   };
 
@@ -427,6 +464,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setViewingServer(server);
     setViewModalOpen(true);
   }, []);
+
+  const resetViewModal = () => {
+    setViewModalOpen(false);
+    setViewingServer(null);
+  };
 
   const handleDelete = useCallback(
     (serverId: string) => {
@@ -781,6 +823,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         server={editingServer}
         open={editModalOpen}
         client={client}
+        identityKey={currentUser?.user_id ?? null}
         authorityKey={durableAuthorityKey}
         offeredTransports={offeredTransports}
         offeredScopes={editableScopes}
@@ -797,12 +840,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       <AdaptiveSettingsModal
         title="MCP Server Details"
         open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setViewingServer(null);
-        }}
+        onCancel={resetViewModal}
         footer={[
-          <Button key="close" onClick={() => setViewModalOpen(false)}>
+          <Button key="close" onClick={resetViewModal}>
             Close
           </Button>,
         ]}
@@ -942,3 +982,18 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     />
   );
 };
+
+/**
+ * Ant Form instances and modal state are caller-private: they can contain raw
+ * bearer/JWT/OAuth credentials and unredacted environment values. Key the
+ * complete state owner by authenticated identity so React destroys caller A's
+ * form and overlays in the same reconciliation that renders caller B. Socket
+ * reconnects and token rotations for the same user keep the key and therefore
+ * preserve ordinary in-progress work.
+ */
+export const MCPServersTable: React.FC<MCPServersTableProps> = (props) => (
+  <MCPServersTableForIdentity
+    key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

@@ -21,6 +21,11 @@ const DEFAULT_ADMIN = {
   email: 'admin@agor.live',
   role: 'admin',
 } as User;
+const REPLACEMENT_ADMIN = {
+  user_id: 'user-admin-b',
+  email: 'admin-b@agor.live',
+  role: 'admin',
+} as User;
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -414,6 +419,91 @@ describe('connect', () => {
     await waitFor(() => expect(connect).toBeEnabled());
   });
 
+  it('erases the active entry, refusal, consent, and key across admin A -> admin B', async () => {
+    const client = makeClient();
+    const view = (currentUser: User, authGeneration: number) => (
+      <MemoryRouter>
+        <CatalogTab
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+      </MemoryRouter>
+    );
+    const rendered = render(view(DEFAULT_ADMIN, 1));
+    fireEvent.click(await findCard('DeepWiki'));
+    let drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = drawer.getByRole('button', { name: /Connect/ });
+    await waitFor(() => expect(connect).toBeEnabled());
+    connectImpl = async () => {
+      throw Object.assign(new Error('Endpoint now requires a bearer token'), {
+        data: { credential_requirement: 'required' },
+      });
+    };
+    fireEvent.click(connect);
+    const keyInput = await drawer.findByPlaceholderText(/bearer access token/i);
+    fireEvent.change(keyInput, { target: { value: 'admin-a-private-key' } });
+    expect(drawer.getByText(/Endpoint now requires/)).toBeVisible();
+
+    rendered.rerender(view(REPLACEMENT_ADMIN, 2));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(await findCard('DeepWiki'));
+    drawer = await findDrawer();
+    expect(drawer.getByRole('checkbox')).not.toBeChecked();
+    expect(drawer.queryByPlaceholderText(/bearer access token/i)).not.toBeInTheDocument();
+    expect(drawer.queryByText(/Endpoint now requires/)).not.toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled();
+    expect(connectCalls).toHaveLength(1);
+  });
+
+  it('does not apply an admin-A connect response after admin B replaces it', async () => {
+    let releaseConnect!: () => void;
+    const pending = new Promise<unknown>((resolve) => {
+      releaseConnect = () =>
+        resolve({
+          mcp_server: { mcp_server_id: 'server-a' },
+          session: { session_id: SESSION_ID },
+          starter_prompt: DEEPWIKI.starter_prompt,
+          reused_existing_server: false,
+        });
+    });
+    connectImpl = async () => pending;
+    const client = makeClient();
+    const view = (currentUser: User, authGeneration: number) => (
+      <MemoryRouter>
+        <CatalogTab
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+      </MemoryRouter>
+    );
+    const rendered = render(view(DEFAULT_ADMIN, 1));
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = drawer.getByRole('button', { name: /Connect/ });
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    await waitFor(() => expect(connectCalls).toHaveLength(1));
+
+    rendered.rerender(view(REPLACEMENT_ADMIN, 2));
+    await act(async () => {
+      releaseConnect();
+      await pending;
+    });
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(localStorage.getItem(`agor-marketplace-branch:${REPLACEMENT_ADMIN.user_id}`)).toBeNull();
+  });
+
   // Consent's two withdrawal rules — a different entry, and the same entry
   // with rewritten wording — are asserted in `CatalogDetailDrawer.test.tsx`.
   // Reaching them from here meant closing and reopening the drawer, mounting
@@ -442,6 +532,9 @@ describe('connect', () => {
       expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
     );
     expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
+    expect(localStorage.getItem(`agor-marketplace-branch:${DEFAULT_ADMIN.user_id}`)).toBe(
+      'branch-1'
+    );
   });
 
   /**

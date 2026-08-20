@@ -79,6 +79,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         server={server}
         open
         client={client}
+        identityKey="user-a"
         authorityKey="user-a:admin:1"
         mutationAllowed
         onClose={vi.fn()}
@@ -128,6 +129,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           server={server}
           open
           client={client}
+          identityKey="user-a"
           authorityKey="user-a:admin:1"
           mutationAllowed
           onClose={vi.fn()}
@@ -171,6 +173,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         server={server}
         open
         client={client}
+        identityKey="user-a"
         authorityKey="user-a:admin:1"
         mutationAllowed
         onClose={onClose}
@@ -225,6 +228,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         server={server}
         open
         client={client}
+        identityKey="user-a"
         authorityKey="user-a:admin:1"
         mutationAllowed
         onClose={vi.fn()}
@@ -274,6 +278,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         server={server}
         open
         client={client}
+        identityKey="user-a"
         authorityKey="user-a:admin:1"
         mutationAllowed
         onClose={vi.fn()}
@@ -307,6 +312,71 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     expect(showError).not.toHaveBeenCalled();
   });
 
+  it('remounts same-server OAuth form state across admin A -> admin B', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const client = {
+      service: vi.fn().mockReturnValue({ patch }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const serverA = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000050',
+      name: 'same-server-id',
+      transport: 'http',
+      url: 'https://same.example/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'admin-a-client',
+        oauth_client_secret: 'admin-a-saved-secret',
+      },
+    } as MCPServer;
+    const serverB = {
+      ...serverA,
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'admin-b-client',
+        oauth_client_secret: 'admin-b-saved-secret',
+      },
+    } as MCPServer;
+    const view = (identityKey: string, server: MCPServer) => (
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey={identityKey}
+        authorityKey={`${identityKey}:admin:2`}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    const rendered = render(view('admin-a', serverA));
+    const secret = await screen.findByLabelText('Client Secret');
+    fireEvent.change(secret, { target: { value: 'admin-a-unsaved-secret' } });
+    const staleSave = screen.getByRole('button', { name: 'Save' });
+
+    rendered.rerender(view('admin-b', serverB));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Client Secret')).toHaveValue('admin-b-saved-secret')
+    );
+    expect(screen.queryByDisplayValue('admin-a-unsaved-secret')).not.toBeInTheDocument();
+    fireEvent.click(staleSave);
+    expect(patch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(patch).toHaveBeenCalledWith(
+      serverB.mcp_server_id,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          oauth_client_id: 'admin-b-client',
+          oauth_client_secret: 'admin-b-saved-secret',
+        }),
+      })
+    );
+  });
+
   it.each(['Save', 'Start OAuth Flow'])(
     'blocks %s after authority is lost while the edit dialog remains open',
     async (action) => {
@@ -329,6 +399,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           server={server}
           open
           client={client}
+          identityKey="user-a"
           authorityKey={mutationAllowed ? 'user-a:admin:1' : null}
           mutationAllowed={mutationAllowed}
           mutationBlockedReason="Connection authority changed"

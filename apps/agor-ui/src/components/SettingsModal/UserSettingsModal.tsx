@@ -256,7 +256,7 @@ export interface UserSettingsModalProps {
   initialTab?: string;
 }
 
-export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
+const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   open,
   onClose,
   user,
@@ -2365,3 +2365,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     </Modal>
   );
 };
+
+/**
+ * Provider tokens, personal environment values, API keys, and Ant Form drafts
+ * are private to both the authenticated caller and the selected target. A
+ * launch-auth identity replacement must destroy them even when both callers
+ * have the same role; same-user reconnects retain the stable key.
+ */
+export const UserSettingsModal: React.FC<UserSettingsModalProps> = (props) => (
+  <UserSettingsModalForIdentity
+    key={`${props.currentUser?.user_id ?? '__no-authenticated-user__'}:${props.user?.user_id ?? '__no-target-user__'}`}
+    {...props}
+  />
+);

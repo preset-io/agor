@@ -170,4 +170,67 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     fireEvent.click(save);
     expect(patchServer).not.toHaveBeenCalled();
   });
+
+  it('destroys the #2482-owned editor and its bearer secret on admin A -> admin B', async () => {
+    const adminAServer = {
+      ...server,
+      name: 'admin-a-bearer',
+      display_name: 'Admin A Bearer',
+      auth: {
+        type: 'bearer',
+        token: 'admin-a-saved-secret',
+      },
+    } as MCPServer;
+    const adminBServer = {
+      ...server,
+      mcp_server_id: '01900000-0000-7000-8000-000000000021',
+      name: 'admin-b-server',
+      display_name: 'Admin B Server',
+    } as MCPServer;
+    const props = (currentUserId: string, selectedServer: MCPServer) => ({
+      client,
+      currentUserId,
+      sessionId: 'session-id',
+      sessionMcpServerIds: [selectedServer.mcp_server_id],
+      mcpServerById: new Map([[selectedServer.mcp_server_id, selectedServer]]),
+      userAuthenticatedMcpServerIds: new Set<string>(),
+    });
+    const rendered = render(<SessionMcpFooterControl {...props('user-a', adminAServer)} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. 1 MCP server attached. Open to add or change MCP servers.',
+      })
+    );
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Session MCP servers' })).getByRole('button', {
+        name: 'Edit Admin A Bearer MCP server',
+      })
+    );
+    const editDialog = await screen.findByRole('dialog', { name: 'Edit MCP Server' });
+    const clientSecret = await within(editDialog).findByLabelText('Token');
+    fireEvent.change(clientSecret, { target: { value: 'admin-a-unsaved-secret' } });
+    const staleSave = within(editDialog).getByRole('button', { name: 'Save' });
+
+    connectionState.authGeneration = 2;
+    rendered.rerender(<SessionMcpFooterControl {...props('user-b', adminBServer)} />);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Edit MCP Server' })).not.toBeInTheDocument()
+    );
+    expect(screen.queryByDisplayValue('admin-a-unsaved-secret')).not.toBeInTheDocument();
+    fireEvent.click(staleSave);
+    expect(patchServer).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. 1 MCP server attached. Open to add or change MCP servers.',
+      })
+    );
+    const replacementDialog = screen.getByRole('dialog', { name: 'Session MCP servers' });
+    expect(within(replacementDialog).getByText('Admin B Server')).toBeInTheDocument();
+    expect(within(replacementDialog).queryByText('Admin A Bearer')).not.toBeInTheDocument();
+  });
 });

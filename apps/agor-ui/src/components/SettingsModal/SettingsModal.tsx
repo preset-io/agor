@@ -726,5 +726,14 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
   if (!props.open) return null;
-  return <SettingsModalContent {...props} />;
+  // Settings contains other caller-private editors (gateway credentials,
+  // environment values, selected records) besides MCP. Destroy the whole
+  // modal state tree on an in-place identity replacement. Connection and
+  // token churn for the same user deliberately retain the tree.
+  return (
+    <SettingsModalContent
+      key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+      {...props}
+    />
+  );
 };

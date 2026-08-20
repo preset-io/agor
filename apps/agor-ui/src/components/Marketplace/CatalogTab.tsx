@@ -16,7 +16,7 @@ import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { useAgorStore } from '../../store/agorStore';
@@ -99,7 +99,7 @@ export interface CatalogTabProps {
   currentUser?: User | null;
 }
 
-export const CatalogTab: React.FC<CatalogTabProps> = ({
+const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   client,
   connected,
   connecting: connectionPending,
@@ -127,6 +127,16 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
   const [keyRequirement, setKeyRequirement] = useState<MCPCatalogCredentialRequirement | null>(
     null
   );
+  // The exported owner below is keyed by current user. This flag also stops a
+  // connect response initiated by caller A from navigating, persisting a
+  // branch preference, or restoring A's error state after caller B replaced it.
+  const identityActiveRef = useRef(true);
+  useEffect(() => {
+    identityActiveRef.current = true;
+    return () => {
+      identityActiveRef.current = false;
+    };
+  }, []);
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
@@ -225,7 +235,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
       acknowledgedDisclosure: string;
       bearerToken?: string;
     }) => {
-      if (!selected || !client) return;
+      if (!selected || !client || !identityActiveRef.current) return;
       setConnecting(true);
       setConnectError(null);
       try {
@@ -240,7 +250,8 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
           // empty arrived.
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
-        rememberConnectBranchId(branchId);
+        if (!identityActiveRef.current) return;
+        rememberConnectBranchId(currentUser?.user_id, branchId);
         // A starter prompt is written to exercise the server it ships with, so
         // it is only worth arming the composer with once that server can answer
         // it. A new OAuth install with no reusable grant lands without
@@ -258,6 +269,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
+        if (!identityActiveRef.current) return;
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
         // The catalog file is presentational; the endpoint decides. When those
         // disagree the daemon says so on the refusal, and taking it here is
@@ -268,7 +280,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
-        setConnecting(false);
+        if (identityActiveRef.current) setConnecting(false);
       }
     },
     [client, currentUser?.user_id, navigate, selected, userAuthenticatedMcpServerIds]
@@ -350,13 +362,14 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
       )}
 
       <CatalogDetailDrawer
+        identityKey={currentUser?.user_id ?? null}
         entry={selected}
         open={selected !== null}
         onClose={closeDrawer}
         branches={branches}
         branchesLoading={branchesLoading}
         branchesError={branchesError}
-        defaultBranchId={getLastConnectBranchId()}
+        defaultBranchId={getLastConnectBranchId(currentUser?.user_id)}
         connecting={connecting}
         connectError={connectError}
         credentialRequirement={keyRequirement}
@@ -368,3 +381,16 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({
     </Flex>
   );
 };
+
+/**
+ * The catalog grid itself is public workspace data, but its active drawer,
+ * refusal/error state, endpoint requirement, and in-flight interaction all
+ * belong to the authenticated caller. Replacing A with B remounts that state
+ * owner synchronously; same-user reconnects and token rotations retain it.
+ */
+export const CatalogTab: React.FC<CatalogTabProps> = (props) => (
+  <CatalogTabForIdentity
+    key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

@@ -22,7 +22,7 @@ export interface SessionMcpFooterControlProps {
   userAuthenticatedMcpServerIds: Set<string>;
 }
 
-export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = ({
+const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps> = ({
   client,
   currentUserId,
   sessionId,
@@ -68,6 +68,13 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   const [open, setOpen] = React.useState(false);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
   const [editModalOpen, setEditModalOpen] = React.useState(false);
+  const identityActiveRef = React.useRef(true);
+  React.useEffect(() => {
+    identityActiveRef.current = true;
+    return () => {
+      identityActiveRef.current = false;
+    };
+  }, []);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const popupRef = React.useRef<HTMLDivElement>(null);
@@ -117,6 +124,17 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
     triggerRef.current?.focus();
   }, []);
 
+  React.useEffect(() => {
+    if (!editingServer) return;
+    const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
+    if (!updatedServer) {
+      setEditModalOpen(false);
+      setEditingServer(null);
+    } else if (updatedServer !== editingServer) {
+      setEditingServer(updatedServer);
+    }
+  }, [editingServer, mcpServerById]);
+
   const summary = React.useMemo(
     () =>
       summarizeSessionMcpServers(sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds),
@@ -146,17 +164,19 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   const badgeAccessibleName = `MCP servers. ${badgeTitle}`;
 
   const handleChange = async (nextIds: string[]) => {
-    if (!client) return;
+    if (!client || !identityActiveRef.current) return;
     setSaving(true);
     try {
       await updateSessionMcpServers(client, sessionId, sessionMcpServerIds, nextIds);
+      if (!identityActiveRef.current) return;
       showSuccess('Session MCP servers updated');
     } catch (err) {
+      if (!identityActiveRef.current) return;
       showError(
         `Failed to update MCP servers: ${err instanceof Error ? err.message : String(err)}`
       );
     } finally {
-      setSaving(false);
+      if (identityActiveRef.current) setSaving(false);
     }
   };
 
@@ -310,6 +330,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           server={editingServer}
           open={editModalOpen}
           client={client}
+          identityKey={currentUserId ?? null}
           authorityKey={durableAuthorityKey}
           mutationAllowed={editMutationAllowed}
           mutationBlockedReason={
@@ -325,3 +346,16 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
     </div>
   );
 };
+
+/**
+ * #2482 keeps the portaled editor owned outside the disclosure. Key that whole
+ * owner by identity rather than moving the modal back into the popup: A -> B
+ * closes and destroys both overlays and their form state, while same-user
+ * reconnects preserve the established lifecycle and focus behavior.
+ */
+export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (props) => (
+  <SessionMcpFooterControlForIdentity
+    key={props.currentUserId ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);
