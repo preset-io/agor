@@ -113,6 +113,12 @@ function buildApp(
     value: number;
   }> = [];
   const generations = new Map<string, number>();
+  // The service's persisted rows. Keep this distinct from `created`, which is
+  // an assertion aid recording only rows written by this request, but use it
+  // for both create and patch just as the production repository does.
+  const serverStore = [...(existingServers as Array<Record<string, unknown>>)] as Array<
+    Record<string, unknown>
+  >;
   const generationKey = (ownerUserId: string, catalogEntryName: string) =>
     JSON.stringify([ownerUserId, catalogEntryName]);
   const services: Record<string, unknown> = {
@@ -137,23 +143,44 @@ function buildApp(
         }
       ),
       find: vi.fn(async () => existingServers),
-      get: vi.fn(async (id: string) =>
-        (existingServers as Array<{ mcp_server_id?: string }>).find(
-          (server) => server.mcp_server_id === id
-        )
+      get: vi.fn(
+        async (id: string) =>
+          // Some OAuth tests deliberately replace an existing fixture after a
+          // refresh. Prefer that live view, then fall back to rows created here.
+          (existingServers as Array<{ mcp_server_id?: string }>).find(
+            (server) => server.mcp_server_id === id
+          ) ?? serverStore.find((server) => server.mcp_server_id === id)
       ),
-      create: vi.fn(async (data: Record<string, unknown>) => {
+      create: vi.fn(async (data: Record<string, unknown>, createParams?: unknown) => {
         // Recorded with the id the service assigned, so `remove` below can
         // actually take it back — otherwise "what is left behind" is a question
         // the stub cannot answer.
-        const row = { ...data, mcp_server_id: 'server-1' };
+        const trustedInstall = (
+          createParams as {
+            user?: { user_id?: string };
+            mcpCatalogInstall?: { entry_name: string };
+          }
+        )?.mcpCatalogInstall;
+        const row = {
+          ...data,
+          mcp_server_id: 'server-1',
+          ...(trustedInstall
+            ? {
+                owner_user_id: (createParams as { user?: { user_id?: string } }).user?.user_id,
+                catalog_entry_name: trustedInstall.entry_name,
+              }
+            : {}),
+        };
         created.mcpServers.push(row);
+        serverStore.push(row);
         return row;
       }),
       remove: vi.fn(async (id: string) => {
         created.mcpServers = created.mcpServers.filter(
           (server) => (server as { mcp_server_id?: string }).mcp_server_id !== id
         );
+        const storedIndex = serverStore.findIndex((server) => server.mcp_server_id === id);
+        if (storedIndex >= 0) serverStore.splice(storedIndex, 1);
         removed.push(id);
         return { mcp_server_id: id };
       }),
@@ -161,6 +188,8 @@ function buildApp(
         created.mcpServers = created.mcpServers.filter(
           (server) => (server as { mcp_server_id?: string }).mcp_server_id !== id
         );
+        const storedIndex = serverStore.findIndex((server) => server.mcp_server_id === id);
+        if (storedIndex >= 0) serverStore.splice(storedIndex, 1);
         removed.push(id);
         return true;
       }),
@@ -184,13 +213,20 @@ function buildApp(
           if (current !== generation.value) {
             throw new Error('A newer marketplace connect superseded this request');
           }
+          const target = serverStore.find((server) => server.mcp_server_id === id);
+          if (
+            target?.source !== 'catalog' ||
+            target.owner_user_id !== generation.ownerUserId ||
+            target.catalog_entry_name !== generation.catalogEntryName
+          ) {
+            throw new Error('Catalog connect generation does not match the install');
+          }
           generationFinalizations.push({ id, ...generation });
         }
         patched.push({ id, data });
-        const target = existingServers.find(
-          (server) => (server as { mcp_server_id?: string }).mcp_server_id === id
-        );
+        const target = serverStore.find((server) => server.mcp_server_id === id);
         const merged = { ...(target as Record<string, unknown>), ...data };
+        if (target) Object.assign(target, data);
         return { ...merged, auth: redactMCPAuthSecrets(merged.auth as MCPAuth) };
       }),
     },
@@ -291,9 +327,12 @@ describe('mcp-catalog/connect', () => {
       scope: 'session',
       auth: { type: 'none' },
     });
-    // Neither ownership nor provenance is decided here — the mcp-servers
-    // create hook stamps both.
-    expect(created.mcpServers[0]).not.toHaveProperty('owner_user_id');
+    // The harness models the mcp-servers create hook, so its persisted view is
+    // stamped even though connect did not put either field in the payload.
+    expect(created.mcpServers[0]).toMatchObject({
+      owner_user_id: ALICE,
+      catalog_entry_name: LINEAR,
+    });
     expect(result.starter_prompt).toBe('List the issues assigned to me this cycle.');
   });
 
@@ -524,14 +563,13 @@ describe('mcp-catalog/connect', () => {
     // The stamp is not the caller's to submit — see `authorizeMcpServerWrite`.
     // Connect names the entry it resolved on params the request cannot reach,
     // so the trusted path is the only one that can produce a stamp.
-    const { app, services, created, deps } = buildApp(CURATED);
+    const { app, services, deps } = buildApp(CURATED);
 
     await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(created.mcpServers[0]).not.toHaveProperty('catalog_entry_name');
-    expect(
-      (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
-    ).toHaveBeenCalledWith(
+    const create = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create;
+    expect(create.mock.calls[0]![0]).not.toHaveProperty('catalog_entry_name');
+    expect(create).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ mcpCatalogInstall: { entry_name: LINEAR } })
     );
@@ -968,7 +1006,7 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
   };
 
   it('builds the row from the catalog entry alone', async () => {
-    const { app, created, deps } = buildApp({ ...CURATED, auth_type: 'oauth' });
+    const { app, services, created, deps } = buildApp({ ...CURATED, auth_type: 'oauth' });
 
     await createMCPCatalogConnectService(app, deps).create({ ...request, ...HOSTILE }, params);
 
@@ -986,10 +1024,14 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
     // Credential routing is the vendor's discovery documents', not the
     // caller's, and the grant is the caller's own rather than the workspace's.
     expect(row.auth).toEqual({ type: 'oauth', oauth_mode: 'per_user' });
-    // Scope, ownership and provenance stay where they are decided.
+    // Scope comes from connect; ownership and provenance are absent from its
+    // payload and stamped onto the persisted row by the service hook.
     expect(row.scope).toBe('session');
-    expect(row).not.toHaveProperty('owner_user_id');
-    expect(row).not.toHaveProperty('catalog_entry_name');
+    const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
+      .mock.calls[0]![0];
+    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput).not.toHaveProperty('catalog_entry_name');
+    expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row.source).toBe('catalog');
     expect(row).not.toHaveProperty('enabled');
   });
@@ -1745,6 +1787,38 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     expect(generationFinalizations).toEqual([]);
   });
 
+  it.each([
+    ['owner', { owner_user_id: BOB }],
+    ['catalog', { catalog_entry_name: 'com.example/other' }],
+    ['source', { source: 'user' }],
+  ] as const)(
+    'rejects a generation finalization when the target %s does not match the claim',
+    async (_identityPart, targetOverrides) => {
+      const { app, patched, generationFinalizations } = buildApp(KEY_ENTRY, [
+        keyInstallOf(targetOverrides),
+      ]);
+      const serverService = serversOf(app);
+      const value = await serverService.claimCatalogConnectGeneration(ALICE, LINEAR);
+
+      await expect(
+        serverService.patch(
+          'server-existing',
+          { auth: { type: 'bearer', token: NEW_KEY } },
+          {
+            mcpCatalogConnectGeneration: {
+              ownerUserId: ALICE,
+              catalogEntryName: LINEAR,
+              value,
+            },
+          }
+        )
+      ).rejects.toThrow(/generation does not match the install/);
+
+      expect(patched).toEqual([]);
+      expect(generationFinalizations).toEqual([]);
+    }
+  );
+
   it('does not patch the key when a later step of the connect fails', async () => {
     // The unit-level half of the ordering rule; the state it protects is
     // asserted against a real database in `mcp-catalog-connect.api-key.test.ts`.
@@ -1881,7 +1955,7 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
   });
 
   it('builds the row from the catalog entry plus the key, and nothing else', async () => {
-    const { app, created } = buildApp(KEY_ENTRY);
+    const { app, services, created } = buildApp(KEY_ENTRY);
 
     await createMCPCatalogConnectService(app).create(HOSTILE_KEY_REQUEST as never, params);
 
@@ -1896,8 +1970,11 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
     }
     expect(row.scope).toBe('session');
     expect(row.source).toBe('catalog');
-    expect(row).not.toHaveProperty('owner_user_id');
-    expect(row).not.toHaveProperty('catalog_entry_name');
+    const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
+      .mock.calls[0]![0];
+    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput).not.toHaveProperty('catalog_entry_name');
+    expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row).not.toHaveProperty('enabled');
     // Nothing the caller planted is anywhere on the row.
     expect(JSON.stringify(row)).not.toContain('planted');
