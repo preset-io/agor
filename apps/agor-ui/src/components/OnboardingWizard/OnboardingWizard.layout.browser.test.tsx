@@ -11,7 +11,7 @@
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
 import type { User } from '@agor-live/client';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -257,5 +257,54 @@ describe('OnboardingWizard layout (real browser)', () => {
       overlaps,
       `A gallery card painted over the pinned controls:\n${overlaps.join('\n')}`
     ).toEqual([]);
+  });
+
+  it('renders the success screen vertically centered, with no recap line and a celebratory hero', async () => {
+    renderWizardAt('goals');
+    await wait(300);
+
+    // goals → pick one → continue
+    fireEvent.click(screen.getByText('Ship without the busywork').closest('button') as HTMLElement);
+    fireEvent.click((await screen.findByText(/^continue →/i)).closest('button') as HTMLElement);
+
+    // workspace → name + Product Manager template → continue
+    await screen.findByText('Build your teammate');
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    fireEvent.click(screen.getByText('Product Manager').closest('[role="radio"]') as HTMLElement);
+    fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
+
+    // llm → connect Claude with a valid key
+    const claude = await screen.findByText('Claude');
+    fireEvent.click(claude.closest('button') as HTMLElement);
+    const key = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: key } });
+    fireEvent.click(screen.getByText(/^connect →/i).closest('button') as HTMLElement);
+
+    // done — teammate-centric success screen.
+    await screen.findByText('Rusty is ready.');
+    await wait(300); // let entry animations settle
+
+    // (1) Recap line is gone: neither the provider nor the goal is echoed here.
+    expect(screen.queryByText('Claude')).toBeNull();
+    expect(screen.queryByText('Ship without the busywork')).toBeNull();
+
+    const step = document.querySelector('.onb-step') as HTMLElement;
+
+    // (3) Celebratory hero present: accent glow + one-shot ring + particle burst.
+    expect(step.querySelector('.onb-glow'), 'the accent glow should render').toBeTruthy();
+    expect(step.querySelector('.onb-ring'), 'the ring pulse should render').toBeTruthy();
+    expect(step.querySelectorAll('.onb-particle').length).toBeGreaterThan(4);
+
+    // (2) Vertically centered: the content block's top gap ≈ bottom gap within the
+    // step body — not top-weighted with a large empty bottom half.
+    const content = step.firstElementChild as HTMLElement;
+    const s = step.getBoundingClientRect();
+    const c = content.getBoundingClientRect();
+    const topGap = c.top - s.top;
+    const bottomGap = s.bottom - c.bottom;
+    expect(
+      Math.abs(topGap - bottomGap),
+      `success content should be vertically centered (topGap=${topGap}, bottomGap=${bottomGap})`
+    ).toBeLessThan(48);
   });
 });

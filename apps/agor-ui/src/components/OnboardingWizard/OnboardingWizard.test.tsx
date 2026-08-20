@@ -665,7 +665,7 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('done step heroes the named teammate with a role pill + adaptive headline and a demoted recap (template picked)', async () => {
+  it('done step heroes the named teammate with a role pill + adaptive headline and NO recap line (template picked)', async () => {
     renderWizard();
 
     // goals — pick one
@@ -688,13 +688,15 @@ describe('OnboardingWizard', () => {
     clickButton(/^connect →/i);
 
     // done — teammate-centric: name heroes the headline, the template is the role
-    // pill, and the recap is a single muted line (no dominating checklist).
+    // pill, the subcopy is the template's own description — and NOTHING else.
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
-    expect(screen.getByText('Claude')).toBeInTheDocument(); // recap: provider
-    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument(); // recap: goal
     // The single primary action is verb-first + named into the first session.
     expect(screen.getByText(/^meet rusty →$/i)).toBeInTheDocument();
+    // The recap line is GONE: neither the provider nor the goal is echoed on the
+    // success screen (only the hero avatar, headline, subcopy, role pill, CTA).
+    expect(screen.queryByText('Claude')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ship without the busywork')).not.toBeInTheDocument();
     // The old dominating checklist + "What we set up" caption are gone.
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/open my board/i)).not.toBeInTheDocument();

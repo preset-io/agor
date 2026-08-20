@@ -295,9 +295,23 @@ const ONB_ANIM_CSS = `
   @keyframes onb-p6 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-72px,0px) scale(0);opacity:0} }
   @keyframes onb-p7 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-51px,-51px) scale(0);opacity:0} }
 
+  /* Success hero: a soft accent glow fades in behind the avatar, and a single
+     accent ring expands + fades once on entry — a brief celebratory settle. */
+  @keyframes onb-glow {
+    from { opacity: 0; transform: scale(0.7); }
+    to   { opacity: 1; transform: scale(1);   }
+  }
+  @keyframes onb-ring {
+    0%   { opacity: 0.55; transform: scale(0.72); }
+    70%  { opacity: 0;    transform: scale(1.9);  }
+    100% { opacity: 0;    transform: scale(1.9);  }
+  }
+
   .onb-step  { animation: onb-fade-in 0.22s cubic-bezier(0.16,1,0.3,1) both; }
   .onb-check { animation: onb-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) both; }
   .onb-draw  { animation: onb-draw 0.75s cubic-bezier(0.4,0,0.2,1) 0.1s both; }
+  .onb-glow  { animation: onb-glow 0.5s ease-out both; }
+  .onb-ring  { animation: onb-ring 1.1s cubic-bezier(0.16,1,0.3,1) 0.15s both; }
 
   /* Glass hover — only on unselected cards; no transform (per UX preference) */
   button.onb-card[aria-pressed='false']:hover {
@@ -317,9 +331,15 @@ const ONB_ANIM_CSS = `
     .onb-step,
     .onb-check,
     .onb-draw,
+    .onb-glow,
+    .onb-ring,
     .onb-particle {
       animation: none !important;
     }
+    /* Keep the accent glow visible (just un-animated); hide the one-shot ring
+       and the particle burst, which only read as motion. */
+    .onb-ring,
+    .onb-particle { display: none !important; }
   }
 `;
 
@@ -1586,10 +1606,6 @@ export function OnboardingWizard({
 
   const renderDone = () => {
     const name = teammateName.trim();
-    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    const providerLabel = selectedAgent
-      ? LLM_OPTIONS.find((option) => option.agent === selectedAgent)?.title
-      : undefined;
     const goalTitles = selectedGoals
       .map((id) => GOALS.find((goal) => goal.id === id)?.title)
       .filter((title): title is string => Boolean(title));
@@ -1620,15 +1636,39 @@ export function OnboardingWizard({
       subline = `Shape ${name} however you like — just tell them what you need in your first chat.`;
     }
 
-    // Demoted recap: one subtle muted line of facts still worth recalling (the
-    // role is already the pill, so it's not repeated here). Never a checklist.
-    const recapFacts = [...(aiConnected && providerLabel ? [providerLabel] : []), ...goalTitles];
-
     return (
-      <div style={{ textAlign: 'center', padding: '6px 0' }}>
-        {/* Teammate hero — the avatar (their own emoji) IS the celebration, with a
-            quiet particle burst. No generic success checkmark. */}
-        <div style={{ position: 'relative', width: 92, height: 92, margin: '0 auto 16px' }}>
+      // Vertically centered within the step body (see the `done` branch of the
+      // step container): auto margins balance the hero above the pinned footer.
+      <div style={{ textAlign: 'center', padding: '6px 0', margin: 'auto 0' }}>
+        {/* Teammate hero — the avatar (their own emoji) IS the celebration: a soft
+            accent glow + a one-shot ring pulse + a particle burst frame it. */}
+        <div style={{ position: 'relative', width: 92, height: 92, margin: '0 auto 18px' }}>
+          {/* Soft radial accent glow behind the avatar. */}
+          <div
+            aria-hidden="true"
+            className="onb-glow"
+            style={{
+              position: 'absolute',
+              inset: -34,
+              borderRadius: '50%',
+              background:
+                'radial-gradient(circle, rgba(46,154,146,0.45) 0%, rgba(46,154,146,0.14) 42%, transparent 70%)',
+              filter: 'blur(4px)',
+              pointerEvents: 'none',
+            }}
+          />
+          {/* One-shot accent ring that expands + fades on entry. */}
+          <div
+            aria-hidden="true"
+            className="onb-ring"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: '50%',
+              border: '2px solid rgba(46,154,146,0.6)',
+              pointerEvents: 'none',
+            }}
+          />
           <div
             className="onb-check"
             style={{
@@ -1695,17 +1735,6 @@ export function OnboardingWizard({
         <Paragraph style={{ color: TEXT_SECONDARY, maxWidth: 400, margin: '0 auto' }}>
           {subline}
         </Paragraph>
-
-        {recapFacts.length > 0 && (
-          <div style={{ marginTop: 18, color: TEXT_MUTED, fontSize: 12 }}>
-            {recapFacts.map((fact, i) => (
-              <Fragment key={fact}>
-                {i > 0 && <Text style={{ color: TEXT_MUTED, fontSize: 12 }}> · </Text>}
-                <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>{fact}</Text>
-              </Fragment>
-            ))}
-          </div>
-        )}
 
         {boardError && (
           <Alert
@@ -1876,10 +1905,14 @@ export function OnboardingWizard({
               // Step 2 owns its scrolling via an inner two-region layout (fixed
               // header + a card region that is the only scroller), so this
               // container must NOT scroll — it becomes a flex column that clips.
+              // Step 4 (done) is a flex column too, so the success hero can center
+              // vertically via auto margins (and still scroll if it ever overflows).
               // Every other step scrolls as one block here.
               ...(currentStep === 'workspace'
                 ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-                : { overflowY: 'auto' }),
+                : currentStep === 'done'
+                  ? { display: 'flex', flexDirection: 'column', overflowY: 'auto' }
+                  : { overflowY: 'auto' }),
             }}
           >
             {currentStep === 'goals' && renderGoals()}
