@@ -115,6 +115,46 @@ describe('register-services OAuth callback URL regression', () => {
     expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
   });
 
+  it('persists the grant and notifies the initiating UI before serving the closing page', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const successBody = callbackBody.slice(
+      callbackBody.indexOf(
+        "persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback')"
+      ),
+      callbackBody.indexOf('} catch (innerErr)')
+    );
+
+    const persistIndex = successBody.indexOf('persistOAuthTokenForPendingFlow');
+    const notifyIndex = successBody.indexOf('emitOAuthCompletion(pendingFlow, true)');
+    const resolveIndex = successBody.indexOf('pendingFlow.tokenResolve?.(tokenResponse)');
+    const renderIndex = successBody.indexOf('sendOAuthResultPage(res, true');
+
+    expect(persistIndex).toBeGreaterThanOrEqual(0);
+    expect(notifyIndex).toBeGreaterThan(persistIndex);
+    expect(resolveIndex).toBeGreaterThan(notifyIndex);
+    expect(renderIndex).toBeGreaterThan(resolveIndex);
+  });
+
+  it('marks callback responses no-store and renders denied/error states without success mode', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+
+    expect(callbackBody).toMatch(
+      /setHeader\s*\(\s*['"]Cache-Control['"]\s*,\s*['"]no-store['"]\s*\)/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*error\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*!code\s*\|\|\s*!state\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
+  });
+
   it('uses one phase-aware failure classifier for callback and manual completion', () => {
     const classifications = codeOnly.match(/classifyMCPOAuthCompletionFailure\s*\(/g) ?? [];
     expect(classifications).toHaveLength(2);

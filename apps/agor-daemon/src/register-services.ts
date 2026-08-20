@@ -192,7 +192,7 @@ import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
-import { escapeHtml } from './utils/html.js';
+import { renderOAuthResultPage } from './utils/html.js';
 import { persistDiscoveredMCPCapabilities } from './utils/mcp-discovered-capabilities.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -1438,19 +1438,6 @@ async function registerMCPServices(
     });
   };
 
-  // Helper to generate a simple HTML page for OAuth callback results
-  function oauthResultPage(success: boolean, message: string): string {
-    const color = success ? '#52c41a' : '#ff4d4f';
-    const icon = success ? '&#10003;' : '&#10007;';
-    const safeMessage = escapeHtml(message);
-    return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Agor OAuth</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#1a1a1a;color:#fff}
-.card{text-align:center;padding:2rem;border-radius:8px;background:#2a2a2a;max-width:400px}
-.icon{font-size:3rem;color:${color}}</style></head>
-<body><div class="card"><div class="icon">${icon}</div><p>${safeMessage}</p></div></body></html>`;
-  }
-
   type PendingOAuthFlow = {
     attemptId: MCPOAuthAttemptID;
     context: OAuthFlowContext;
@@ -2136,7 +2123,7 @@ async function registerMCPServices(
 
   const terminalMessageForStatus = (status: MCPOAuthPendingFlowStatus): string => {
     if (status === 'succeeded') {
-      return 'OAuth authentication already completed. You can close this tab.';
+      return 'OAuth authentication has already completed successfully.';
     }
     if (status === 'ambiguous' || status === 'exchanging') {
       return 'OAuth exchange outcome is uncertain. Start a new OAuth flow; the previous authorization code will not be replayed.';
@@ -2144,12 +2131,23 @@ async function registerMCPServices(
     return 'OAuth flow did not complete. Please start a new flow.';
   };
 
+  const sendOAuthResultPage = (
+    res: express.Response,
+    success: boolean,
+    message: string,
+    status = 200
+  ): void => {
+    const page = renderOAuthResultPage(success, message);
+    res.setHeader('Content-Security-Policy', page.contentSecurityPolicy);
+    res.status(status).send(page.html);
+  };
+
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store');
     try {
       const code = req.query.code as string | undefined;
       const state = req.query.state as string | undefined;
@@ -2170,14 +2168,17 @@ async function registerMCPServices(
             pendingOAuthFlows.delete(state);
           }
         }
-        res
-          .status(400)
-          .send(oauthResultPage(false, 'Authorization was not completed. Please restart OAuth.'));
+        sendOAuthResultPage(
+          res,
+          false,
+          'Authorization was not completed. Please restart OAuth.',
+          400
+        );
         return;
       }
 
       if (!code || !state) {
-        res.status(400).send(oauthResultPage(false, 'Missing code or state parameter'));
+        sendOAuthResultPage(res, false, 'Missing code or state parameter', 400);
         return;
       }
 
@@ -2186,28 +2187,24 @@ async function registerMCPServices(
         const claimed = await durableOAuthFlows.claimForCallback(state);
         if (claimed.outcome === 'not_claimed') {
           if (claimed.flow?.status === 'succeeded') {
-            res.send(oauthResultPage(true, terminalMessageForStatus('succeeded')));
+            sendOAuthResultPage(res, true, terminalMessageForStatus('succeeded'));
             return;
           }
-          res
-            .status(409)
-            .send(
-              oauthResultPage(
-                false,
-                claimed.flow
-                  ? terminalMessageForStatus(claimed.flow.status)
-                  : 'OAuth flow expired or not found. Please start the flow again.'
-              )
-            );
+          sendOAuthResultPage(
+            res,
+            false,
+            claimed.flow
+              ? terminalMessageForStatus(claimed.flow.status)
+              : 'OAuth flow expired or not found. Please start the flow again.',
+            409
+          );
           return;
         }
         try {
           pendingFlow = pendingFromDurableClaim(durableOAuthFlows.openClaim(claimed.flow, state));
         } catch {
           await durableOAuthFlows.finish(claimed.flow, 'failed', 'sealed_material_unavailable');
-          res
-            .status(409)
-            .send(oauthResultPage(false, 'OAuth flow cannot be resumed. Please start again.'));
+          sendOAuthResultPage(res, false, 'OAuth flow cannot be resumed. Please start again.', 409);
           return;
         }
       } else {
@@ -2230,11 +2227,12 @@ async function registerMCPServices(
         }
       }
       if (!pendingFlow) {
-        res
-          .status(400)
-          .send(
-            oauthResultPage(false, 'OAuth flow expired or not found. Please start the flow again.')
-          );
+        sendOAuthResultPage(
+          res,
+          false,
+          'OAuth flow expired or not found. Please start the flow again.',
+          400
+        );
         return;
       }
 
@@ -2256,7 +2254,7 @@ async function registerMCPServices(
         pendingFlow.tokenResolve?.(tokenResponse);
 
         console.log('[OAuth Callback] Flow completed successfully');
-        res.send(oauthResultPage(true, 'OAuth authentication successful! You can close this tab.'));
+        sendOAuthResultPage(res, true, 'OAuth authentication was successful.');
       } catch (innerErr) {
         const classification = classifyMCPOAuthCompletionFailure(innerErr);
         const { ambiguous } = classification;
@@ -2282,25 +2280,24 @@ async function registerMCPServices(
               : 'OAuth provider rejected the authorization. Start a new OAuth flow.'
           )
         );
-        res
-          .status(ambiguous ? 409 : 400)
-          .send(
-            oauthResultPage(false, terminalMessageForStatus(ambiguous ? 'ambiguous' : 'failed'))
-          );
+        sendOAuthResultPage(
+          res,
+          false,
+          terminalMessageForStatus(ambiguous ? 'ambiguous' : 'failed'),
+          ambiguous ? 409 : 400
+        );
         return;
       }
     } catch (err) {
       console.error(
         `[OAuth Callback] Failed category=${err instanceof Error ? err.name : 'unknown'}`
       );
-      res
-        .status(500)
-        .send(
-          oauthResultPage(
-            false,
-            'Authentication could not be completed. Please start a new OAuth flow.'
-          )
-        );
+      sendOAuthResultPage(
+        res,
+        false,
+        'Authentication could not be completed. Please start a new OAuth flow.',
+        500
+      );
     }
   };
 
