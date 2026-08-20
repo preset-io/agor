@@ -145,23 +145,30 @@ function buildApp(
       find: vi.fn(async (findParams?: { query?: Record<string, unknown> }) => {
         const query = findParams?.query ?? {};
         let rows = serverStore.filter((server) => {
-          if (query.scope !== undefined && server.scope !== query.scope) return false;
-          if (query.scopeId !== undefined && server.scope_id !== query.scopeId) return false;
-          if (query.transport !== undefined && server.transport !== query.transport) return false;
+          if (query.scope && server.scope !== query.scope) return false;
+          // MCPServerRepository only has a materialized scope foreign key for
+          // global rows. Session scope is represented by the attachment table,
+          // so scopeId deliberately adds no condition for every other scope.
+          if (query.scopeId && query.scope === 'global' && server.owner_user_id !== query.scopeId) {
+            return false;
+          }
+          if (query.transport && server.transport !== query.transport) return false;
           if (query.enabled !== undefined && server.enabled !== query.enabled) return false;
-          if (query.source !== undefined && server.source !== query.source) return false;
+          if (query.source && server.source !== query.source) return false;
+          if (query.catalogEntryName && server.catalog_entry_name !== query.catalogEntryName) {
+            return false;
+          }
+          // Production treats ownerless as an opt-in filter. Explicit false is
+          // therefore the same as omission, rather than "owned rows only".
           if (
-            query.catalogEntryName !== undefined &&
-            server.catalog_entry_name !== query.catalogEntryName
+            query.ownerless &&
+            server.owner_user_id !== undefined &&
+            server.owner_user_id !== null
           ) {
             return false;
           }
-          if (query.ownerless !== undefined) {
-            const ownerless = server.owner_user_id === undefined || server.owner_user_id === null;
-            if (ownerless !== query.ownerless) return false;
-          }
           if (
-            query.usableByUserId !== undefined &&
+            query.usableByUserId &&
             server.owner_user_id !== undefined &&
             server.owner_user_id !== null &&
             server.owner_user_id !== query.usableByUserId
@@ -347,6 +354,7 @@ const request = {
 type StubFn = ReturnType<typeof vi.fn>;
 const serversOf = (app: { service: (p: string) => unknown }) =>
   app.service('mcp-servers') as {
+    find: StubFn;
     create: StubFn;
     patch: StubFn;
     remove: StubFn;
@@ -357,6 +365,41 @@ const sessionsOf = (app: { service: (p: string) => unknown }) =>
 const attachOf = (app: { service: (p: string) => unknown }) =>
   app.service('/sessions/:id/mcp-servers') as { create: StubFn };
 const services = serversOf;
+
+describe('stateful mcp-servers.find harness', () => {
+  it('maps global scopeId to owner_user_id and ignores scopeId for other scopes', async () => {
+    const aliceGlobal = installOf({ mcp_server_id: 'alice-global', scope: 'global' });
+    const ownerlessGlobal = installOf({
+      mcp_server_id: 'ownerless-global',
+      scope: 'global',
+      owner_user_id: undefined,
+    });
+    const session = installOf({
+      mcp_server_id: 'session-row',
+      scope: 'session',
+      owner_user_id: undefined,
+    });
+    const { app } = buildApp(CURATED, [aliceGlobal, ownerlessGlobal, session]);
+
+    await expect(
+      serversOf(app).find({ query: { scope: 'global', scopeId: ALICE } })
+    ).resolves.toMatchObject({ data: [{ mcp_server_id: 'alice-global' }] });
+    await expect(
+      serversOf(app).find({ query: { scope: 'session', scopeId: 'session-attachment-id' } })
+    ).resolves.toMatchObject({ data: [{ mcp_server_id: 'session-row' }] });
+  });
+
+  it('does not apply an owner filter for ownerless:false', async () => {
+    const owned = installOf({ mcp_server_id: 'owned' });
+    const ownerless = installOf({ mcp_server_id: 'ownerless', owner_user_id: undefined });
+    const { app } = buildApp(CURATED, [owned, ownerless]);
+
+    await expect(serversOf(app).find({ query: { ownerless: false } })).resolves.toMatchObject({
+      total: 2,
+      data: [{ mcp_server_id: 'owned' }, { mcp_server_id: 'ownerless' }],
+    });
+  });
+});
 
 describe('mcp-catalog/connect', () => {
   beforeEach(() => {
