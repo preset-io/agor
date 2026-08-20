@@ -235,7 +235,7 @@ This is tenant-safe: the existing trusted tenant transaction/RLS context and boa
 - focused Biome checks on changed files;
 - multitenancy, daemon-filesystem, and realtime boundary checks.
 
-Core, daemon, and UI package type checks were attempted. They fail on pre-existing/unbuilt workspace resolution (`@agor/git`, `@agor/core/*`, `@agor-live/client`, and agentic-tool packages), followed by cascade errors. Per repository instructions, no workspace build was run solely to manufacture those artifacts. Both dialect schema modules import successfully through `tsx`; focused Vitest transforms, lint, and boundary checks cover the modified paths.
+Final validation ran after `pnpm i` (already up to date). The repository's full `pnpm check` passed, including workspace typechecks, lint, short-ID and boundary checks, and its configured non-docs build. The build was run because the final validation request explicitly required `pnpm check`. Both dialect schema modules also import successfully through `tsx`.
 
 ## Residual unknowns
 
