@@ -57,6 +57,30 @@ user-selectable or data-visualization palettes; terminal/ANSI output; syntax/dif
 explicit brand assets; and demo-only marketing screenshots. Do not move an ordinary component's
 palette into a constants file just to avoid tokens.
 
+## Text overflow & truncation
+
+Any component that renders user-supplied text — board, teammate, card, and session names,
+filenames, repo slugs, and similar — MUST keep that text from breaking its layout:
+
+1. **Bound the width.** Give the container a `maxWidth` (and usually a `minWidth`) so it never
+   grows arbitrarily with content. Reference roughly `min 248px` / `max 456px`, adapted to the
+   nearest existing sizing token rather than a bare literal where one fits.
+2. **Truncate to a single line.** The label needs `overflow: hidden; text-overflow: ellipsis;
+   white-space: nowrap`, and — the classic gotcha — `min-width: 0` on the flex child, or the
+   ellipsis never triggers. Fixed neighbors (icons, badges, counts) get `flex-shrink: 0` so only
+   the text flexes.
+3. **Tooltip only when clipped.** Show the full value on hover, but only when the text is actually
+   truncated (`scrollWidth > clientWidth`) — never a redundant tooltip on text that fits.
+
+Reuse the house primitive instead of re-implementing this: AntD `Typography.Text` with
+`ellipsis={{ tooltip: fullValue }}` does all three of the mechanics above (single-line clamp,
+overflow detection, and a tooltip that appears only when clipped). See `BoardSwitcher`,
+`BoardBranchList`, `BranchCard`, and `BranchesTable` for the pattern. There is no separate
+truncation component to add.
+
+Do **not** truncate headings, error messages, validation text, or notifications — that content
+must remain fully readable.
+
 ## Accessibility and testing
 
 - Preserve keyboard operation, visible focus, accessible names, correct semantic elements, and
