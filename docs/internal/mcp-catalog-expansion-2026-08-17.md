@@ -33,7 +33,7 @@ The live-provider pass performed:
 3. live protected-resource and authorization-server metadata fetches through Agor's
    hardened outbound fetch path;
 4. direct `startMCPOAuthFlow` core validation with `marketplace`, a nonfunctional
-   placeholder client ID, and DCR disabled, covering resource/issuer safety, HTTPS
+   placeholder client ID, and `dcrMode: "advertised"`, covering resource/issuer safety, HTTPS
    endpoint validation, and PKCE S256 before constructing a placeholder authorization
    URL.
 
@@ -63,11 +63,14 @@ strict-only RFC 9207 response-issuer flag. The test proves that the service:
 5. reaches the fixture's DCR endpoint, which records the request and returns HTTP 418
    without allocating a client.
 
-The service returns the redacted `dcr_registration` diagnostic and redirect, with no
-authorization URL, token request, or pending-attempt ID. This safely covers Agor's
-actual pre-mutation service seam. It is fixture evidence for the shared implementation,
-**not** a claim that any live vendor accepted DCR, registered Agor's callback, or created
-a durable pending attempt.
+The service makes a DCR POST to the local fixture. The fixture records it and returns
+HTTP 418 without allocating a client and sees no `/authorize` or `/token` request. The
+service returns the redacted `dcr_registration` diagnostic and redirect, with no
+authorization URL or pending-attempt ID. This proves the request shape and that no
+authorization, token, or pending-attempt state followed that controlled provider
+rejection; it is **not** an Agor-side abort seam before provider mutation and is **not**
+a claim that any live vendor accepted DCR, registered Agor's callback, or created a
+durable pending attempt.
 
 Acceptance requires safe live metadata with an advertised DCR endpoint (or a separately
 reviewed public client, of which this final set uses none), plus the service-boundary
@@ -130,19 +133,19 @@ identity was wrong and has been removed. The resulting catalog split is 31 publi
 All eleven permission disclosures were rechecked against current vendor documentation
 and the 2026-08-20 live metadata:
 
-| Entry       | Disclosure review                                                                                                                                                                                                                                                                                                          |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Postman     | Expanded for the US-only OAuth Full endpoint's 100+ tools, workspace/access management, environment variables, destructive API operations, and hosted telemetry.                                                                                                                                                           |
-| Cloudinary  | Retained: its documented asset-management surface uploads, searches, renames, tags, transforms, and deletes media; live resource scopes remain `asset_management upload media_generation` plus identity scopes.                                                                                                            |
-| Miro        | Expanded to include acting on comments; board reach remains limited by the approving user's existing board access.                                                                                                                                                                                                         |
-| Axiom       | Expanded to cover metrics queries and update authority as well as create/delete dashboards, monitors, and notifiers, query billing, and US result routing.                                                                                                                                                                 |
-| Algolia     | Retained as explicitly read-only across every application/index the user can reach; official docs say data changes remain in the dashboard or APIs.                                                                                                                                                                        |
-| Netlify     | Expanded for user/team information, access-control changes, extension install/removal, build logs, form submissions, and environment secrets in addition to projects/deploys/storage/databases.                                                                                                                            |
-| Klaviyo     | Expanded for customer and user-generated content, destructive campaign actions and send cancellation, profile merge/import, and subscription/suppression changes.                                                                                                                                                          |
-| Customer.io | Expanded for the exact five live PRM scopes—`configure read read:sensitive write write:live`—and their full Journeys/CDP authority. Agor requests all five; provider consent, user role, and admin toggles still constrain the grant. The catalog URL is explicitly US-only; Customer.io's separate EU URL is not modeled. |
-| incident.io | Expanded for follow-ups, investigations, post-mortems/archives, and connected observability logs, metrics, traces, and dashboards; also states the admin callback-host allowlisting prerequisite users need before Agor can authorize.                                                                                     |
-| Tavily      | Updated under its official Registry identity; disclosure covers submitted queries/URLs, account usage, and the live `openid offline_access` session scopes. Tools remain public-web search/extraction only.                                                                                                                |
-| Clerk       | Retained: live `tools/list` and `list_clerk_sdk_snippets` expose public snippet bundles, not a Clerk tenant or end-user data.                                                                                                                                                                                              |
+| Entry       | Disclosure review                                                                                                                                                                                                                                                                                                                            |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postman     | Expanded for the US-only OAuth Full endpoint's 100+ tools, workspace/access management, environment variables, destructive API operations, and hosted telemetry.                                                                                                                                                                             |
+| Cloudinary  | Expanded for folder creation, movement, and deletion. The official tool catalog states that folder deletion deletes all assets within it, so the consent copy explicitly warns that recursive folder deletion can remove every contained asset. Live resource scopes remain `asset_management upload media_generation` plus identity scopes. |
+| Miro        | Expanded to include acting on comments; board reach remains limited by the approving user's existing board access.                                                                                                                                                                                                                           |
+| Axiom       | Expanded to cover metrics queries and update authority as well as create/delete dashboards, monitors, and notifiers, query billing, and US result routing.                                                                                                                                                                                   |
+| Algolia     | Retained as explicitly read-only across every application/index the user can reach; official docs say data changes remain in the dashboard or APIs.                                                                                                                                                                                          |
+| Netlify     | Expanded for user/team information, access-control changes, extension install/removal, build logs, form submissions, and environment secrets in addition to projects/deploys/storage/databases.                                                                                                                                              |
+| Klaviyo     | Expanded for the unparameterized endpoint's defaults (write actions enabled, user-generated-content tools enabled, and all non-beta toolsets), plus list/segment deletion and membership changes, webhook/form deletion, profile deletion requests, and coupon, tag, image, template, universal-content, and custom-metric management.       |
+| Customer.io | Expanded for the exact five live PRM scopes—`configure read read:sensitive write write:live`—and their full Journeys/CDP authority. Agor requests all five; provider consent, user role, and admin toggles still constrain the grant. The catalog URL is explicitly US-only; Customer.io's separate EU URL is not modeled.                   |
+| incident.io | Expanded for follow-ups, investigations, post-mortems/archives, and connected observability logs, metrics, traces, and dashboards; also states the admin callback-host allowlisting prerequisite users need before Agor can authorize.                                                                                                       |
+| Tavily      | Updated under its official Registry identity; disclosure covers submitted queries/URLs, account usage, and the live `openid offline_access` session scopes. Tools remain public-web search/extraction only.                                                                                                                                  |
+| Clerk       | Retained: live `tools/list` and `list_clerk_sdk_snippets` expose public snippet bundles, not a Clerk tenant or end-user data.                                                                                                                                                                                                                |
 
 Editorial ranks remain assigned into gaps created by #2491 instead of appending stale
 51–62 ranks; §11 records the exact mapping.
@@ -547,17 +550,19 @@ four values cannot distinguish:
 
 1. **Open and complete** — Clerk, DeepWiki. No account exists to have; a key
    would buy nothing.
-2. **Open but metered** — Context7, Exa, Firecrawl, Hugging Face. Full tool
-   surface, free tier, and a key lifts limits or unlocks private data.
+2. **Open but metered** — Context7, Exa, Firecrawl, Hugging Face. At least one
+   substantive tool call works without credentials, but quota caps apply and a
+   key can raise limits or expose a broader surface; Firecrawl keyless is
+   specifically limited to Search, Scrape, and Parse.
 3. **Open handshake, closed tools** — Browserbase, Storyblok. Connect succeeds;
    every tool fails. **Currently indistinguishable from 1 and 2**, which is why
    §3.2 had to be a human judgement rather than a rule.
 
 Categories 1 and 2 are both fine to ship and the difference is a curation-copy
-matter — arguably `permission_disclosure` should mention metering, as Tavily's
-does, and Context7's and Firecrawl's currently do not. It is
-category 3 that is dangerous, and it is dangerous precisely because nothing in
-the file or the probe can express it.
+matter. Firecrawl's disclosure now states that its keyless surface is rate-limited
+and daily-capped; the older Context7, Exa, and Hugging Face copy does not consistently
+surface that distinction. It is category 3 that is dangerous, and it is dangerous
+precisely because nothing in the file or the probe can express it.
 
 Three options, in the order I would consider them:
 
@@ -587,8 +592,9 @@ tools-actually-work curation check.
 `/mcp` alias. On 2026-08-20 the versioned URL returned `none`, initialized as
 `firecrawl-fastmcp` 3.24.0, listed exactly `firecrawl_scrape`, `firecrawl_search`, and
 `firecrawl_parse`, and completed a real unauthenticated scrape of `https://example.com`.
-The starter prompt and disclosure now match that rate-limited keyless surface rather
-than promising the account-only crawl tool.
+The catalog now carries both `web-search` and `web-scrape`, so exact capability filters
+match the live tools and starter prompt. The disclosure explicitly calls the keyless
+surface rate-limited and daily-capped rather than promising the account-only crawl tool.
 
 ---
 
@@ -622,6 +628,7 @@ not a measured Agor install count.
 
 - [Postman remote MCP](https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server)
 - [Cloudinary MCP and AI agent tools](https://cloudinary.com/documentation/cloudinary_llm_mcp)
+- [Cloudinary Asset Management MCP tool catalog](https://asset-management.mcp.cloudinary.com/)
 - [Miro MCP](https://developers.miro.com/docs/miro-mcp)
 - [Axiom MCP](https://axiom.co/docs/console/intelligence/mcp-server)
 - [Algolia Productivity MCP](https://www.algolia.com/doc/guides/model-context-protocol/productivity-mcp)
@@ -636,3 +643,4 @@ not a measured Agor install count.
 - [Render MCP — rejected](https://render.com/docs/mcp-server)
 - [Official MCP Registry API](https://registry.modelcontextprotocol.io/v0.1/servers)
 - [Firecrawl MCP setup](https://github.com/firecrawl/firecrawl-docs/blob/main/mcp-server.mdx)
+- [Firecrawl keyless rate limits](https://github.com/firecrawl/firecrawl-docs/blob/main/rate-limits.mdx)

@@ -197,7 +197,7 @@ entries:
     capabilities: [files, content-cms]
     benefit: Upload, tag, and transform media from the session, so an agent wires up image URLs it has actually created rather than ones it invented.
     starter_prompt: Search my Cloudinary library for the assets I describe and generate a responsive transformation URL for each.
-    permission_disclosure: Uploads, renames, deletes, tags, and transforms assets in the Cloudinary product environment you authorise, and searches everything stored in it.
+    permission_disclosure: Uploads, renames, deletes, tags, and transforms assets in the Cloudinary product environment you authorise, and searches everything stored in it. It creates, moves, and deletes folders; recursive folder deletion can delete all assets contained in the selected folder.
     icon_url: https://www.google.com/s2/favicons?domain=cloudinary.com&sz=64
     popularity_rank: 46
     remote_url: https://asset-management.mcp.cloudinary.com/mcp
@@ -622,7 +622,7 @@ unpublished:
     capabilities: [email, crm, analytics]
     benefit: Answer "how did that campaign do, and who did it go to" without exporting a report first.
     starter_prompt: Summarise how my last five email campaigns performed and describe which segment each one targeted.
-    permission_disclosure: Reads and writes profiles, events, campaigns, flows, and catalogs in the Klaviyo accounts you authorise, including customer personal and user-generated data. It can create, update, delete, send, or clone campaigns, cancel campaign sends, import or merge profiles, and subscribe, unsubscribe, suppress, or unsuppress people.
+    permission_disclosure: The default unparameterized endpoint enables write actions and user-generated-content tools and exposes all non-beta toolsets. It reads and writes profiles, events, campaigns, flows, catalogs, lists, and segments in the Klaviyo accounts you authorise, including customer personal and user-generated data. It can create, update, delete, send, or clone campaigns and flows; cancel campaign sends; delete lists and segments and add or remove list members; import or merge profiles; change subscriptions and suppressions; submit profile deletion requests; delete webhooks and forms; and manage coupons and coupon codes, tags and tag groups, images, email templates and universal content, and custom metrics.
     icon_url: https://www.google.com/s2/favicons?domain=klaviyo.com&sz=64
     popularity_rank: 52
     remote_url: https://mcp.klaviyo.com/mcp
@@ -676,10 +676,10 @@ unpublished:
 
   - name: com.firecrawl/mcp
     category: search
-    capabilities: [web-scrape]
+    capabilities: [web-search, web-scrape]
     benefit: Turn any site into clean markdown an agent can actually read, including JavaScript-rendered pages.
     starter_prompt: Search the documentation site I name, scrape the most relevant public pages, and summarise its structure.
-    permission_disclosure: Sends searches and public URLs to Firecrawl and returns content through its rate-limited keyless Search, Scrape, and Parse tools. No Firecrawl account data is accessed.
+    permission_disclosure: Sends searches and public URLs to Firecrawl and returns content through its rate-limited, daily-capped keyless Search, Scrape, and Parse tools. No Firecrawl account data is accessed.
     icon_url: https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=64
     popularity_rank: 26
     remote_url: https://mcp.firecrawl.dev/v2/mcp

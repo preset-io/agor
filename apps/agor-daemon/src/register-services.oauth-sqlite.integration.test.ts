@@ -168,10 +168,11 @@ async function createTestProvider(
       let body = '';
       for await (const chunk of request) body += String(chunk);
       recordedRequest.jsonBody = body ? (JSON.parse(body) as Record<string, unknown>) : {};
-      // This fixture is intentionally pre-mutation: it records the production
-      // DCR request and rejects it without allocating a client or grant.
+      // The DCR POST has crossed the provider boundary here. This controlled
+      // fixture records it, then returns 418 without allocating a client or
+      // grant; it is not an Agor-side pre-provider-mutation abort seam.
       response.writeHead(418, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: 'fixture_rejected_without_mutation' }));
+      response.end(JSON.stringify({ error: 'fixture_rejected_registration' }));
       return;
     }
     if (url.pathname === '/token') {

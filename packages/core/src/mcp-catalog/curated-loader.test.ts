@@ -376,11 +376,31 @@ describe('the shipped catalog', () => {
       const copy = disclosure(name).toLowerCase();
       for (const term of terms) expect(copy).toContain(term.toLowerCase());
     };
+    expectTerms('io.github.cloudinary/asset-management-mcp', [
+      'creates, moves, and deletes folders',
+      'recursive folder deletion',
+      'all assets',
+    ]);
     expectTerms('com.netlify/mcp', [
       'user and team',
       'access controls',
       'install or remove extensions',
       'secrets',
+    ]);
+    expectTerms('com.klaviyo/mcp', [
+      'default unparameterized endpoint',
+      'write actions',
+      'user-generated-content tools',
+      'all non-beta toolsets',
+      'delete lists and segments',
+      'add or remove list members',
+      'profile deletion requests',
+      'delete webhooks and forms',
+      'coupons and coupon codes',
+      'tag groups',
+      'images',
+      'email templates',
+      'custom metrics',
     ]);
     expectTerms('io.customer/mcp', [
       'US-region',
@@ -412,6 +432,7 @@ describe('the shipped catalog', () => {
         name: 'com.firecrawl/mcp',
         remote_url: 'https://mcp.firecrawl.dev/v2/mcp',
         auth_type: 'none',
+        capabilities: ['web-search', 'web-scrape'],
       })
     );
   });
