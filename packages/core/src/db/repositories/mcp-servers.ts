@@ -14,7 +14,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
-import { and, eq, isNull, like, or } from 'drizzle-orm';
+import { and, eq, isNull, like, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
 import { restoreRedactedMCPEnvSecrets } from '../../tools/mcp/env-secrets';
@@ -24,7 +24,7 @@ import {
 } from '../../tools/mcp/http-headers';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type MCPServerInsert, type MCPServerRow, mcpServers } from '../schema';
+import { type MCPServerInsert, type MCPServerRow, mcpServers, sessionMcpServers } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -344,6 +344,36 @@ export class MCPServerRepository
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Delete an install only while no session has adopted it.
+   *
+   * The NOT EXISTS predicate and DELETE are one statement.  This is used by
+   * catalog-connect compensation: a concurrent request may have recovered a
+   * just-created row after losing the owner/catalog unique race.  A separate
+   * liveness read would allow that request to attach between the read and the
+   * delete and would make its successful result disappear afterwards.
+   */
+  async deleteIfUnattached(id: string): Promise<boolean> {
+    try {
+      const fullId = await this.resolveId(id);
+      const result = await deleteFrom(this.db, mcpServers)
+        .where(
+          and(
+            eq(mcpServers.mcp_server_id, fullId),
+            sql`NOT EXISTS (SELECT 1 FROM ${sessionMcpServers} WHERE ${sessionMcpServers.mcp_server_id} = ${mcpServers.mcp_server_id})`
+          )
+        )
+        .run();
+      return result.rowsAffected > 0;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return false;
+      throw new RepositoryError(
+        `Failed to delete unattached MCP server: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

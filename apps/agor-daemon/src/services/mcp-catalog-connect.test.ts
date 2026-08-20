@@ -45,6 +45,7 @@ function installOf(overrides: Record<string, unknown> = {}) {
     url: 'https://mcp.linear.app/mcp',
     auth: { type: 'none' },
     enabled: true,
+    owner_user_id: ALICE,
     ...overrides,
   };
 }
@@ -130,6 +131,13 @@ function buildApp(
         );
         removed.push(id);
         return { mcp_server_id: id };
+      }),
+      removeIfUnattached: vi.fn(async (id: string) => {
+        created.mcpServers = created.mcpServers.filter(
+          (server) => (server as { mcp_server_id?: string }).mcp_server_id !== id
+        );
+        removed.push(id);
+        return true;
       }),
       // Stands in for the real service's write-then-redact: what comes back
       // from a patch is the stored row with its secrets replaced, which is what
@@ -355,14 +363,14 @@ describe('mcp-catalog/connect', () => {
       mcp_server_id: 'server-redirected',
       url: 'https://collector.evil.example/mcp',
     });
-    const { app, created, deps } = buildApp(CURATED, [redirected]);
+    const { app, created, patched, deps } = buildApp(CURATED, [redirected]);
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(result.mcp_server.mcp_server_id).not.toBe('server-redirected');
-    expect(created.mcpServers).toHaveLength(1);
-    expect(created.mcpServers[0]).toMatchObject({ url: 'https://mcp.linear.app/mcp' });
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-redirected');
+    expect(created.mcpServers).toHaveLength(0);
+    expect(patched.at(-1)!.data).toMatchObject({ url: 'https://mcp.linear.app/mcp' });
   });
 
   it('does not reuse an install whose transport no longer matches', async () => {
@@ -371,8 +379,8 @@ describe('mcp-catalog/connect', () => {
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers).toHaveLength(1);
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
   });
 
   it('does not reuse an install whose auth configuration has drifted', async () => {
@@ -386,13 +394,13 @@ describe('mcp-catalog/connect', () => {
       mcp_server_id: 'server-reauthed',
       auth: { type: 'oauth', oauth_authorization_url: 'https://evil.example/authorize' },
     });
-    const { app, created, deps } = buildApp(CURATED, [reAuthed]);
+    const { app, created, patched, deps } = buildApp(CURATED, [reAuthed]);
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers).toHaveLength(1);
-    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
+    expect(patched.at(-1)!.data).toMatchObject({ auth: { type: 'none' } });
   });
 
   it('does not reuse an install carrying custom headers', async () => {
@@ -408,8 +416,8 @@ describe('mcp-catalog/connect', () => {
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers).toHaveLength(1);
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
   });
 
   it('does not reuse a disabled install', async () => {
@@ -419,13 +427,13 @@ describe('mcp-catalog/connect', () => {
     // may be shared and switched off deliberately, and flipping somebody
     // else's decision is not what "connect this entry" asked for.
     const disabled = installOf({ mcp_server_id: 'server-disabled', enabled: false });
-    const { app, created, deps } = buildApp(CURATED, [disabled]);
+    const { app, created, patched, deps } = buildApp(CURATED, [disabled]);
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers).toHaveLength(1);
-    expect(created.mcpServers[0]).not.toMatchObject({ enabled: false });
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
+    expect(patched.at(-1)!.data).toMatchObject({ enabled: true });
   });
 
   it('passes over a drifted row and takes the caller’s real install', async () => {
@@ -675,8 +683,9 @@ describe('mcp-catalog/connect', () => {
     // authorization decision — the row was created moments ago under the
     // caller's own params, so the delete is deliberately internal.
     expect(
-      (services['mcp-servers'] as { remove: ReturnType<typeof vi.fn> }).remove
-    ).toHaveBeenCalledWith('server-1', expect.objectContaining({ provider: undefined }));
+      (services['mcp-servers'] as { removeIfUnattached: ReturnType<typeof vi.fn> })
+        .removeIfUnattached
+    ).toHaveBeenCalledWith('server-1');
   });
 
   it('takes back the server it created when the attach is refused', async () => {
@@ -840,12 +849,12 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
       const redirected = installOf({
         auth: { type: 'oauth', oauth_mode: 'per_user', [field]: 'https://attacker.example/token' },
       });
-      const { app, created, deps } = buildApp(OAUTH_ENTRY, [redirected]);
+      const { app, patched, deps } = buildApp(OAUTH_ENTRY, [redirected]);
 
       const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-      expect(result.reused_existing_server).toBe(false);
-      expect((created.mcpServers[0] as { auth: Record<string, unknown> }).auth).toEqual({
+      expect(result.reused_existing_server).toBe(true);
+      expect((patched.at(-1)!.data as { auth: Record<string, unknown> }).auth).toEqual({
         type: 'oauth',
         oauth_mode: 'per_user',
       });
@@ -854,14 +863,14 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
 
   it('does not reuse an unauthenticated row for an endpoint that has been opened up', async () => {
     probeRemoteAuthType.mockResolvedValue('none');
-    const { app, created, deps } = buildApp(OAUTH_ENTRY, [
+    const { app, patched, deps } = buildApp(OAUTH_ENTRY, [
       installOf({ auth: { type: 'oauth', oauth_mode: 'per_user' } }),
     ]);
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
+    expect(result.reused_existing_server).toBe(true);
+    expect(patched.at(-1)!.data).toMatchObject({ auth: { type: 'none' } });
   });
 });
 
@@ -954,7 +963,7 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
     // Reuse is the other way a caller could influence what they get back:
     // if the payload steered the comparison, a caller could have connect hand
     // them a row they did not install.
-    const { app, created, deps } = buildApp({ ...CURATED, auth_type: 'oauth' }, [
+    const { app, patched, deps } = buildApp({ ...CURATED, auth_type: 'oauth' }, [
       installOf({ auth: { type: 'oauth', oauth_mode: 'shared' } }),
     ]);
 
@@ -963,8 +972,8 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
       params
     );
 
-    expect(result.reused_existing_server).toBe(false);
-    expect((created.mcpServers[0] as { auth: unknown }).auth).toEqual({
+    expect(result.reused_existing_server).toBe(true);
+    expect((patched.at(-1)!.data as { auth: unknown }).auth).toEqual({
       type: 'oauth',
       oauth_mode: 'per_user',
     });
@@ -1705,8 +1714,8 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
 
     const result = await createMCPCatalogConnectService(app).create(keyRequest, params);
 
-    expect(result.reused_existing_server).toBe(false);
-    expect(created.mcpServers).toHaveLength(1);
+    expect(result.reused_existing_server).toBe(true);
+    expect(created.mcpServers).toHaveLength(0);
   });
 
   it('leaves the unauthenticated and OAuth paths sharing rows as before', async () => {

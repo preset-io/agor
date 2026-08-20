@@ -1417,7 +1417,7 @@ export const mcpServers = sqliteTable(
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
     catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
-      .on(table.owner_user_id, table.catalog_entry_name)
+      .on(sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
       .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );

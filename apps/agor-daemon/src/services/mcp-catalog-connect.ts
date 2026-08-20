@@ -611,20 +611,31 @@ export function createMCPCatalogConnectService(
       },
     });
     const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    const mayReuse = (server: MCPServer): boolean =>
-      !carriesRowLevelSecret(server.auth) ||
-      (userId !== undefined && server.owner_user_id === userId);
-    const install = servers.find(
+    const owned = (server: MCPServer): boolean =>
+      userId !== undefined && server.owner_user_id === userId;
+    const current = servers.find(
       (server) =>
         server.enabled &&
         isCurrentCatalogInstall(server, entry, prescribed, {
           reconcileMissingCompatibilityMode: true,
         }) &&
-        mayReuse(server)
+        (!carriesRowLevelSecret(server.auth) || owned(server))
     );
-    return install
-      ? { server: install, kind: 'catalog_install' }
-      : await findReusableCredential(entry, prescribed, servers, params);
+    // New catalog installs are always private. An owned row that has been
+    // disabled or edited still occupies the database identity, so Connect
+    // reconciles that row rather than attempting an impossible second insert.
+    const catalogInstall = current ?? servers.find(owned);
+    if (catalogInstall) return { server: catalogInstall, kind: 'catalog_install' };
+
+    // Credential peers are not catalog-identity matches, so fetch the caller's
+    // broader usable set only after ruling out a current or reconcilable install.
+    const peerResult = await service('mcp-servers').find({
+      ...params,
+      provider: undefined,
+      query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
+    });
+    const peers = (Array.isArray(peerResult) ? peerResult : peerResult.data) as MCPServer[];
+    return findReusableCredential(entry, prescribed, peers, params);
   };
 
   /**
@@ -774,8 +785,6 @@ export function createMCPCatalogConnectService(
     }
 
     return undefined;
-  };
-
   /**
    * Write the key the caller just pasted onto the install being reused.
    *
@@ -887,6 +896,32 @@ export function createMCPCatalogConnectService(
       }
       const reusedExisting = !createdServer;
 
+      if (
+        reusedExisting &&
+        selection?.kind === 'catalog_install' &&
+        (!mcpServer.enabled ||
+          !isCurrentCatalogInstall(mcpServer, entry, auth, {
+            reconcileMissingCompatibilityMode: true,
+          }))
+      ) {
+        // The targeted identity is the caller's own row (findExistingInstall
+        // proves that). Run the ordinary external patch authorization as well,
+        // so a changed tenant write policy can refuse reconciliation rather
+        // than being bypassed by the marketplace path.
+        mcpServer = (await service('mcp-servers').patch(
+          mcpServer.mcp_server_id,
+          {
+            enabled: true,
+            transport: createInput.transport,
+            scope: createInput.scope,
+            url: createInput.url,
+            headers: {},
+            auth: createInput.auth,
+          },
+          { ...params }
+        )) as MCPServer;
+      }
+
       // Four writes across three services, so there is no transaction to lean
       // on. What this request created, it takes back on failure: a server or a
       // session nobody can see is configuration the user never asked to keep
@@ -993,10 +1028,10 @@ export function createMCPCatalogConnectService(
         }
         if (createdServer) {
           try {
-            await service('mcp-servers').remove(mcpServer.mcp_server_id, {
-              ...params,
-              provider: undefined,
-            });
+            // Atomic liveness/adoption check. A concurrent unique-conflict
+            // loser may now be using this row; in that case it owns the row's
+            // continued life and compensation must leave it in place.
+            await service('mcp-servers').removeIfUnattached(mcpServer.mcp_server_id);
           } catch (cleanupError) {
             console.warn(
               `[mcp-catalog/connect] Left ${mcpServer.mcp_server_id} behind after a failed connect:`,

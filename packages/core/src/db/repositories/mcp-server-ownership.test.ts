@@ -123,6 +123,36 @@ describe('private MCP server ownership', () => {
     ]);
   });
 
+  dbTest(
+    'creator failure cannot delete a catalog row after a conflict loser adopts it',
+    async ({ db }) => {
+      const { sessionMcpRepo, alicesSession, mcpServerRepo } = await setupTenant(db);
+      const winnerCreated = await mcpServerRepo.create({
+        name: 'catalog-race',
+        transport: 'http',
+        url: 'https://catalog.example/mcp',
+        scope: 'session',
+        source: 'catalog',
+        catalog_entry_name: 'com.example/race',
+        owner_user_id: ALICE,
+      });
+
+      // The concurrent insert lost the unique race, recovered winnerCreated,
+      // and completed its attachment before the creator's later step failed.
+      await sessionMcpRepo.addServer(alicesSession.session_id, winnerCreated.mcp_server_id);
+
+      await expect(mcpServerRepo.deleteIfUnattached(winnerCreated.mcp_server_id)).resolves.toBe(
+        false
+      );
+      await expect(mcpServerRepo.findById(winnerCreated.mcp_server_id)).resolves.toMatchObject({
+        mcp_server_id: winnerCreated.mcp_server_id,
+      });
+      await expect(
+        sessionMcpRepo.getRelationship(alicesSession.session_id, winnerCreated.mcp_server_id)
+      ).resolves.not.toBeNull();
+    }
+  );
+
   dbTest('a shared server stays attachable by anyone', async ({ db }) => {
     const { sessionMcpRepo, bobsSession, sharedServer } = await setupTenant(db);
 

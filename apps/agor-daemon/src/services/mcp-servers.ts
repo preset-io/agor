@@ -123,6 +123,11 @@ export class MCPServersService extends DrizzleService<
   ): Promise<MCPServer[]> {
     return this.mcpServerRepo.findByScope(scope, scopeId);
   }
+
+  /** Internal compensation primitive; deliberately not registered as a REST method. */
+  async removeIfUnattached(id: string): Promise<boolean> {
+    return this.mcpServerRepo.deleteIfUnattached(id);
+  }
 }
 
 /**
