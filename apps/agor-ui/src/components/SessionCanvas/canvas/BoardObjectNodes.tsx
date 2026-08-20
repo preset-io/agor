@@ -395,199 +395,12 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           position: 'relative',
         }}
       >
-        {/* Toolbar - ALWAYS rendered, visibility controlled by CSS only */}
-        <div
-          className="nodrag nopan"
-          onPointerDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onPointerUp={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          style={{
-            position: 'absolute',
-            top: '-44px',
-            left: '50%',
-            transform: `translateX(-50%) scale(${scale})`,
-            transformOrigin: 'center bottom',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '6px',
-            background: token.colorBgElevated,
-            border: `1px solid ${token.colorBorder}`,
-            borderRadius: token.borderRadius,
-            boxShadow: token.boxShadowSecondary,
-            zIndex: 1000,
-            userSelect: 'none',
-            // CSS-only visibility control (no DOM changes). When the
-            // connection gate is closed we also dim and block clicks so the
-            // toolbar reads as read-only and never accidentally fires.
-            opacity: toolbarVisible ? (mutationDisabled ? 0.5 : 1) : 0,
-            pointerEvents: toolbarVisible && !mutationDisabled ? 'auto' : 'none',
-            transition: 'opacity 0.15s ease',
-          }}
-        >
-          {/* Border Color Picker */}
+        {/* Toolbar — mounted only while the zone is selected (toolbarVisible
+            keeps a 100ms grace so quick re-selects don't flicker). Keeps the
+            other ~11 controls out of the DOM/accessibility tree per zone. */}
+        {toolbarVisible && (
           <div
             className="nodrag nopan"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontWeight: 500,
-                userSelect: 'none',
-                lineHeight: 1,
-              }}
-            >
-              Border
-            </span>
-            <ColorPicker
-              value={borderColor}
-              onChange={handleBorderColorChange}
-              trigger="click"
-              destroyTooltipOnHide
-              showText={false}
-              format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors,
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              <button
-                type="button"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '3px',
-                  backgroundColor: borderColor,
-                  border: `1px solid ${token.colorBorder}`,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  boxShadow: token.boxShadowSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                title="Change border color"
-              />
-            </ColorPicker>
-          </div>
-          <div
-            style={{
-              width: '1px',
-              height: '24px',
-              backgroundColor: token.colorBorder,
-              margin: '0 2px',
-              alignSelf: 'center',
-            }}
-          />
-          {/* Background Color Picker */}
-          <div
-            className="nodrag nopan"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-          >
-            <span
-              style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontWeight: 500,
-                userSelect: 'none',
-                lineHeight: 1,
-              }}
-            >
-              Fill
-            </span>
-            <ColorPicker
-              value={backgroundColor}
-              onChange={handleBackgroundColorChange}
-              trigger="click"
-              destroyTooltipOnHide
-              showText={false}
-              format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors.map(
-                    (c) =>
-                      `${c}${Math.round(ZONE_CONTENT_OPACITY * 255)
-                        .toString(16)
-                        .padStart(2, '0')}`
-                  ),
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              <button
-                type="button"
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '3px',
-                  backgroundColor: backgroundColor,
-                  border: `1px solid ${token.colorBorder}`,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  boxShadow: token.boxShadowSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                title="Change background color"
-              />
-            </ColorPicker>
-          </div>
-          <div
-            style={{
-              width: '1px',
-              height: '24px',
-              backgroundColor: token.colorBorder,
-              margin: '0 2px',
-              alignSelf: 'center',
-            }}
-          />
-          {/* Lock/Unlock Button */}
-          <button
-            type="button"
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -595,40 +408,339 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             onPointerUp={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (mutationDisabled) return;
-              handleToggleLock();
             }}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
             }}
             style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
-              border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
+              position: 'absolute',
+              top: '-44px',
+              left: '50%',
+              transform: `translateX(-50%) scale(${scale})`,
+              transformOrigin: 'center bottom',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              gap: '8px',
+              padding: '6px',
+              background: token.colorBgElevated,
+              border: `1px solid ${token.colorBorder}`,
+              borderRadius: token.borderRadius,
+              boxShadow: token.boxShadowSecondary,
+              zIndex: 1000,
               userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
+              // When the connection gate is closed, dim and block clicks so the
+              // toolbar reads as read-only and never accidentally fires.
+              opacity: mutationDisabled ? 0.5 : 1,
+              pointerEvents: mutationDisabled ? 'none' : 'auto',
             }}
-            title={data.locked ? 'Unlock zone' : 'Lock zone'}
           >
-            {data.locked ? (
-              <LockOutlined
+            {/* Border Color Picker */}
+            <div
+              className="nodrag nopan"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.stopPropagation();
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <span
                 style={{
-                  fontSize: '12px',
-                  color: token.colorWarning,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  fontSize: '11px',
+                  color: token.colorTextSecondary,
+                  fontWeight: 500,
+                  userSelect: 'none',
+                  lineHeight: 1,
                 }}
+              >
+                Border
+              </span>
+              <ColorPicker
+                value={borderColor}
+                onChange={handleBorderColorChange}
+                trigger="click"
+                destroyTooltipOnHide
+                showText={false}
+                format="hex"
+                presets={[
+                  {
+                    label: 'Presets',
+                    colors: colors,
+                  },
+                  ...(recentColors.length > 0
+                    ? [
+                        {
+                          label: 'Recent',
+                          colors: recentColors,
+                        },
+                      ]
+                    : []),
+                ]}
+              >
+                <button
+                  type="button"
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '3px',
+                    backgroundColor: borderColor,
+                    border: `1px solid ${token.colorBorder}`,
+                    userSelect: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    boxShadow: token.boxShadowSecondary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title="Change border color"
+                />
+              </ColorPicker>
+            </div>
+            <div
+              style={{
+                width: '1px',
+                height: '24px',
+                backgroundColor: token.colorBorder,
+                margin: '0 2px',
+                alignSelf: 'center',
+              }}
+            />
+            {/* Background Color Picker */}
+            <div
+              className="nodrag nopan"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.stopPropagation();
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: token.colorTextSecondary,
+                  fontWeight: 500,
+                  userSelect: 'none',
+                  lineHeight: 1,
+                }}
+              >
+                Fill
+              </span>
+              <ColorPicker
+                value={backgroundColor}
+                onChange={handleBackgroundColorChange}
+                trigger="click"
+                destroyTooltipOnHide
+                showText={false}
+                format="hex"
+                presets={[
+                  {
+                    label: 'Presets',
+                    colors: colors.map(
+                      (c) =>
+                        `${c}${Math.round(ZONE_CONTENT_OPACITY * 255)
+                          .toString(16)
+                          .padStart(2, '0')}`
+                    ),
+                  },
+                  ...(recentColors.length > 0
+                    ? [
+                        {
+                          label: 'Recent',
+                          colors: recentColors,
+                        },
+                      ]
+                    : []),
+                ]}
+              >
+                <button
+                  type="button"
+                  style={{
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '3px',
+                    backgroundColor: backgroundColor,
+                    border: `1px solid ${token.colorBorder}`,
+                    userSelect: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    boxShadow: token.boxShadowSecondary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title="Change background color"
+                />
+              </ColorPicker>
+            </div>
+            <div
+              style={{
+                width: '1px',
+                height: '24px',
+                backgroundColor: token.colorBorder,
+                margin: '0 2px',
+                alignSelf: 'center',
+              }}
+            />
+            {/* Lock/Unlock Button */}
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (mutationDisabled) return;
+                handleToggleLock();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              style={{
+                width: '20px',
+                height: '20px',
+                borderRadius: '3px',
+                backgroundColor: data.locked ? token.colorWarningBg : token.colorBgContainer,
+                border: `1px solid ${data.locked ? token.colorWarning : token.colorBorder}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+              title={data.locked ? 'Unlock zone' : 'Lock zone'}
+            >
+              {data.locked ? (
+                <LockOutlined
+                  style={{
+                    fontSize: '12px',
+                    color: token.colorWarning,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+              ) : (
+                <UnlockOutlined
+                  style={{
+                    fontSize: '12px',
+                    color: token.colorText,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+              )}
+            </button>
+            {verticalDivider}
+            {/* Layer (z-order) controls */}
+            <div
+              className="nodrag nopan"
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              {renderActionButton(
+                'to-back',
+                'Send to back',
+                <VerticalAlignBottomOutlined style={layerIconStyle} />,
+                () => handleReorder('back')
+              )}
+              {renderActionButton(
+                'send-backward',
+                'Send backward',
+                <CaretDownOutlined style={layerIconStyle} />,
+                () => handleReorder('backward')
+              )}
+              {renderActionButton(
+                'bring-forward',
+                'Bring forward',
+                <CaretUpOutlined style={layerIconStyle} />,
+                () => handleReorder('forward')
+              )}
+              {renderActionButton(
+                'to-front',
+                'Bring to front',
+                <VerticalAlignTopOutlined style={layerIconStyle} />,
+                () => handleReorder('front')
+              )}
+            </div>
+            {verticalDivider}
+            {/* Label font-size stepper */}
+            <div
+              className="nodrag nopan"
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <FontSizeOutlined
+                style={{ fontSize: '12px', color: token.colorTextSecondary }}
+                title="Label font size"
               />
-            ) : (
-              <UnlockOutlined
+              {renderActionButton(
+                'font-smaller',
+                'Smaller label',
+                <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>−</span>,
+                () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP),
+                atMinFontSize
+              )}
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: token.colorTextSecondary,
+                  fontVariantNumeric: 'tabular-nums',
+                  minWidth: '20px',
+                  textAlign: 'center',
+                  userSelect: 'none',
+                }}
+              >
+                {Math.round(labelFontSize)}
+              </span>
+              {renderActionButton(
+                'font-larger',
+                'Larger label',
+                <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>+</span>,
+                () => handleFontSizeStep(ZONE_FONT_SIZE_STEP),
+                atMaxFontSize
+              )}
+            </div>
+            {verticalDivider}
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (mutationDisabled) return;
+                setConfigModalOpen(true);
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              style={{
+                width: '20px',
+                height: '20px',
+                borderRadius: '3px',
+                backgroundColor: token.colorBgContainer,
+                border: `1px solid ${token.colorBorder}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+              title="Configure zone"
+            >
+              <SettingOutlined
                 style={{
                   fontSize: '12px',
                   color: token.colorText,
@@ -637,168 +749,58 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   justifyContent: 'center',
                 }}
               />
-            )}
-          </button>
-          {verticalDivider}
-          {/* Layer (z-order) controls */}
-          <div
-            className="nodrag nopan"
-            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-          >
-            {renderActionButton(
-              'to-back',
-              'Send to back',
-              <VerticalAlignBottomOutlined style={layerIconStyle} />,
-              () => handleReorder('back')
-            )}
-            {renderActionButton(
-              'send-backward',
-              'Send backward',
-              <CaretDownOutlined style={layerIconStyle} />,
-              () => handleReorder('backward')
-            )}
-            {renderActionButton(
-              'bring-forward',
-              'Bring forward',
-              <CaretUpOutlined style={layerIconStyle} />,
-              () => handleReorder('forward')
-            )}
-            {renderActionButton(
-              'to-front',
-              'Bring to front',
-              <VerticalAlignTopOutlined style={layerIconStyle} />,
-              () => handleReorder('front')
-            )}
-          </div>
-          {verticalDivider}
-          {/* Label font-size stepper */}
-          <div
-            className="nodrag nopan"
-            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-          >
-            <FontSizeOutlined
-              style={{ fontSize: '12px', color: token.colorTextSecondary }}
-              title="Label font size"
-            />
-            {renderActionButton(
-              'font-smaller',
-              'Smaller label',
-              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>−</span>,
-              () => handleFontSizeStep(-ZONE_FONT_SIZE_STEP),
-              atMinFontSize
-            )}
-            <span
+            </button>
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (mutationDisabled) return;
+                setDeleteModalOpen(true);
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = token.colorError;
+                e.currentTarget.style.borderColor = token.colorError;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = token.colorTextSecondary;
+                e.currentTarget.style.borderColor = token.colorBorder;
+              }}
               style={{
-                fontSize: '11px',
-                color: token.colorTextSecondary,
-                fontVariantNumeric: 'tabular-nums',
-                minWidth: '20px',
-                textAlign: 'center',
+                width: '20px',
+                height: '20px',
+                borderRadius: '3px',
+                backgroundColor: token.colorBgContainer,
+                border: `1px solid ${token.colorBorder}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 userSelect: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                color: token.colorTextSecondary,
               }}
+              title="Delete zone"
             >
-              {Math.round(labelFontSize)}
-            </span>
-            {renderActionButton(
-              'font-larger',
-              'Larger label',
-              <span style={{ fontSize: '13px', lineHeight: 1, fontWeight: 600 }}>+</span>,
-              () => handleFontSizeStep(ZONE_FONT_SIZE_STEP),
-              atMaxFontSize
-            )}
+              <DeleteOutlined
+                style={{
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              />
+            </button>
           </div>
-          {verticalDivider}
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (mutationDisabled) return;
-              setConfigModalOpen(true);
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: token.colorBgContainer,
-              border: `1px solid ${token.colorBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
-            }}
-            title="Configure zone"
-          >
-            <SettingOutlined
-              style={{
-                fontSize: '12px',
-                color: token.colorText,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            />
-          </button>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (mutationDisabled) return;
-              setDeleteModalOpen(true);
-            }}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = token.colorError;
-              e.currentTarget.style.borderColor = token.colorError;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = token.colorTextSecondary;
-              e.currentTarget.style.borderColor = token.colorBorder;
-            }}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '3px',
-              backgroundColor: token.colorBgContainer,
-              border: `1px solid ${token.colorBorder}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              userSelect: 'none',
-              cursor: 'pointer',
-              padding: 0,
-              color: token.colorTextSecondary,
-            }}
-            title="Delete zone"
-          >
-            <DeleteOutlined
-              style={{
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            />
-          </button>
-        </div>
+        )}
         <div
           style={{
             pointerEvents: 'auto',

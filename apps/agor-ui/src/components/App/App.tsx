@@ -20,14 +20,9 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Layout, theme, Upload } from 'antd';
+import { Layout, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import {
-  type ImperativePanelHandle,
-  Panel,
-  PanelGroup,
-  PanelResizeHandle,
-} from 'react-resizable-panels';
+import { type ImperativePanelHandle, Panel, PanelGroup } from 'react-resizable-panels';
 import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -105,6 +100,7 @@ import {
   toContentRelativePercent,
   toViewportRelativePercent,
 } from './panelSizing';
+import { WorkspaceResizeHandle } from './WorkspaceResizeHandle';
 
 const { Content } = Layout;
 
@@ -357,7 +353,6 @@ export const App: React.FC<AppProps> = ({
   // stays quiet across unrelated entity patches), a call-time
   // `agorStore.getState()` read inside a handler, or pushed down into the
   // component that actually consumes the map (SettingsModal, UrlStateBridge).
-  const { token } = theme.useToken();
   const { showWarning, showError } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
@@ -1525,31 +1520,10 @@ export const App: React.FC<AppProps> = ({
                 />
               )}
             </Panel>
-            <PanelResizeHandle
-              style={{
-                position: 'relative',
-                width: leftPanelCollapsed ? '0px' : '4px',
-                background: token.colorBorderSecondary,
-                cursor: leftPanelCollapsed ? 'default' : 'col-resize',
-                transition: 'background 0.2s',
-                pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
-                overflow: 'visible',
-                zIndex: 10,
-              }}
+            <WorkspaceResizeHandle
+              disabled={leftPanelCollapsed}
               onDragging={(isDragging) => {
                 leftPanelResizeDraggingRef.current = isDragging;
-              }}
-              onMouseEnter={(e) => {
-                if (!leftPanelCollapsed) {
-                  (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    token.colorPrimary;
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!leftPanelCollapsed) {
-                  (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    token.colorBorderSecondary;
-                }
               }}
             />
             <Panel id="content-panel" order={2} defaultSize={contentPanelWidthPercent} minSize={40}>
@@ -1648,23 +1622,9 @@ export const App: React.FC<AppProps> = ({
                 </Panel>
                 {(sessionPanelTargetOpen || !eventStreamPanelCollapsed) && (
                   <>
-                    <PanelResizeHandle
-                      style={{
-                        width: '4px',
-                        background: token.colorBorderSecondary,
-                        cursor: 'col-resize',
-                        transition: 'background 0.2s',
-                      }}
+                    <WorkspaceResizeHandle
                       onDragging={(isDragging) => {
                         rightPanelResizeDraggingRef.current = isDragging;
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as unknown as HTMLDivElement).style.background =
-                          token.colorPrimary;
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as unknown as HTMLDivElement).style.background =
-                          token.colorBorderSecondary;
                       }}
                     />
                     <Panel
