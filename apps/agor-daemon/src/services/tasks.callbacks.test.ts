@@ -1,4 +1,4 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
@@ -345,6 +345,28 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).toContain(originalPrompt);
     expect(callbackPrompt).toContain('**Result:**');
     expect(callbackPrompt).toContain('Final child result');
+  });
+
+  it('exposes childSessionTitle to custom callback templates', async () => {
+    const { service, createPending } = makeService({
+      childSession: { title: 'Investigate flaky test' },
+      parentSession: {
+        callback_config: {
+          template: 'Child "{{childSessionTitle}}" ({{childSessionId}}) is done.',
+        },
+      },
+    });
+
+    await service.patch(taskId, {
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    expect(callbackPrompt).toBe(
+      `Child "Investigate flaky test" (${shortId(childSessionId as Session['session_id'])}) is done.`
+    );
   });
 
   it('uses the same single templated patch completion path for sessions.create callbacks without spawn genealogy', async () => {

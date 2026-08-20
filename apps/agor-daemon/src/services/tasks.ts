@@ -1230,6 +1230,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const context: ChildCompletionContext = {
         childSessionId: shortId(childSession.session_id),
         childSessionFullId: childSession.session_id,
+        childSessionTitle: childSession.title || '',
         childTaskId: shortId(task.task_id),
         childTaskFullId: task.task_id,
         parentSessionId: shortId(targetSessionId), // backward compat
