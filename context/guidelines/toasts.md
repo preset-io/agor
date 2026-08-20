@@ -26,7 +26,7 @@ It's the **static** message API. It mounts outside the React tree, so it does **
 ## What the wrapper gives you for free
 
 - **Theme integration.** Themed via `App.useApp()` under the hood.
-- **Copy-to-clipboard on every toast.** A semantic **Copy** button copies only the rendered, user-visible text. It does not add stacks, headers, response bodies, secrets, environment values, or other hidden diagnostics. Copy success or failure is shown visually and announced to assistive technology. No need to add a separate `<CopyButton>` inside the toast.
+- **Copy-to-clipboard on every toast.** An icon-only semantic **Copy** button copies only the rendered, user-visible text. Its accessible name (and hover title) describes the current copy state. It does not add stacks, headers, response bodies, secrets, environment values, or other hidden diagnostics. Copy success or failure is shown visually and announced to assistive technology. No need to add a separate `<CopyButton>` inside the toast.
 - **Persistent, dismissible errors.** Errors remain until the user chooses **Dismiss** or a keyed loading/error/success update replaces them. Copy and Dismiss are keyboard-focusable buttons; dismissing a focused error moves focus to an adjacent error when available, then back to the control that preceded the error. Use `{ duration }` only when a genuinely transient error should expire.
 - **Bounded, non-evicting error review.** AntD's message list scrolls within the viewport. Do not add `maxCount`: it discards undismissed errors. Do not enable the collapsed message stack unless it gains a keyboard-operable expansion path.
 - **Standardized timing.** Success/info: 3s. Warning: 4s. Loading and errors: indefinite. Override per-call with `{ duration }` if you have a reason.
