@@ -9,9 +9,9 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type {
-  InitialContentDeliveryResult,
-  InitialContentRetry,
+  NewSessionConfig,
   NewSessionCreationResult,
+  SessionInitializationRetry,
 } from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
@@ -23,7 +23,6 @@ import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import type { NewSessionConfig } from '../NewSessionModal';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -68,10 +67,10 @@ export interface AppHeaderProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<NewSessionCreationResult | null>;
-  onRetryInitialContent?: (
+  onRetrySessionInitialization?: (
     sessionId: string,
-    retry: InitialContentRetry
-  ) => Promise<InitialContentDeliveryResult>;
+    retry: SessionInitializationRetry
+  ) => Promise<NewSessionCreationResult>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -149,7 +148,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   instanceLabel,
   instanceDescription,
   onCreateSession,
-  onRetryInitialContent,
+  onRetrySessionInitialization,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -315,7 +314,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             currentUser={user}
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
-            onRetryInitialContent={onRetryInitialContent}
+            onRetrySessionInitialization={onRetrySessionInitialization}
             disabled={mutationDisabled}
           />
         )}

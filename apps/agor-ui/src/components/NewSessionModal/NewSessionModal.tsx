@@ -14,8 +14,6 @@ import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme 
 import { useCallback, useEffect, useState } from 'react';
 import type { NewSessionConfig } from '../../domain/sessionCreation';
 
-export type { NewSessionConfig } from '../../domain/sessionCreation';
-
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';

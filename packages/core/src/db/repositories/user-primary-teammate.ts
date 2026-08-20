@@ -101,18 +101,23 @@ export class UserPrimaryTeammateRepository {
     userId: UserID,
     options: ResolvePrimaryTeammateOptions = {}
   ): Promise<Branch[]> {
-    const candidates = await this.branches.findTeammateBranches({
-      archived: false,
-      ...(options.enforceAccess === false ? {} : { userId }),
-    });
-    if (options.enforceAccess === false) return candidates;
-
-    const eligible = await Promise.all(
-      candidates.map((branch) =>
-        this.findEligiblePrimaryTeammate(branch.branch_id, userId, options)
-      )
-    );
-    return eligible.filter((branch): branch is Branch => branch !== null);
+    const candidates: Branch[] = [];
+    const pageSize = 200;
+    for (let offset = 0; ; offset += pageSize) {
+      const page = await this.branches.findTeammateBranches({
+        archived: false,
+        ...(options.enforceAccess === false
+          ? {}
+          : { userId, minimumPermission: 'session' as const }),
+        // Settings is not itself a paging UI, so exhaust repository pages. The
+        // eligibility predicate remains set-wise in SQL rather than N+1 reads.
+        limit: pageSize,
+        offset,
+      });
+      candidates.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return candidates.filter(isTeammate);
   }
 
   /** Set the user's primary teammate branch and emit the assignment event. */

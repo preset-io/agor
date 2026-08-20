@@ -63,6 +63,23 @@ describe('prompt and widget transaction scopes', () => {
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
 
+  it('binds public prompt retries to one tenant-scoped caller/session/content identity', () => {
+    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
+    const prompt = source.slice(promptStart, runStart);
+
+    expect(prompt).toContain('idempotencyKey?: UUID');
+    expect(prompt).toContain('const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey');
+    expect(prompt).toContain('prior.session_id !== id');
+    expect(prompt).toContain(
+      'prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt'
+    );
+    expect(prompt).toContain('task_id: stableTaskId');
+    expect(prompt.indexOf('const promptTenantId = getCurrentTenantId()')).toBeLessThan(
+      prompt.indexOf('const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey')
+    );
+  });
+
   it('restores the queued user before hooked Session recovery under branch RBAC', () => {
     const start = source.indexOf('async function processNextQueuedTaskInternal(');
     const end = source.indexOf('// Inject queue processor into sessions service.', start);

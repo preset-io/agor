@@ -5,9 +5,8 @@ import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
-  InitialContentDeliveryResult,
-  InitialContentRetry,
   NewSessionCreationResult,
+  SessionInitializationRetry,
 } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
@@ -209,15 +208,16 @@ function renderCompose(opts: {
   currentUser?: User | null;
   disabled?: boolean;
   onCreateSession?: (config: unknown, boardId: string) => Promise<NewSessionCreationResult | null>;
-  onRetryInitialContent?: (
+  onRetrySessionInitialization?: (
     sessionId: string,
-    retry: InitialContentRetry
-  ) => Promise<InitialContentDeliveryResult>;
+    retry: SessionInitializationRetry
+  ) => Promise<NewSessionCreationResult>;
 }) {
   const onCreateSession =
     opts.onCreateSession ??
     vi.fn().mockResolvedValue({
       sessionId: 'session-new',
+      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
       delivery: { prompt: 'not-requested', attachments: 'not-requested' },
     });
   const result = render(
@@ -228,7 +228,7 @@ function renderCompose(opts: {
           currentUser={opts.currentUser ?? null}
           currentBoardId={opts.currentBoardId ?? 'board-current'}
           onCreateSession={onCreateSession as never}
-          onRetryInitialContent={opts.onRetryInitialContent}
+          onRetrySessionInitialization={opts.onRetrySessionInitialization}
           disabled={opts.disabled}
         />
       </AntApp>
@@ -498,35 +498,44 @@ describe('NavbarComposeButton', () => {
   });
 
   it('preserves the draft and avoids a false success when initial delivery fails', async () => {
-    const retry = { prompt: 'do not lose me' };
+    const retry = {
+      content: {
+        prompt: 'do not lose me',
+        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
+      },
+    };
     const onCreateSession = vi.fn().mockResolvedValue({
       sessionId: 'session-undelivered',
-      delivery: { prompt: 'failed', attachments: 'not-requested', retry },
+      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
+      delivery: {
+        prompt: 'failed',
+        attachments: 'not-requested',
+        retry: retry.content,
+      },
+      retry,
     });
-    const onRetryInitialContent = vi
-      .fn()
-      .mockResolvedValue({ prompt: 'delivered', attachments: 'not-requested' });
-    renderCompose({ primary: primaryBranch, onCreateSession, onRetryInitialContent });
+    const onRetrySessionInitialization = vi.fn().mockResolvedValue({
+      sessionId: 'session-undelivered',
+      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
+      delivery: { prompt: 'delivered', attachments: 'not-requested' },
+    });
+    renderCompose({ primary: primaryBranch, onCreateSession, onRetrySessionInitialization });
     openPopover();
     const prompt = await screen.findByTestId('compose-prompt');
     fireEvent.change(prompt, { target: { value: 'do not lose me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send in Background' }));
 
-    expect(
-      await screen.findByText('Session created, but some content was not sent')
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Session created, but setup is incomplete')).toBeInTheDocument();
     expect(prompt).toHaveValue('do not lose me');
     expect(screen.getByRole('button', { name: 'Send in Background' })).toBeDisabled();
     expect(goToSession).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
     await waitFor(() =>
-      expect(onRetryInitialContent).toHaveBeenCalledWith('session-undelivered', retry)
+      expect(onRetrySessionInitialization).toHaveBeenCalledWith('session-undelivered', retry)
     );
     await waitFor(() =>
-      expect(
-        screen.queryByText('Session created, but some content was not sent')
-      ).not.toBeInTheDocument()
+      expect(screen.queryByText('Session created, but setup is incomplete')).not.toBeInTheDocument()
     );
     expect(goToSession).not.toHaveBeenCalled();
   });

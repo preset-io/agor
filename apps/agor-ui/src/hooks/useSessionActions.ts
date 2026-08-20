@@ -18,7 +18,7 @@ import {
   SessionStatus,
 } from '@agor-live/client';
 import { useState } from 'react';
-import type { NewSessionConfig } from '../components/NewSessionModal';
+import type { NewSessionConfig } from '../domain/sessionCreation';
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;

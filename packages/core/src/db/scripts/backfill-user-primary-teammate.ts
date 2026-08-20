@@ -15,11 +15,12 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { BranchID } from '@agor/core/types';
+import type { BranchID, UserID } from '@agor/core/types';
 import { createClient } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
 import type { Database } from '../client';
 import { BoardRepository } from '../repositories/boards';
+import type { ResolvePrimaryTeammateOptions } from '../repositories/user-primary-teammate';
 import { UserPrimaryTeammateRepository } from '../repositories/user-primary-teammate';
 import { UsersRepository } from '../repositories/users';
 
@@ -32,52 +33,54 @@ export interface BackfillUserPrimaryTeammateResult {
   alreadySet: number;
 }
 
+export type BackfillUserPrimaryTeammateOutcome = 'assigned' | 'skipped' | 'alreadySet';
+
+/**
+ * Tenant-scoped, per-user rollout path. Besides startup backfills, the users
+ * service invokes this lazily when a caller first resolves their preference,
+ * which covers dynamic Postgres tenants without unsafe system enumeration.
+ */
+export async function backfillUserPrimaryTeammate(
+  db: Database,
+  userId: UserID,
+  options: ResolvePrimaryTeammateOptions = {}
+): Promise<BackfillUserPrimaryTeammateOutcome> {
+  const primaryTeammates = new UserPrimaryTeammateRepository(db);
+  if (await primaryTeammates.getBranchId(userId)) return 'alreadySet';
+
+  const user = await new UsersRepository(db).findById(userId).catch(() => null);
+  const mainBoardId = user?.preferences?.mainBoardId;
+  if (!mainBoardId) return 'skipped';
+
+  const board = await new BoardRepository(db).findById(mainBoardId).catch(() => null);
+  const teammateBranchId = board?.primary_teammate_id;
+  if (!teammateBranchId) return 'skipped';
+
+  const eligible = await primaryTeammates.findEligiblePrimaryTeammate(
+    teammateBranchId as BranchID,
+    userId,
+    options
+  );
+  if (!eligible) return 'skipped';
+
+  return (await primaryTeammates.setPrimaryTeammateIfUnset(userId, teammateBranchId as BranchID, {
+    source: 'default',
+  }))
+    ? 'assigned'
+    : 'alreadySet';
+}
+
 export async function backfillUserPrimaryTeammates(
   db: Database
 ): Promise<BackfillUserPrimaryTeammateResult> {
   const users = new UsersRepository(db);
-  const boards = new BoardRepository(db);
-  const primaryTeammates = new UserPrimaryTeammateRepository(db);
-
   const result: BackfillUserPrimaryTeammateResult = { assigned: 0, skipped: 0, alreadySet: 0 };
 
   for (const user of await users.findAll()) {
-    const mainBoardId = user.preferences?.mainBoardId;
-    if (!mainBoardId) {
-      result.skipped++;
-      continue;
-    }
-
-    if (await primaryTeammates.getBranchId(user.user_id)) {
-      result.alreadySet++;
-      continue;
-    }
-
-    const board = await boards.findById(mainBoardId).catch(() => null);
-    const teammateBranchId = board?.primary_teammate_id;
-    if (!teammateBranchId) {
-      result.skipped++;
-      continue;
-    }
-
-    const eligible = await primaryTeammates.findEligiblePrimaryTeammate(
-      teammateBranchId as BranchID,
-      user.user_id
-    );
-    if (!eligible) {
-      result.skipped++;
-      continue;
-    }
-
-    const assigned = await primaryTeammates.setPrimaryTeammateIfUnset(
-      user.user_id,
-      teammateBranchId as BranchID,
-      {
-        source: 'default',
-      }
-    );
-    if (assigned) result.assigned++;
-    else result.alreadySet++;
+    const outcome = await backfillUserPrimaryTeammate(db, user.user_id);
+    if (outcome === 'assigned') result.assigned++;
+    else if (outcome === 'alreadySet') result.alreadySet++;
+    else result.skipped++;
   }
 
   return result;

@@ -33,6 +33,9 @@ import {
 export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
   (level) => level !== 'none'
 );
+export const SESSION_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
+  (level) => level === 'session' || level === 'prompt' || level === 'all'
+);
 
 /**
  * True when the user is in any active (non-archived) group with an explicit
@@ -143,6 +146,93 @@ export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
       and(
         eq(branches.permission_source, 'override'),
         inArray(branches.others_can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+      )
+    ) ?? sql`false`
+  );
+}
+
+/** Set-based counterpart to resolveUserPermission(..., minimum=session). */
+export function sessionBranchAccessCondition(db: Database, userId: UUID): SQL {
+  const activeBranchSessionGrant = exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branchGroupGrants)
+      .innerJoin(
+        groupMemberships,
+        and(
+          eq(groupMemberships.group_id, branchGroupGrants.group_id),
+          eq(groupMemberships.user_id, userId)
+        )
+      )
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.branch_id, branches.branch_id),
+          inArray(branchGroupGrants.can, SESSION_BRANCH_PERMISSION_LEVELS)
+        )
+      )
+  );
+  const activeBoardSessionGrant = exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boardGroupGrants)
+      .innerJoin(
+        groupMemberships,
+        and(
+          eq(groupMemberships.group_id, boardGroupGrants.group_id),
+          eq(groupMemberships.user_id, userId)
+        )
+      )
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .innerJoin(
+        boards,
+        and(
+          eq(boards.board_id, boardGroupGrants.board_id),
+          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared')
+        )
+      )
+      .where(
+        and(
+          eq(boardGroupGrants.board_id, branches.board_id),
+          inArray(boardGroupGrants.can, SESSION_BRANCH_PERMISSION_LEVELS)
+        )
+      )
+  );
+  const alignedBoardSessionDefault = exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+    (db as any)
+      .select({ _: sql`1` })
+      .from(boards)
+      .where(
+        and(
+          eq(boards.board_id, branches.board_id),
+          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
+          inArray(
+            sql`coalesce(${jsonExtract(db, boards.data, 'default_others_can')}, 'session')`,
+            SESSION_BRANCH_PERMISSION_LEVELS
+          )
+        )
+      )
+  );
+
+  return (
+    or(
+      isNotNull(branchOwners.user_id),
+      activeBranchSessionGrant,
+      and(eq(branches.permission_source, 'board'), activeBoardOwnerAccessExists(db, userId)),
+      and(eq(branches.permission_source, 'board'), activeBoardSessionGrant),
+      and(eq(branches.permission_source, 'board'), alignedBoardSessionDefault),
+      and(
+        eq(branches.permission_source, 'override'),
+        inArray(branches.others_can, SESSION_BRANCH_PERMISSION_LEVELS)
       )
     ) ?? sql`false`
   );

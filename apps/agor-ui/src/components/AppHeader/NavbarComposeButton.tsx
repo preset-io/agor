@@ -32,11 +32,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type {
-  InitialContentDeliveryResult,
-  InitialContentRetry,
+  NewSessionConfig,
   NewSessionCreationResult,
+  SessionInitializationRetry,
 } from '../../domain/sessionCreation';
-import { isInitialContentDelivered } from '../../domain/sessionCreation';
+import { isSessionInitializationComplete } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
@@ -50,7 +50,6 @@ import {
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import type { NewSessionConfig } from '../NewSessionModal';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -70,10 +69,10 @@ export interface NavbarComposeButtonProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<NewSessionCreationResult | null>;
-  onRetryInitialContent?: (
+  onRetrySessionInitialization?: (
     sessionId: string,
-    retry: InitialContentRetry
-  ) => Promise<InitialContentDeliveryResult>;
+    retry: SessionInitializationRetry
+  ) => Promise<NewSessionCreationResult>;
   disabled?: boolean;
 }
 
@@ -102,7 +101,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   currentUser,
   currentBoardId,
   onCreateSession,
-  onRetryInitialContent,
+  onRetrySessionInitialization,
   disabled = false,
 }) => {
   const { token } = theme.useToken();
@@ -130,7 +129,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     sessionId: string;
     branch: Branch;
     mode: SendMode;
-    retry: InitialContentRetry;
+    retry: SessionInitializationRetry;
   } | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
@@ -317,9 +316,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         branch.board_id ?? currentBoardId ?? ''
       );
       if (!outcome) return; // onCreateSession already surfaced the failure
-      const { sessionId, delivery } = outcome;
-      if (!isInitialContentDelivered(delivery) && delivery.retry) {
-        setDeliveryFailure({ sessionId, branch, mode, retry: delivery.retry });
+      const { sessionId } = outcome;
+      if (!isSessionInitializationComplete(outcome) && outcome.retry) {
+        setDeliveryFailure({ sessionId, branch, mode, retry: outcome.retry });
         return;
       }
       finishSuccessfulSend(mode, branch, sessionId);
@@ -348,14 +347,14 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     }
   };
 
-  const retryInitialContent = async () => {
-    if (!deliveryFailure || !onRetryInitialContent) return;
+  const retrySessionInitialization = async () => {
+    if (!deliveryFailure || !onRetrySessionInitialization) return;
     const failure = deliveryFailure;
     setSubmitting(failure.mode);
     try {
-      const delivery = await onRetryInitialContent(failure.sessionId, failure.retry);
-      if (delivery.retry) {
-        setDeliveryFailure({ ...failure, retry: delivery.retry });
+      const outcome = await onRetrySessionInitialization(failure.sessionId, failure.retry);
+      if (outcome.retry) {
+        setDeliveryFailure({ ...failure, retry: outcome.retry });
         return;
       }
       setDeliveryFailure(null);
@@ -568,12 +567,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             <Alert
               type="warning"
               showIcon
-              message="Session created, but some content was not sent"
-              description="Your complete draft is still here. Retry it against the session that was already created."
+              message="Session created, but setup is incomplete"
+              description="Your complete draft is still here. Retry setup and delivery against the session that was already created."
               action={
                 <Space>
-                  <Button size="small" onClick={() => void retryInitialContent()}>
-                    Retry delivery
+                  <Button size="small" onClick={() => void retrySessionInitialization()}>
+                    Retry setup
                   </Button>
                   <Button
                     size="small"

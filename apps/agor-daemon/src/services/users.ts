@@ -29,6 +29,7 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  backfillUserPrimaryTeammate,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -139,6 +140,7 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'getPrimaryTeammate',
   'getPrimaryTeammateCandidates',
   'setPrimaryTeammate',
+  'setPrimaryTeammateIfUnset',
 ] as const;
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
@@ -1303,9 +1305,16 @@ export class UsersService {
    */
   async getPrimaryTeammate(_data: unknown, params?: Params): Promise<Branch | null> {
     const userId = requireCallerId(params);
-    return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId, {
-      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
-    });
+    const options = { enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params) };
+    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
+    const existing = await primaryTeammates.resolvePrimaryTeammate(userId, options);
+    if (existing || (await primaryTeammates.getBranchId(userId))) return existing;
+
+    // Concrete dynamic-tenant rollout: this request already carries trusted
+    // tenant context, so migrate only the current caller rather than ever
+    // enumerating tenant-owned users from system scope.
+    await backfillUserPrimaryTeammate(this.db, userId, options);
+    return primaryTeammates.resolvePrimaryTeammate(userId, options);
   }
 
   private shouldEnforcePrimaryTeammateAccess(params?: Params): boolean {
@@ -1359,6 +1368,42 @@ export class UsersService {
       updatedBy: userId,
     });
     return branch;
+  }
+
+  /**
+   * Persist an onboarding/default selection without overwriting a concurrent
+   * manual pick. Validation is identical to explicit selection, but provenance
+   * remains `default` for analytics and future preference migrations.
+   */
+  async setPrimaryTeammateIfUnset(
+    data: { branchId: string },
+    params?: Params
+  ): Promise<Branch | null> {
+    const userId = this.requirePrimaryTeammateMember(params);
+    const branchId = data?.branchId as BranchID | undefined;
+    if (!branchId) {
+      throw new Forbidden('A branchId is required to set a primary teammate');
+    }
+
+    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
+    const branch = await primaryTeammates.findEligiblePrimaryTeammate(branchId, userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+    if (!branch) {
+      throw new Forbidden(
+        'Primary assistant must be an active teammate you can create sessions on'
+      );
+    }
+
+    const inserted = await primaryTeammates.setPrimaryTeammateIfUnset(userId, branchId, {
+      source: 'default',
+      updatedBy: userId,
+    });
+    return inserted
+      ? branch
+      : primaryTeammates.resolvePrimaryTeammate(userId, {
+          enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+        });
   }
 
   private requirePrimaryTeammateMember(params?: Params): UserID {

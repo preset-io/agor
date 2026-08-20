@@ -1,4 +1,5 @@
 import {
+  BoardRepository,
   BranchRepository,
   type Database,
   generateId,
@@ -31,6 +32,8 @@ async function createBranch(
     others_can?: 'none' | 'view' | 'session';
     teammate?: boolean;
     archived?: boolean;
+    board_id?: UUID;
+    permission_source?: 'board' | 'override';
   }
 ): Promise<BranchID> {
   const slug = `repo-${uniqueId}`;
@@ -51,8 +54,9 @@ async function createBranch(
     ref: name,
     branch_unique_id: uniqueId++,
     path: `/tmp/${name}`,
+    board_id: overrides?.board_id,
     created_by: overrides?.created_by ?? CALLER,
-    permission_source: 'override',
+    permission_source: overrides?.permission_source ?? 'override',
     others_can: overrides?.others_can ?? 'session',
     archived: overrides?.archived,
     custom_context:
@@ -85,6 +89,69 @@ describe('UsersService primary teammate', () => {
     expect(resolved?.branch_id).toBe(branchId);
     setSpy.mockRestore();
   });
+
+  dbTest('onboarding default is set once and never overwrites an explicit pick', async ({ db }) => {
+    await ensureCaller(db);
+    const onboarding = await createBranch(db);
+    const explicit = await createBranch(db);
+    const service = createUsersService(db);
+    const setSpy = vi.spyOn(UserPrimaryTeammateRepository.prototype, 'setPrimaryTeammateIfUnset');
+
+    await expect(
+      service.setPrimaryTeammateIfUnset({ branchId: onboarding }, CALLER_PARAMS)
+    ).resolves.toMatchObject({ branch_id: onboarding });
+    expect(setSpy).toHaveBeenCalledWith(CALLER, onboarding, {
+      source: 'default',
+      updatedBy: CALLER,
+    });
+
+    await service.setPrimaryTeammate({ branchId: explicit }, CALLER_PARAMS);
+    await expect(
+      service.setPrimaryTeammateIfUnset({ branchId: onboarding }, CALLER_PARAMS)
+    ).resolves.toMatchObject({ branch_id: explicit });
+    setSpy.mockRestore();
+  });
+
+  dbTest(
+    'getPrimaryTeammate lazily rolls out the board default in caller tenant scope',
+    async ({ db }) => {
+      const board = await new BoardRepository(db).create({
+        board_id: generateId(),
+        name: 'Caller board',
+        created_by: CALLER,
+        access_mode: 'shared',
+      });
+      const caller = await new UsersRepository(db).create({
+        email: 'caller@example.com',
+        role: 'member',
+        preferences: { mainBoardId: board.board_id },
+      });
+      const callerParams = { user: { user_id: caller.user_id, role: 'member' } } as never;
+      const branchId = await createBranch(db, {
+        board_id: board.board_id as UUID,
+        permission_source: 'override',
+        created_by: caller.user_id as UUID,
+      });
+      await new BoardRepository(db).setPrimaryTeammate(board.board_id, branchId);
+
+      expect(
+        (await new UsersRepository(db).findById(caller.user_id))?.preferences?.mainBoardId
+      ).toBe(board.board_id);
+      expect((await new BoardRepository(db).findById(board.board_id))?.primary_teammate_id).toBe(
+        branchId
+      );
+      await expect(
+        new UserPrimaryTeammateRepository(db).findEligiblePrimaryTeammate(branchId, caller.user_id)
+      ).resolves.toMatchObject({ branch_id: branchId });
+
+      await expect(
+        createUsersService(db).getPrimaryTeammate(undefined, callerParams)
+      ).resolves.toMatchObject({ branch_id: branchId });
+      expect(await new UserPrimaryTeammateRepository(db).getBranchId(caller.user_id)).toBe(
+        branchId
+      );
+    }
+  );
 
   dbTest('setPrimaryTeammate rejects a branch the caller cannot access', async ({ db }) => {
     await ensureCaller(db);
@@ -138,6 +205,9 @@ describe('UsersService primary teammate', () => {
     await expect(service.setPrimaryTeammate({ branchId }, viewerParams)).rejects.toThrow(
       /Member role/
     );
+    await expect(service.setPrimaryTeammateIfUnset({ branchId }, viewerParams)).rejects.toThrow(
+      /Member role/
+    );
   });
 
   dbTest('setPrimaryTeammate rejects non-teammate and archived branches', async ({ db }) => {
@@ -180,6 +250,9 @@ describe('UsersService primary teammate', () => {
     await expect(service.getPrimaryTeammateCandidates(undefined, {} as never)).rejects.toThrow();
     await expect(
       service.setPrimaryTeammate({ branchId: generateId() }, {} as never)
+    ).rejects.toThrow();
+    await expect(
+      service.setPrimaryTeammateIfUnset({ branchId: generateId() }, {} as never)
     ).rejects.toThrow();
   });
 });

@@ -98,6 +98,7 @@ describe('isTenantWriteMethodName', () => {
       'upsertBoardObject',
       'markConsumed',
       'setPrimaryTeammate',
+      'setPrimaryTeammateIfUnset',
       'updateLastMessage',
       'clearZoneReferences',
       'revoke',

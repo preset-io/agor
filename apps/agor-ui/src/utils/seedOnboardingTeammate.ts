@@ -187,6 +187,28 @@ export async function seedOnboardingTeammate(
       return {};
     }
 
+    // Persist the caller's default immediately. The daemon validates session
+    // eligibility and uses set-if-unset so a concurrent explicit Settings pick
+    // always wins. This also covers users who skip model setup and never create
+    // the bootstrap session below.
+    if (!input.client) {
+      input.onWarn(
+        `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant yet.`
+      );
+    } else {
+      try {
+        await input.client
+          .service('users')
+          .setPrimaryTeammateIfUnset({ branchId: branch.branch_id });
+      } catch (error) {
+        input.onWarn(
+          `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant: ${
+            error instanceof Error ? error.message : String(error)
+          }.`
+        );
+      }
+    }
+
     const existingSession = await findExistingSession(input, branch.branch_id);
     if (existingSession) {
       return { branchId: branch.branch_id, sessionId: existingSession.session_id };

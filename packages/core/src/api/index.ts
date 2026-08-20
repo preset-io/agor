@@ -120,6 +120,8 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
+  /** Caller-generated UUID used to reconcile ambiguous transport retries. */
+  idempotencyKey?: string;
 }
 
 export interface QueuedSessionPromptResult {
@@ -593,6 +595,8 @@ export interface UsersService extends AgorService<User> {
    * recorded as an explicit user pick.
    */
   setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null>;
+  /** Set an onboarding/default teammate only when the caller is still unset. */
+  setPrimaryTeammateIfUnset(data: { branchId: string }, params?: Params): Promise<Branch | null>;
 }
 
 /**
@@ -1178,7 +1182,8 @@ function extendUsersService(client: AgorClient): void {
       'syncAvatars',
       'getPrimaryTeammate',
       'getPrimaryTeammateCandidates',
-      'setPrimaryTeammate'
+      'setPrimaryTeammate',
+      'setPrimaryTeammateIfUnset'
     );
   }
   usersService[USERS_SERVICE_EXTENDED] = true;

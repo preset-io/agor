@@ -1573,6 +1573,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stream?: boolean;
           messageSource?: MessageSource;
           /**
+           * Public caller-generated UUID for safe retry after an ambiguous
+           * transport failure. The Task row is tenant-scoped and reconciliation
+           * additionally binds this key to caller, session, and prompt content.
+           */
+          idempotencyKey?: UUID;
+          /**
            * Internal-only task metadata merged onto the queued/created task.
            * Used by daemon callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
@@ -1600,6 +1606,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!data.prompt) throw new Error('Prompt required');
         if (data.idempotencyTaskId && params.provider) {
           throw new Forbidden('idempotencyTaskId is internal-only');
+        }
+        if (
+          data.idempotencyKey &&
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            data.idempotencyKey
+          )
+        ) {
+          throw new BadRequest('idempotencyKey must be a UUID');
+        }
+        if (data.idempotencyKey && data.idempotencyTaskId) {
+          throw new BadRequest('Use only one prompt idempotency identity');
         }
         if (data.metadata !== undefined && params.provider) {
           throw new Forbidden('Task metadata is internal-only');
@@ -1679,23 +1696,24 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
+        const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey;
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
-          if (!data.idempotencyTaskId) return null;
-          const prior = await taskRepo.findById(data.idempotencyTaskId);
+          if (!stableTaskId) return null;
+          const prior = await taskRepo.findById(stableTaskId);
           if (!prior) return null;
           if (prior.session_id !== id) {
-            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+            throw new Conflict(`Task identity ${stableTaskId} is already in use`);
           }
           const expectedCreator = params.user?.user_id ?? session.created_by;
           if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
-            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+            throw new Conflict(`Task identity ${stableTaskId} is already in use`);
           }
           if (isTaskPendingDispatch(prior)) return null;
 
           await reconcileStableInitialUserMessage(
             prior,
             params,
-            prior.metadata?.initial_message_id ?? (data.idempotencyTaskId as MessageID)
+            prior.metadata?.initial_message_id ?? (stableTaskId as MessageID)
           );
           return prior;
         };
@@ -1773,24 +1791,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               params
             );
 
-            const prior = data.idempotencyTaskId
-              ? await taskRepo.findById(data.idempotencyTaskId)
-              : null;
+            const prior = stableTaskId ? await taskRepo.findById(stableTaskId) : null;
             if (prior && prior.session_id !== id) {
-              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
+              throw new Conflict(`Task identity ${stableTaskId} is already in use`);
             }
 
             const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
               trustedInternalMetadata: !params.provider,
             });
-            if (data.idempotencyTaskId) {
-              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
+            if (stableTaskId) {
+              taskMetadata.initial_message_id = stableTaskId as MessageID;
             }
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
             const task = await taskRepo.createPending({
-              task_id: data.idempotencyTaskId,
+              task_id: stableTaskId,
               session_id: id as SessionID,
               full_prompt: data.prompt,
               created_by: createdBy,
@@ -1818,9 +1834,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
-                ...(data.idempotencyTaskId
-                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
-                  : {}),
+                ...(stableTaskId ? { stableInitialMessageId: stableTaskId as MessageID } : {}),
               },
               params
             );

@@ -40,7 +40,6 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
-import type { NewSessionConfig } from './components/NewSessionModal';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -50,11 +49,11 @@ import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import type {
-  InitialContentDeliveryResult,
-  InitialContentRetry,
+  NewSessionConfig,
   NewSessionCreationResult,
+  SessionInitializationRetry,
 } from './domain/sessionCreation';
-import { deliverInitialSessionContent } from './domain/sessionCreation';
+import { initializeCreatedSession } from './domain/sessionCreation';
 import {
   IdentityContractState,
   useAgorClient,
@@ -1005,11 +1004,23 @@ function AppContent() {
     );
   }
 
-  const deliverInitialContent = async (
+  const initializeSession = async (
     sessionId: string,
-    content: InitialContentRetry
-  ): Promise<InitialContentDeliveryResult> => {
-    return deliverInitialSessionContent(sessionId, content, {
+    initialization: SessionInitializationRetry
+  ): Promise<NewSessionCreationResult> => {
+    return initializeCreatedSession(sessionId, initialization, {
+      associateMcpServer: async (targetSessionId, serverId) => {
+        if (!client) throw new Error('Connection unavailable');
+        await client.service(`sessions/${targetSessionId}/mcp-servers`).create({
+          mcpServerId: serverId,
+        });
+      },
+      updateEnvironmentVariables: async (targetSessionId, envVarNames) => {
+        if (!client) throw new Error('Connection unavailable');
+        await client.service(`sessions/${targetSessionId}/env-selections`).patch(null, {
+          envVarNames,
+        });
+      },
       uploadAttachments: async (targetSessionId, prompt, files) => {
         const uploaded = await uploadFilesToSession({
           sessionId: targetSessionId,
@@ -1019,8 +1030,14 @@ function AppContent() {
         });
         return buildPromptWithAttachments(prompt, uploaded.files);
       },
-      sendPrompt: (targetSessionId, prompt, permissionMode) =>
-        handleSendPrompt(targetSessionId, prompt, permissionMode),
+      sendPrompt: (targetSessionId, prompt, permissionMode, idempotencyKey) =>
+        handleSendPrompt(targetSessionId, prompt, permissionMode, idempotencyKey),
+      onSetupError: (stage, error) => {
+        const label = stage === 'mcpServers' ? 'MCP servers' : 'environment variables';
+        showError(
+          `Failed to configure ${label}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      },
       onAttachmentUploadError: (error) => {
         showError(
           `Failed to upload attachments: ${error instanceof Error ? error.message : String(error)}`
@@ -1034,70 +1051,50 @@ function AppContent() {
     config: NewSessionConfig,
     boardId: string
   ): Promise<NewSessionCreationResult | null> => {
+    const branch_id = config.branch_id;
+    if (!branch_id) {
+      showError('Failed to create session: Branch ID is required to create a session');
+      return null;
+    }
+
+    const { attachmentFiles, ...sessionConfig } = config;
+    let session: Session | null = null;
     try {
-      const branch_id = config.branch_id;
-
-      if (!branch_id) {
-        throw new Error('Branch ID is required to create a session');
-      }
-
       // Files pasted/dropped into the New Session modal ride along on the
       // config but must never enter the session-create REST payload — strip
       // them out and upload them once the session (and its ID) exists.
-      const { attachmentFiles, ...sessionConfig } = config;
-
       // Create the session with the branch_id
-      const session = await createSession({
+      session = await createSession({
         ...sessionConfig,
         branch_id,
       });
-
-      if (session) {
-        // Optimistically insert the authoritative row `create` just returned so
-        // the store knows the session before we navigate to it. Selection is
-        // routed through URL→store resolution, which can only resolve a session
-        // that's already in `sessionById`; without this the drawer would blank
-        // until the socket `created` event re-delivered the same object. That
-        // event is now a harmless no-op — `sessionCreated` is idempotent.
-        sessionCreated(session);
-
-        // Associate MCP servers if provided
-        if (config.mcpServerIds && config.mcpServerIds.length > 0) {
-          for (const serverId of config.mcpServerIds) {
-            try {
-              await client?.service(`sessions/${session.session_id}/mcp-servers`).create({
-                mcpServerId: serverId,
-              });
-            } catch (error) {
-              console.error(`Failed to associate MCP server ${serverId}:`, error);
-            }
-          }
-        }
-
-        // Associate session-scope env var selections if provided.
-        if (config.envVarNames && config.envVarNames.length > 0) {
-          await handleUpdateSessionEnvSelections(session.session_id, config.envVarNames);
-        }
-
-        showSuccess('Session created!');
-
-        const delivery = await deliverInitialContent(session.session_id, {
-          prompt: config.initialPrompt ?? '',
-          attachmentFiles,
-          permissionMode: config.permissionMode,
-        });
-
-        return { sessionId: session.session_id, delivery };
-      } else {
-        showError('Failed to create session');
-        return null;
-      }
     } catch (error) {
       showError(
         `Failed to create session: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
     }
+
+    if (!session) {
+      showError('Failed to create session');
+      return null;
+    }
+
+    // From this point onward the session identity is durable. Every setup or
+    // delivery failure is represented as a retry against this same session;
+    // never collapse back to null and invite a duplicate create.
+    sessionCreated(session);
+    showSuccess('Session created!');
+    return initializeSession(session.session_id, {
+      mcpServerIds: config.mcpServerIds,
+      envVarNames: config.envVarNames,
+      content: {
+        prompt: config.initialPrompt ?? '',
+        attachmentFiles,
+        permissionMode: config.permissionMode,
+        idempotencyKey: crypto.randomUUID(),
+      },
+    });
   };
 
   // Update draft for a specific session
@@ -1184,13 +1181,15 @@ function AppContent() {
   const handleSendPrompt = async (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    idempotencyKey?: string
   ): Promise<boolean> => {
     if (!client) return false;
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
         permissionMode,
+        idempotencyKey,
       });
 
       // Clear the draft after sending
@@ -1884,7 +1883,7 @@ function AppContent() {
         />
       }
       onCreateSession={handleCreateSession}
-      onRetryInitialContent={deliverInitialContent}
+      onRetrySessionInitialization={initializeSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}

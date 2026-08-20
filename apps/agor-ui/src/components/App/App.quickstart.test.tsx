@@ -170,6 +170,10 @@ function optimisticCreate(...ids: string[]) {
     insertSession(id);
     return {
       sessionId: id,
+      setup: {
+        mcpServers: 'not-requested' as const,
+        environmentVariables: 'not-requested' as const,
+      },
       delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
     };
   });
@@ -197,6 +201,10 @@ function renderShell(
   user: User,
   onCreateSession = vi.fn(async () => ({
     sessionId: 'new-session-id',
+    setup: {
+      mcpServers: 'not-requested' as const,
+      environmentVariables: 'not-requested' as const,
+    },
     delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
   })),
   client: unknown = null

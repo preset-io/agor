@@ -853,7 +853,8 @@ describe('createClient', () => {
         'syncAvatars',
         'getPrimaryTeammate',
         'getPrimaryTeammateCandidates',
-        'setPrimaryTeammate'
+        'setPrimaryTeammate',
+        'setPrimaryTeammateIfUnset'
       );
     });
 
@@ -905,6 +906,7 @@ describe('createClient', () => {
       const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
         permissionMode: 'auto',
         stream: true,
+        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
       });
 
       expect(createMock).toHaveBeenCalledWith(
@@ -912,6 +914,7 @@ describe('createClient', () => {
           prompt: 'Fix failing tests',
           permissionMode: 'auto',
           stream: true,
+          idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
         },
         undefined
       );
