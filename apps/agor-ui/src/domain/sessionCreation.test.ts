@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   admitSessionInitializationPrompt,
+  createPromptIdempotencyKey,
   deliverInitialSessionContent,
   initializeCreatedSession,
 } from './sessionCreation';
 
 const IDEMPOTENCY_KEY = '0198cdef-1234-7000-8000-123456789abc';
+
+describe('createPromptIdempotencyKey', () => {
+  it('falls back to getRandomValues when randomUUID is unavailable on HTTP origins', () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => {
+      bytes.fill(0x11);
+      return bytes;
+    });
+
+    expect(
+      createPromptIdempotencyKey({ getRandomValues } as unknown as Pick<Crypto, 'getRandomValues'>)
+    ).toBe('11111111-1111-4111-9111-111111111111');
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('admitSessionInitializationPrompt', () => {
   it('does not surface a delayed failure after the initiating identity is stale', async () => {

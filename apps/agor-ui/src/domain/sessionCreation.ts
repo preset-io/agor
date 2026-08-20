@@ -5,6 +5,26 @@ import type {
   EffortLevel,
   PermissionMode,
 } from '@agor-live/client';
+import { v4 as uuidv4 } from 'uuid';
+
+type PromptIdempotencyCrypto = Pick<Crypto, 'getRandomValues'> &
+  Partial<Pick<Crypto, 'randomUUID'>>;
+
+/**
+ * Generate a public prompt-admission identity in secure and insecure browser contexts.
+ *
+ * `Crypto.randomUUID()` is exposed only in secure contexts, while
+ * `Crypto.getRandomValues()` remains available for LAN-hosted HTTP development. TypeScript's
+ * DOM declarations do not model that runtime distinction.
+ */
+export function createPromptIdempotencyKey(
+  cryptoSource: PromptIdempotencyCrypto = globalThis.crypto
+): string {
+  if (typeof cryptoSource.randomUUID === 'function') {
+    return cryptoSource.randomUUID();
+  }
+  return uuidv4({ random: cryptoSource.getRandomValues(new Uint8Array(16)) });
+}
 
 export interface NewSessionConfig {
   branch_id: string;

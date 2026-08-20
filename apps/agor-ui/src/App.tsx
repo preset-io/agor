@@ -55,6 +55,7 @@ import type {
 } from './domain/sessionCreation';
 import {
   admitSessionInitializationPrompt,
+  createPromptIdempotencyKey,
   initializeCreatedSession,
 } from './domain/sessionCreation';
 import {
@@ -1265,7 +1266,7 @@ function AppContent() {
         prompt: config.initialPrompt ?? '',
         attachmentFiles,
         permissionMode: config.permissionMode,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createPromptIdempotencyKey(),
       },
     });
   };
