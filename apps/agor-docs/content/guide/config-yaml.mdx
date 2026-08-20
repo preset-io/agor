@@ -66,6 +66,19 @@ resolved in memory and never written back.
 exact initiating replica's executor-reachable origin, not the load-balanced
 daemon Service URL.
 
+`AGOR_UNKNOWN_CONFIG_KEYS` controls what happens when `config.yaml` contains a
+key the daemon does not recognize. The default, `error`, fails closed — the safe
+choice wherever a human edits config or in CI, because a typo like
+`unix_user_mdoe` is caught instead of silently ignored. Set it to `warn` to log
+and ignore unknown keys instead. That exists for forward compatibility during
+rolling deploys and rollbacks: a config written for a newer daemon can be read
+by an older one that predates a purely **additive** key it can safely ignore
+(for example `execution.executor_response`). It is **not** safe for a key that
+changes a default or security posture the older binary must honor — those still
+require deploying the config no earlier than the daemon that understands them.
+It is env-only (there is no `config.yaml` equivalent) so a strictness switch can
+never itself be the unrecognized key, and so it persists across image rollbacks.
+
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.
 

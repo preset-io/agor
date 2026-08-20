@@ -379,6 +379,33 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+/**
+ * Policy for config keys the daemon does not recognize.
+ *
+ * `error` (default) fails closed — the safe choice for humans editing config,
+ * because a typo like `unix_user_mdoe` is caught instead of silently ignored.
+ *
+ * `warn` tolerates unknown keys (logs each and continues). This exists for
+ * forward compatibility during rolling deploys and rollbacks: config written
+ * for a newer daemon can be read by an older one that predates a purely
+ * ADDITIVE key it can safely ignore (e.g. `execution.executor_response` — an
+ * older daemon just uses its old path). It is NOT safe for a key that changes a
+ * default or security posture the old binary must honor; those still require
+ * deploy ordering. Env-only (not a config key) to avoid the chicken-and-egg of
+ * a strictness switch that could itself be an unknown key, and because it is a
+ * deploy/ops decision that should persist across image rollbacks.
+ */
+type UnknownConfigKeyPolicy = 'error' | 'warn';
+
+function resolveUnknownConfigKeyPolicy(): UnknownConfigKeyPolicy {
+  const raw = process.env.AGOR_UNKNOWN_CONFIG_KEYS?.trim().toLowerCase();
+  if (raw === undefined || raw === '' || raw === 'error') return 'error';
+  if (raw === 'warn') return 'warn';
+  throw new Error(
+    `Config error: AGOR_UNKNOWN_CONFIG_KEYS must be 'error' or 'warn' (got '${process.env.AGOR_UNKNOWN_CONFIG_KEYS}')`
+  );
+}
+
 function validateConfig(config: AgorConfig): void {
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
     ?.plugins;
@@ -916,9 +943,15 @@ function validateConfig(config: AgorConfig): void {
   // not stop a daemon from booting on upgrade; the keys are read and ignored.
   only(legacyConfig.mcp_catalog, 'mcp_catalog', RETIRED_CONFIG_KEYS.mcp_catalog);
   if (unknownPaths.length > 0) {
-    throw new Error(
-      `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`
-    );
+    const summary = `unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`;
+    if (resolveUnknownConfigKeyPolicy() === 'warn') {
+      console.warn(
+        `[config] Ignoring ${summary} (AGOR_UNKNOWN_CONFIG_KEYS=warn). This tolerates ` +
+          'config written for a newer daemon; use the default (error) in dev/CI to catch typos.'
+      );
+    } else {
+      throw new Error(`Config error: ${summary}`);
+    }
   }
 
   assertSupportedUnixUserMode(config.execution?.unix_user_mode);

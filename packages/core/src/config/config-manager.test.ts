@@ -464,6 +464,46 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
   });
 
+  describe('AGOR_UNKNOWN_CONFIG_KEYS forward-compatibility policy', () => {
+    const writeConfigWithFutureKey = async () => {
+      const agorDir = path.join(tempDir, '.agor');
+      await fs.mkdir(agorDir, { recursive: true });
+      // A key an older daemon would not recognize (as if written by a newer one).
+      await fs.writeFile(
+        path.join(agorDir, 'config.yaml'),
+        'execution:\n  a_future_additive_key: true\n',
+        'utf-8'
+      );
+    };
+
+    afterEach(() => {
+      delete process.env.AGOR_UNKNOWN_CONFIG_KEYS;
+    });
+
+    it('rejects unknown keys by default (fails closed, catches typos)', async () => {
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+      await expect(loadConfig()).rejects.toThrow(/execution\.a_future_additive_key/);
+    });
+
+    it('tolerates unknown keys and warns when set to warn', async () => {
+      process.env.AGOR_UNKNOWN_CONFIG_KEYS = 'warn';
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+
+      await expect(loadConfig()).resolves.toBeTruthy();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('execution.a_future_additive_key'));
+    });
+
+    it('rejects an invalid policy value', async () => {
+      process.env.AGOR_UNKNOWN_CONFIG_KEYS = 'lenient';
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+      await expect(loadConfig()).rejects.toThrow(/AGOR_UNKNOWN_CONFIG_KEYS must be/);
+    });
+  });
+
   it('boots with a full mcp_catalog block from before the catalog moved into the repository', async () => {
     // The catalog is a file in this repository and has nothing to configure,
     // but an unrecognized top-level key throws — so removing the section
