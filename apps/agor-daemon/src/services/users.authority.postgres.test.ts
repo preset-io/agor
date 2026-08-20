@@ -159,6 +159,38 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('keeps primary-agentic-tool bootstrapping inside the ambient tenant scope', async () => {
+      const tenantA = `primary-agentic-tool-a-${generateId()}`;
+      const tenantB = `primary-agentic-tool-b-${generateId()}`;
+      const memberA = await seed(tenantA, 'member', 'primary-agentic-tool-a');
+      const memberB = await seed(tenantB, 'member', 'primary-agentic-tool-b');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantA, async () => {
+        // Even a caller-shaped payload naming tenant A cannot make tenant A's
+        // ambient database scope see or mutate tenant B's user row.
+        await expect(
+          service.setPrimaryAgenticToolIfUnset(
+            { tool: 'gemini', expectedUserId: memberB.user_id as UserID },
+            params(memberB, tenantA)
+          )
+        ).rejects.toMatchObject({ code: 403 });
+
+        await expect(
+          service.setPrimaryAgenticToolIfUnset(
+            { tool: 'codex', expectedUserId: memberA.user_id as UserID },
+            params(memberA, tenantA)
+          )
+        ).resolves.toMatchObject({ primary_agentic_tool: 'codex' });
+      });
+
+      await runWithTenantDatabaseScope(db, tenantB, async () => {
+        await expect(
+          service.get(memberB.user_id as UserID, params(memberB, tenantB))
+        ).resolves.toMatchObject({ primary_agentic_tool: undefined });
+      });
+    });
+
     it('enforces membership target authority for transport and direct calls under RLS', async () => {
       const tenantId = `membership-authority-${generateId()}`;
       const otherTenantId = `membership-authority-other-${generateId()}`;

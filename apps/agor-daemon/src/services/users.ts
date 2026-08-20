@@ -1447,10 +1447,11 @@ export class UsersService {
     }
 
     await lockUserAuthorityMutation(this.db, params);
-    const currentRow = await select(this.db)
-      .from(users)
-      .where(withTenantPredicate(params, eq(users.user_id, userId)))
-      .one();
+    // Tenant ownership is ambient here: the users service hook has already
+    // entered the trusted tenant database scope, and PostgreSQL RLS applies it
+    // to every query through this.db. Do not derive SQL scope from request
+    // params; those identify the caller, not the persistence boundary.
+    const currentRow = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
     if (!currentRow) throw new Forbidden(USER_AUTHORITY_DENIED);
 
     const currentData = currentRow.data as Record<string, unknown> & {
@@ -1466,23 +1467,16 @@ export class UsersService {
         data: { ...currentData, primary_agentic_tool: tool },
       })
       .where(
-        withTenantPredicate(
-          params,
-          and(
-            eq(users.user_id, userId),
-            isNull(jsonExtract(this.db, users.data, 'primary_agentic_tool'))
-          )
+        and(
+          eq(users.user_id, userId),
+          isNull(jsonExtract(this.db, users.data, 'primary_agentic_tool'))
         )
       )
       .returning()
       .one();
 
     const effectiveRow =
-      updatedRow ??
-      (await select(this.db)
-        .from(users)
-        .where(withTenantPredicate(params, eq(users.user_id, userId)))
-        .one());
+      updatedRow ?? (await select(this.db).from(users).where(eq(users.user_id, userId)).one());
     if (!effectiveRow) throw new Forbidden(USER_AUTHORITY_DENIED);
 
     if (updatedRow && this.app) {
