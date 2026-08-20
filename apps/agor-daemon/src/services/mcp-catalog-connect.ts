@@ -812,14 +812,25 @@ export function createMCPCatalogConnectService(
    * further write — see the call site for why ordering is the answer rather
    * than a rollback.
    */
-  const rotateInstalledKey = async (
+  const finalizeReusedInstall = async (
     server: MCPServer,
+    reconcile: boolean,
+    createInput: CreateMCPServerInput,
     prescribed: MCPAuth,
     params: AuthenticatedParams
   ): Promise<MCPServer> =>
     (await service('mcp-servers').patch(
       server.mcp_server_id,
-      { auth: prescribed },
+      reconcile
+        ? {
+            enabled: true,
+            transport: createInput.transport,
+            scope: createInput.scope,
+            url: createInput.url,
+            headers: {},
+            auth: prescribed,
+          }
+        : { auth: prescribed },
       { ...params }
     )) as MCPServer;
 
@@ -895,32 +906,13 @@ export function createMCPCatalogConnectService(
         }
       }
       const reusedExisting = !createdServer;
-
-      if (
+      const needsReconciliation =
         reusedExisting &&
         selection?.kind === 'catalog_install' &&
         (!mcpServer.enabled ||
           !isCurrentCatalogInstall(mcpServer, entry, auth, {
             reconcileMissingCompatibilityMode: true,
-          }))
-      ) {
-        // The targeted identity is the caller's own row (findExistingInstall
-        // proves that). Run the ordinary external patch authorization as well,
-        // so a changed tenant write policy can refuse reconciliation rather
-        // than being bypassed by the marketplace path.
-        mcpServer = (await service('mcp-servers').patch(
-          mcpServer.mcp_server_id,
-          {
-            enabled: true,
-            transport: createInput.transport,
-            scope: createInput.scope,
-            url: createInput.url,
-            headers: {},
-            auth: createInput.auth,
-          },
-          { ...params }
-        )) as MCPServer;
-      }
+          }));
 
       // Four writes across three services, so there is no transaction to lean
       // on. What this request created, it takes back on failure: a server or a
@@ -966,9 +958,16 @@ export function createMCPCatalogConnectService(
         // owner had it, working with the key it already held, beside a session
         // the caller was told they did not get. That is a state the product can
         // survive and a user can retry out of, which the alternative is not.
+        // Reconciliation, like credential rotation, overwrites state from a
+        // previous connect and therefore happens only after the new session
+        // and attachment are established. If either earlier write fails, the
+        // reused row has not been touched; cleanup can remove only this
+        // request's new session. One final patch applies drift repair and the
+        // newly validated credential together, so there is no intermediate
+        // enabled/rerouted row carrying the old auth policy or secret.
         const installed =
-          reusedExisting && carriesRowLevelSecret(auth)
-            ? await rotateInstalledKey(mcpServer, auth, params)
+          reusedExisting && (needsReconciliation || carriesRowLevelSecret(auth))
+            ? await finalizeReusedInstall(mcpServer, needsReconciliation, createInput, auth, params)
             : mcpServer;
 
         return {

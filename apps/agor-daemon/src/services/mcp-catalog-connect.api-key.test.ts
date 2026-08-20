@@ -24,6 +24,9 @@
  * repository — the same reason `curated.yaml` cannot hold one.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createDatabaseAsync,
   MCPServerRepository,
@@ -41,7 +44,7 @@ import type {
   User,
   UserRole,
 } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 import { createMCPServersService } from './mcp-servers.js';
@@ -73,6 +76,12 @@ const CONNECT_REQUEST = {
   agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: DISCLOSURE,
 };
+
+const testDatabaseDirs = new Set<string>();
+afterEach(() => {
+  for (const dir of testDatabaseDirs) rmSync(dir, { recursive: true, force: true });
+  testDatabaseDirs.clear();
+});
 
 type HookFn = (context: unknown) => Promise<unknown>;
 type HookChains = Record<string, HookFn[]>;
@@ -143,7 +152,15 @@ function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase): {
 }
 
 async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
-  const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+  // Repository compensation opens a native transaction, and libsql uses a
+  // separate connection for it. A file-backed database keeps that connection
+  // on the same schema; `:memory:` would create an unrelated empty database.
+  const dir = mkdtempSync(join(tmpdir(), 'agor-mcp-api-key-'));
+  testDatabaseDirs.add(dir);
+  const rawDb = await createDatabaseAsync({
+    dialect: 'sqlite',
+    url: `file:${join(dir, 'test.db')}`,
+  });
   const db = rawDb as unknown as TenantScopeAwareDatabase;
   await runMigrations(rawDb);
   await setMcpMemberPolicy(db, 'allow_crud', undefined, null);
@@ -233,6 +250,8 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
       app.service('mcp-servers').find(paramsFor(caller)) as Promise<{ data: MCPServer[] }>,
     get: (caller: User, id: string) =>
       app.service('mcp-servers').get(id, paramsFor(caller)) as Promise<MCPServer>,
+    patch: (caller: User, id: string, data: Record<string, unknown>) =>
+      app.service('mcp-servers').patch(id, data, paramsFor(caller)) as Promise<MCPServer>,
     /** What the socket transport would put on the wire for the last call. */
     lastDispatched: () => (lastContext.dispatch ?? lastContext.result) as unknown,
     captureBroadcasts: (event: 'created' | 'patched') => {
@@ -372,6 +391,56 @@ describe('an API-key install, end to end', () => {
     // Only the session from the connect that succeeded — the failed attempt
     // added none for a retry to duplicate.
     expect(daemon.sessions()).toHaveLength(1);
+  });
+
+  it('leaves a disabled bearer install byte-for-byte unchanged when attachment fails', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('disabled-failure@agor.live');
+    const installed = await daemon.connectAs(alice, WORKING_KEY);
+    await daemon.patch(alice, installed.mcp_server.mcp_server_id, { enabled: false });
+    const [before] = await daemon.stored();
+
+    daemon.failAttach(new Error('attachment refused'));
+    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/attachment refused/);
+
+    const [after] = await daemon.stored();
+    expect(after).toEqual(before);
+    expect(after?.enabled).toBe(false);
+    expect(after?.auth?.token).toBe(WORKING_KEY);
+  });
+
+  it('preserves endpoint, transport, headers, auth policy, and secrets when drift repair fails later', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('drift-failure@agor.live');
+    const installed = await daemon.connectAs(alice, WORKING_KEY);
+    await daemon.patch(alice, installed.mcp_server.mcp_server_id, {
+      url: 'https://old.example.invalid/mcp',
+      transport: 'sse',
+      headers: { 'X-Old-Secret': 'old-header-secret' },
+      auth: {
+        type: 'jwt',
+        api_url: 'https://old.example.invalid/token',
+        api_token: 'old-api-token',
+        api_secret: 'old-api-secret',
+      },
+    });
+    const [before] = await daemon.stored();
+
+    daemon.failSessionCreate(new Error('branch vanished'));
+    await expect(daemon.connectAs(alice, ROTATED_KEY)).rejects.toThrow(/branch vanished/);
+
+    const [after] = await daemon.stored();
+    expect(after).toEqual(before);
+    expect(after).toMatchObject({
+      url: 'https://old.example.invalid/mcp',
+      transport: 'sse',
+      headers: { 'X-Old-Secret': 'old-header-secret' },
+      auth: {
+        type: 'jwt',
+        api_token: 'old-api-token',
+        api_secret: 'old-api-secret',
+      },
+    });
   });
 
   it('leaves no session behind when the attachment is refused, and a retry converges', async () => {

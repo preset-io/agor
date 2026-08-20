@@ -8,6 +8,7 @@ export {
   type MCPApiKeyProbeVerdict,
   probeRemoteApiKey,
   probeRemoteAuthType,
+  probeRemoteBearerToken,
 } from './auth-probe';
 export { findCatalogEntry, loadCatalog } from './catalog';
 export { CuratedCatalogError, loadCuratedCatalog } from './curated-loader';

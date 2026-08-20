@@ -13,8 +13,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
-import { and, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { restoreRedactedMCPAuthSecrets } from '../../tools/mcp/auth-secrets';
 import { restoreRedactedMCPEnvSecrets } from '../../tools/mcp/env-secrets';
@@ -22,8 +21,16 @@ import {
   normalizeMCPCustomHeaders,
   restoreRedactedMCPCustomHeaders,
 } from '../../tools/mcp/http-headers';
+import { assertPublicMCPOAuthCompatibilityMode } from '../../types/mcp';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { type MCPServerInsert, type MCPServerRow, mcpServers, sessionMcpServers } from '../schema';
 import {
   AmbiguousIdError,
@@ -352,24 +359,38 @@ export class MCPServerRepository
   /**
    * Delete an install only while no session has adopted it.
    *
-   * The NOT EXISTS predicate and DELETE are one statement.  This is used by
-   * catalog-connect compensation: a concurrent request may have recovered a
-   * just-created row after losing the owner/catalog unique race.  A separate
-   * liveness read would allow that request to attach between the read and the
-   * delete and would make its successful result disappear afterwards.
+   * Serialize cleanup against attachment through the parent row. PostgreSQL
+   * attachment inserts take a foreign-key key-share lock on that row. Taking
+   * FOR UPDATE here therefore waits for an already-running adoption, and the
+   * following SELECT is a new READ COMMITTED statement with a fresh snapshot.
+   * This ordering matters: a single DELETE ... NOT EXISTS statement takes its
+   * snapshot before a lock wait and can miss the attachment that just committed.
+   *
+   * SQLite starts an IMMEDIATE transaction instead. That acquires the writer
+   * reservation before the liveness read, so an attachment either commits
+   * first and is observed or starts only after cleanup has completed.
    */
   async deleteIfUnattached(id: string): Promise<boolean> {
     try {
       const fullId = await this.resolveId(id);
-      const result = await deleteFrom(this.db, mcpServers)
-        .where(
-          and(
-            eq(mcpServers.mcp_server_id, fullId),
-            sql`NOT EXISTS (SELECT 1 FROM ${sessionMcpServers} WHERE ${sessionMcpServers.mcp_server_id} = ${mcpServers.mcp_server_id})`
-          )
-        )
-        .run();
-      return result.rowsAffected > 0;
+      return await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockRowForUpdate(tx, this.db, mcpServers, eq(mcpServers.mcp_server_id, fullId));
+          const attachment = await select(tx)
+            .from(sessionMcpServers)
+            .where(eq(sessionMcpServers.mcp_server_id, fullId))
+            .limit(1)
+            .one();
+          if (attachment) return false;
+
+          const result = await deleteFrom(tx, mcpServers)
+            .where(eq(mcpServers.mcp_server_id, fullId))
+            .run();
+          return result.rowsAffected > 0;
+        },
+        { sqliteImmediate: true }
+      );
     } catch (error) {
       if (error instanceof EntityNotFoundError) return false;
       throw new RepositoryError(
