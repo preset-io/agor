@@ -6,6 +6,7 @@ import {
   Button,
   Divider,
   Dropdown,
+  Flex,
   Grid,
   Input,
   Space,
@@ -132,25 +133,22 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       return {
         key: board.board_id,
         label: (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              minWidth: 250,
-              padding: '4px 0',
-            }}
-          >
-            <Space size={8}>
+          <Flex align="center" justify="space-between" gap={8} style={{ padding: '4px 0' }}>
+            <Flex align="center" gap={8} style={{ flex: 1, minWidth: 0 }}>
               <BoardTile emoji={getBoardEmoji(board, branchById)} size={24} />
-              <Text strong={isActive}>{board.name}</Text>
-            </Space>
+              <Text strong={isActive} ellipsis={{ tooltip: board.name }} style={{ minWidth: 0 }}>
+                {board.name}
+              </Text>
+            </Flex>
             <Badge
               count={branchCount}
               showZero
-              style={{ backgroundColor: isActive ? token.colorPrimary : token.colorBgTextHover }}
+              style={{
+                flexShrink: 0,
+                backgroundColor: isActive ? token.colorPrimary : token.colorBgTextHover,
+              }}
             />
-          </div>
+          </Flex>
         ),
         onClick: () => handleBoardClick(board.board_id),
       };
@@ -231,7 +229,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                 backgroundColor: token.colorBgElevated,
                 borderRadius: token.borderRadiusLG,
                 boxShadow: token.boxShadowSecondary,
-                minWidth: 290,
+                minWidth: 248,
+                maxWidth: 456,
               }}
             >
               <div
