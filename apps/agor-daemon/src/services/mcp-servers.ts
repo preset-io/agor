@@ -7,6 +7,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { MCPServerRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { Conflict } from '@agor/core/feathers';
 import type {
   CreateMCPServerInput,
   MCPScope,
@@ -32,7 +33,13 @@ export type MCPServerParams = QueryParams<{
   usableByUserId?: string;
   ownerless?: boolean;
   catalogEntryName?: string;
-}>;
+}> & {
+  mcpCatalogConnectGeneration?: {
+    ownerUserId: string;
+    catalogEntryName: string;
+    value: number;
+  };
+};
 
 /**
  * Extended MCP servers service with custom methods
@@ -124,9 +131,36 @@ export class MCPServersService extends DrizzleService<
     return this.mcpServerRepo.findByScope(scope, scopeId);
   }
 
+  override async patch(
+    id: string | null,
+    data: Partial<UpdateMCPServerInput>,
+    params?: MCPServerParams
+  ): Promise<MCPServer | MCPServer[]> {
+    const generation = params?.mcpCatalogConnectGeneration;
+    if (!generation || id === null) return super.patch(id, data, params);
+    await this.get(id, params);
+    const updated = await this.mcpServerRepo.updateIfCatalogConnectGeneration(
+      id,
+      generation.ownerUserId,
+      generation.catalogEntryName,
+      generation.value,
+      data
+    );
+    if (!updated) throw new Conflict('A newer marketplace connect superseded this request');
+    return updated;
+  }
+
   /** Internal compensation primitive; deliberately not registered as a REST method. */
   async removeIfUnattached(id: string): Promise<boolean> {
     return this.mcpServerRepo.deleteIfUnattached(id);
+  }
+
+  /** Internal request-order claim; not registered as a REST method. */
+  async claimCatalogConnectGeneration(
+    ownerUserId: string,
+    catalogEntryName: string
+  ): Promise<number> {
+    return this.mcpServerRepo.claimCatalogConnectGeneration(ownerUserId, catalogEntryName);
   }
 }
 

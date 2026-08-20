@@ -56,6 +56,7 @@ import {
   isCurrentCatalogInstall,
   sameCatalogEndpoint,
 } from './mcp-catalog-install-policy.js';
+import type { MCPServersService } from './mcp-servers.js';
 
 /**
  * Auth fields that decide where an authorization code or a client credential is
@@ -821,22 +822,29 @@ export function createMCPCatalogConnectService(
     reconcile: boolean,
     createInput: CreateMCPServerInput,
     prescribed: MCPAuth,
-    params: AuthenticatedParams
-  ): Promise<MCPServer> =>
-    (await service('mcp-servers').patch(
-      server.mcp_server_id,
-      reconcile
-        ? {
-            enabled: true,
-            transport: createInput.transport,
-            scope: createInput.scope,
-            url: createInput.url,
-            headers: {},
-            auth: prescribed,
-          }
-        : { auth: prescribed },
-      { ...params }
-    )) as MCPServer;
+    params: AuthenticatedParams,
+    generation?: { ownerUserId: string; catalogEntryName: string; value: number }
+  ): Promise<MCPServer> => {
+    const updates = reconcile
+      ? {
+          enabled: true,
+          transport: createInput.transport,
+          scope: createInput.scope,
+          url: createInput.url,
+          headers: {},
+          auth: prescribed,
+        }
+      : { auth: prescribed };
+    if (!generation) {
+      return (await service('mcp-servers').patch(server.mcp_server_id, updates, {
+        ...params,
+      })) as MCPServer;
+    }
+    return (await service('mcp-servers').patch(server.mcp_server_id, updates, {
+      ...params,
+      mcpCatalogConnectGeneration: generation,
+    } as AuthenticatedParams)) as MCPServer;
+  };
 
   return {
     async create(data, params) {
@@ -863,9 +871,20 @@ export function createMCPCatalogConnectService(
       // comes from the entry the catalog resolved and the answer the endpoint
       // gave, so a caller holding a key can only ever aim it at the URL the
       // checked-in file already points to.
-      const auth = await resolveAuthRequirement(entry, readBearerToken(data.bearer_token, entry));
-
       const userId = params.user?.user_id as UserID | undefined;
+      const bearerToken = readBearerToken(data.bearer_token, entry);
+      const connectGeneration =
+        bearerToken && userId
+          ? {
+              ownerUserId: userId,
+              catalogEntryName: entry.name,
+              value: await (
+                service('mcp-servers') as unknown as MCPServersService
+              ).claimCatalogConnectGeneration(userId, entry.name),
+            }
+          : undefined;
+      const auth = await resolveAuthRequirement(entry, bearerToken);
+
       const existing = await findExistingInstall(entry, auth, userId, params);
 
       const createInput: CreateMCPServerInput = {
@@ -970,8 +989,16 @@ export function createMCPCatalogConnectService(
         // newly validated credential together, so there is no intermediate
         // enabled/rerouted row carrying the old auth policy or secret.
         const installed =
-          reusedExisting && (needsReconciliation || carriesRowLevelSecret(auth))
-            ? await finalizeReusedInstall(mcpServer, needsReconciliation, createInput, auth, params)
+          connectGeneration ||
+          (reusedExisting && (needsReconciliation || carriesRowLevelSecret(auth)))
+            ? await finalizeReusedInstall(
+                mcpServer,
+                needsReconciliation,
+                createInput,
+                auth,
+                params,
+                connectGeneration
+              )
             : mcpServer;
 
         return {

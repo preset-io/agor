@@ -27,8 +27,11 @@ import { createRegisteredMCPCatalogConnectService } from '../register-routes.js'
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
-const { probeRemoteAuthType } = vi.hoisted(() => ({ probeRemoteAuthType: vi.fn() }));
-vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType }));
+const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
+  probeRemoteAuthType: vi.fn(),
+  probeRemoteBearerToken: vi.fn(),
+}));
+vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -52,6 +55,12 @@ const REQUEST = {
   agentic_tool: 'claude-code' as const,
   acknowledged_disclosure: ENTRY.permission_disclosure,
 };
+const CREDENTIAL_ENTRY = {
+  ...ENTRY,
+  name: 'test/catalog-connect-postgres-credentials',
+  auth_type: 'credentials',
+  credentials: { scheme: 'bearer' },
+} as unknown as MCPCatalogEntry;
 
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
@@ -142,6 +151,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     beforeEach(() => {
       probeRemoteAuthType.mockReset();
       probeRemoteAuthType.mockResolvedValue('oauth');
+      probeRemoteBearerToken.mockReset();
+      probeRemoteBearerToken.mockResolvedValue('accepted');
     });
 
     async function buildTenant(label: string) {
@@ -275,6 +286,24 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
     }
 
+    async function connectWithToken(
+      user: User,
+      tenantId: string,
+      token: string,
+      app = connectApp(CREDENTIAL_ENTRY)
+    ) {
+      return runWithTenantDatabaseScope(db, tenantId, () =>
+        createRegisteredMCPCatalogConnectService(app, db).create(
+          {
+            ...REQUEST,
+            catalog_key: CREDENTIAL_ENTRY.name,
+            bearer_token: token,
+          },
+          params(user, tenantId)
+        )
+      );
+    }
+
     it('reuses the authenticated caller credential peer and obeys probed OAuth policy', async () => {
       const actor = await buildTenant('positive');
       const peer = await seedPeer(actor.tenantId, actor.user);
@@ -359,6 +388,87 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(result.reused_existing_server).toBe(false);
       expect(result.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
       expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe('strict');
+    });
+
+    it('keeps the newer bearer credential when an older PostgreSQL rotation resumes', async () => {
+      probeRemoteAuthType.mockResolvedValue('credentials');
+      const actor = await buildTenant('bearer-rotation-race');
+      const app = connectApp(CREDENTIAL_ENTRY);
+      await connectWithToken(actor.user, actor.tenantId, 'postgres-seed-key', app);
+      const OLD_KEY = 'postgres-delayed-old-key';
+      const NEW_KEY = 'postgres-new-key';
+      let releaseOld!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        releaseOld = resolve;
+      });
+      let reached!: () => void;
+      const atProbe = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      probeRemoteBearerToken.mockImplementation(async (_url, token) => {
+        if (token === OLD_KEY) {
+          reached();
+          await blocked;
+        }
+        return 'accepted';
+      });
+
+      const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
+      await atProbe;
+      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
+      await Promise.resolve();
+      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      releaseOld();
+      await older;
+      const newer = await newerPending;
+      expect(newer.reused_existing_server).toBe(true);
+      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+        const rows = await new MCPServerRepository(scoped).findAll({
+          catalogEntryName: CREDENTIAL_ENTRY.name,
+        });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.auth?.token).toBe(NEW_KEY);
+      });
+    });
+
+    it('serializes delayed PostgreSQL first connects before adoption and preserves the newer key', async () => {
+      probeRemoteAuthType.mockResolvedValue('credentials');
+      const actor = await buildTenant('bearer-first-race');
+      const app = connectApp(CREDENTIAL_ENTRY);
+      const OLD_KEY = 'postgres-delayed-first-key';
+      const NEW_KEY = 'postgres-first-winner-key';
+      let releaseOld!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        releaseOld = resolve;
+      });
+      let reached!: () => void;
+      const atProbe = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      probeRemoteBearerToken.mockImplementation(async (_url, token) => {
+        if (token === OLD_KEY) {
+          reached();
+          await blocked;
+        }
+        return 'accepted';
+      });
+
+      const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
+      await atProbe;
+      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
+      await Promise.resolve();
+      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      releaseOld();
+      await older;
+      const newer = await newerPending;
+      expect(newer.reused_existing_server).toBe(true);
+      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+        const rows = await new MCPServerRepository(scoped).findAll({
+          catalogEntryName: CREDENTIAL_ENTRY.name,
+        });
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.auth?.token).toBe(NEW_KEY);
+      });
     });
   }
 );

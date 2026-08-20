@@ -486,14 +486,86 @@ describe('an API-key install, end to end', () => {
     const daemon = await buildDaemon();
     const alice = await daemon.addUser('alice@agor.live');
 
-    const results = await Promise.all([
+    const outcomes = await Promise.allSettled([
       daemon.connectAs(alice, WORKING_KEY),
       daemon.connectAs(alice, WORKING_KEY),
     ]);
 
     expect(await daemon.stored()).toHaveLength(1);
-    expect(new Set(results.map((result) => result.mcp_server.mcp_server_id)).size).toBe(1);
-    expect(results.filter((result) => result.reused_existing_server)).toHaveLength(1);
+    const successes = outcomes.flatMap((outcome) =>
+      outcome.status === 'fulfilled' ? [outcome.value] : []
+    );
+    expect(successes.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(successes.map((result) => result.mcp_server.mcp_server_id)).size).toBe(1);
+    for (const rejected of outcomes.filter((outcome) => outcome.status === 'rejected')) {
+      expect(String(rejected.reason)).toMatch(/newer marketplace connect superseded/i);
+    }
+  });
+
+  it('fences an older delayed rotation after a newer rotation completes', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('rotation-race@agor.live');
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    let releaseOld!: () => void;
+    const oldBlocked = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let oldReachedProbe!: () => void;
+    const oldAtProbe = new Promise<void>((resolve) => {
+      oldReachedProbe = resolve;
+    });
+    const OLD_KEY = 'fake-delayed-old-key-cccc';
+    probeRemoteBearerToken.mockImplementation(async (_url, token) => {
+      if (token === OLD_KEY) {
+        oldReachedProbe();
+        await oldBlocked;
+      }
+      return 'accepted';
+    });
+
+    const older = daemon.connectAs(alice, OLD_KEY);
+    await oldAtProbe;
+    const newer = await daemon.connectAs(alice, ROTATED_KEY);
+    releaseOld();
+
+    await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
+    expect(newer.reused_existing_server).toBe(true);
+    expect((await daemon.stored())[0]?.auth?.token).toBe(ROTATED_KEY);
+    expect(daemon.sessions()).toHaveLength(2);
+  });
+
+  it('fences delayed first-connect adoption from overwriting the newer winner', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('first-connect-race@agor.live');
+    const OLD_KEY = 'fake-delayed-first-key-dddd';
+    let releaseOld!: () => void;
+    const oldBlocked = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let oldReachedProbe!: () => void;
+    const oldAtProbe = new Promise<void>((resolve) => {
+      oldReachedProbe = resolve;
+    });
+    probeRemoteBearerToken.mockImplementation(async (_url, token) => {
+      if (token === OLD_KEY) {
+        oldReachedProbe();
+        await oldBlocked;
+      }
+      return 'accepted';
+    });
+
+    const older = daemon.connectAs(alice, OLD_KEY);
+    await oldAtProbe;
+    const newer = await daemon.connectAs(alice, ROTATED_KEY);
+    releaseOld();
+
+    await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
+    expect(newer.reused_existing_server).toBe(false);
+    const rows = await daemon.stored();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.auth?.token).toBe(ROTATED_KEY);
+    expect(daemon.sessions()).toHaveLength(1);
   });
 });
 

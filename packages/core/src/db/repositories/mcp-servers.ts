@@ -31,7 +31,14 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type MCPServerInsert, type MCPServerRow, mcpServers, sessionMcpServers } from '../schema';
+import {
+  appVariables,
+  type MCPServerInsert,
+  type MCPServerRow,
+  mcpServers,
+  sessionMcpServers,
+} from '../schema';
+import { AppVariableRepository } from './app-variables';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -48,6 +55,22 @@ export class MCPServerRepository
   implements BaseRepository<MCPServer, CreateMCPServerInput | UpdateMCPServerInput>
 {
   constructor(private db: Database) {}
+
+  private static readonly CATALOG_CONNECT_GENERATION_NAMESPACE = 'mcp-catalog-connect-generation';
+
+  static catalogConnectGenerationKey(ownerUserId: string, catalogEntryName: string): string {
+    return JSON.stringify([ownerUserId, catalogEntryName]);
+  }
+
+  async claimCatalogConnectGeneration(
+    ownerUserId: string,
+    catalogEntryName: string
+  ): Promise<number> {
+    return new AppVariableRepository(this.db).incrementPlainInteger(
+      MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE,
+      MCPServerRepository.catalogConnectGenerationKey(ownerUserId, catalogEntryName)
+    );
+  }
 
   /**
    * Convert database row to MCPServer type
@@ -331,6 +354,84 @@ export class MCPServerRepository
         error
       );
     }
+  }
+
+  /**
+   * Apply a catalog reconnect only if it is still the newest request begun for
+   * this tenant/owner/catalog identity. The generation row is locked through
+   * the credential update, so a newer request cannot claim its generation
+   * between the check and the write.
+   */
+  async updateIfCatalogConnectGeneration(
+    id: string,
+    ownerUserId: string,
+    catalogEntryName: string,
+    expectedGeneration: number,
+    updates: UpdateMCPServerInput
+  ): Promise<MCPServer | null> {
+    const fullId = await this.resolveId(id);
+    const key = MCPServerRepository.catalogConnectGenerationKey(ownerUserId, catalogEntryName);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const generationWhere = and(
+          eq(appVariables.namespace, MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE),
+          eq(appVariables.key, key)
+        );
+        await lockRowForUpdate(tx, this.db, appVariables, generationWhere!);
+        const generationRow = await select(tx).from(appVariables).where(generationWhere).one();
+        if (Number(generationRow?.value_text) !== expectedGeneration) return null;
+
+        await lockRowForUpdate(tx, this.db, mcpServers, eq(mcpServers.mcp_server_id, fullId));
+        const row = await select(tx)
+          .from(mcpServers)
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .one();
+        if (!row) throw new EntityNotFoundError('MCPServer', id);
+        const current = this.rowToMCPServer(row as MCPServerRow);
+        if (
+          current.source !== 'catalog' ||
+          current.owner_user_id !== ownerUserId ||
+          current.catalog_entry_name !== catalogEntryName
+        ) {
+          throw new RepositoryError('Catalog connect generation does not match the install');
+        }
+        const merged = { ...current, ...updates };
+        if ('headers' in updates) {
+          merged.headers = restoreRedactedMCPCustomHeaders({
+            current: current.headers,
+            next: updates.headers,
+          });
+        }
+        if ('auth' in updates) {
+          merged.auth = restoreRedactedMCPAuthSecrets({
+            current: current.auth,
+            next: updates.auth,
+          });
+        }
+        if ('env' in updates) {
+          merged.env = restoreRedactedMCPEnvSecrets({ current: current.env, next: updates.env });
+        }
+        const insertData = this.mcpServerToInsert(merged);
+        await update(tx, mcpServers)
+          .set({
+            enabled: insertData.enabled,
+            scope: insertData.scope,
+            transport: insertData.transport,
+            updated_at: new Date(),
+            data: insertData.data,
+          })
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .run();
+        const updated = await select(tx)
+          .from(mcpServers)
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .one();
+        if (!updated) throw new RepositoryError('Failed to retrieve updated MCP server');
+        return this.rowToMCPServer(updated as MCPServerRow);
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
