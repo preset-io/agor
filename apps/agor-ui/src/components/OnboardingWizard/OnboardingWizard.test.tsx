@@ -480,7 +480,7 @@ describe('OnboardingWizard', () => {
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('workspace step names the teammate, creates their board and saves progress when no board exists yet', async () => {
+  it('workspace step advances to the LLM step WITHOUT creating a board (creation deferred to completion)', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
@@ -490,23 +490,14 @@ describe('OnboardingWizard', () => {
 
     clickButton(/^continue →/i);
 
-    await waitFor(() => {
-      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
-    });
-    await waitFor(() => {
-      expect(onUpdateUser).toHaveBeenCalledWith(
-        'user-1',
-        expect.objectContaining({
-          preferences: expect.objectContaining({
-            onboarding: expect.objectContaining({ boardId: 'board-1' }),
-          }),
-        })
-      );
-    });
+    // Step 2 no longer creates a board (that's deferred to completion so an
+    // abandoned run never leaves an orphan board) — Continue just advances.
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('workspace step surfaces a board-creation failure as an inline error instead of crashing', async () => {
+  it('surfaces a board-creation failure at COMPLETION as an inline error on the final step', async () => {
     const boardsService = {
       create: vi.fn(async () => {
         throw new Error('slug already exists');
@@ -520,13 +511,14 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'workspace', client: client as never });
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    clickButton(/^continue →/i);
+    clickButton(/^continue →/i); // workspace → llm (no board yet)
+    await findAndClickButton(/skip for now/i); // llm → done
+    // The board is created only now, at completion; its rejection surfaces as an
+    // inline Alert on the final step and the wizard stays there so the user retries.
+    clickButton(/meet rusty/i);
 
-    // The rejection surfaces as an inline Alert, not an uncaught exception —
-    // the wizard stays on step 2 and the user can retry.
     expect(await screen.findByText('slug already exists')).toBeInTheDocument();
-    expect(screen.getByText('Build your teammate')).toBeInTheDocument();
-    expect(screen.getByText(/^continue →/i)).toBeInTheDocument();
+    expect(screen.getByText('Rusty is ready.')).toBeInTheDocument();
   });
 
   it('workspace step renders the template gallery below the name field', () => {
@@ -581,19 +573,22 @@ describe('OnboardingWizard', () => {
     await findAndClickButton(/skip for now/i); // llm
     clickButton(/meet rusty/i); // named teammate → verb-first primary CTA
 
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        teammateName: 'Rusty',
-        teammateEmoji: '⚖️',
-        sourceBranch: 'template/legal-analyst',
-      })
+    // Board creation now precedes onComplete (both at completion), so await it.
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          teammateName: 'Rusty',
+          teammateEmoji: '⚖️',
+          sourceBranch: 'template/legal-analyst',
+        })
+      )
     );
   });
 
-  it('always creates a NEW board even when the user already has one (never reuses it)', async () => {
+  it('creates a NEW board only at completion, even when the user already has one (never reuses it)', async () => {
     // The user already has a board (mainBoardId + hydrated store). Per the 1:1
     // teammate↔board convention, onboarding must STILL create a fresh board named
-    // after the teammate and never reuse/join the existing one.
+    // after the teammate and never reuse/join the existing one — and only at the end.
     const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
     const { boardsService } = renderWizard({
       initialStep: 'workspace',
@@ -601,19 +596,21 @@ describe('OnboardingWizard', () => {
       user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
     });
 
-    // Helper copy promises a fresh, owned board — never "join your existing board".
+    // Helper copy promises a fresh board made at the end — never "join your existing board".
     expect(screen.queryByText(/join your existing board/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/their own board/i)).toBeInTheDocument();
+    expect(screen.getByText(/new board/i)).toBeInTheDocument();
 
-    // Naming + Continue creates a brand-new board named after the teammate, even
-    // though the user already has one.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    clickButton(/^continue →/i);
+    clickButton(/^continue →/i); // workspace → llm: still NO board created
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    expect(boardsService.create).not.toHaveBeenCalled();
+
+    await findAndClickButton(/skip for now/i); // llm → done
+    clickButton(/meet rusty/i); // completion → create the brand-new board now
 
     await waitFor(() => {
       expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
     });
-    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
   });
 
   it('completes the full flow and calls onComplete with the created board', async () => {
@@ -623,7 +620,7 @@ describe('OnboardingWizard', () => {
     // goals (optional — Continue is disabled without a selection, so skip)
     clickButton(/skip for now/i);
 
-    // workspace — name the teammate, which creates their board
+    // workspace — name the teammate (the board is created later, at completion)
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
@@ -636,28 +633,31 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — the primary CTA is now verb-first + named ("Meet Rusty →").
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    // done — teammate-centric adaptive headline; the primary CTA is verb-first + named.
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
-    // The wizard emits the teammate naming details + selected agent so the app
-    // shell can seed the first AI teammate on the created board. No template was
-    // picked, so sourceBranch is undefined (framework repo default).
-    expect(onComplete).toHaveBeenCalledWith({
-      branchId: '',
-      sessionId: '',
-      boardId: 'board-1',
-      path: 'teammate',
-      teammateName: 'Rusty',
-      teammateEmoji: '🤖',
-      sourceBranch: undefined,
-      agent: 'claude-code',
-      // Goals were skipped → the default MCP suggestion set flows through, and
-      // the goals threaded to the completion handler are empty.
-      suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
-      goals: [],
-      canManageIntegrations: false,
-    });
+    // The wizard creates the board now (at completion) and emits the teammate
+    // naming details + selected agent so the app shell can seed the first AI
+    // teammate on it. No template was picked → sourceBranch undefined. Board
+    // creation precedes onComplete, so await it.
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: '',
+        sessionId: '',
+        boardId: 'board-1',
+        path: 'teammate',
+        teammateName: 'Rusty',
+        teammateEmoji: '🤖',
+        sourceBranch: undefined,
+        agent: 'claude-code',
+        // Goals were skipped → the default MCP suggestion set flows through, and
+        // the goals threaded to the completion handler are empty.
+        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        goals: [],
+        canManageIntegrations: false,
+      })
+    );
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
     expect(onCreateRepo).not.toHaveBeenCalled();
@@ -665,14 +665,14 @@ describe('OnboardingWizard', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('done step summarizes the teammate name, goal, template, and connected provider', async () => {
+  it('done step heroes the named teammate with a role pill + adaptive headline and a demoted recap (template picked)', async () => {
     renderWizard();
 
     // goals — pick one
     clickButton('Ship without the busywork');
     clickButton(/^continue →/i);
 
-    // workspace — name + template
+    // workspace — name + template (Product Manager → role pill + its avatar emoji)
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     const templateCard = screen.getByText('Product Manager').closest('[role="radio"]');
@@ -687,23 +687,20 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — recap matches exactly what was entered, not the old
-    // persona/MCP-recommendations checklist.
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(screen.getByText('🧭 Rusty')).toBeInTheDocument();
-    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
-    expect(screen.getByText('Product Manager')).toBeInTheDocument();
-    expect(screen.getByText('Claude')).toBeInTheDocument();
-    expect(screen.queryByText('AI connected')).not.toBeInTheDocument();
-    expect(screen.queryByText('MCP tools')).not.toBeInTheDocument();
-    // The single primary action is verb-first + named (into the activation moment),
-    // and the recap sits under a muted "What we set up" caption as clearly secondary.
+    // done — teammate-centric: name heroes the headline, the template is the role
+    // pill, and the recap is a single muted line (no dominating checklist).
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
+    expect(screen.getByText('Claude')).toBeInTheDocument(); // recap: provider
+    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument(); // recap: goal
+    // The single primary action is verb-first + named into the first session.
     expect(screen.getByText(/^meet rusty →$/i)).toBeInTheDocument();
-    expect(screen.getByText('What we set up')).toBeInTheDocument();
+    // The old dominating checklist + "What we set up" caption are gone.
+    expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/open my board/i)).not.toBeInTheDocument();
   });
 
-  it('done step shows skip hints when goals/template/provider were skipped', async () => {
+  it('done step shows a warm generic success when the teammate was left unnamed (no checklist)', async () => {
     renderWizard();
 
     clickButton(/skip for now/i); // goals
@@ -712,11 +709,13 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i); // llm
 
+    // No teammate to hero → the warm generic headline + board-open subcopy, and the
+    // old skip-hint checklist is gone entirely.
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(screen.getByText('Skipped — add one anytime from your board')).toBeInTheDocument();
-    expect(screen.getByText('Skipped — steer any session directly instead')).toBeInTheDocument();
-    expect(screen.getByText('Skipped — no starter playbook picked')).toBeInTheDocument();
-    expect(screen.getByText('Not connected — add in Settings - AI & Agents')).toBeInTheDocument();
+    expect(screen.getByText('Open your board to start your first AI session.')).toBeInTheDocument();
+    expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Skipped —/)).not.toBeInTheDocument();
+    expect(screen.getByText(/open my board/i)).toBeInTheDocument(); // unnamed → generic CTA
   });
 
   it('lets the user skip every step without any confirmation dialog', async () => {

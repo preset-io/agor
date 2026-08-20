@@ -54,7 +54,11 @@ import {
   mergeGoalMcpRecs,
   ONBOARDING_GOALS,
 } from '../../utils/onboardingGoals';
-import { getTeammateTemplate, resolveTemplateSourceBranch } from '../../utils/teammateTemplates';
+import {
+  BLANK_TEMPLATE_ID,
+  getTeammateTemplate,
+  resolveTemplateSourceBranch,
+} from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
@@ -456,11 +460,9 @@ export function OnboardingWizard({
   // Chosen gallery template id (null = nothing picked yet). Sets the default
   // avatar and the teammate's framework source branch — never the name.
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  // Onboarding always creates a fresh board for the teammate (1:1 teammate↔board
-  // convention); it never reuses the user's existing board, so there is no
-  // board-reuse verification state.
-  const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
-  const [boardCreating, setBoardCreating] = useState(false);
+  // The teammate's board is created ONLY at completion (the `done` handler) — a
+  // fresh board named after the teammate, never before, so an abandoned run
+  // leaves no orphan board. Errors from that final creation surface on step 4.
   const [boardError, setBoardError] = useState<string | null>(null);
 
   // ── Step 4: completion ────────────────────────────────────────────────────
@@ -485,9 +487,7 @@ export function OnboardingWizard({
     setTeammateName(DEFAULT_TEAMMATE_NAME);
     setTeammateEmoji('🤖');
     setSelectedTemplateId(null);
-    setCreatedBoardId(null);
     setBoardError(null);
-    setBoardCreating(false);
     setCompleting(false);
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
@@ -531,8 +531,7 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    setTeammateName(DEFAULT_TEAMMATE_NAME);
-    setCreatedBoardId(null);
+    setTeammateName('');
   }, [open, user]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
@@ -661,7 +660,7 @@ export function OnboardingWizard({
   ]);
 
   const disabledReason = useMemo((): string | null => {
-    if (llmSaving || boardCreating) return null;
+    if (llmSaving || completing) return null;
     switch (currentStep) {
       case 'goals':
         return selectedGoals.length > 0 ? null : 'Pick up to two, or skip for now';
@@ -699,7 +698,7 @@ export function OnboardingWizard({
     authMethod,
     teammateName,
     llmSaving,
-    boardCreating,
+    completing,
   ]);
 
   const primaryLabel = useMemo(() => {
@@ -876,44 +875,14 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        // Always create a NEW board named after the teammate — a teammate gets
-        // its own board and becomes its primary assistant (1:1 convention). We
-        // never reuse the user's existing board. If we already created one this
-        // run (user stepped back to workspace and forward again), reuse THAT
-        // rather than spawning a duplicate board.
-        if (createdBoardId) {
-          goToStep('llm');
-          return;
-        }
-        if (!client) {
-          setBoardError(NO_CLIENT_BOARD_ERROR);
-          return;
-        }
-        setBoardCreating(true);
-        setBoardError(null);
-        try {
-          const board = await client.service('boards').create({
-            name: teammateName.trim(),
-            icon: teammateEmoji,
-          });
-          const newBoardId = board?.board_id ?? null;
-          if (!newBoardId) {
-            setBoardError('Board was created but returned no ID - try again.');
-            return;
-          }
-          setCreatedBoardId(newBoardId);
-          if (user) await saveOnboardingProgress({ boardId: newBoardId });
-          goToStep('llm');
-        } catch (err) {
-          setBoardError(err instanceof Error ? err.message : 'Failed to create board');
-        } finally {
-          setBoardCreating(false);
-        }
+        // Step 2 no longer creates the board — that happens ONLY at completion
+        // (the `done` case below), so an abandoned run never leaves an orphan
+        // board. The name (required to advance) is what the board is named after.
+        goToStep('llm');
         break;
       }
       case 'done': {
-        // Always the board we just created this run — never a reused board.
-        const boardIdToUse = createdBoardId || '';
+        const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
         // this still powers the teammate proposing connections in its first session.
@@ -921,14 +890,33 @@ export function OnboardingWizard({
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
+        setBoardError(null);
         try {
+          // Create the teammate's board ONLY now, at the very end. Always a fresh
+          // board named after the teammate; seedOnboardingTeammate (via onComplete)
+          // then makes the teammate its PRIMARY assistant + starts the first
+          // session. If the teammate was left unnamed (workspace skipped), there's
+          // nothing to seed, so we open without creating a board.
+          let boardId = '';
+          if (client && name) {
+            const board = await client.service('boards').create({
+              name,
+              icon: teammateEmoji,
+            });
+            boardId = board?.board_id ?? '';
+            if (!boardId) {
+              setBoardError('Board was created but returned no ID - try again.');
+              return;
+            }
+            if (user) await saveOnboardingProgress({ boardId });
+          }
           await onComplete({
             branchId: '',
             sessionId: '',
-            boardId: boardIdToUse,
+            boardId,
             path: 'teammate',
             // Naming details for the first AI teammate, seeded on completion.
-            teammateName: teammateName.trim() || undefined,
+            teammateName: name || undefined,
             teammateEmoji,
             // Framework source branch from the chosen gallery template; undefined
             // (blank / no pick) falls back to the repo default branch.
@@ -938,6 +926,8 @@ export function OnboardingWizard({
             canManageIntegrations: hasMinimumRole(user?.role, ROLES.ADMIN),
             goals: selectedGoals,
           });
+        } catch (err) {
+          setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
         } finally {
           setCompleting(false);
         }
@@ -961,7 +951,6 @@ export function OnboardingWizard({
     teammateEmoji,
     selectedTemplateId,
     saveOnboardingProgress,
-    createdBoardId,
     onComplete,
     goToStep,
   ]);
@@ -1575,7 +1564,7 @@ export function OnboardingWizard({
                 />
               </div>
               <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
-                They'll get their own board, with you as owner.
+                We'll set them up as the primary teammate on a new board when you finish.
               </Text>
             </div>
 
@@ -1585,19 +1574,11 @@ export function OnboardingWizard({
           </div>
         }
       />
-
-      {boardError && (
-        <Alert
-          type="error"
-          message={boardError}
-          showIcon
-          style={{ marginTop: 16, flex: '0 0 auto' }}
-        />
-      )}
     </div>
   );
 
   const renderDone = () => {
+    const name = teammateName.trim();
     const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
     const providerLabel = selectedAgent
       ? LLM_OPTIONS.find((option) => option.agent === selectedAgent)?.title
@@ -1605,83 +1586,61 @@ export function OnboardingWizard({
     const goalTitles = selectedGoals
       .map((id) => GOALS.find((goal) => goal.id === id)?.title)
       .filter((title): title is string => Boolean(title));
-    // getTeammateTemplate covers the blank starter too (title "Start blank"),
-    // so no separate BLANK_TEMPLATE_ID case is needed here.
-    const templateLabel = getTeammateTemplate(selectedTemplateId)?.title;
+    // Role = the picked template's title; the blank starter is a starting point,
+    // not a role, so it never reads as a job title on the hero.
+    const template =
+      selectedTemplateId && selectedTemplateId !== BLANK_TEMPLATE_ID
+        ? getTeammateTemplate(selectedTemplateId)
+        : undefined;
+    const roleTitle = template?.title;
+    const primaryGoal = goalTitles[0];
 
-    // Recaps exactly what steps 1-3 collected — not a setup checklist, since
-    // there's no in-wizard MCP step anymore to report on.
-    const summaryRows: { label: string; value: string | undefined; hint: string }[] = [
-      {
-        label: 'Teammate',
-        value: teammateName.trim() ? `${teammateEmoji} ${teammateName.trim()}` : undefined,
-        hint: 'Skipped — add one anytime from your board',
-      },
-      {
-        label: 'Goals',
-        value: goalTitles.length ? goalTitles.join(', ') : undefined,
-        hint: 'Skipped — steer any session directly instead',
-      },
-      {
-        label: 'Template',
-        value: templateLabel,
-        hint: 'Skipped — no starter playbook picked',
-      },
-      {
-        label: 'AI provider',
-        value: aiConnected ? providerLabel : undefined,
-        hint: 'Not connected — add in Settings - AI & Agents',
-      },
-    ];
+    // Adaptive, teammate-centric copy. An unnamed teammate can't be heroed, so it
+    // keeps the warm generic headline; a named one is celebrated by name (+ role).
+    let headline: string;
+    let subline: string;
+    if (!name) {
+      headline = "You're ready to build.";
+      subline = 'Open your board to start your first AI session.';
+    } else if (roleTitle) {
+      headline = `${name} is ready.`;
+      subline = template?.description ?? `Your new ${roleTitle}, set up and ready on your board.`;
+    } else if (primaryGoal) {
+      headline = `${name} is ready.`;
+      subline = `Set up for what you picked: ${goalTitles.join(', ')}. Point ${name} at the first one in your first chat.`;
+    } else {
+      headline = `${name} is ready.`;
+      subline = `Shape ${name} however you like — just tell them what you need in your first chat.`;
+    }
+
+    // Demoted recap: one subtle muted line of facts still worth recalling (the
+    // role is already the pill, so it's not repeated here). Never a checklist.
+    const recapFacts = [...(aiConnected && providerLabel ? [providerLabel] : []), ...goalTitles];
 
     return (
-      <div style={{ textAlign: 'center', padding: '8px 0' }}>
-        {/* Animated success circle + particles */}
-        <div style={{ position: 'relative', width: 90, height: 90, margin: '0 auto 20px' }}>
-          <svg
-            width="90"
-            height="90"
-            viewBox="0 0 90 90"
-            role="img"
-            aria-label="Success"
-            style={{ position: 'absolute', inset: 0 }}
-          >
-            <title>Success</title>
-            <circle
-              cx="45"
-              cy="45"
-              r="38"
-              fill="none"
-              stroke="rgba(46,154,146,0.15)"
-              strokeWidth="2"
-            />
-            <circle
-              cx="45"
-              cy="45"
-              r="38"
-              fill="none"
-              stroke="#2e9a92"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeDasharray="239"
-              strokeDashoffset="239"
-              className="onb-draw"
-              style={{ transform: 'rotate(-90deg)', transformOrigin: '45px 45px' }}
-            />
-          </svg>
+      <div style={{ textAlign: 'center', padding: '6px 0' }}>
+        {/* Teammate hero — the avatar (their own emoji) IS the celebration, with a
+            quiet particle burst. No generic success checkmark. */}
+        <div style={{ position: 'relative', width: 92, height: 92, margin: '0 auto 16px' }}>
           <div
+            className="onb-check"
             style={{
               position: 'absolute',
               inset: 0,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              borderRadius: '50%',
+              fontSize: 46,
+              lineHeight: 1,
+              background: GLASS_CARD_BG,
+              border: GLASS_CARD_BORDER,
+              boxShadow: GLASS_CARD_SHADOW,
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
             }}
           >
-            <CheckCircleOutlined
-              className="onb-check"
-              style={{ color: SUCCESS_GREEN, fontSize: 36, animationDelay: '0.6s' }}
-            />
+            <span aria-hidden="true">{teammateEmoji || '🤖'}</span>
           </div>
           {PARTICLE_DIRS.map(([px, py], i) => (
             <div
@@ -1704,96 +1663,58 @@ export function OnboardingWizard({
           ))}
         </div>
 
-        <Title level={2} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-          You're ready to build.
+        {/* Role pill — reads like the job title you just hired for. */}
+        {roleTitle && (
+          <div
+            style={{
+              display: 'inline-block',
+              color: PRIMARY,
+              background: 'rgba(46,154,146,0.14)',
+              border: '1px solid rgba(46,154,146,0.4)',
+              borderRadius: 999,
+              padding: '2px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              marginBottom: 10,
+            }}
+          >
+            {roleTitle}
+          </div>
+        )}
+
+        <Title level={2} style={{ color: TEXT_PRIMARY, margin: '0 0 8px' }}>
+          {headline}
         </Title>
-        <Paragraph
-          style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
-        >
-          {teammateName.trim()
-            ? `${teammateName.trim()} is set up and waiting on your board.`
-            : 'Open your board to start your first AI session.'}
+        <Paragraph style={{ color: TEXT_SECONDARY, maxWidth: 400, margin: '0 auto' }}>
+          {subline}
         </Paragraph>
 
-        {/* Recap — deliberately secondary to the primary CTA below: a muted
-            caption + quiet glass card, not a competing call to action. */}
-        <Text
-          style={{
-            display: 'block',
-            textAlign: 'left',
-            color: TEXT_MUTED,
-            fontSize: 11,
-            textTransform: 'uppercase',
-            letterSpacing: 0.4,
-            marginBottom: 6,
-          }}
-        >
-          What we set up
-        </Text>
-        {/* Summary checklist */}
-        <div
-          style={{
-            background: GLASS_CARD_BG,
-            border: GLASS_CARD_BORDER,
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            boxShadow: GLASS_CARD_SHADOW,
-            borderRadius: 10,
-            padding: '16px 20px',
-            textAlign: 'left',
-            marginBottom: 8,
-          }}
-        >
-          {summaryRows.map(({ label, value, hint }) => (
-            <div
-              key={label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '6px 0',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 14,
-                  color: value ? SUCCESS_GREEN : TEXT_MUTED,
-                  fontWeight: 600,
-                  width: 16,
-                  textAlign: 'center',
-                }}
-              >
-                {value ? '✓' : '·'}
-              </span>
-              <Text
-                style={{
-                  color: value ? TEXT_PRIMARY : TEXT_SECONDARY,
-                  flex: 1,
-                  fontSize: 13,
-                }}
-              >
-                {label}
-              </Text>
-              <Text
-                style={{
-                  color: value ? TEXT_SECONDARY : TEXT_MUTED,
-                  fontSize: value ? 12 : 11,
-                  maxWidth: 200,
-                  textAlign: 'right',
-                }}
-              >
-                {value ?? hint}
-              </Text>
-            </div>
-          ))}
-        </div>
+        {recapFacts.length > 0 && (
+          <div style={{ marginTop: 18, color: TEXT_MUTED, fontSize: 12 }}>
+            {recapFacts.map((fact, i) => (
+              <Fragment key={fact}>
+                {i > 0 && <Text style={{ color: TEXT_MUTED, fontSize: 12 }}> · </Text>}
+                <Text style={{ color: TEXT_MUTED, fontSize: 12 }}>{fact}</Text>
+              </Fragment>
+            ))}
+          </div>
+        )}
+
+        {boardError && (
+          <Alert
+            type="error"
+            message={boardError}
+            showIcon
+            style={{ marginTop: 18, textAlign: 'left' }}
+          />
+        )}
       </div>
     );
   };
 
   // ─── Footer ───────────────────────────────────────────────────────────────
 
-  const isPrimaryLoading = llmSaving || boardCreating || completing;
+  const isPrimaryLoading = llmSaving || completing;
   const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
 
   const footer = (
