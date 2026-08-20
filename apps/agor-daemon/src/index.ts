@@ -37,6 +37,7 @@ import {
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
   assertValidEffectiveExecutionConfig,
+  assertValidEffectiveExternalLaunchConfig,
   assertValidEffectiveIdentityConfig,
   getConfigPath,
   loadConfig,
@@ -47,6 +48,7 @@ import {
   resolveDeploymentConfig,
   resolveEffectiveConfig,
   resolveGitConfigParameters,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveSecurity,
 } from '@agor/core/config';
@@ -193,6 +195,7 @@ async function startDaemonWithOwnedMetrics(
   config = resolveEffectiveConfig(config);
   const deploymentId = requireDeploymentId(config);
   assertValidEffectiveExecutionConfig(config);
+  assertValidEffectiveExternalLaunchConfig(config);
   assertValidEffectiveIdentityConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
@@ -734,7 +737,8 @@ async function startDaemonWithOwnedMetrics(
   const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
-    skipFirstRunAdminBootstrap: effectiveConfig.external_launch?.enabled === true,
+    skipFirstRunAdminBootstrap:
+      !resolveIdentityAuthority(effectiveConfig).capabilities.users.create,
     // The URL may come from DATABASE_URL, but operators still need to size the
     // per-replica pool from config.yaml. Keep this deliberately limited to max:
     // the public idleTimeout setting is documented in milliseconds while the

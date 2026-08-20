@@ -8,7 +8,7 @@
 import type { ResolvedIdentityAuthority } from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
 import type { UploadIngressPolicy } from '@agor/core/types';
-import { useEffect, useState } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import type { BranchStorageConfig } from '../utils/branchStorage';
 
@@ -79,45 +79,99 @@ interface HealthResponse {
   features?: FeaturesConfig;
 }
 
-export function useAuthConfig() {
-  const [config, setConfig] = useState<AuthConfig | null>(null);
-  const [instanceConfig, setInstanceConfig] = useState<InstanceConfig | null>(null);
-  const [featuresConfig, setFeaturesConfig] = useState<FeaturesConfig | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+interface AuthConfigState {
+  config: AuthConfig | null;
+  instanceConfig: InstanceConfig | null;
+  featuresConfig: FeaturesConfig | undefined;
+  loading: boolean;
+  error: Error | null;
+}
 
-  useEffect(() => {
-    async function fetchAuthConfig() {
-      try {
-        const response = await fetch(`${getDaemonUrl()}/health`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch auth config: ${response.statusText}`);
-        }
+let snapshot: AuthConfigState = {
+  config: null,
+  instanceConfig: null,
+  featuresConfig: undefined,
+  loading: true,
+  error: null,
+};
+let request: Promise<void> | null = null;
+const listeners = new Set<() => void>();
 
-        const health: HealthResponse = await response.json();
-        setConfig(health.auth);
-        setInstanceConfig(health.instance ?? null);
-        setFeaturesConfig(health.features);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error(String(err)));
-        // Default to requiring auth on error (secure by default)
-        setConfig({ requireAuth: true });
-        setInstanceConfig(null);
-        setFeaturesConfig(undefined);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchAuthConfig();
-  }, []);
-
-  return {
-    config,
-    instanceConfig,
-    featuresConfig,
-    loading,
-    error,
+/** Reset the module cache between isolated component tests. */
+export function __resetAuthConfigForTests(): void {
+  snapshot = {
+    config: null,
+    instanceConfig: null,
+    featuresConfig: undefined,
+    loading: true,
+    error: null,
   };
+  request = null;
+}
+
+/** Seed the already-loaded app-shell snapshot for isolated component tests. */
+export function __setAuthConfigForTests(config: AuthConfig): void {
+  snapshot = {
+    config,
+    instanceConfig: null,
+    featuresConfig: undefined,
+    loading: false,
+    error: null,
+  };
+  request = Promise.resolve();
+}
+
+function publish(next: AuthConfigState): void {
+  snapshot = next;
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function fetchAuthConfigOnce(): Promise<void> {
+  if (request) return request;
+  request = (async () => {
+    try {
+      const response = await fetch(`${getDaemonUrl()}/health`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch auth config: ${response.statusText}`);
+      }
+
+      const health: HealthResponse = await response.json();
+      publish({
+        config: health.auth,
+        instanceConfig: health.instance ?? null,
+        featuresConfig: health.features,
+        loading: false,
+        error: null,
+      });
+    } catch (err) {
+      publish({
+        // Default to requiring auth on error (secure by default). Capability
+        // consumers also inspect `error` and keep mutation controls disabled.
+        config: { requireAuth: true },
+        instanceConfig: null,
+        featuresConfig: undefined,
+        loading: false,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  })();
+  return request;
+}
+
+/** One shared health snapshot for the whole UI; consumers never refetch or drift. */
+export function useAuthConfig(): AuthConfigState {
+  const state = useSyncExternalStore(
+    subscribe,
+    () => snapshot,
+    () => snapshot
+  );
+  useEffect(() => {
+    void fetchAuthConfigOnce();
+  }, []);
+  return state;
 }

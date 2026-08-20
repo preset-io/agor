@@ -125,6 +125,22 @@ describe('UsersService — delegated execution home key validation', () => {
     });
     expect(user.unix_username).toBe('_alice-1');
   });
+
+  dbTest('rejects a duplicate execution-home key across users', async ({ db }) => {
+    const service = new UsersService(db);
+    await service.create({
+      email: 'first-home-key@test.local',
+      password: 'test-password-1234',
+      unix_username: 'shared-home',
+    });
+    await expect(
+      service.create({
+        email: 'second-home-key@test.local',
+        password: 'test-password-1234',
+        unix_username: 'shared-home',
+      })
+    ).rejects.toThrow(/already in use/);
+  });
 });
 
 describe('UsersService — external identity authority', () => {

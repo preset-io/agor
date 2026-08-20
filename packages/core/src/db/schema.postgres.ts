@@ -1160,6 +1160,47 @@ export const users = pgTable(
     tenantIdx: index('users_tenant_id_idx').on(table.tenant_id),
     emailIdx: index('users_email_idx').on(table.email),
     emailTenantUnique: uniqueIndex('users_tenant_email_unique').on(table.tenant_id, table.email),
+    executionHomeTenantUnique: uniqueIndex('users_tenant_unix_username_unique').on(
+      table.tenant_id,
+      table.unix_username
+    ),
+  })
+);
+
+/**
+ * Database-enforced binding between one trusted external subject and its local
+ * user projection. The JSON copy on users remains a compatibility/audit cache;
+ * this relation is the lookup and uniqueness authority.
+ */
+export const userExternalIdentities = pgTable(
+  'user_external_identities',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    identity_key: varchar('identity_key', { length: 64 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    email: text('email'),
+    name: text('name'),
+    last_login_at: t.timestamp('last_login_at').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.identity_key] }),
+    tenantUserFk: foreignKey({
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'user_external_identities_tenant_user_fk',
+    }).onDelete('cascade'),
+    providerSubjectUnique: uniqueIndex('user_external_identities_provider_subject_unique').on(
+      table.tenant_id,
+      table.provider,
+      table.issuer,
+      table.subject
+    ),
+    userIdx: index('user_external_identities_tenant_user_idx').on(table.tenant_id, table.user_id),
   })
 );
 
@@ -2746,6 +2787,8 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type UserExternalIdentityRow = typeof userExternalIdentities.$inferSelect;
+export type UserExternalIdentityInsert = typeof userExternalIdentities.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;

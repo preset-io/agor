@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -404,6 +405,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   });
 
   it('keeps externally managed identity read-only while saving Agor preferences', async () => {
+    __resetAuthConfigForTests();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -1244,6 +1246,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 // every tool enabled) before each test so provider panels render, and clear any
 // per-test override afterwards so visibility never leaks between tests.
 beforeEach(() => {
+  __setAuthConfigForTests({ requireAuth: true });
   agorStore.getState().setAgenticToolSettings([]);
 });
 afterEach(() => {

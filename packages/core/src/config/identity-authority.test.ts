@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveEffectiveConfig } from './config-manager';
 import { assertValidEffectiveIdentityConfig, resolveIdentityAuthority } from './identity-authority';
 import type { AgorConfig } from './types';
 
@@ -38,7 +39,7 @@ describe('identity authority', () => {
 
   it('derives externally managed capabilities from the coherent external profile', () => {
     const config = externalConfig();
-    expect(() => assertValidEffectiveIdentityConfig(config, {})).not.toThrow();
+    expect(() => assertValidEffectiveIdentityConfig(config)).not.toThrow();
     expect(resolveIdentityAuthority(config)).toMatchObject({
       userLifecycle: 'external',
       roleAuthority: 'claims',
@@ -90,26 +91,21 @@ describe('identity authority', () => {
 
   it('requires the external launch provisioner and rejects bootstrap role mutation', () => {
     expect(() =>
-      assertValidEffectiveIdentityConfig(
-        externalConfig({ external_launch: { enabled: false } }),
-        {}
-      )
+      assertValidEffectiveIdentityConfig(externalConfig({ external_launch: { enabled: false } }))
     ).toThrow(/external_launch\.enabled/);
 
     expect(() =>
       assertValidEffectiveIdentityConfig(
         externalConfig({
           execution: { bootstrap_superadmin_users: ['user-1'] },
-        }),
-        {}
+        })
       )
     ).toThrow(/bootstrap_superadmin_users/);
   });
 
   it('accepts the documented environment override for external launch enablement', () => {
     const config = externalConfig({ external_launch: { enabled: false } });
-    expect(() =>
-      assertValidEffectiveIdentityConfig(config, { AGOR_EXTERNAL_LAUNCH_ENABLED: 'true' })
-    ).not.toThrow();
+    const effective = resolveEffectiveConfig(config, { AGOR_EXTERNAL_LAUNCH_ENABLED: 'true' });
+    expect(() => assertValidEffectiveIdentityConfig(effective)).not.toThrow();
   });
 });

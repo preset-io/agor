@@ -946,6 +946,18 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/identity\.user_lifecycle|identity\.surprise/);
   });
 
+  it('rejects scalar identity and external launch sections', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+
+    await fs.writeFile(configPath, 'identity: external\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/identity must be an object/);
+
+    await fs.writeFile(configPath, 'external_launch: enabled\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/external_launch must be an object/);
+  });
+
   it('accepts an HTTP(S) external launch login redirect URL', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

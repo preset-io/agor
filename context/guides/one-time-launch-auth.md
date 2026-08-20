@@ -89,6 +89,13 @@ or edit those fields. Preferences, onboarding, agentic-tool credentials and
 defaults, environment variables, API keys, and MCP selection/OAuth remain
 Agor-owned.
 
+The daemon stores the trusted `(tenant, provider, issuer, subject)` binding in
+a tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
+projection runs in one tenant-scoped transaction and serializes a subject
+across replicas; the JSON copy on `users.data.external_identities` remains a
+compatibility and audit cache. Execution-home keys are also unique per tenant,
+so a claim cannot route two users into the same delegated credential context.
+
 Claims roles are required and exact in this mode. `allow_admin_roles` and
 `execution.allow_superadmin` remain explicit acceptance gates; disallowed roles
 fail the launch rather than being downgraded. Omitting `identity` preserves
@@ -216,6 +223,15 @@ Production verification is asymmetric and fails closed:
 
 ## Compatibility and upgrade notes
 
+- **Migrate before enabling external authority.** The external-identity
+  migration creates the binding relation and makes execution-home keys unique
+  per tenant. It fails closed if legacy rows already contain conflicting
+  bindings or duplicate non-null execution-home keys; resolve that data before
+  retrying. Apply the migration before starting the new daemon binary, and
+  enable the `identity` profile only after every daemon replica runs a version
+  that maintains the binding. New daemons can discover legacy JSON links and
+  bind them transactionally on the next successful launch, but old daemons do
+  not write the new relation.
 - **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
   verification (`jwks_url` / `public_key`) now defaults to an `RS256`-only
   allow-list and refuses HS\* algorithms outright. A deployment that signs

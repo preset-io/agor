@@ -1115,6 +1115,37 @@ export const users = sqliteTable(
   },
   (table) => ({
     emailIdx: index('users_email_idx').on(table.email),
+    executionHomeUnique: uniqueIndex('users_unix_username_unique').on(table.unix_username),
+  })
+);
+
+/**
+ * Database-enforced binding between one trusted external subject and its local
+ * user projection. SQLite is single-tenant, so identity_key is globally unique.
+ */
+export const userExternalIdentities = sqliteTable(
+  'user_external_identities',
+  {
+    identity_key: text('identity_key', { length: 64 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    email: text('email'),
+    name: text('name'),
+    last_login_at: t.timestamp('last_login_at').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    providerSubjectUnique: uniqueIndex('user_external_identities_provider_subject_unique').on(
+      table.provider,
+      table.issuer,
+      table.subject
+    ),
+    userIdx: index('user_external_identities_user_idx').on(table.user_id),
   })
 );
 
@@ -2577,6 +2608,8 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type UserExternalIdentityRow = typeof userExternalIdentities.$inferSelect;
+export type UserExternalIdentityInsert = typeof userExternalIdentities.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;

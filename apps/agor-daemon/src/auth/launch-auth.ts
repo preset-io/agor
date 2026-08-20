@@ -4,6 +4,7 @@ import {
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
+  externalLaunchConfigurationError,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveTenantContext,
@@ -14,23 +15,19 @@ import {
   generateId,
   hash,
   insert,
+  isExecutionHomeKeyAvailable,
   reattributeLegacyAnonymousRows,
-  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   select,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+  UserExternalIdentitiesRepository,
   update,
   users,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type {
-  Params,
-  TenantContext,
-  User,
-  UserExternalIdentity,
-  UserID,
-  UserRole,
-} from '@agor/core/types';
-import { normalizeRole, ROLES } from '@agor/core/types';
+import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
+import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
@@ -38,13 +35,6 @@ import { authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_SERVICE_TOKEN_ENV = 'AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN';
-const DEFAULT_SHARED_SECRET_ENV = 'AGOR_EXTERNAL_LAUNCH_SHARED_SECRET';
-const DEFAULT_EXCHANGE_URL_ENV = 'AGOR_EXTERNAL_LAUNCH_EXCHANGE_URL';
-const DEFAULT_ISSUER_ENV = 'AGOR_EXTERNAL_LAUNCH_ISSUER';
-const DEFAULT_AUDIENCE_ENV = 'AGOR_EXTERNAL_LAUNCH_AUDIENCE';
-const DEFAULT_INSTANCE_ID_ENV = 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID';
-const DEFAULT_FORWARD_REQUEST_HOST_ENV = 'AGOR_EXTERNAL_LAUNCH_FORWARD_REQUEST_HOST';
 const DEFAULT_TRUSTED_HOST_HEADER = 'host';
 const DEFAULT_RETURN_HOST_PARAM = 'return_host';
 
@@ -121,40 +111,32 @@ export interface LaunchAuthServiceOptions {
   usersService: { get(id: UserID, params?: Params): Promise<User> };
 }
 
-function envFlag(value: string | undefined): boolean | undefined {
-  if (value === undefined) return undefined;
-  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
-}
-
 export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSettings {
   const raw = config.external_launch;
-  const serviceTokenEnv = raw?.service_credential_env || DEFAULT_SERVICE_TOKEN_ENV;
-  const sharedSecretEnv = raw?.dev_shared_secret_env || DEFAULT_SHARED_SECRET_ENV;
 
   return {
-    enabled: envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true,
-    exchangeUrl: process.env[DEFAULT_EXCHANGE_URL_ENV] || raw?.exchange_url,
-    audience: process.env[DEFAULT_AUDIENCE_ENV] || raw?.audience,
-    issuer: process.env[DEFAULT_ISSUER_ENV] || raw?.issuer,
-    instanceId: process.env[DEFAULT_INSTANCE_ID_ENV] || raw?.instance_id,
+    enabled: raw?.enabled === true,
+    exchangeUrl: raw?.exchange_url,
+    audience: raw?.audience,
+    issuer: raw?.issuer,
+    instanceId: raw?.instance_id,
     providerId: raw?.provider_id,
     jwksUrl: raw?.jwks_url,
     publicKey: raw?.public_key,
-    devSharedSecret: process.env[sharedSecretEnv] || raw?.dev_shared_secret,
-    serviceCredential: process.env[serviceTokenEnv] || raw?.service_credential,
+    devSharedSecret: raw?.dev_shared_secret,
+    serviceCredential: raw?.service_credential,
     allowAdminRoles: raw?.allow_admin_roles === true,
     trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
-    forwardRequestHost:
-      envFlag(process.env[DEFAULT_FORWARD_REQUEST_HOST_ENV]) ?? raw?.forward_request_host === true,
+    forwardRequestHost: raw?.forward_request_host === true,
     trustedHostHeader: (raw?.trusted_host_header || DEFAULT_TRUSTED_HOST_HEADER).toLowerCase(),
   };
 }
 
 export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunchAuthSettings {
   const raw = config.external_launch;
-  const enabled = envFlag(process.env.AGOR_EXTERNAL_LAUNCH_ENABLED) ?? raw?.enabled === true;
+  const enabled = raw?.enabled === true;
   // Only advertise a return-host param when a launch-init redirect exists to
   // append it to; the param name itself is public routing metadata, not a secret.
   const returnHostParam =
@@ -169,7 +151,7 @@ export function resolvePublicLaunchAuthSettings(config: AgorConfig): PublicLaunc
   };
 }
 
-function assertConfigured(settings: ResolvedLaunchSettings): void {
+function assertConfigured(config: AgorConfig, settings: ResolvedLaunchSettings): void {
   const rejectConfig = (reason: string): never => {
     console.warn(`[auth/launch] ${reason}`);
     throw new NotAuthenticated('One-time launch authentication is unavailable');
@@ -178,32 +160,8 @@ function assertConfigured(settings: ResolvedLaunchSettings): void {
   if (!settings.enabled) {
     rejectConfig('disabled');
   }
-  if (!settings.exchangeUrl) {
-    rejectConfig('missing exchange_url');
-  }
-  if (!settings.issuer || !settings.audience) {
-    rejectConfig('missing issuer or audience');
-  }
-  const configuredKeyCount = [
-    settings.jwksUrl,
-    settings.publicKey,
-    settings.devSharedSecret,
-  ].filter(Boolean).length;
-  if (configuredKeyCount === 0) {
-    rejectConfig('missing assertion verification key');
-  }
-  if (configuredKeyCount > 1) {
-    rejectConfig('multiple assertion verification methods configured');
-  }
-  // Asymmetric verification (jwks_url/public_key) must never be paired with a
-  // symmetric HS* algorithm. Pinning this makes the algorithm-confusion defense
-  // independent of the jsonwebtoken default allow-list: even if an operator
-  // overrides `algorithms`, an asymmetric public key can never be coerced into
-  // an HMAC secret. The RS256 default for asymmetric methods is preserved.
-  const usesAsymmetricKey = Boolean(settings.jwksUrl || settings.publicKey);
-  if (usesAsymmetricKey && settings.algorithms?.some((alg) => /^hs/i.test(alg))) {
-    rejectConfig('asymmetric verification cannot be configured with HS* algorithms');
-  }
+  const configurationError = externalLaunchConfigurationError(config);
+  if (configurationError) rejectConfig(configurationError);
 }
 
 function identityKey(provider: string, issuer: string, subject: string): string {
@@ -225,7 +183,7 @@ function derivedEmail(provider: string, issuer: string, subject: string): string
 }
 
 async function chooseLocalEmail(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopedDatabase,
   requestedEmail: string | undefined,
   key: string,
   provider: string,
@@ -306,9 +264,21 @@ function mapRole(
 }
 
 async function findUserByExternalIdentity(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopedDatabase,
+  repository: UserExternalIdentitiesRepository,
   key: string
 ): Promise<typeof users.$inferSelect | null> {
+  const binding = await repository.findByKey(key);
+  if (binding) {
+    const boundUser = await select(db).from(users).where(eq(users.user_id, binding.user_id)).one();
+    if (!boundUser) {
+      throw new NotAuthenticated('Invalid external identity binding');
+    }
+    return boundUser;
+  }
+
+  // Compatibility path for users projected before the relation existed. The
+  // caller binds the discovered user transactionally before completing login.
   const rows = await select(db).from(users).all();
   for (const row of rows) {
     const identities = getExternalIdentities(row.data as UserDataWithExternalIdentities);
@@ -318,7 +288,7 @@ async function findUserByExternalIdentity(
 }
 
 async function findUserByTrustedEmail(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopedDatabase,
   email: string | undefined,
   key: string,
   settings: ResolvedLaunchSettings,
@@ -342,20 +312,16 @@ async function findUserByTrustedEmail(
   return existing;
 }
 
-async function upsertLaunchUser(
+async function projectLaunchUser(
+  db: TenantScopedDatabase,
   options: LaunchAuthServiceOptions,
-  claims: LaunchClaims,
-  tenant?: TenantContext
-): Promise<User> {
-  const { db, config, usersService } = options;
+  claims: LaunchClaims
+): Promise<UserID> {
+  const { config } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
   const settings = resolveLaunchSettings(config);
   const identityAuthority = resolveIdentityAuthority(config);
-  const userLookupParams = {
-    provider: undefined,
-    ...(tenant ? { tenant } : {}),
-  };
   const provider = claims.provider || settings.providerId || issuer;
   const key = identityKey(provider, issuer, subject);
   const now = new Date();
@@ -370,6 +336,13 @@ async function upsertLaunchUser(
   }
   const name = claims.name?.trim() || undefined;
   const unixUsername = claims.unix_username?.trim() || null;
+  if (
+    claims.unix_username !== undefined &&
+    unixUsername !== null &&
+    !isValidExecutionHomeKey(unixUsername)
+  ) {
+    throw new NotAuthenticated('Invalid one-time launch assertion execution home');
+  }
   const avatar = claims.avatar || claims.picture;
   const identity: StoredExternalIdentity = {
     key,
@@ -381,8 +354,12 @@ async function upsertLaunchUser(
     last_login_at: nowIso,
   };
 
+  const identityRepository = new UserExternalIdentitiesRepository(db);
+  await identityRepository.lockProvisioningKey(`identity:${key}`);
+  if (email) await identityRepository.lockProvisioningKey(`email:${email}`);
+
   const existing =
-    (await findUserByExternalIdentity(db, key)) ??
+    (await findUserByExternalIdentity(db, identityRepository, key)) ??
     (await findUserByTrustedEmail(db, email, key, settings, claims));
   if (existing) {
     const role = mapRole(
@@ -401,6 +378,18 @@ async function upsertLaunchUser(
       nextIdentities.push(identity);
     }
 
+    const nextUnixUsername =
+      identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+      claims.unix_username !== undefined
+        ? unixUsername
+        : (unixUsername ?? existing.unix_username);
+    if (
+      nextUnixUsername &&
+      !(await isExecutionHomeKeyAvailable(db, nextUnixUsername, existing.user_id))
+    ) {
+      throw new NotAuthenticated('External execution home is already assigned');
+    }
+
     await update(db, users)
       .set({
         email:
@@ -410,11 +399,7 @@ async function upsertLaunchUser(
             : existing.email,
         name: name ?? existing.name,
         role,
-        unix_username:
-          identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
-          claims.unix_username !== undefined
-            ? unixUsername
-            : (unixUsername ?? existing.unix_username),
+        unix_username: nextUnixUsername,
         updated_at: now,
         data: {
           ...data,
@@ -425,9 +410,10 @@ async function upsertLaunchUser(
       })
       .where(eq(users.user_id, existing.user_id))
       .run();
+    await identityRepository.bind(existing.user_id as UserID, identity, now);
     await reattributeLegacyAnonymousRows(db, existing.user_id);
 
-    return usersService.get(existing.user_id as UserID, userLookupParams);
+    return existing.user_id as UserID;
   }
 
   const role = mapRole(
@@ -440,6 +426,9 @@ async function upsertLaunchUser(
   const localEmail = await chooseLocalEmail(db, email, key, provider, issuer, subject);
   const userId = generateId() as UserID;
   const password = await hash(randomBytes(32).toString('hex'), 10);
+  if (unixUsername && !(await isExecutionHomeKeyAvailable(db, unixUsername))) {
+    throw new NotAuthenticated('External execution home is already assigned');
+  }
 
   await insert(db, users)
     .values({
@@ -463,9 +452,10 @@ async function upsertLaunchUser(
       } as UserDataWithExternalIdentities,
     })
     .run();
+  await identityRepository.bind(userId, identity, now);
   await reattributeLegacyAnonymousRows(db, userId);
 
-  return usersService.get(userId, userLookupParams);
+  return userId;
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -731,6 +721,26 @@ function issueRuntimeTokens(
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
   const multiTenancy = resolveMultiTenancyConfig(options.config);
   const tenantClaim = multiTenancy.auth_claim ?? 'tenant_id';
+  // SQLite uses one process-local connection and cannot begin two IMMEDIATE
+  // transactions concurrently. PostgreSQL additionally takes the repository's
+  // advisory lock, which extends the same identity serialization across HA
+  // replicas. Failed projections release the queue so a later launch can retry.
+  const projectionTails = new Map<string, Promise<void>>();
+  const serializeProjection = async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const previous = projectionTails.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(work);
+    const tail = next.then(
+      () => undefined,
+      () => undefined
+    );
+    projectionTails.set(key, tail);
+    try {
+      return await next;
+    } finally {
+      if (projectionTails.get(key) === tail) projectionTails.delete(key);
+    }
+  };
+
   return {
     async create(data: { launchCode?: string; launch_code?: string }, params?: Params) {
       const launchCode =
@@ -747,7 +757,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
       }
 
       const settings = resolveLaunchSettings(options.config);
-      assertConfigured(settings);
+      assertConfigured(options.config, settings);
 
       try {
         // Resolve the browser Host from the trusted local request context BEFORE
@@ -772,17 +782,26 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         // resolver so `required_from_auth` cannot fall back to a trusted_header
         // or an explicit params tenant; an absent claim fails closed below.
         const tenant = resolveTenantContext(multiTenancy, { authPayload: claims });
-        return await runWithTenantDatabaseScope(options.db, tenant.tenant_id, async () => {
-          const user = await upsertLaunchUser(options, claims, tenant);
-          return issueRuntimeTokens(
-            user,
-            options.jwtSecret,
-            options.accessTokenTtl,
-            options.refreshTokenTtl,
-            tenantClaim,
-            tenant.tenant_id
-          );
-        });
+        const provider = claims.provider || settings.providerId || claims.iss;
+        const projectionKey = `${tenant.tenant_id}\0${provider}\0${claims.iss}\0${claims.sub}`;
+        const userId = await serializeProjection(projectionKey, () =>
+          runWithTenantDatabaseTransaction(options.db, tenant.tenant_id, async (scopedDb) =>
+            projectLaunchUser(scopedDb, options, claims)
+          )
+        );
+        const userLookupParams = {
+          provider: undefined,
+          tenant,
+        };
+        const user = await options.usersService.get(userId, userLookupParams);
+        return issueRuntimeTokens(
+          user,
+          options.jwtSecret,
+          options.accessTokenTtl,
+          options.refreshTokenTtl,
+          tenantClaim,
+          tenant.tenant_id
+        );
       } catch (error) {
         // Every launch failure — expected or unexpected — emits exactly one
         // coarse operator diagnostic before rethrowing. Only a static reason

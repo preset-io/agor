@@ -23,6 +23,7 @@ import {
   resolveSdkWatchdogConfig,
 } from './executor-heartbeat';
 import { resolveExecutorResponseConfig } from './executor-response';
+import { resolveEffectiveExternalLaunchConfig } from './external-launch';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
@@ -518,6 +519,11 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const unknownPaths: string[] = [];
+  const requireObject = (value: unknown, path: string) => {
+    if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) {
+      throw new Error(`Config error: ${path} must be an object`);
+    }
+  };
   const only = (value: unknown, path: string, allowed: readonly string[]) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     for (const key of Object.keys(value)) {
@@ -652,6 +658,9 @@ function validateConfig(config: AgorConfig): void {
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
+  requireObject(config.external_launch, 'external_launch');
+  requireObject(config.identity, 'identity');
+  requireObject(config.identity?.external, 'identity.external');
   only(config.external_launch, 'external_launch', [
     'enabled',
     'exchange_url',
@@ -1421,6 +1430,7 @@ export function resolveEffectiveConfig(
     'AGOR_STATSD_ENABLED'
   );
   const statsdPort = parseOptionalPortEnvironmentValue(env.AGOR_STATSD_PORT, 'AGOR_STATSD_PORT');
+  const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
   // Resolve the effective Unix isolation mode (env override wins) so the
   // `sandbox` mode can imply the rest of its machinery.
@@ -1491,6 +1501,7 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
       ...defaults.execution,
       ...config.execution,

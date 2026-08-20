@@ -82,6 +82,12 @@ Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
 environment variables, personal API keys, and MCP selections/OAuth grants stay
 editable.
 
+The trusted `(tenant, provider, issuer, subject)` binding is stored in a
+tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
+projection is one tenant-scoped transaction and serializes the same subject
+across replicas. Execution-home keys are also unique per tenant, preventing two
+users from sharing one delegated credential context.
+
 The role claim is required and exact in this mode. Administrative claims still
 require `external_launch.allow_admin_roles`; a `superadmin` claim also requires
 `execution.allow_superadmin`. A disabled role fails authentication rather than
@@ -91,6 +97,12 @@ Omitting `identity` preserves normal local user, role, and password authority.
 The current contract does not synchronize external deactivation or revoke
 already-issued Agor credentials: the external provider can prevent a new
 launch, while cleanup and revocation remain a separate lifecycle concern.
+
+Before enabling this profile, apply the external-identity migration and upgrade
+every daemon replica. The migration fails closed if legacy external bindings or
+non-null execution-home keys conflict. New daemons can bind a legacy JSON link
+on the next successful launch, but old daemons do not maintain the new binding
+relation.
 
 For local development only, a symmetric assertion secret can be used:
 

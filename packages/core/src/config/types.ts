@@ -317,6 +317,19 @@ export interface AgorIdentitySettings {
 
 export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 1 as const;
 
+/** Stable identifiers returned in externally-managed mutation errors. */
+export const AgorIdentityCapability = {
+  USER_CREATE: 'users.create',
+  USER_DELETE: 'users.delete',
+  USER_IDENTITY_WRITE: 'users.identity.write',
+  USER_ROLE_WRITE: 'users.role.write',
+  USER_PASSWORD_WRITE: 'users.password.write',
+  USER_AVATAR_SETTINGS_WRITE: 'users.avatar-settings.write',
+  USER_SELF_CONFIGURATION_WRITE: 'users.self-configuration.write',
+} as const;
+export type AgorIdentityCapability =
+  (typeof AgorIdentityCapability)[keyof typeof AgorIdentityCapability];
+
 /** Resolved identity policy and client capability contract exposed by the daemon. */
 export interface ResolvedIdentityAuthority {
   contractVersion: typeof IDENTITY_AUTHORITY_CONTRACT_VERSION;

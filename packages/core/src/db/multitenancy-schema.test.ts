@@ -46,6 +46,9 @@ function migrationTenantTables(): string[] {
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
+  const externalIdentitiesMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0090_external_user_identities.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -57,6 +60,7 @@ function migrationTenantTables(): string[] {
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -73,6 +77,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

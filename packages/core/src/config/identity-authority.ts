@@ -45,23 +45,12 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
   };
 }
 
-function externalLaunchEnabled(config: AgorConfig, env: NodeJS.ProcessEnv): boolean {
-  const override = env.AGOR_EXTERNAL_LAUNCH_ENABLED?.trim().toLowerCase();
-  if (override !== undefined && override !== '') {
-    return ['1', 'true', 'yes', 'on'].includes(override);
-  }
-  return config.external_launch?.enabled === true;
-}
-
 /**
  * Validate the resolved authority profile before database initialization.
  * Invalid partial profiles fail closed rather than producing combinations
  * whose create, role, password, and JIT behavior disagree.
  */
-export function assertValidEffectiveIdentityConfig(
-  config: AgorConfig,
-  env: NodeJS.ProcessEnv = process.env
-): void {
+export function assertValidEffectiveIdentityConfig(config: AgorConfig): void {
   const identity = config.identity;
   if (!identity) return;
 
@@ -95,10 +84,8 @@ export function assertValidEffectiveIdentityConfig(
       "identity.user_lifecycle 'external' requires identity.external.provider 'external_launch' and provisioning 'jit'"
     );
   }
-  if (!externalLaunchEnabled(config, env)) {
-    throw new Error(
-      'identity external authority requires external_launch.enabled or AGOR_EXTERNAL_LAUNCH_ENABLED'
-    );
+  if (config.external_launch?.enabled !== true) {
+    throw new Error('identity external authority requires external_launch.enabled');
   }
   if ((config.execution?.bootstrap_superadmin_users?.length ?? 0) > 0) {
     throw new Error(

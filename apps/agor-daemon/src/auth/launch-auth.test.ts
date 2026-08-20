@@ -12,6 +12,7 @@ import {
   insert,
   select,
   update,
+  userExternalIdentities,
   users,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
@@ -235,6 +236,15 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+
+    const binding = await select(db).from(userExternalIdentities).all();
+    expect(binding).toEqual([
+      expect.objectContaining({
+        user_id: result.user.user_id,
+        provider: 'https://issuer.example.test',
+        subject: 'external-user-1',
+      }),
+    ]);
   });
 
   it('scopes launch auth with the configured tenant claim', async () => {
@@ -298,6 +308,28 @@ describe('one-time launch auth service', () => {
     expect(relaunched.user.unix_username).toBe('jose_garcia');
   });
 
+  it('rejects malformed and duplicate authoritative execution-home claims', async () => {
+    mockExchange(
+      signClaims({ sub: 'invalid-home', email: 'invalid-home@example.test', unix_username: '../x' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'invalid-home' })
+    ).rejects.toThrow(/execution home/);
+
+    mockExchange(
+      signClaims({ sub: 'home-owner', email: 'home-owner@example.test', unix_username: 'shared' })
+    );
+    await service(externalAuthorityConfig()).create({ launchCode: 'home-owner' });
+
+    mockExchange(
+      signClaims({ sub: 'home-other', email: 'home-other@example.test', unix_username: 'shared' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'home-other' })
+    ).rejects.toThrow(/already assigned/);
+    expect(await select(db).from(users).all()).toHaveLength(1);
+  });
+
   it('repeat login maps the same external identity to the same local user', async () => {
     mockExchange(signClaims());
     const first = await service().create({ launchCode: 'first' });
@@ -307,6 +339,22 @@ describe('one-time launch auth service', () => {
 
     expect(second.user.user_id).toBe(first.user.user_id);
     expect(second.user.name).toBe('Updated Name');
+  });
+
+  it('serializes concurrent JIT projection for the same external subject', async () => {
+    mockExchange(
+      signClaims({ sub: 'concurrent-user', email: 'concurrent@example.test', name: 'Concurrent' })
+    );
+
+    const auth = service();
+    const [first, second] = await Promise.all([
+      auth.create({ launchCode: 'concurrent-1' }),
+      auth.create({ launchCode: 'concurrent-2' }),
+    ]);
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(await select(db).from(users).all()).toHaveLength(1);
+    expect(await select(db).from(userExternalIdentities).all()).toHaveLength(1);
   });
 
   it('synchronizes claim-owned fields on each externally authoritative launch', async () => {
