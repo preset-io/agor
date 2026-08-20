@@ -915,12 +915,12 @@ export function OnboardingWizard({
           // Create the teammate's board ONLY now, at the very end. Always a fresh
           // board named after the teammate; seedOnboardingTeammate (via onComplete)
           // then makes the teammate its PRIMARY assistant + starts the first
-          // session. If the teammate was left unnamed (workspace skipped), there's
-          // nothing to seed, so we open without creating a board.
+          // session. If the user skipped naming a teammate, we still create a default
+          // board so they always land on a board; there's just no teammate to seed.
           let boardId = '';
-          if (client && name) {
+          if (client) {
             const board = await client.service('boards').create({
-              name,
+              name: name || (user?.name ? `${user.name}'s board` : 'My board'),
               icon: teammateEmoji,
             });
             boardId = board?.board_id ?? '';
