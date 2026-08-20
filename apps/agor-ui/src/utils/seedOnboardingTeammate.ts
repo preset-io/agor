@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session } from '@agor-live/client';
-import type { NewSessionConfig } from '../domain/sessionCreation';
+import type { NewSessionConfig, SessionInitializationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
@@ -42,7 +42,10 @@ export interface SeedOnboardingTeammateInput {
   existingSessionId?: string;
   onCreateBranch: TeammateCreationDeps['onCreateBranch'];
   onUpdateBranch: TeammateCreationDeps['onUpdateBranch'];
-  onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
+  onCreateSession: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<SessionInitializationResult | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
   onWarn: (message: string) => void;
 }
@@ -139,7 +142,11 @@ async function findExistingSession(
 
 export async function seedOnboardingTeammate(
   input: SeedOnboardingTeammateInput
-): Promise<{ branchId?: string; sessionId?: string }> {
+): Promise<{
+  branchId?: string;
+  sessionId?: string;
+  initialization?: SessionInitializationResult;
+}> {
   const teammateName = input.teammateName?.trim();
   // Nothing to seed — the user skipped naming a teammate.
   if (!teammateName || !input.boardId) return {};
@@ -225,7 +232,7 @@ export async function seedOnboardingTeammate(
       return { branchId: branch.branch_id };
     }
 
-    const sessionId = await startTeammateBootstrapSession({
+    const initialization = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
       boardId: branch.board_id || input.boardId,
@@ -248,7 +255,11 @@ export async function seedOnboardingTeammate(
       onCreateSession: input.onCreateSession,
     });
 
-    return { branchId: branch.branch_id, sessionId };
+    return {
+      branchId: branch.branch_id,
+      sessionId: initialization.sessionId,
+      initialization,
+    };
   } catch (error) {
     input.onWarn(
       `Your board is ready, but we couldn't start your AI teammate: ${

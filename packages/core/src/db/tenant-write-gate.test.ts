@@ -99,6 +99,7 @@ describe('isTenantWriteMethodName', () => {
       'markConsumed',
       'setPrimaryTeammate',
       'setPrimaryTeammateIfUnset',
+      'ensurePrimaryTeammateDefault',
       'updateLastMessage',
       'clearZoneReferences',
       'revoke',

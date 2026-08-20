@@ -15,7 +15,7 @@ import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
-import { TaskRepository } from './tasks';
+import { PromptIdempotencyConflictError, TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 /**
@@ -2519,6 +2519,52 @@ function createPendingInput(overrides: {
 }
 
 describe('TaskRepository.createPending', () => {
+  dbTest(
+    'reconciles concurrent public retry admissions without reusing the public key as an ID',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const publicKey = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' as UUID;
+      const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+
+      const admitted = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          taskRepo.createPending({
+            ...input,
+            task_id: generateId(),
+            promptIdempotency: { key: publicKey, requestFingerprint: 'a'.repeat(64) },
+          })
+        )
+      );
+
+      expect(new Set(admitted.map((task) => task.task_id))).toHaveLength(1);
+      expect(admitted[0].task_id).not.toBe(publicKey);
+      expect(admitted[0].task_id[14]).toBe('7');
+      expect(await taskRepo.findQueued(sessionId)).toHaveLength(1);
+    }
+  );
+
+  dbTest(
+    'rejects reuse of a public retry key with a different request fingerprint',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const publicKey = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' as UUID;
+      const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+      await taskRepo.createPending({
+        ...input,
+        promptIdempotency: { key: publicKey, requestFingerprint: 'a'.repeat(64) },
+      });
+
+      await expect(
+        taskRepo.createPending({
+          ...input,
+          promptIdempotency: { key: publicKey, requestFingerprint: 'b'.repeat(64) },
+        })
+      ).rejects.toBeInstanceOf(PromptIdempotencyConflictError);
+    }
+  );
+
   dbTest('reconciles concurrent stable-ID creation to one task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

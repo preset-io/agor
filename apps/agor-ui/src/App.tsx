@@ -50,7 +50,7 @@ import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import type {
   NewSessionConfig,
-  NewSessionCreationResult,
+  SessionInitializationResult,
   SessionInitializationRetry,
 } from './domain/sessionCreation';
 import { initializeCreatedSession } from './domain/sessionCreation';
@@ -458,6 +458,9 @@ function AppContent() {
 
   // Per-session prompt drafts (persists across session switches)
   const [promptDrafts, setPromptDrafts] = useState<Map<string, string>>(new Map());
+  const [sessionInitializationRetries, setSessionInitializationRetries] = useState<
+    Map<string, SessionInitializationRetry>
+  >(new Map());
 
   // Track if we've successfully loaded data at least once
   // This prevents UI from unmounting during reconnections
@@ -794,8 +797,7 @@ function AppContent() {
       onUpdateBranch: (branchId, updates) =>
         handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
       onCreateSession: async (config, boardId) => {
-        const outcome = await handleCreateSession(config, boardId);
-        return outcome?.sessionId ?? null;
+        return handleCreateSession(config, boardId);
       },
       onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
     });
@@ -1007,8 +1009,8 @@ function AppContent() {
   const initializeSession = async (
     sessionId: string,
     initialization: SessionInitializationRetry
-  ): Promise<NewSessionCreationResult> => {
-    return initializeCreatedSession(sessionId, initialization, {
+  ): Promise<SessionInitializationResult> => {
+    const outcome = await initializeCreatedSession(sessionId, initialization, {
       associateMcpServer: async (targetSessionId, serverId) => {
         if (!client) throw new Error('Connection unavailable');
         await client.service(`sessions/${targetSessionId}/mcp-servers`).create({
@@ -1044,13 +1046,20 @@ function AppContent() {
         );
       },
     });
+    setSessionInitializationRetries((previous) => {
+      const next = new Map(previous);
+      if (outcome.status === 'retryable') next.set(sessionId, outcome.retry);
+      else next.delete(sessionId);
+      return next;
+    });
+    return outcome;
   };
 
   // Handle session creation
   const handleCreateSession = async (
     config: NewSessionConfig,
     boardId: string
-  ): Promise<NewSessionCreationResult | null> => {
+  ): Promise<SessionInitializationResult | null> => {
     const branch_id = config.branch_id;
     if (!branch_id) {
       showError('Failed to create session: Branch ID is required to create a session');
@@ -1884,6 +1893,7 @@ function AppContent() {
       }
       onCreateSession={handleCreateSession}
       onRetrySessionInitialization={initializeSession}
+      sessionInitializationRetries={sessionInitializationRetries}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}

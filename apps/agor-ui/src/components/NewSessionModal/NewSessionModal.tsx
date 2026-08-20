@@ -12,7 +12,7 @@ import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import type { NewSessionConfig } from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
 
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
@@ -47,7 +47,7 @@ const PASTE_SHORTCUT =
 export interface NewSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (config: NewSessionConfig) => void;
+  onCreate: (config: NewSessionConfig) => Promise<SessionInitializationResult | null>;
   availableAgents: AgenticToolOption[];
   branchId: string; // Required - the branch to create the session in
   branch?: Branch; // Optional - branch details for display
@@ -251,7 +251,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           codexDefaults.networkAccess;
       }
 
-      onCreate(config);
+      void onCreate(config).catch(() => setIsCreating(false));
       // Note: isCreating will be reset when modal reopens via useEffect
     });
   };

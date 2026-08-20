@@ -31,7 +31,7 @@ function seedStore(branches: Branch[]) {
 }
 
 function createClient(current: Branch | null) {
-  const getPrimaryTeammate = vi.fn().mockResolvedValue(current);
+  const ensurePrimaryTeammateDefault = vi.fn().mockResolvedValue(current);
   const getPrimaryTeammateCandidates = vi
     .fn()
     .mockResolvedValue(Array.from(agorStore.getState().branchById.values()));
@@ -41,12 +41,12 @@ function createClient(current: Branch | null) {
   const client = {
     service: (name: string) => {
       if (name === 'users') {
-        return { getPrimaryTeammate, getPrimaryTeammateCandidates, setPrimaryTeammate };
+        return { ensurePrimaryTeammateDefault, getPrimaryTeammateCandidates, setPrimaryTeammate };
       }
       throw new Error(`unexpected service ${name}`);
     },
   } as unknown as AgorClient;
-  return { client, getPrimaryTeammate, getPrimaryTeammateCandidates, setPrimaryTeammate };
+  return { client, ensurePrimaryTeammateDefault, getPrimaryTeammateCandidates, setPrimaryTeammate };
 }
 
 function renderPicker(client: AgorClient) {
@@ -104,11 +104,14 @@ describe('PrimaryTeammatePicker', () => {
   it('invalidates caller-scoped results when identity changes on the same client', async () => {
     const ada = teammate('branch-1', 'Ada');
     const grace = teammate('branch-2', 'Grace');
-    const getPrimaryTeammate = vi.fn().mockResolvedValueOnce(ada).mockResolvedValueOnce(grace);
+    const ensurePrimaryTeammateDefault = vi
+      .fn()
+      .mockResolvedValueOnce(ada)
+      .mockResolvedValueOnce(grace);
     const getPrimaryTeammateCandidates = vi.fn().mockResolvedValue([ada, grace]);
     const client = {
       service: () => ({
-        getPrimaryTeammate,
+        ensurePrimaryTeammateDefault,
         getPrimaryTeammateCandidates,
         setPrimaryTeammate: vi.fn(),
       }),
@@ -127,7 +130,7 @@ describe('PrimaryTeammatePicker', () => {
       </AntApp>
     );
     await waitFor(() => expect(screen.getByText(/Currently/)).toHaveTextContent('Grace'));
-    expect(getPrimaryTeammate).toHaveBeenCalledTimes(2);
+    expect(ensurePrimaryTeammateDefault).toHaveBeenCalledTimes(2);
   });
 
   it('writes the picked teammate as an explicit change', async () => {

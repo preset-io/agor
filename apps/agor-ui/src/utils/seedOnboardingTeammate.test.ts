@@ -14,11 +14,18 @@ vi.mock('./startTeammateBootstrapSession', () => ({ startTeammateBootstrapSessio
 const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
 
+const completeInitialization = {
+  status: 'complete' as const,
+  sessionId: 'session-1',
+  setup: { mcpServers: 'not-requested' as const, environmentVariables: 'not-requested' as const },
+  delivery: { prompt: 'delivered' as const, attachments: 'not-requested' as const },
+};
+
 function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
   const onWarn = vi.fn();
   const onCreateBranch = vi.fn();
   const onUpdateBranch = vi.fn();
-  const onCreateSession = vi.fn(async () => 'session-1');
+  const onCreateSession = vi.fn(async () => completeInitialization);
   const setPrimaryTeammateIfUnset = vi.fn().mockResolvedValue({ branch_id: 'branch-1' });
   const client = {
     service: vi.fn((name: string) => {
@@ -70,7 +77,7 @@ describe('seedOnboardingTeammate', () => {
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
-    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
 
     const {
       input,
@@ -116,9 +123,48 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
-    expect(result).toEqual({ branchId: 'branch-1', sessionId: 'session-1' });
+    expect(result).toEqual({
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      initialization: completeInitialization,
+    });
     expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({ branchId: 'branch-1' });
     expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('returns the complete retry payload when onboarding session initialization is incomplete', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    const file = new File(['draft'], 'draft.txt');
+    const retryableInitialization = {
+      status: 'retryable' as const,
+      sessionId: 'session-1',
+      setup: { mcpServers: 'failed' as const, environmentVariables: 'pending' as const },
+      delivery: { prompt: 'pending' as const, attachments: 'failed' as const },
+      retry: {
+        mcpServerIds: ['mcp-1'],
+        content: {
+          prompt: 'retain onboarding draft',
+          attachmentFiles: [file],
+          idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
+        },
+      },
+    };
+    startTeammateBootstrapSessionMock.mockResolvedValue(retryableInitialization);
+
+    const result = await seedOnboardingTeammate(setup().input);
+
+    expect(result).toEqual({
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      initialization: retryableInitialization,
+    });
+    expect(result.initialization?.status).toBe('retryable');
+    if (result.initialization?.status === 'retryable') {
+      expect(result.initialization.retry.content.attachmentFiles).toEqual([file]);
+    }
   });
 
   // The completion handler (App.handleOnboardingComplete) resolves the framework
@@ -154,7 +200,7 @@ describe('seedOnboardingTeammate', () => {
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
-    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
 
     const repoById = new Map<string, Repo>([['repo-fw', frameworkRepoWithStatus('ready')]]);
     const readyFrameworkRepo = findFrameworkRepo(repoById, { readyOnly: true })?.[1];
@@ -168,7 +214,11 @@ describe('seedOnboardingTeammate', () => {
       expect.objectContaining({ repoId: 'repo-fw', createdViaOnboarding: true }),
       expect.anything()
     );
-    expect(result).toEqual({ branchId: 'branch-1', sessionId: 'session-1' });
+    expect(result).toEqual({
+      branchId: 'branch-1',
+      sessionId: 'session-1',
+      initialization: completeInitialization,
+    });
     expect(onWarn).not.toHaveBeenCalled();
   });
 

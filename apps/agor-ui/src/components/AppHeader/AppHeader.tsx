@@ -10,7 +10,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type {
   NewSessionConfig,
-  NewSessionCreationResult,
+  SessionInitializationResult,
   SessionInitializationRetry,
 } from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
@@ -66,11 +66,11 @@ export interface AppHeaderProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationResult | null>;
+  ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (
     sessionId: string,
     retry: SessionInitializationRetry
-  ) => Promise<NewSessionCreationResult>;
+  ) => Promise<SessionInitializationResult>;
 }
 
 const RecentBoardPills: React.FC<{

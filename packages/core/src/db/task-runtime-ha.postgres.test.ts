@@ -17,6 +17,7 @@ import { isPostgresDatabase } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
+  PromptIdempotencyConflictError,
   RepoRepository,
   SessionRepository,
   TaskRepository,
@@ -433,5 +434,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
         })
       ).rejects.toThrow();
     });
+  });
+
+  it('scopes concurrent public prompt idempotency by tenant/caller/session', async () => {
+    const a = await seedTenant(db, 'prompt-idempotency-a');
+    const b = await seedTenant(db, 'prompt-idempotency-b');
+    const publicKey = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' as UUID;
+    const admission = { key: publicKey, requestFingerprint: 'a'.repeat(64) };
+    const admit = (seed: TenantSeed) =>
+      runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).createPending({
+          task_id: generateId() as TaskID,
+          session_id: seed.sessionId,
+          created_by: seed.userId,
+          full_prompt: 'idempotent prompt',
+          status: TaskStatus.QUEUED,
+          promptIdempotency: admission,
+        })
+      );
+
+    const [aFirst, aSecond, bFirst] = await Promise.all([admit(a), admit(a), admit(b)]);
+    expect(aFirst.task_id).toBe(aSecond.task_id);
+    expect(aFirst.task_id).not.toBe(publicKey);
+    expect(bFirst.task_id).not.toBe(aFirst.task_id);
+
+    await expect(
+      runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+        new TaskRepository(scoped).createPending({
+          task_id: generateId() as TaskID,
+          session_id: a.sessionId,
+          created_by: a.userId,
+          full_prompt: 'idempotent prompt',
+          status: TaskStatus.QUEUED,
+          promptIdempotency: { key: publicKey, requestFingerprint: 'b'.repeat(64) },
+        })
+      )
+    ).rejects.toBeInstanceOf(PromptIdempotencyConflictError);
   });
 });

@@ -63,20 +63,25 @@ describe('prompt and widget transaction scopes', () => {
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
 
-  it('binds public prompt retries to one tenant-scoped caller/session/content identity', () => {
+  it('keeps public prompt retry identities scoped and separate from Task IDs', () => {
     const promptStart = source.indexOf("'/sessions/:id/prompt'");
     const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, runStart);
 
     expect(prompt).toContain('idempotencyKey?: UUID');
-    expect(prompt).toContain('const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey');
+    expect(prompt).toContain('const stableTaskId = data.idempotencyTaskId;');
+    expect(prompt).toContain('requestFingerprint: createHash');
+    expect(prompt).toContain('permissionMode: data.permissionMode ?? null');
+    expect(prompt).toContain('stream: data.stream !== false');
+    expect(prompt).toContain('taskRepo.findByPromptIdempotency(');
     expect(prompt).toContain('prior.session_id !== id');
     expect(prompt).toContain(
       'prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt'
     );
-    expect(prompt).toContain('task_id: stableTaskId');
+    expect(prompt).toContain('task_id: requestedTaskId');
+    expect(prompt).toContain('promptIdempotency,');
     expect(prompt.indexOf('const promptTenantId = getCurrentTenantId()')).toBeLessThan(
-      prompt.indexOf('const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey')
+      prompt.indexOf('const stableTaskId = data.idempotencyTaskId;')
     );
   });
 

@@ -33,10 +33,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type {
   NewSessionConfig,
-  NewSessionCreationResult,
+  SessionInitializationResult,
   SessionInitializationRetry,
 } from '../../domain/sessionCreation';
-import { isSessionInitializationComplete } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
@@ -68,11 +67,11 @@ export interface NavbarComposeButtonProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationResult | null>;
+  ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (
     sessionId: string,
     retry: SessionInitializationRetry
-  ) => Promise<NewSessionCreationResult>;
+  ) => Promise<SessionInitializationResult>;
   disabled?: boolean;
 }
 
@@ -178,7 +177,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setResolveFailed(false);
     client
       .service('users')
-      .getPrimaryTeammate()
+      .ensurePrimaryTeammateDefault()
       .then((branch) => {
         if (!cancelled) {
           setPrimaryBranch(branch);
@@ -317,7 +316,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       );
       if (!outcome) return; // onCreateSession already surfaced the failure
       const { sessionId } = outcome;
-      if (!isSessionInitializationComplete(outcome) && outcome.retry) {
+      if (outcome.status === 'retryable') {
         setDeliveryFailure({ sessionId, branch, mode, retry: outcome.retry });
         return;
       }
@@ -353,7 +352,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setSubmitting(failure.mode);
     try {
       const outcome = await onRetrySessionInitialization(failure.sessionId, failure.retry);
-      if (outcome.retry) {
+      if (outcome.status === 'retryable') {
         setDeliveryFailure({ ...failure, retry: outcome.retry });
         return;
       }

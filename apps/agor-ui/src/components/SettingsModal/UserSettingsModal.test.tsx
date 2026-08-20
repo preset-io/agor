@@ -1250,10 +1250,10 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     // Caller-scoped: the picker reads the signed-in user's primary teammate via
     // the users service. A null result leaves the select ready for a choice —
     // enough to prove the Preferences assistant section mounts the picker.
-    const getPrimaryTeammate = vi.fn(async () => null);
+    const ensurePrimaryTeammateDefault = vi.fn(async () => null);
     const client = {
       service: (name: string) => {
-        if (name === 'users') return { getPrimaryTeammate };
+        if (name === 'users') return { ensurePrimaryTeammateDefault };
         return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
       },
     } as unknown as AgorClient;
@@ -1282,14 +1282,14 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByRole('heading', { name: 'Developer tools' })).toBeInTheDocument();
     expect(screen.getByText('Primary assistant')).toBeInTheDocument();
     expect(await screen.findByText('Select a primary assistant')).toBeInTheDocument();
-    expect(getPrimaryTeammate).toHaveBeenCalled();
+    expect(ensurePrimaryTeammateDefault).toHaveBeenCalled();
   });
 
   it('redirects the former Primary Assistant deep link to Preferences', async () => {
-    const getPrimaryTeammate = vi.fn(async () => null);
+    const ensurePrimaryTeammateDefault = vi.fn(async () => null);
     const client = {
       service: (name: string) => {
-        if (name === 'users') return { getPrimaryTeammate };
+        if (name === 'users') return { ensurePrimaryTeammateDefault };
         return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
       },
     } as unknown as AgorClient;

@@ -78,7 +78,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
     setLoading(true);
     setLoadFailed(false);
     Promise.all([
-      client.service('users').getPrimaryTeammate(),
+      client.service('users').ensurePrimaryTeammateDefault(),
       client.service('users').getPrimaryTeammateCandidates(),
     ])
       .then(([branch, eligibleCandidates]) => {

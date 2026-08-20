@@ -113,7 +113,7 @@ describe('UsersService primary teammate', () => {
   });
 
   dbTest(
-    'getPrimaryTeammate lazily rolls out the board default in caller tenant scope',
+    'explicit initializer rolls out the board default while the getter remains pure',
     async ({ db }) => {
       const board = await new BoardRepository(db).create({
         board_id: generateId(),
@@ -144,8 +144,12 @@ describe('UsersService primary teammate', () => {
         new UserPrimaryTeammateRepository(db).findEligiblePrimaryTeammate(branchId, caller.user_id)
       ).resolves.toMatchObject({ branch_id: branchId });
 
+      const service = createUsersService(db);
+      await expect(service.getPrimaryTeammate(undefined, callerParams)).resolves.toBeNull();
+      expect(await new UserPrimaryTeammateRepository(db).getBranchId(caller.user_id)).toBeNull();
+
       await expect(
-        createUsersService(db).getPrimaryTeammate(undefined, callerParams)
+        service.ensurePrimaryTeammateDefault(undefined, callerParams)
       ).resolves.toMatchObject({ branch_id: branchId });
       expect(await new UserPrimaryTeammateRepository(db).getBranchId(caller.user_id)).toBe(
         branchId
@@ -202,6 +206,9 @@ describe('UsersService primary teammate', () => {
     await expect(service.getPrimaryTeammateCandidates(undefined, viewerParams)).rejects.toThrow(
       /Member role/
     );
+    await expect(service.ensurePrimaryTeammateDefault(undefined, viewerParams)).rejects.toThrow(
+      /Member role/
+    );
     await expect(service.setPrimaryTeammate({ branchId }, viewerParams)).rejects.toThrow(
       /Member role/
     );
@@ -247,6 +254,7 @@ describe('UsersService primary teammate', () => {
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();
+    await expect(service.ensurePrimaryTeammateDefault(undefined, {} as never)).rejects.toThrow();
     await expect(service.getPrimaryTeammateCandidates(undefined, {} as never)).rejects.toThrow();
     await expect(
       service.setPrimaryTeammate({ branchId: generateId() }, {} as never)

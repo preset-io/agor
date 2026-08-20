@@ -254,6 +254,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
       tenantScopedDb,
       new SessionRepository(tenantScopedDb)
     );
+    let defaultInitializerCalls = 0;
+    const primaryDefaultInitializer = bindRepositoryToTenantUnitOfWork(tenantScopedDb, {
+      async ensurePrimaryTeammateDefault() {
+        defaultInitializerCalls++;
+      },
+    });
 
     const { generation } = await acquireTenantWriteGate(db, tenant, { reason: 'freeze' });
 
@@ -271,7 +277,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
           created_by: 'write-gate-test-user',
         })
       ).rejects.toBeInstanceOf(TenantWriteGateActiveError);
+      await expect(primaryDefaultInitializer.ensurePrimaryTeammateDefault()).rejects.toBeInstanceOf(
+        TenantWriteGateActiveError
+      );
     });
+    expect(defaultInitializerCalls).toBe(0);
 
     // Nothing was written while gated.
     expect(await countTenantSessions(db, tenant)).toBe(1);

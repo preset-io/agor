@@ -112,6 +112,7 @@ describe('initializeCreatedSession', () => {
 
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(result).toMatchObject({
+      status: 'retryable',
       sessionId: 'session-1',
       setup: { mcpServers: 'failed', environmentVariables: 'pending' },
       delivery: { prompt: 'pending', attachments: 'not-requested' },
@@ -134,6 +135,7 @@ describe('initializeCreatedSession', () => {
 
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(result).toMatchObject({
+      status: 'retryable',
       sessionId: 'session-1',
       setup: { mcpServers: 'not-requested', environmentVariables: 'failed' },
       retry: { envVarNames: ['TOKEN'], content },

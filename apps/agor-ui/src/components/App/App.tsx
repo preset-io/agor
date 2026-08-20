@@ -20,7 +20,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Layout, theme, Upload } from 'antd';
+import { Alert, Button, Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -34,7 +34,7 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type {
   NewSessionConfig,
-  NewSessionCreationResult,
+  SessionInitializationResult,
   SessionInitializationRetry,
 } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -176,11 +176,13 @@ export interface AppProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<NewSessionCreationResult | null>;
+  ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (
     sessionId: string,
     retry: SessionInitializationRetry
-  ) => Promise<NewSessionCreationResult>;
+  ) => Promise<SessionInitializationResult>;
+  /** Session-scoped recovery payloads retained by the root creation seam. */
+  sessionInitializationRetries?: ReadonlyMap<string, SessionInitializationRetry>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -316,6 +318,7 @@ export const App: React.FC<AppProps> = ({
   topBanner,
   onCreateSession,
   onRetrySessionInitialization,
+  sessionInitializationRetries,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -397,6 +400,9 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [retryingInitializationSessionId, setRetryingInitializationSessionId] = useState<
+    string | null
+  >(null);
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
   // both answer "what am I looking at right now?" so they share one
@@ -871,6 +877,7 @@ export const App: React.FC<AppProps> = ({
       setSelectedSessionId(sessionId);
       navigation.goToSession(sessionId);
     }
+    return outcome ?? null;
   };
 
   // Single mechanism behind both "pick a tool" entry points: the quick-start
@@ -1066,18 +1073,15 @@ export const App: React.FC<AppProps> = ({
       if (!onCreateSession) {
         throw new Error('Missing session creation handler.');
       }
-      const sessionId = await startTeammateBootstrapSession({
+      const initialization = await startTeammateBootstrapSession({
         client,
         branchId: branch.branch_id,
         boardId: branch.board_id || currentBoardId,
         sessionConfig,
-        onCreateSession: async (config, boardId) => {
-          const outcome = await onCreateSession(config, boardId);
-          return outcome?.sessionId ?? null;
-        },
+        onCreateSession,
         onStatusChange: progress?.onStatusChange,
       });
-      navigation.goToSession(sessionId);
+      navigation.goToSession(initialization.sessionId);
       return;
     } catch (error) {
       console.error('AI teammate session bootstrap failed:', error);
@@ -1698,16 +1702,53 @@ export const App: React.FC<AppProps> = ({
                       maxSize={sessionPanelMaxSizeWithinContent}
                     >
                       {effectiveSelectedSessionId ? (
-                        <SessionPanel
-                          client={client}
-                          session={selectedSession}
-                          branch={selectedSessionBranch}
-                          currentUserId={user?.user_id}
-                          sessionMcpServerIds={selectedSessionMcpServerIds}
-                          open={!!effectiveSelectedSessionId}
-                          onClose={handleCloseSessionPanel}
-                          uploadPolicy={uploadPolicy}
-                        />
+                        <Flex vertical style={{ height: '100%' }}>
+                          {sessionInitializationRetries?.has(effectiveSelectedSessionId) && (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              title="Session created, but setup is incomplete"
+                              description="Retry setup and delivery against the session that was already created."
+                              action={
+                                <Button
+                                  size="small"
+                                  loading={
+                                    retryingInitializationSessionId === effectiveSelectedSessionId
+                                  }
+                                  onClick={async () => {
+                                    const retry = sessionInitializationRetries.get(
+                                      effectiveSelectedSessionId
+                                    );
+                                    if (!retry || !onRetrySessionInitialization) return;
+                                    setRetryingInitializationSessionId(effectiveSelectedSessionId);
+                                    try {
+                                      await onRetrySessionInitialization(
+                                        effectiveSelectedSessionId,
+                                        retry
+                                      );
+                                    } finally {
+                                      setRetryingInitializationSessionId(null);
+                                    }
+                                  }}
+                                >
+                                  Retry setup
+                                </Button>
+                              }
+                            />
+                          )}
+                          <div style={{ flex: 1, minHeight: 0 }}>
+                            <SessionPanel
+                              client={client}
+                              session={selectedSession}
+                              branch={selectedSessionBranch}
+                              currentUserId={user?.user_id}
+                              sessionMcpServerIds={selectedSessionMcpServerIds}
+                              open={!!effectiveSelectedSessionId}
+                              onClose={handleCloseSessionPanel}
+                              uploadPolicy={uploadPolicy}
+                            />
+                          </div>
+                        </Flex>
                       ) : pendingToolChoiceBranchId ? (
                         <PendingToolChoicePanel
                           branch={pendingToolChoiceBranch}

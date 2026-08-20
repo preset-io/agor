@@ -319,6 +319,12 @@ export const tasks = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
+    // Public prompt retries use a caller-provided admission key without
+    // overloading the server-owned UUIDv7 Task identity. The fingerprint
+    // binds the key to the complete execution request.
+    prompt_idempotency_key: text('prompt_idempotency_key', { length: 36 }),
+    prompt_request_fingerprint: text('prompt_request_fingerprint', { length: 64 }),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -386,6 +392,9 @@ export const tasks = sqliteTable(
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
+    promptIdempotencyUnique: uniqueIndex('tasks_prompt_idempotency_unique')
+      .on(table.created_by, table.session_id, table.prompt_idempotency_key)
+      .where(sql`${table.prompt_idempotency_key} IS NOT NULL`),
     // Standalone recovery uses the same bounded Session scan without tenant
     // routing metadata.
     queueScanIdx: index('tasks_queue_scan_idx')

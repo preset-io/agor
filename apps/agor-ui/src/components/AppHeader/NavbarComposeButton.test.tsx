@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
-  NewSessionCreationResult,
+  SessionInitializationResult,
   SessionInitializationRetry,
 } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
@@ -197,7 +197,7 @@ const pickedBranch = makeBranch({
 
 function makeClient(primary: Branch | null): AgorClient {
   return {
-    service: () => ({ getPrimaryTeammate: () => Promise.resolve(primary) }),
+    service: () => ({ ensurePrimaryTeammateDefault: () => Promise.resolve(primary) }),
   } as unknown as AgorClient;
 }
 
@@ -207,15 +207,19 @@ function renderCompose(opts: {
   pathname?: string;
   currentUser?: User | null;
   disabled?: boolean;
-  onCreateSession?: (config: unknown, boardId: string) => Promise<NewSessionCreationResult | null>;
+  onCreateSession?: (
+    config: unknown,
+    boardId: string
+  ) => Promise<SessionInitializationResult | null>;
   onRetrySessionInitialization?: (
     sessionId: string,
     retry: SessionInitializationRetry
-  ) => Promise<NewSessionCreationResult>;
+  ) => Promise<SessionInitializationResult>;
 }) {
   const onCreateSession =
     opts.onCreateSession ??
     vi.fn().mockResolvedValue({
+      status: 'complete',
       sessionId: 'session-new',
       setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
       delivery: { prompt: 'not-requested', attachments: 'not-requested' },
@@ -505,6 +509,7 @@ describe('NavbarComposeButton', () => {
       },
     };
     const onCreateSession = vi.fn().mockResolvedValue({
+      status: 'retryable',
       sessionId: 'session-undelivered',
       setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
       delivery: {
@@ -515,6 +520,7 @@ describe('NavbarComposeButton', () => {
       retry,
     });
     const onRetrySessionInitialization = vi.fn().mockResolvedValue({
+      status: 'complete',
       sessionId: 'session-undelivered',
       setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
       delivery: { prompt: 'delivered', attachments: 'not-requested' },

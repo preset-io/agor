@@ -43,12 +43,18 @@ export interface InitialContentDeliveryResult {
   retry?: InitialContentRetry;
 }
 
-export interface NewSessionCreationResult {
+interface SessionInitializationResultBase {
   sessionId: string;
   setup: SessionSetupResult;
   delivery: InitialContentDeliveryResult;
-  retry?: SessionInitializationRetry;
 }
+
+export type SessionInitializationResult =
+  | (SessionInitializationResultBase & { status: 'complete' })
+  | (SessionInitializationResultBase & {
+      status: 'retryable';
+      retry: SessionInitializationRetry;
+    });
 
 export interface SessionSetupResult {
   mcpServers: SessionSetupStageStatus;
@@ -159,7 +165,7 @@ export async function initializeCreatedSession(
   sessionId: string,
   initialization: SessionInitializationRetry,
   dependencies: SessionInitializationDependencies
-): Promise<NewSessionCreationResult> {
+): Promise<SessionInitializationResult> {
   const setup: SessionSetupResult = {
     mcpServers: initialization.mcpServerIds?.length ? 'pending' : 'not-requested',
     environmentVariables: initialization.envVarNames?.length ? 'pending' : 'not-requested',
@@ -182,6 +188,7 @@ export async function initializeCreatedSession(
   // association is unresolved, and do not run later setup stages prematurely.
   if (failedMcpServerIds.length) {
     return {
+      status: 'retryable',
       sessionId,
       setup,
       delivery: pendingContentDelivery(initialization.content),
@@ -201,6 +208,7 @@ export async function initializeCreatedSession(
       setup.environmentVariables = 'failed';
       dependencies.onSetupError?.('environmentVariables', error);
       return {
+        status: 'retryable',
         sessionId,
         setup,
         delivery: pendingContentDelivery(initialization.content),
@@ -217,14 +225,13 @@ export async function initializeCreatedSession(
     initialization.content,
     dependencies
   );
-  return {
-    sessionId,
-    setup,
-    delivery,
-    ...(delivery.retry ? { retry: { content: delivery.retry } } : {}),
-  };
-}
-
-export function isSessionInitializationComplete(result: NewSessionCreationResult): boolean {
-  return !result.retry;
+  return delivery.retry
+    ? {
+        status: 'retryable',
+        sessionId,
+        setup,
+        delivery,
+        retry: { content: delivery.retry },
+      }
+    : { status: 'complete', sessionId, setup, delivery };
 }

@@ -37,7 +37,7 @@ export type BackfillUserPrimaryTeammateOutcome = 'assigned' | 'skipped' | 'alrea
 
 /**
  * Tenant-scoped, per-user rollout path. Besides startup backfills, the users
- * service invokes this lazily when a caller first resolves their preference,
+ * service exposes an explicit member-gated initializer for the current caller,
  * which covers dynamic Postgres tenants without unsafe system enumeration.
  */
 export async function backfillUserPrimaryTeammate(

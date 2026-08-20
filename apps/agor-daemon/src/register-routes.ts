@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { createHash } from 'node:crypto';
 import { Transform } from 'node:stream';
 import {
   type AgorConfig,
@@ -26,6 +27,7 @@ import {
   generateId,
   getCurrentTenantId,
   MessagesRepository,
+  PromptIdempotencyConflictError,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -1696,24 +1698,56 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        const stableTaskId = data.idempotencyTaskId ?? data.idempotencyKey;
+        const stableTaskId = data.idempotencyTaskId;
+        const expectedCreator = params.user?.user_id ?? session.created_by;
+        const promptIdempotency = data.idempotencyKey
+          ? {
+              key: data.idempotencyKey,
+              requestFingerprint: createHash('sha256')
+                .update(
+                  JSON.stringify({
+                    prompt: data.prompt,
+                    permissionMode: data.permissionMode ?? null,
+                    stream: data.stream !== false,
+                  })
+                )
+                .digest('hex'),
+            }
+          : undefined;
+        const findPriorAdmission = async (): Promise<Task | null> => {
+          try {
+            if (stableTaskId) return taskRepo.findById(stableTaskId);
+            if (promptIdempotency) {
+              return taskRepo.findByPromptIdempotency(
+                id as SessionID,
+                expectedCreator,
+                promptIdempotency
+              );
+            }
+            return null;
+          } catch (error) {
+            if (error instanceof PromptIdempotencyConflictError) {
+              throw new Conflict(error.message);
+            }
+            throw error;
+          }
+        };
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
-          if (!stableTaskId) return null;
-          const prior = await taskRepo.findById(stableTaskId);
+          if (!stableTaskId && !promptIdempotency) return null;
+          const prior = await findPriorAdmission();
           if (!prior) return null;
           if (prior.session_id !== id) {
-            throw new Conflict(`Task identity ${stableTaskId} is already in use`);
+            throw new Conflict('Prompt idempotency identity is already in use');
           }
-          const expectedCreator = params.user?.user_id ?? session.created_by;
           if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
-            throw new Conflict(`Task identity ${stableTaskId} is already in use`);
+            throw new Conflict('Prompt idempotency identity is already in use');
           }
           if (isTaskPendingDispatch(prior)) return null;
 
           await reconcileStableInitialUserMessage(
             prior,
             params,
-            prior.metadata?.initial_message_id ?? (stableTaskId as MessageID)
+            prior.metadata?.initial_message_id ?? (prior.task_id as MessageID)
           );
           return prior;
         };
@@ -1791,31 +1825,46 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               params
             );
 
-            const prior = stableTaskId ? await taskRepo.findById(stableTaskId) : null;
+            const prior = await findPriorAdmission();
             if (prior && prior.session_id !== id) {
-              throw new Conflict(`Task identity ${stableTaskId} is already in use`);
+              throw new Conflict('Prompt idempotency identity is already in use');
             }
 
+            // Public retry keys are scoped admission identities, never entity
+            // IDs. Allocate the Task/Message UUIDv7 server-side and let the
+            // repository reconcile concurrent requests to the winning row.
+            const requestedTaskId = stableTaskId ?? (promptIdempotency ? generateId() : undefined);
             const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
               trustedInternalMetadata: !params.provider,
             });
-            if (stableTaskId) {
-              taskMetadata.initial_message_id = stableTaskId as MessageID;
+            if (requestedTaskId) {
+              taskMetadata.initial_message_id = requestedTaskId as MessageID;
             }
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
-            const task = await taskRepo.createPending({
-              task_id: stableTaskId,
-              session_id: id as SessionID,
-              full_prompt: data.prompt,
-              created_by: createdBy,
-              status: TaskStatus.QUEUED,
-              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
-            });
+            let task: Task;
+            try {
+              task = await taskRepo.createPending({
+                task_id: requestedTaskId,
+                session_id: id as SessionID,
+                full_prompt: data.prompt,
+                created_by: createdBy,
+                status: TaskStatus.QUEUED,
+                metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
+                promptIdempotency,
+              });
+            } catch (error) {
+              if (error instanceof PromptIdempotencyConflictError) {
+                throw new Conflict(error.message);
+              }
+              throw error;
+            }
             await tasksService.autoTitleSession(task, params);
 
-            if (!prior) {
+            const admittedNewTask =
+              !prior && (!requestedTaskId || task.task_id === requestedTaskId);
+            if (admittedNewTask) {
               // Repository admission bypasses TasksService.create. Publish the
               // entity before its possible patched/dispatch event so reactive
               // clients observe a coherent lifecycle.
@@ -1834,7 +1883,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
-                ...(stableTaskId ? { stableInitialMessageId: stableTaskId as MessageID } : {}),
+                ...((stableTaskId || promptIdempotency) && task.metadata?.initial_message_id
+                  ? { stableInitialMessageId: task.metadata.initial_message_id }
+                  : {}),
               },
               params
             );
