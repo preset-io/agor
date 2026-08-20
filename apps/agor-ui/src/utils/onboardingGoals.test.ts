@@ -131,8 +131,8 @@ describe('buildGoalBootstrapGuidance', () => {
     const lines = buildGoalBootstrapGuidance(['hand-off-build', 'dig-into-anything']);
     expect(lines[0]).toBe(findOnboardingGoal('hand-off-build')?.bootstrapLine);
     expect(lines[1]).toBe(findOnboardingGoal('dig-into-anything')?.bootstrapLine);
-    // Bridging line names the primary as the concrete opener and the secondary as the follow-up.
-    expect(lines[2]).toContain('"Hand off the build"');
+    // Bridging line names primary and secondary without adding another opening command.
+    expect(lines[2]).toContain('"Spin up a build"');
     expect(lines[2]).toContain('"Dig into anything"');
     expect(lines[2]).toMatch(/do not ask which matters more/i);
   });
