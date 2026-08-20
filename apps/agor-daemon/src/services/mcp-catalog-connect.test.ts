@@ -142,7 +142,56 @@ function buildApp(
           return value;
         }
       ),
-      find: vi.fn(async () => existingServers),
+      find: vi.fn(async (findParams?: { query?: Record<string, unknown> }) => {
+        const query = findParams?.query ?? {};
+        let rows = serverStore.filter((server) => {
+          if (query.scope !== undefined && server.scope !== query.scope) return false;
+          if (query.scopeId !== undefined && server.scope_id !== query.scopeId) return false;
+          if (query.transport !== undefined && server.transport !== query.transport) return false;
+          if (query.enabled !== undefined && server.enabled !== query.enabled) return false;
+          if (query.source !== undefined && server.source !== query.source) return false;
+          if (
+            query.catalogEntryName !== undefined &&
+            server.catalog_entry_name !== query.catalogEntryName
+          ) {
+            return false;
+          }
+          if (query.ownerless !== undefined) {
+            const ownerless = server.owner_user_id === undefined || server.owner_user_id === null;
+            if (ownerless !== query.ownerless) return false;
+          }
+          if (
+            query.usableByUserId !== undefined &&
+            server.owner_user_id !== undefined &&
+            server.owner_user_id !== null &&
+            server.owner_user_id !== query.usableByUserId
+          ) {
+            return false;
+          }
+          return true;
+        });
+        const sort = query.$sort as Record<string, 1 | -1> | undefined;
+        if (sort) {
+          rows = [...rows].sort((a, b) => {
+            for (const [field, direction] of Object.entries(sort)) {
+              const left = a[field];
+              const right = b[field];
+              if (left === right) continue;
+              if (left === undefined || left === null) return -1 * direction;
+              if (right === undefined || right === null) return direction;
+              return (left < right ? -1 : 1) * direction;
+            }
+            return 0;
+          });
+        }
+        const skip = (query.$skip as number | undefined) ?? 0;
+        const limit = (query.$limit as number | undefined) ?? 50;
+        const data = rows.slice(skip, skip + limit).map((server) => ({
+          ...server,
+          auth: redactMCPAuthSecrets(server.auth as MCPAuth),
+        }));
+        return { total: rows.length, limit, skip, data };
+      }),
       get: vi.fn(
         async (id: string) =>
           // Some OAuth tests deliberately replace an existing fixture after a
@@ -172,7 +221,10 @@ function buildApp(
             : {}),
         };
         created.mcpServers.push(row);
-        serverStore.push(row);
+        // The repository default is visible on subsequent reads even though
+        // the create recorder intentionally preserves only what this request
+        // and its trusted hook supplied.
+        serverStore.push({ enabled: true, ...row });
         return row;
       }),
       remove: vi.fn(async (id: string) => {
@@ -404,6 +456,22 @@ describe('mcp-catalog/connect', () => {
     ).toHaveBeenCalledWith(
       expect.objectContaining({ query: expect.objectContaining({ usableByUserId: ALICE }) })
     );
+  });
+
+  it('converges on the canonical row when a competing create wins', async () => {
+    const { app, created, deps } = buildApp(CURATED);
+    const create = serversOf(app).create;
+    const persistCompetingRow = create.getMockImplementation()!;
+    create.mockImplementationOnce(async (...args: unknown[]) => {
+      await persistCompetingRow(...args);
+      throw { code: 'SQLITE_CONSTRAINT_UNIQUE' };
+    });
+
+    const result = await createMCPCatalogConnectService(app, deps).create(request, params);
+
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe('server-1');
+    expect(created.mcpServers).toHaveLength(1);
   });
 
   it('reuses the install after the entry is edited', async () => {
@@ -1762,6 +1830,34 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     expect(result.mcp_server.auth?.token).toBe(MCP_HEADER_REDACTED_SENTINEL);
   });
 
+  it('a second connect discovers the canonical row created by the first', async () => {
+    const { app, created, patched, generationClaims, generationFinalizations } =
+      buildApp(KEY_ENTRY);
+
+    const first = await createMCPCatalogConnectService(app).create(keyRequest, params);
+    const second = await createMCPCatalogConnectService(app).create(
+      { ...keyRequest, bearer_token: 'fake-new-key-2222' },
+      params
+    );
+
+    expect(first.reused_existing_server).toBe(false);
+    expect(second.reused_existing_server).toBe(true);
+    expect(second.mcp_server.mcp_server_id).toBe(first.mcp_server.mcp_server_id);
+    expect(created.mcpServers).toHaveLength(1);
+    expect(generationClaims).toEqual([
+      { ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 },
+      { ownerUserId: ALICE, catalogEntryName: LINEAR, value: 2 },
+    ]);
+    expect(generationFinalizations).toEqual([
+      { id: 'server-1', ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 },
+      { id: 'server-1', ownerUserId: ALICE, catalogEntryName: LINEAR, value: 2 },
+    ]);
+    expect(patched.at(-1)).toEqual({
+      id: 'server-1',
+      data: { auth: { type: 'bearer', token: 'fake-new-key-2222' } },
+    });
+  });
+
   it('rejects a stale key finalization after a newer connect claims the identity', async () => {
     const { app, patched, generationFinalizations } = buildApp(KEY_ENTRY, [keyInstallOf()]);
     const serverService = serversOf(app);
@@ -1888,7 +1984,7 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     // it: an open server keeps no credential, and an OAuth grant lives in
     // `user_mcp_oauth_tokens` keyed by user, so neither is the row's to lend.
     probeRemoteAuthType.mockResolvedValue('none');
-    const { app, created } = buildApp(CURATED, [installOf({ owner_user_id: BOB })]);
+    const { app, created } = buildApp(CURATED, [installOf({ owner_user_id: undefined })]);
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
 
