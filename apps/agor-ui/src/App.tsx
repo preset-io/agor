@@ -30,7 +30,7 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, ConfigProvider, theme } from 'antd';
+import { Alert, Button, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -49,6 +49,7 @@ import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
+  IdentityContractState,
   useAgorClient,
   useAgorData,
   useAuth,
@@ -319,6 +320,8 @@ function AppContent() {
     featuresConfig,
     loading: authConfigLoading,
     error: authConfigError,
+    identityContractState,
+    retry: retryAuthConfig,
   } = useAuthConfig();
 
   // Authentication
@@ -845,6 +848,7 @@ function AppContent() {
   // Show auth config error ONLY if we don't have a config yet (first load)
   // If we already have a config cached, continue with that even if there's an error
   if (authConfigError && !authConfig) {
+    const unsupportedIdentityContract = identityContractState === IdentityContractState.UNSUPPORTED;
     return (
       <div
         style={{
@@ -857,16 +861,27 @@ function AppContent() {
       >
         <Alert
           type="warning"
-          title="Could not fetch daemon configuration"
+          title={
+            unsupportedIdentityContract
+              ? 'Incompatible daemon configuration contract'
+              : 'Could not fetch daemon configuration'
+          }
           description={
             <div>
               <p>{authConfigError.message}</p>
-              <p>Defaulting to requiring authentication. Start the daemon with:</p>
-              <p>
-                <code>cd apps/agor-daemon && pnpm dev</code>
-              </p>
+              {unsupportedIdentityContract ? (
+                <p>Deploy compatible Agor UI and daemon versions, then retry.</p>
+              ) : (
+                <>
+                  <p>Make sure the daemon is running:</p>
+                  <p>
+                    <code>cd apps/agor-daemon && pnpm dev</code>
+                  </p>
+                </>
+              )}
             </div>
           }
+          action={<Button onClick={retryAuthConfig}>Retry</Button>}
           showIcon
         />
       </div>

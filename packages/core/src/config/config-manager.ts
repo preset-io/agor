@@ -23,7 +23,10 @@ import {
   resolveSdkWatchdogConfig,
 } from './executor-heartbeat';
 import { resolveExecutorResponseConfig } from './executor-response';
-import { resolveEffectiveExternalLaunchConfig } from './external-launch';
+import {
+  assertValidRawExternalLaunchConfig,
+  resolveEffectiveExternalLaunchConfig,
+} from './external-launch';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
@@ -683,6 +686,7 @@ function validateConfig(config: AgorConfig): void {
     'trusted_host_header',
     'return_host_param',
   ]);
+  assertValidRawExternalLaunchConfig(config.external_launch);
   only(config.identity, 'identity', ['user_lifecycle', 'role_authority', 'local_auth', 'external']);
   only(config.identity?.external, 'identity.external', ['provider', 'provisioning']);
   if (
@@ -1023,6 +1027,14 @@ function validateConfig(config: AgorConfig): void {
   );
 
   validateExternalLaunchReturnHostParam(config);
+}
+
+/**
+ * Validate a preloaded/programmatic config through the same raw boundary used
+ * for YAML. Daemon startup calls this before applying environment overrides.
+ */
+export function assertValidRawConfig(config: AgorConfig): void {
+  validateConfig(config);
 }
 
 /** Return the deployment identity after enforcing the daemon startup invariant. */

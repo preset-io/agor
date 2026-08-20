@@ -51,8 +51,19 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
  * whose create, role, password, and JIT behavior disagree.
  */
 export function assertValidEffectiveIdentityConfig(config: AgorConfig): void {
-  const identity = config.identity;
-  if (!identity) return;
+  const identityValue = config.identity as unknown;
+  if (identityValue === undefined) return;
+  if (!identityValue || typeof identityValue !== 'object' || Array.isArray(identityValue)) {
+    throw new Error('identity must be an object');
+  }
+  const identity = identityValue as NonNullable<AgorConfig['identity']>;
+  const externalValue = identity.external as unknown;
+  if (
+    externalValue !== undefined &&
+    (!externalValue || typeof externalValue !== 'object' || Array.isArray(externalValue))
+  ) {
+    throw new Error('identity.external must be an object');
+  }
 
   const resolved = resolveIdentityAuthority(config);
   if (resolved.userLifecycle === AgorUserLifecycleAuthority.INTERNAL) {

@@ -1,4 +1,4 @@
-import { createPublicKey } from 'node:crypto';
+import { createPublicKey, type KeyObject } from 'node:crypto';
 import {
   type AgorConfig,
   AgorExternalLaunchAlgorithm,
@@ -69,7 +69,11 @@ function optionalBoolean(
   return value;
 }
 
-function httpUrl(value: string | undefined, path: string): string | undefined {
+function httpUrl(
+  value: string | undefined,
+  path: string,
+  options: { rejectUserinfo?: boolean } = {}
+): string | undefined {
   if (value === undefined) return undefined;
   let parsed: URL;
   try {
@@ -79,6 +83,9 @@ function httpUrl(value: string | undefined, path: string): string | undefined {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`${path} must be a valid HTTP(S) URL`);
+  }
+  if (options.rejectUserinfo && (parsed.username || parsed.password)) {
+    throw new Error(`${path} must not include URL credentials`);
   }
   return value;
 }
@@ -98,7 +105,57 @@ function parseAlgorithms(
   return algorithms as ResolvedExternalLaunchSettings['algorithms'];
 }
 
-function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunchSettings {
+const DEFAULT_HMAC_ALGORITHMS = [AgorExternalLaunchAlgorithm.HS256];
+const DEFAULT_RSA_ALGORITHMS = [AgorExternalLaunchAlgorithm.RS256];
+
+const EC_CURVE_ALGORITHM = new Map<string, AgorExternalLaunchAlgorithm>([
+  ['prime256v1', AgorExternalLaunchAlgorithm.ES256],
+  ['secp256r1', AgorExternalLaunchAlgorithm.ES256],
+  ['P-256', AgorExternalLaunchAlgorithm.ES256],
+  ['secp384r1', AgorExternalLaunchAlgorithm.ES384],
+  ['P-384', AgorExternalLaunchAlgorithm.ES384],
+  ['secp521r1', AgorExternalLaunchAlgorithm.ES512],
+  ['P-521', AgorExternalLaunchAlgorithm.ES512],
+]);
+
+function publicKeyAlgorithms(
+  key: KeyObject,
+  configured: ResolvedExternalLaunchSettings['algorithms']
+): ResolvedExternalLaunchSettings['algorithms'] {
+  if (key.asymmetricKeyType === 'rsa') {
+    const algorithms = configured ?? DEFAULT_RSA_ALGORITHMS;
+    if (
+      algorithms.some((algorithm) => !algorithm.startsWith('RS') && !algorithm.startsWith('PS'))
+    ) {
+      throw new Error('external_launch RSA public keys may only use RS* or PS* algorithms');
+    }
+    return algorithms;
+  }
+
+  if (key.asymmetricKeyType === 'ec') {
+    const curve = key.asymmetricKeyDetails?.namedCurve;
+    const expected = curve ? EC_CURVE_ALGORITHM.get(curve) : undefined;
+    if (!expected) {
+      throw new Error('external_launch.public_key uses an unsupported elliptic curve');
+    }
+    const algorithms = configured ?? [expected];
+    if (algorithms.some((algorithm) => algorithm !== expected)) {
+      throw new Error(
+        `external_launch EC public key curve ${curve} requires the ${expected} algorithm`
+      );
+    }
+    return algorithms;
+  }
+
+  throw new Error(
+    `external_launch.public_key uses unsupported key type ${key.asymmetricKeyType ?? 'unknown'}`
+  );
+}
+
+function parseExternalLaunchSettings(
+  config: AgorConfig,
+  options: { requireCompleteProvider?: boolean } = {}
+): ResolvedExternalLaunchSettings {
   const rawValue = config.external_launch as unknown;
   if (rawValue !== undefined && !isObject(rawValue)) {
     throw new Error('external_launch must be an object');
@@ -106,12 +163,16 @@ function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunch
   const raw = rawValue ?? {};
 
   const enabled = optionalBoolean(raw, 'enabled');
-  const exchangeUrl = httpUrl(requiredString(raw, 'exchange_url'), 'external_launch.exchange_url');
+  const exchangeUrl = httpUrl(requiredString(raw, 'exchange_url'), 'external_launch.exchange_url', {
+    rejectUserinfo: true,
+  });
   const issuer = requiredString(raw, 'issuer');
   const audience = requiredString(raw, 'audience');
   const instanceId = requiredString(raw, 'instance_id');
   const providerId = requiredString(raw, 'provider_id');
-  const jwksUrl = httpUrl(requiredString(raw, 'jwks_url'), 'external_launch.jwks_url');
+  const jwksUrl = httpUrl(requiredString(raw, 'jwks_url'), 'external_launch.jwks_url', {
+    rejectUserinfo: true,
+  });
   const publicKey = requiredString(raw, 'public_key', { preserveWhitespace: true });
   const devSharedSecret = requiredString(raw, 'dev_shared_secret', { preserveWhitespace: true });
   const serviceCredential = requiredString(raw, 'service_credential', {
@@ -139,7 +200,7 @@ function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunch
       `external_launch.request_timeout_ms must be an integer from 1 to ${EXTERNAL_LAUNCH_MAX_TIMEOUT_MS}`
     );
   }
-  const algorithms = parseAlgorithms(raw);
+  let algorithms = parseAlgorithms(raw);
   const allowAdminRoles = optionalBoolean(raw, 'allow_admin_roles');
   const trustVerifiedEmailForLinking = optionalBoolean(raw, 'trust_verified_email_for_linking');
   const forwardRequestHost = optionalBoolean(raw, 'forward_request_host');
@@ -177,28 +238,31 @@ function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunch
   }
 
   const verificationMethods = [jwksUrl, publicKey, devSharedSecret].filter(Boolean);
-  if (enabled && !exchangeUrl) {
+  const requireCompleteProvider = options.requireCompleteProvider ?? true;
+  if (requireCompleteProvider && enabled && !exchangeUrl) {
     throw new Error('external_launch.exchange_url is required when external launch is enabled');
   }
-  if (enabled && (!issuer || !audience)) {
+  if (requireCompleteProvider && enabled && (!issuer || !audience)) {
     throw new Error(
       'external_launch.issuer and external_launch.audience are required when external launch is enabled'
     );
   }
-  if (enabled && verificationMethods.length === 0) {
+  if (requireCompleteProvider && enabled && verificationMethods.length === 0) {
     throw new Error('external_launch requires exactly one assertion verification method');
   }
-  if (enabled && verificationMethods.length > 1) {
+  if (verificationMethods.length > 1) {
     throw new Error('external_launch must not configure multiple assertion verification methods');
   }
-  if (enabled && publicKey) {
+  if (publicKey) {
+    let key: KeyObject;
     try {
-      createPublicKey(publicKey);
+      key = createPublicKey(publicKey);
     } catch {
       throw new Error('external_launch.public_key must be a valid public key');
     }
+    algorithms = publicKeyAlgorithms(key, algorithms);
   }
-  if (enabled && algorithms) {
+  if (algorithms) {
     const hasHsAlgorithm = algorithms.some((algorithm) => algorithm.startsWith('HS'));
     const hasNonHsAlgorithm = algorithms.some((algorithm) => !algorithm.startsWith('HS'));
     if (devSharedSecret && hasNonHsAlgorithm) {
@@ -208,6 +272,8 @@ function parseExternalLaunchSettings(config: AgorConfig): ResolvedExternalLaunch
       throw new Error('external_launch asymmetric verification cannot use HS* algorithms');
     }
   }
+  if (!algorithms && devSharedSecret) algorithms = DEFAULT_HMAC_ALGORITHMS;
+  if (!algorithms && jwksUrl) algorithms = DEFAULT_RSA_ALGORITHMS;
 
   return {
     enabled,
@@ -274,9 +340,7 @@ export function resolveEffectiveExternalLaunchConfig(
   configured: AgorConfig['external_launch'],
   env: NodeJS.ProcessEnv = process.env
 ): AgorExternalLaunchSettings | undefined {
-  if (configured !== undefined && !isObject(configured)) {
-    throw new Error('Config error: external_launch must be an object');
-  }
+  assertValidRawExternalLaunchConfig(configured);
 
   const raw: AgorExternalLaunchSettings = configured ?? {};
   const enabled = booleanEnvironmentValue(
@@ -326,6 +390,24 @@ export function resolveEffectiveExternalLaunchConfig(
       : {}),
     ...(forwardRequestHost !== undefined ? { forward_request_host: forwardRequestHost } : {}),
   };
+}
+
+/**
+ * Validate file- or API-provided values before environment projection. This
+ * keeps programmatic daemon startup on the same raw config boundary as YAML
+ * loading while allowing required secrets to arrive from their named env vars.
+ */
+export function assertValidRawExternalLaunchConfig(configured: unknown): void {
+  try {
+    parseExternalLaunchSettings(
+      { external_launch: configured as AgorConfig['external_launch'] },
+      { requireCompleteProvider: false }
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'external_launch configuration is invalid';
+    throw new Error(`Config error: ${message}`);
+  }
 }
 
 /**

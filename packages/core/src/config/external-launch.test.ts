@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   assertValidEffectiveExternalLaunchConfig,
@@ -13,6 +14,16 @@ const completeProvider = {
   audience: 'runtime:test',
   jwks_url: 'https://issuer.example.test/jwks',
 } as const;
+
+function publicKeyPem(type: 'rsa' | 'ec' | 'ed25519', namedCurve?: string): string {
+  const { publicKey } =
+    type === 'rsa'
+      ? generateKeyPairSync('rsa', { modulusLength: 2_048 })
+      : type === 'ec'
+        ? generateKeyPairSync('ec', { namedCurve: namedCurve ?? 'P-256' })
+        : generateKeyPairSync('ed25519');
+  return publicKey.export({ type: 'spki', format: 'pem' }).toString();
+}
 
 function unsafeConfig(externalLaunch: Record<string, unknown>): AgorConfig {
   return { external_launch: externalLaunch } as unknown as AgorConfig;
@@ -92,7 +103,17 @@ describe('external launch effective config', () => {
 
   it.each([
     ['non-HTTP exchange URL', { exchange_url: 'not-a-url' }, /exchange_url.*HTTP/i],
+    [
+      'credentials in the exchange URL',
+      { exchange_url: 'https://user:secret@issuer.example.test/exchange' },
+      /exchange_url.*URL credentials/i,
+    ],
     ['non-HTTP JWKS URL', { jwks_url: 'file:///tmp/jwks.json' }, /jwks_url.*HTTP/i],
+    [
+      'credentials in the JWKS URL',
+      { jwks_url: 'https://user:secret@issuer.example.test/jwks' },
+      /jwks_url.*URL credentials/i,
+    ],
     ['zero timeout', { request_timeout_ms: 0 }, /request_timeout_ms.*1/i],
     ['excessive timeout', { request_timeout_ms: 120_001 }, /request_timeout_ms.*120000/i],
     ['empty algorithms', { algorithms: [] }, /algorithms.*non-empty/i],
@@ -122,6 +143,56 @@ describe('external launch effective config', () => {
         })
       )
     ).toThrow(/symmetric verification.*HS/i);
+  });
+
+  it('derives a curve-compatible default for an EC public key', () => {
+    const result = resolveExternalLaunchSettings(
+      unsafeConfig({
+        ...completeProvider,
+        jwks_url: undefined,
+        public_key: publicKeyPem('ec', 'P-256'),
+      })
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.settings.algorithms).toEqual(['ES256']);
+  });
+
+  it.each([
+    [
+      'an EC key with an RSA algorithm',
+      publicKeyPem('ec', 'P-256'),
+      ['RS256'],
+      /curve.*requires.*ES256/i,
+    ],
+    [
+      'an EC key with the wrong curve algorithm',
+      publicKeyPem('ec', 'P-256'),
+      ['ES384'],
+      /curve.*requires.*ES256/i,
+    ],
+    ['an RSA key with an EC algorithm', publicKeyPem('rsa'), ['ES256'], /RSA.*RS\* or PS\*/i],
+    ['an unsupported key type', publicKeyPem('ed25519'), ['RS256'], /unsupported key type/i],
+  ])('rejects %s', (_label, publicKey, algorithms, expected) => {
+    expect(() =>
+      assertValidEffectiveExternalLaunchConfig(
+        unsafeConfig({
+          ...completeProvider,
+          jwks_url: undefined,
+          public_key: publicKey,
+          algorithms,
+        })
+      )
+    ).toThrow(expected);
+  });
+
+  it('rejects malformed raw env selectors with a stable config error', () => {
+    expect(() =>
+      resolveEffectiveExternalLaunchConfig(
+        unsafeConfig({ service_credential_env: 42 }).external_launch,
+        {}
+      )
+    ).toThrow(/Config error: external_launch\.service_credential_env must be a non-empty string/i);
   });
 
   it('returns the normalized settings consumed by request handling', () => {

@@ -541,10 +541,9 @@ async function verifyLaunchAssertion(
   }
 
   const key = await resolveVerificationKey(decoded.header, settings);
-  // Production verification is asymmetric and must pin an explicit algorithm
-  // allow-list. Defaulting to RS256 for the non-dev path prevents algorithm
-  // confusion (e.g. a public key coerced into HS256). The dev symmetric path
-  // stays HS256-only. An operator may still narrow/extend via `algorithms`.
+  // The shared config parser supplies a key-compatible algorithm allow-list.
+  // These fallbacks are defensive for callers constructing resolved settings
+  // outside that parser; they preserve the historical JWKS/dev defaults.
   const algorithms = settings.algorithms ?? (settings.devSharedSecret ? ['HS256'] : ['RS256']);
   const claims = jwt.verify(assertion, key, {
     issuer: settings.issuer,

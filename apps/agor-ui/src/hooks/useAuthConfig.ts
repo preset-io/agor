@@ -103,6 +103,8 @@ export interface AuthConfigState {
   loading: boolean;
   error: Error | null;
   identityContractState: IdentityContractState;
+  /** Retry a failed or unsupported health-contract load without remounting. */
+  retry: () => void;
 }
 
 let snapshot: AuthConfigState = {
@@ -112,6 +114,7 @@ let snapshot: AuthConfigState = {
   loading: true,
   error: null,
   identityContractState: IdentityContractState.UNKNOWN,
+  retry: retryAuthConfig,
 };
 let request: Promise<void> | null = null;
 const listeners = new Set<() => void>();
@@ -125,6 +128,7 @@ export function __resetAuthConfigForTests(): void {
     loading: true,
     error: null,
     identityContractState: IdentityContractState.UNKNOWN,
+    retry: retryAuthConfig,
   };
   request = null;
 }
@@ -146,6 +150,7 @@ export function __setAuthConfigForTests(config: AuthConfig): void {
         ? new Error('Unsupported daemon identity capability contract')
         : null,
     identityContractState,
+    retry: retryAuthConfig,
   };
   request = Promise.resolve();
 }
@@ -284,6 +289,7 @@ function fetchAuthConfigOnce(): Promise<void> {
         loading: false,
         error: parsed.error,
         identityContractState: parsed.identityContractState,
+        retry: retryAuthConfig,
       });
     } catch (err) {
       publish({
@@ -295,16 +301,31 @@ function fetchAuthConfigOnce(): Promise<void> {
         loading: false,
         error: err instanceof Error ? err : new Error(String(err)),
         identityContractState: IdentityContractState.UNKNOWN,
+        retry: retryAuthConfig,
       });
     }
   })();
   request = currentRequest;
   void currentRequest.finally(() => {
     // Successful health remains cached for the app lifetime. A transient
-    // failure is retryable on the next mount instead of poisoning the singleton.
+    // failure releases the singleton so the mounted shell's action can retry.
     if (snapshot.error && request === currentRequest) request = null;
   });
   return currentRequest;
+}
+
+/** Retry in place so the app-shell error state can recover without a reload. */
+export function retryAuthConfig(): void {
+  if (snapshot.loading || !snapshot.error) return;
+  request = null;
+  publish({
+    ...snapshot,
+    loading: true,
+    error: null,
+    identityContractState: IdentityContractState.UNKNOWN,
+    retry: retryAuthConfig,
+  });
+  void fetchAuthConfigOnce();
 }
 
 /** One shared health snapshot for the whole UI; consumers never refetch or drift. */

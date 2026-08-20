@@ -176,9 +176,10 @@ credential is never returned to the browser, exposed in the public `/health`
 settings, or written to logs.
 
 Production verification fails closed: the `none` algorithm is always rejected;
-`jwks_url` / `public_key` verification defaults to an `RS256` allow-list to
-prevent algorithm confusion; and a missing issuer, audience, `exp`, `sub`, or
-required tenant claim creates no session.
+`jwks_url` verification defaults to an `RS256` allow-list, while a static
+`public_key` derives a compatible default from its key type and EC curve. An
+explicit allow-list must match that key. A missing issuer, audience, `exp`,
+`sub`, or required tenant claim creates no session.
 
 The exchange endpoint should consume the launch code exactly once and return:
 
@@ -210,12 +211,13 @@ Required when `external_launch.instance_id` is configured:
 
 ## Compatibility and upgrade notes
 
-- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
-  verification (`jwks_url` / `public_key`) defaults to an `RS256`-only allow-list
-  and refuses HS\* algorithms. If your issuer signs assertions with another
-  asymmetric algorithm (`RS384`, `ES256`, `PS256`, …) and previously relied on
-  library defaults, set `algorithms` explicitly to the intended asymmetric
-  algorithm **before** upgrading, or assertions will stop verifying.
+- **Non-RS256 JWKS signing must be declared before upgrading.** `jwks_url`
+  verification defaults to an `RS256`-only allow-list and refuses HS\*
+  algorithms. Static `public_key` verification instead derives `RS256` for RSA
+  or the matching ES algorithm for a supported EC curve; an explicit
+  `algorithms` list must be compatible with the key. If a JWKS issuer signs with
+  another asymmetric algorithm (`RS384`, `ES256`, `PS256`, …), set
+  `algorithms` explicitly **before** upgrading.
 - **`login_redirect_url` deployments begin receiving a return-host parameter.**
   When `login_redirect_url` is enabled, direct-host entry appends the configured
   `return_host_param` (default `return_host`) to that URL. Existing deployments

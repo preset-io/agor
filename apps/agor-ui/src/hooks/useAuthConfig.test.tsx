@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __resetAuthConfigForTests, IdentityContractState, useAuthConfig } from './useAuthConfig';
 
@@ -115,7 +115,7 @@ describe('useAuthConfig', () => {
     expect(result.current.identityContractState).toBe(IdentityContractState.UNSUPPORTED);
   });
 
-  it('retries after a failed singleton fetch without synthesizing local-login config', async () => {
+  it('retries in the mounted app shell without synthesizing local-login config', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false, statusText: 'Unavailable' })
@@ -125,16 +125,16 @@ describe('useAuthConfig', () => {
       });
     vi.stubGlobal('fetch', fetchMock);
 
-    const first = renderHook(() => useAuthConfig());
-    await waitFor(() => expect(first.result.current.loading).toBe(false));
-    expect(first.result.current.config).toBeNull();
-    expect(first.result.current.error).not.toBeNull();
-    first.unmount();
+    const { result } = renderHook(() => useAuthConfig());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.config).toBeNull();
+    expect(result.current.error).not.toBeNull();
 
-    const second = renderHook(() => useAuthConfig());
-    await waitFor(() => expect(second.result.current.config).toEqual({ requireAuth: true }));
-    expect(second.result.current.config).toEqual({ requireAuth: true });
-    expect(second.result.current.identityContractState).toBe(IdentityContractState.LEGACY);
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(result.current.config).toEqual({ requireAuth: true }));
+    expect(result.current.error).toBeNull();
+    expect(result.current.identityContractState).toBe(IdentityContractState.LEGACY);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -208,9 +208,10 @@ workspace host:
 Production verification is asymmetric and fails closed:
 
 - The `none` algorithm is always rejected.
-- When verifying with `jwks_url` or `public_key`, the algorithm allow-list
-  defaults to `RS256` (override with `algorithms`), preventing algorithm
-  confusion (e.g. a public key coerced into an HS256 secret). The dev
+- `jwks_url` verification defaults to an `RS256` allow-list. Static
+  `public_key` verification derives `RS256` for RSA or the matching ES
+  algorithm for a supported EC curve; an explicit `algorithms` list must match
+  that key. Both asymmetric paths refuse HS\* algorithms, and the dev
   `dev_shared_secret` path stays HS256-only.
 - JWKS assertions must carry a `kid` that matches a signing key. A key that
   omits `use`/`alg` metadata is accepted; when either is present it must be
@@ -232,13 +233,12 @@ Production verification is asymmetric and fails closed:
   that maintains the binding. New daemons can discover legacy JSON links and
   bind them transactionally on the next successful launch, but old daemons do
   not write the new relation.
-- **Non-RS256 asymmetric signing must be declared before upgrading.** Asymmetric
-  verification (`jwks_url` / `public_key`) now defaults to an `RS256`-only
-  allow-list and refuses HS\* algorithms outright. A deployment that signs
-  assertions with a different asymmetric algorithm (e.g. `RS384`, `ES256`,
-  `PS256`) and previously relied on library defaults must set `algorithms`
-  explicitly to the intended asymmetric algorithm **before** upgrading, or its
-  assertions will stop verifying.
+- **Non-RS256 JWKS signing must be declared before upgrading.** `jwks_url`
+  verification defaults to an `RS256`-only allow-list and refuses HS\*
+  algorithms outright. Static `public_key` verification derives a compatible
+  RSA/EC default. A JWKS deployment that signs assertions with a different
+  asymmetric algorithm (e.g. `RS384`, `ES256`, `PS256`) must set `algorithms`
+  explicitly before upgrading.
 - **`login_redirect_url` deployments begin receiving a return-host query
   parameter.** When `login_redirect_url` is enabled, direct-host entry appends
   the configured `return_host_param` (default `return_host`) to that URL. This is

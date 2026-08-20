@@ -39,6 +39,7 @@ import {
   assertValidEffectiveExecutionConfig,
   assertValidEffectiveExternalLaunchConfig,
   assertValidEffectiveIdentityConfig,
+  assertValidRawConfig,
   getConfigPath,
   loadConfig,
   loadConfigFromFile,
@@ -189,6 +190,10 @@ async function startDaemonWithOwnedMetrics(
     : options?.configPath
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
+
+  // Programmatic startup must cross the same untrusted config boundary as
+  // YAML before environment projection reads nested scalar values.
+  assertValidRawConfig(config);
 
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.

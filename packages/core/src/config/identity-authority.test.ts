@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEffectiveConfig } from './config-manager';
+import { assertValidRawConfig, resolveEffectiveConfig } from './config-manager';
 import { assertValidEffectiveIdentityConfig, resolveIdentityAuthority } from './identity-authority';
 import type { AgorConfig } from './types';
 
@@ -35,6 +35,23 @@ describe('identity authority', () => {
         },
       },
     });
+  });
+
+  it('rejects malformed programmatic identity sections before projection', () => {
+    const scalarIdentity = { identity: 'external' } as unknown as AgorConfig;
+    expect(() => assertValidRawConfig(scalarIdentity)).toThrow(
+      /Config error: identity must be an object/i
+    );
+    expect(() => assertValidEffectiveIdentityConfig(scalarIdentity)).toThrow(
+      /identity must be an object/i
+    );
+
+    const scalarExternal = {
+      identity: { external: 'external_launch' },
+    } as unknown as AgorConfig;
+    expect(() => assertValidRawConfig(scalarExternal)).toThrow(
+      /Config error: identity\.external must be an object/i
+    );
   });
 
   it('derives externally managed capabilities from the coherent external profile', () => {
