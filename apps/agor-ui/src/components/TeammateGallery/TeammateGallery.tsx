@@ -26,10 +26,17 @@ export interface TeammateGalleryProps {
   onChange: (templateId: string | null) => void;
   /**
    * Optional content placed above the filter chips inside the non-scrolling
-   * header region (e.g. a title/intro + name field + section label). It stays
-   * fixed while only the card grid scrolls, in its own region below.
+   * header region (e.g. a name field + section label). It stays pinned at all
+   * times while only the card grid scrolls, in its own region below.
    */
   header?: React.ReactNode;
+  /**
+   * Optional content (e.g. a step title + intro) placed ABOVE `header`, which
+   * smoothly collapses/hides once the card region is scrolled past a small
+   * threshold and restores when scrolled back to the top. The card grid keeps
+   * its own overflow clip, so collapsing this can never cause card overlap.
+   */
+  collapsibleHeader?: React.ReactNode;
 }
 
 /**
@@ -257,12 +264,18 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
   value,
   onChange,
   header,
+  collapsibleHeader,
 }) => {
   const { token } = theme.useToken();
   const goalList = useMemo(() => goals ?? [], [goals]);
   const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
 
   const [filter, setFilter] = useState<GalleryFilter>('all');
+  // Collapse the `collapsibleHeader` (step title + intro) once the card region is
+  // scrolled a little; restore it at the top. Threshold avoids flicker on tiny
+  // scrolls. The grid stays in its own overflow clip regardless, so this cannot
+  // reintroduce the card-over-header overlap the two-region layout fixed.
+  const [scrolled, setScrolled] = useState(false);
 
   const cards = useMemo(() => galleryCardsForFilter(goalList, filter), [goalList, filter]);
 
@@ -280,64 +293,87 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
     // grid lives in its own overflow container below, so cards are clipped to it
     // and can never paint over the header.
     <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
-      {/* Non-scrolling header: the optional host content (title/intro + name
-          field + label) plus the filter chips stay fixed above the card region. */}
-      <Flex
-        vertical
-        gap={token.marginSM}
-        style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}
-      >
-        {header}
-        <Flex
-          role="group"
-          aria-label="Filter templates by category"
-          align="center"
-          gap={token.marginXS}
-          wrap="wrap"
-        >
-          {chips.map((chip) => {
-            const active = filter === chip.key;
-            return (
-              <AntTag.CheckableTag
-                key={chip.key}
-                checked={active}
-                onChange={() => setFilter(chip.key)}
-                // Explicit, deterministic styling in both states so inactive chips
-                // always look identical: a bordered transparent pill, with only the
-                // active chip filled. Inline styles also override antd's hover-fill,
-                // so no chip is left with a stuck grey box.
-                style={{
-                  cursor: 'pointer',
-                  fontSize: token.fontSize,
-                  padding: '2px 12px',
-                  borderRadius: token.borderRadius,
-                  border: `1px solid ${active ? token.colorPrimary : token.colorBorderSecondary}`,
-                  background: active ? token.colorPrimary : 'transparent',
-                  color: active ? token.colorTextLightSolid : token.colorText,
-                }}
+      {/* Non-scrolling header. The collapsible block (title/intro) hides on
+          scroll; the pinned block (name field + label) and the filter chips
+          stay fixed above the card region at all times. */}
+      <div style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}>
+        {collapsibleHeader && (
+          <div
+            data-collapsible-header=""
+            aria-hidden={scrolled || undefined}
+            style={{
+              overflow: 'hidden',
+              // Collapse to nothing on scroll; a generous cap covers the title +
+              // intro at any wrap without clipping when expanded.
+              maxHeight: scrolled ? 0 : 200,
+              opacity: scrolled ? 0 : 1,
+              marginBottom: scrolled ? 0 : token.marginSM,
+              transition: 'max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.25s ease',
+            }}
+          >
+            {collapsibleHeader}
+          </div>
+        )}
+        <Flex vertical gap={token.marginSM}>
+          {header}
+          <Flex
+            role="group"
+            aria-label="Filter templates by category"
+            align="center"
+            gap={token.marginXS}
+            wrap="wrap"
+          >
+            {chips.map((chip) => {
+              const active = filter === chip.key;
+              return (
+                <AntTag.CheckableTag
+                  key={chip.key}
+                  checked={active}
+                  onChange={() => setFilter(chip.key)}
+                  // Explicit, deterministic styling in both states so inactive chips
+                  // always look identical: a bordered transparent pill, with only the
+                  // active chip filled. Inline styles also override antd's hover-fill,
+                  // so no chip is left with a stuck grey box.
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: token.fontSize,
+                    padding: '2px 12px',
+                    borderRadius: token.borderRadius,
+                    border: `1px solid ${active ? token.colorPrimary : token.colorBorderSecondary}`,
+                    background: active ? token.colorPrimary : 'transparent',
+                    color: active ? token.colorTextLightSolid : token.colorText,
+                  }}
+                >
+                  {chip.label}
+                </AntTag.CheckableTag>
+              );
+            })}
+            {filter !== 'all' && (
+              // Ghost, understated, trailing the chips — clears back to All.
+              <Button
+                type="text"
+                size="small"
+                onClick={() => setFilter('all')}
+                style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
               >
-                {chip.label}
-              </AntTag.CheckableTag>
-            );
-          })}
-          {filter !== 'all' && (
-            // Ghost, understated, trailing the chips — clears back to All.
-            <Button
-              type="text"
-              size="small"
-              onClick={() => setFilter('all')}
-              style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
-            >
-              Clear filters
-            </Button>
-          )}
+                Clear filters
+              </Button>
+            )}
+          </Flex>
         </Flex>
-      </Flex>
+      </div>
 
       {/* Scroll region: its OWN overflow container, so the browser clips the
           cards to it. This is what makes overlap impossible by construction —
-          a card can never render above the sibling header block. */}
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+          a card can never render above the sibling header block. The scroll
+          position also drives the collapsible header (title/intro) above. */}
+      <div
+        onScroll={(event) => {
+          const next = event.currentTarget.scrollTop > 8;
+          setScrolled((prev) => (prev === next ? prev : next));
+        }}
+        style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
+      >
         <div
           role="radiogroup"
           aria-label="Teammate template"

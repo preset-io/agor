@@ -1530,13 +1530,20 @@ export function OnboardingWizard({
         goals={selectedGoals}
         value={selectedTemplateId}
         onChange={applyTemplate}
-        header={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        collapsibleHeader={
+          // Title + intro: renderStepBadge (marginBottom 12) + a zero-margin
+          // Paragraph gives the SAME title→intro gap as the other steps. This
+          // block collapses away once the card region is scrolled.
+          <>
             {renderStepBadge('Build your teammate')}
             <Paragraph style={{ color: TEXT_SECONDARY, margin: 0 }}>
               Name your teammate and pick a starter template to shape what they do — or start blank.
               Change anything later.
             </Paragraph>
+          </>
+        }
+        header={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <Text
                 style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}

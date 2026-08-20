@@ -143,11 +143,6 @@ describe('TeammateGallery', () => {
     // Host header content renders inside the gallery.
     expect(screen.getByText('NAME FIELD')).toBeInTheDocument();
 
-    // The header block holds the host content + the chip row and does NOT scroll.
-    const headerBlock = chipRow().parentElement as HTMLElement;
-    expect(headerBlock).toContainElement(screen.getByText('NAME FIELD'));
-    expect(headerBlock.getAttribute('style') ?? '').not.toContain('overflow');
-
     // The card grid lives inside its OWN overflow-y:auto scroll container — the
     // structural guarantee that cards are clipped to it and can never paint over
     // the header (replacing the old, engine-dependent position:sticky approach).
@@ -155,11 +150,52 @@ describe('TeammateGallery', () => {
     const scrollRegion = grid.parentElement as HTMLElement;
     expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
 
-    // Header block and scroll region are SEPARATE SIBLINGS; neither nests the
-    // other, so overlap is impossible by construction.
-    expect(headerBlock.contains(grid)).toBe(false);
-    expect(scrollRegion.contains(headerBlock)).toBe(false);
-    expect(scrollRegion.parentElement).toBe(headerBlock.parentElement);
+    // The name field + chips live OUTSIDE the scroll region, in the fixed header.
+    expect(scrollRegion.contains(screen.getByText('NAME FIELD'))).toBe(false);
+    expect(scrollRegion.contains(chipRow())).toBe(false);
+
+    // The fixed header block and the scroll region are SEPARATE SIBLINGS under the
+    // gallery root; the header holds the name field + chips but never the grid, so
+    // overlap is impossible by construction.
+    const headerContainer = scrollRegion.previousElementSibling as HTMLElement;
+    expect(headerContainer.contains(chipRow())).toBe(true);
+    expect(headerContainer.contains(screen.getByText('NAME FIELD'))).toBe(true);
+    expect(headerContainer.contains(grid)).toBe(false);
+  });
+
+  it('collapses the collapsibleHeader once the card region is scrolled and restores it at the top', () => {
+    render(
+      <TeammateGallery
+        value={null}
+        onChange={vi.fn()}
+        collapsibleHeader={<div>TITLE BLOCK</div>}
+        header={<div>NAME FIELD</div>}
+      />
+    );
+    const wrapper = screen
+      .getByText('TITLE BLOCK')
+      .closest('[data-collapsible-header]') as HTMLElement;
+    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const scrollRegion = grid.parentElement as HTMLElement;
+
+    // At the top: title/intro expanded (opaque, not aria-hidden, non-zero cap).
+    expect(wrapper.style.opacity).toBe('1');
+    expect(wrapper.getAttribute('aria-hidden')).toBeNull();
+    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBeGreaterThan(0);
+
+    // Scroll past the threshold → collapse away (transparent, aria-hidden, capped 0).
+    scrollRegion.scrollTop = 40;
+    fireEvent.scroll(scrollRegion);
+    expect(wrapper.style.opacity).toBe('0');
+    expect(wrapper.getAttribute('aria-hidden')).toBe('true');
+    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBe(0);
+
+    // Back to the top → restore.
+    scrollRegion.scrollTop = 0;
+    fireEvent.scroll(scrollRegion);
+    expect(wrapper.style.opacity).toBe('1');
+    expect(wrapper.getAttribute('aria-hidden')).toBeNull();
+    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBeGreaterThan(0);
   });
 
   it('badges up to two goal-recommended templates and never the blank card', () => {
