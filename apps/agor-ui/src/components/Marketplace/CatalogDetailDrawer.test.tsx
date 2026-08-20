@@ -69,7 +69,10 @@ function renderDrawer(entry: MCPCatalogEntry) {
   return { show };
 }
 
-const connectButton = () => screen.getByRole('button', { name: /Connect/ });
+const connectButton = () =>
+  screen
+    .getByText(/^(Connect, then sign in|Verify token & connect|Check & connect|Connect & try it)$/i)
+    .closest('button')!;
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {
