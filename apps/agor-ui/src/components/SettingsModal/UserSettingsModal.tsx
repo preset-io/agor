@@ -30,7 +30,6 @@ import {
   KeyOutlined,
   LockOutlined,
   MinusCircleOutlined,
-  RobotOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
   ThunderboltOutlined,
@@ -176,6 +175,7 @@ const toolFromProviderKey = (key: string): AgenticToolName =>
 const LEGACY_TAB_ALIASES: Record<string, string> = {
   general: 'profile',
   audio: 'preferences',
+  'primary-teammate': 'preferences',
   groups: 'access',
   'personal-api-keys': 'tokens',
 };
@@ -208,14 +208,9 @@ const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keyword
   preferences: {
     title: 'Preferences',
     icon: <BellOutlined />,
-    keywords: 'audio sound interface chime',
+    keywords: 'assistant teammate audio sound notification chime event stream',
   },
   security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
-  'primary-teammate': {
-    title: 'Primary Assistant',
-    icon: <RobotOutlined />,
-    keywords: 'primary assistant teammate default agent',
-  },
   tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
   uploads: {
     title: 'Uploads',
@@ -357,12 +352,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
     if (rawActiveKey === 'security' && !canWriteExecutionHome && !canWritePassword)
       return 'profile';
-    if (
-      (rawActiveKey === 'tokens' ||
-        rawActiveKey === 'uploads' ||
-        rawActiveKey === 'primary-teammate') &&
-      isEditingOther
-    )
+    if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
       return 'profile';
     if (rawActiveKey === 'access' && !canAdministerTarget) return 'profile';
     return rawActiveKey;
@@ -1075,13 +1065,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           ...(!canWriteExecutionHome && !canWritePassword
             ? []
             : [{ key: 'security', ...PANEL_META.security }]),
-          // Primary Assistant, personal API tokens, and uploads are scoped to
-          // the signed-in caller, so they are meaningless (and misleading) when
-          // an admin edits another user.
+          // Personal API tokens and uploads are scoped to the signed-in caller,
+          // so they are meaningless (and misleading) when an admin edits another
+          // user. The caller-scoped Primary Assistant control lives within
+          // Preferences and is hidden there while editing another user.
           ...(isEditingOther
             ? []
             : [
-                { key: 'primary-teammate', ...PANEL_META['primary-teammate'] },
                 { key: 'tokens', ...PANEL_META.tokens },
                 { key: 'uploads', ...PANEL_META.uploads },
               ]),
@@ -1224,6 +1214,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         kind: 'setting',
         keywords: 'impersonation os process user',
         panelKey: 'security',
+      });
+    }
+    if (!isEditingOther) {
+      entries.push({
+        label: 'Primary assistant',
+        kind: 'setting',
+        keywords: 'teammate default agent personal ambient work',
+        panelKey: 'preferences',
       });
     }
     if (isSelf && onRestartOnboarding) {
@@ -1649,8 +1647,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderPreferencesPanel = () => (
     <>
       <PanelHeader title={PANEL_META.preferences.title} />
+
+      {!isEditingOther && (
+        <>
+          <SectionDivider label="Assistant" />
+          <Typography.Text strong>Primary assistant</Typography.Text>
+          <Typography.Paragraph
+            type="secondary"
+            style={{ maxWidth: 560, marginTop: token.marginXXS, marginBottom: token.marginMD }}
+          >
+            Choose the teammate Agor uses by default for personal and ambient work.
+          </Typography.Paragraph>
+          <PrimaryTeammatePicker client={client} compact />
+        </>
+      )}
+
+      <SectionDivider label="Notifications" />
       <AudioSettingsTab form={audioForm} onValuesChange={() => markMainPanelDirty('preferences')} />
-      <SectionDivider label="Interface" />
+
+      <SectionDivider label="Developer tools" />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
         <FieldRow
           label="Live event stream"
@@ -1661,7 +1676,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           }
           name="eventStreamEnabled"
           valuePropName="checked"
-          tooltip="Adds an icon to the navbar to inspect live WebSocket events for debugging."
+          help="Show a navbar shortcut for inspecting live WebSocket events while debugging."
         >
           <Switch />
         </FieldRow>
@@ -2008,13 +2023,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return renderSecurityPanel();
       case 'preferences':
         return renderPreferencesPanel();
-      case 'primary-teammate':
-        return (
-          <>
-            <PanelHeader title={PANEL_META['primary-teammate'].title} />
-            <PrimaryTeammatePicker client={client} />
-          </>
-        );
       case 'env-vars':
         return renderEnvVarsPanel();
       case 'tokens':

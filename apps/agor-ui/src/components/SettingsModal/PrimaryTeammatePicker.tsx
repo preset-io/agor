@@ -131,7 +131,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   };
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       {!compact && (
         <Typography.Text type="secondary">
           Your default teammate for personal, ambient work. Change it anytime.
@@ -166,7 +166,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         optionFilterProp="searchText"
         notFoundContent={options.length === 0 ? 'No teammates available' : undefined}
         suffixIcon={<RobotOutlined />}
-        style={{ maxWidth: 420 }}
+        style={{ width: '100%', maxWidth: 420 }}
         optionRender={(option) => (
           <div style={{ lineHeight: 1.3 }}>
             <div>{option.data.label}</div>
