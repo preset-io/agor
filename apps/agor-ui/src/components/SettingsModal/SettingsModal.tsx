@@ -31,7 +31,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Grid, Layout, Menu, Modal, theme } from 'antd';
+import { Drawer, Grid, Layout, Menu, Modal, Select, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -340,6 +340,28 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, token]
   );
 
+  const mobileSectionOptions = useMemo(
+    () => [
+      { label: 'Workspace · Boards', value: 'boards' },
+      { label: 'Workspace · Repositories', value: 'repos' },
+      { label: 'Workspace · Branches', value: 'branches' },
+      { label: 'Workspace · Teammates', value: 'teammates' },
+      { label: 'Workspace · Cards (Beta)', value: 'cards' },
+      { label: 'Workspace · Artifacts', value: 'artifacts' },
+      ...(isAdmin
+        ? [
+            { label: 'Integrations · Agentic Tools', value: 'agentic-tools' },
+            { label: 'Integrations · MCP Servers', value: 'mcp' },
+            { label: 'Integrations · Gateway Channels', value: 'gateway' },
+            { label: 'Admin · Groups', value: 'groups' },
+          ]
+        : []),
+      { label: 'Admin · Users', value: 'users' },
+      { label: 'System · About', value: 'about' },
+    ],
+    [isAdmin]
+  );
+
   // Render content based on active section
   const renderContent = () => {
     switch (activeTab) {
@@ -474,6 +496,56 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return null;
     }
   };
+
+  if (compact) {
+    return (
+      <Drawer
+        title="Workspace settings"
+        placement="bottom"
+        size="94dvh"
+        open={open}
+        onClose={onClose}
+        styles={{ body: { padding: 0, overflow: 'hidden' } }}
+      >
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <div
+            style={{
+              padding: '12px 16px',
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgElevated,
+            }}
+          >
+            <Select
+              aria-label="Settings section"
+              value={activeTab}
+              options={mobileSectionOptions}
+              onChange={(key) => onTabChange?.(key as SettingsSection)}
+              style={{ width: '100%' }}
+              size="large"
+            />
+          </div>
+          <Content style={{ padding: '20px 16px 32px', overflow: 'auto', minWidth: 0 }}>
+            {renderContent()}
+          </Content>
+        </Layout>
+        <BranchModal
+          open={branchModalOpen}
+          onClose={handleBranchModalClose}
+          branch={selectedBranch}
+          repo={selectedRepo}
+          sessions={branchSessions}
+          boardObjects={boardObjects}
+          client={client}
+          currentUser={currentUser}
+          onUpdateBranch={onUpdateBranch}
+          onUpdateRepo={onUpdateRepo}
+          onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
+          onOpenSettings={onClose}
+          presentation="bottom-sheet"
+        />
+      </Drawer>
+    );
+  }
 
   return (
     <Modal

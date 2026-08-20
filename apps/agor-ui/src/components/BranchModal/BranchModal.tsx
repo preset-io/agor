@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { Badge, Button, Grid, Modal, Space, Tabs, theme } from 'antd';
+import { Alert, Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
@@ -53,6 +53,7 @@ export interface BranchModalProps {
   onSessionClick?: (sessionId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   defaultTab?: BranchModalTab; // Open modal to a specific tab
+  presentation?: 'modal' | 'bottom-sheet';
 }
 
 export const BranchModal: React.FC<BranchModalProps> = ({
@@ -71,6 +72,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   onSessionClick,
   onExecuteScheduleNow,
   defaultTab,
+  presentation = 'modal',
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -110,8 +112,42 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const isATeammate = branch ? isTeammate(branch) : false;
   const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
 
-  if (!branch || !repo) {
+  if (!branch) {
     return null;
+  }
+
+  if (!repo) {
+    const unavailable = (
+      <Alert
+        type="warning"
+        showIcon
+        title="Repository details are unavailable"
+        description="This branch cannot be edited until its repository has loaded. Open workspace repositories to check its configuration."
+        action={
+          onOpenSettings ? (
+            <Button size="small" onClick={onOpenSettings}>
+              Repositories
+            </Button>
+          ) : undefined
+        }
+      />
+    );
+    return presentation === 'bottom-sheet' || compact ? (
+      <Drawer
+        title={`Branch: ${branch.name}`}
+        placement="bottom"
+        size="min(52dvh, 440px)"
+        open={open}
+        onClose={onClose}
+        footer={<Button onClick={onClose}>Close</Button>}
+      >
+        {unavailable}
+      </Drawer>
+    ) : (
+      <Modal title={`Branch: ${branch.name}`} open={open} onCancel={onClose} footer={null}>
+        {unavailable}
+      </Modal>
+    );
   }
 
   const title = isATeammate
@@ -294,6 +330,32 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Space>
   );
 
+  const contents = (
+    <Tabs
+      tabPosition="top"
+      activeKey={activeTab}
+      onChange={(key) => setActiveTab(key as BranchModalTab)}
+      items={tabItems}
+    />
+  );
+
+  if (presentation === 'bottom-sheet' || compact) {
+    return (
+      <Drawer
+        title={title}
+        placement="bottom"
+        size="94dvh"
+        open={open}
+        onClose={onClose}
+        mask={{ closable: false }}
+        footer={footer}
+        styles={{ body: { padding: '12px 16px', overflowY: 'auto' } }}
+      >
+        {contents}
+      </Drawer>
+    );
+  }
+
   return (
     <Modal
       title={title}
@@ -312,12 +374,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         },
       }}
     >
-      <Tabs
-        tabPosition="top"
-        activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as BranchModalTab)}
-        items={tabItems}
-      />
+      {contents}
     </Modal>
   );
 };

@@ -44,6 +44,7 @@ import {
   Checkbox,
   ConfigProvider,
   Divider,
+  Drawer,
   Form,
   Grid,
   Input,
@@ -2156,6 +2157,69 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Button>,
       ];
 
+  const mobileSectionOptions = navGroups.flatMap((group) =>
+    group.children.map((child) => ({
+      label: `${group.label} · ${child.title}`,
+      value: child.key,
+    }))
+  );
+
+  const hiddenForms = (
+    <div hidden aria-hidden="true">
+      {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
+        <Form component={false} form={form} />
+      )}
+      {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
+      {visibleAgenticToolTabs.map((tool) =>
+        activeTool === tool ? null : (
+          <Form key={tool} component={false} form={agenticFormByTool[tool]} />
+        )
+      )}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <Drawer
+        open={open}
+        onClose={handleClose}
+        title={siderTitle}
+        placement="bottom"
+        size="94dvh"
+        footer={<Space style={{ width: '100%', justifyContent: 'flex-end' }}>{footer}</Space>}
+        styles={{ body: { padding: 0, overflow: 'hidden' } }}
+      >
+        {hiddenForms}
+        <ConfigProvider theme={scopedTheme}>
+          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+            <div
+              style={{
+                padding: token.paddingSM,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgElevated,
+              }}
+            >
+              <Select
+                aria-label="User settings section"
+                showSearch
+                optionFilterProp="label"
+                value={activeInNav ? activeKey : undefined}
+                placeholder="Choose a settings section"
+                options={mobileSectionOptions}
+                onChange={setActiveKey}
+                style={{ width: '100%' }}
+                size="large"
+              />
+            </div>
+            <Content style={{ padding: '20px 16px 32px', overflow: 'auto', minWidth: 0 }}>
+              {renderContent()}
+            </Content>
+          </Layout>
+        </ConfigProvider>
+      </Drawer>
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -2197,17 +2261,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       {/* Keep inactive form instances connected to Ant Form. Without these
           lightweight hidden connectors, calling form methods while switching
           panels can produce noisy "useForm is not connected" console warnings. */}
-      <div hidden aria-hidden="true">
-        {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
-          <Form component={false} form={form} />
-        )}
-        {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
-        {visibleAgenticToolTabs.map((tool) =>
-          activeTool === tool ? null : (
-            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
-          )
-        )}
-      </div>
+      {hiddenForms}
       <ConfigProvider theme={scopedTheme}>
         <Layout
           style={{

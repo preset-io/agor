@@ -1,6 +1,6 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
+import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
@@ -1379,6 +1379,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 // per-test override afterwards so visibility never leaks between tests.
 beforeEach(() => {
   __setAuthConfigForTests({ requireAuth: true });
+  vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
   agorStore.getState().setAgenticToolSettings([]);
 });
 afterEach(() => {

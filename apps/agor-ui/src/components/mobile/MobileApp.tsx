@@ -186,6 +186,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         client={client}
         currentUser={user}
         defaultTab={branchEditor?.tab}
+        presentation="bottom-sheet"
         onOpenSettings={() => {
           setBranchEditor(null);
           onOpenWorkspaceSettings('repos');
