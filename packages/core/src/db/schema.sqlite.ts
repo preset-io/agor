@@ -977,7 +977,7 @@ export const users = sqliteTable(
       .notNull()
       .default('member'),
 
-    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
+    // Opaque execution-home key (optional, database-enforced uniqueness)
     unix_username: text('unix_username'),
 
     // Absolute host home dir used as the per-user sandbox overlay SOURCE under
