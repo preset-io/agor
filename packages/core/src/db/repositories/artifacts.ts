@@ -12,6 +12,8 @@ import type {
   Artifact,
   ArtifactBuildStatus,
   ArtifactID,
+  ArtifactListFieldWithoutFiles,
+  ArtifactMetadataListField,
   BoardID,
   BranchID,
   SandpackTemplate,
@@ -47,6 +49,13 @@ function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
 
 export type ArtifactListProjection = 'full' | 'without-files' | 'metadata';
 
+type ArtifactComputedListField = 'fullscreen_url' | 'url';
+type ArtifactMetadataDatabaseField = Exclude<ArtifactMetadataListField, ArtifactComputedListField>;
+type ArtifactWithoutFilesDatabaseField = Exclude<
+  ArtifactListFieldWithoutFiles,
+  ArtifactComputedListField
+>;
+
 const artifactMetadataColumns = {
   artifact_id: artifacts.artifact_id,
   branch_id: artifacts.branch_id,
@@ -65,7 +74,7 @@ const artifactMetadataColumns = {
   updated_at: artifacts.updated_at,
   archived: artifacts.archived,
   archived_at: artifacts.archived_at,
-};
+} satisfies Record<ArtifactMetadataDatabaseField, unknown>;
 
 type ArtifactMetadataRow = Partial<ArtifactRow> &
   Pick<ArtifactRow, keyof typeof artifactMetadataColumns>;
@@ -78,7 +87,7 @@ const artifactWithoutFilesColumns = {
   required_env_vars: artifacts.required_env_vars,
   agor_grants: artifacts.agor_grants,
   agor_runtime: artifacts.agor_runtime,
-};
+} satisfies Record<ArtifactWithoutFilesDatabaseField, unknown>;
 
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}

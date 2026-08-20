@@ -432,6 +432,7 @@ describe('Session recent index migrations', () => {
     expect(migration).toContain(
       '"sessions_tenant_archived_updated_idx" ON "sessions" ("tenant_id","archived","updated_at")'
     );
+    expect(migration.trim().endsWith('SET LOCAL lock_timeout = DEFAULT;')).toBe(true);
     expect(migration).not.toContain('"board_id"');
   });
 

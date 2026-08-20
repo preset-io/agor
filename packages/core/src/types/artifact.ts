@@ -230,34 +230,64 @@ export interface Artifact {
   url?: string | null;
 }
 
-/** Artifact list response fields that preserve the legacy DTO while omitting source files. */
-export const ARTIFACT_LIST_FIELDS_WITHOUT_FILES = [
-  'artifact_id',
-  'branch_id',
-  'source_session_id',
-  'board_id',
-  'name',
-  'description',
-  'path',
-  'template',
-  'build_status',
-  'build_errors',
-  'content_hash',
+/**
+ * Artifact list fields that are expensive or unnecessary for initial canvas
+ * hydration, but are still part of the legacy non-file list DTO.
+ *
+ * This list owns the projection policy: every other Artifact field except
+ * `files` is metadata. Adding a new Artifact field therefore makes the
+ * exhaustive metadata map below fail typechecking until its list behavior is
+ * considered explicitly.
+ */
+export const ARTIFACT_RUNTIME_LIST_FIELDS_WITHOUT_FILES = [
   'dependencies',
   'entry',
   'sandpack_config',
   'required_env_vars',
   'agor_grants',
   'agor_runtime',
-  'public',
-  'created_by',
-  'created_at',
-  'updated_at',
-  'archived',
-  'archived_at',
-  'fullscreen_url',
-  'url',
 ] as const satisfies readonly (keyof Artifact)[];
+
+export type ArtifactRuntimeListFieldWithoutFiles =
+  (typeof ARTIFACT_RUNTIME_LIST_FIELDS_WITHOUT_FILES)[number];
+export type ArtifactListFieldWithoutFiles = Exclude<keyof Artifact, 'files'>;
+export type ArtifactMetadataListField = Exclude<
+  ArtifactListFieldWithoutFiles,
+  ArtifactRuntimeListFieldWithoutFiles
+>;
+
+const artifactMetadataListFieldMap = {
+  artifact_id: true,
+  branch_id: true,
+  source_session_id: true,
+  board_id: true,
+  name: true,
+  description: true,
+  path: true,
+  template: true,
+  build_status: true,
+  build_errors: true,
+  content_hash: true,
+  public: true,
+  created_by: true,
+  created_at: true,
+  updated_at: true,
+  archived: true,
+  archived_at: true,
+  fullscreen_url: true,
+  url: true,
+} as const satisfies Record<ArtifactMetadataListField, true>;
+
+/** Lean artifact DTO used by the initial canvas hydration. */
+export const ARTIFACT_METADATA_LIST_FIELDS = Object.freeze(
+  Object.keys(artifactMetadataListFieldMap) as ArtifactMetadataListField[]
+);
+
+/** Artifact list response fields that preserve the legacy DTO while omitting source files. */
+export const ARTIFACT_LIST_FIELDS_WITHOUT_FILES = Object.freeze([
+  ...ARTIFACT_METADATA_LIST_FIELDS,
+  ...ARTIFACT_RUNTIME_LIST_FIELDS_WITHOUT_FILES,
+]) satisfies readonly ArtifactListFieldWithoutFiles[];
 
 /**
  * Artifact payload served to frontend via REST.

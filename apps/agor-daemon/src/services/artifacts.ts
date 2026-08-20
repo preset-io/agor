@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
+  type ArtifactListProjection,
   ArtifactRepository,
   ArtifactTrustGrantRepository,
   BoardRepository,
@@ -47,6 +48,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  ARTIFACT_LIST_FIELDS_WITHOUT_FILES,
+  ARTIFACT_METADATA_LIST_FIELDS,
   canonicalizeAgorGrants,
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
@@ -170,16 +173,36 @@ export type ArtifactParams = QueryParams<{
 
 const MAX_CONSOLE_ENTRIES = 100;
 
-const ARTIFACT_HEAVY_LIST_FIELDS = [
-  'files',
-  'dependencies',
-  'entry',
-  'sandpack_config',
-  'required_env_vars',
-  'agor_grants',
-  'agor_runtime',
-] as const satisfies readonly (keyof Artifact)[];
-const ARTIFACT_HEAVY_LIST_FIELD_SET = new Set<string>(ARTIFACT_HEAVY_LIST_FIELDS);
+const ARTIFACT_METADATA_LIST_FIELD_SET = new Set<string>(ARTIFACT_METADATA_LIST_FIELDS);
+const ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET = new Set<string>(ARTIFACT_LIST_FIELDS_WITHOUT_FILES);
+
+/**
+ * Choose the smallest SQL row shape that still preserves the generic adapter's
+ * late filter, sort, and select semantics.
+ *
+ * A nonempty `$select` is the only opt-in: no selection (including `$select:
+ * []`) retains the full-row response contract. Fields needed by residual
+ * filters and `$sort` must also be materialized even when the caller will not
+ * receive them. Unknown/future fields conservatively fall back to a full row so
+ * a type/schema addition cannot silently change query behavior.
+ */
+function resolveArtifactListProjection(query: Query): ArtifactListProjection {
+  const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
+  if (!selectedFields || selectedFields.length === 0) return 'full';
+
+  const materializedFields = new Set<string>(selectedFields);
+  for (const field of Object.keys(query)) {
+    if (!field.startsWith('$')) materializedFields.add(field);
+  }
+  for (const field of Object.keys(query.$sort ?? {})) materializedFields.add(field);
+
+  let projection: ArtifactListProjection = 'metadata';
+  for (const field of materializedFields) {
+    if (!ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET.has(field)) return 'full';
+    if (!ARTIFACT_METADATA_LIST_FIELD_SET.has(field)) projection = 'without-files';
+  }
+  return projection;
+}
 
 /** Path the synthesized .env file lands at in the file map. */
 const SYNTHESIZED_ENV_PATH = '/.env';
@@ -312,7 +335,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
-      projection?: 'metadata' | 'without-files';
+      projection?: ArtifactListProjection;
     } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
@@ -323,17 +346,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
     // `$select` used to run only after `SELECT *` and JSON decoding, so even a
     // metadata-only initial hydration pulled every source file over the DB
-    // connection. Keep full-row reads as the default, but when the caller has
-    // explicitly excluded `files`, select either the complete legacy list DTO
-    // without files or the smaller metadata shape directly in SQL.
-    const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
-    if (selectedFields && !selectedFields.includes('files')) {
-      filter.projection = selectedFields.some(
-        (field) => field !== 'files' && ARTIFACT_HEAVY_LIST_FIELD_SET.has(field)
-      )
-        ? 'without-files'
-        : 'metadata';
-    }
+    // connection. Keep full-row reads as the default. A nonempty selection can
+    // use a leaner SQL shape only when that shape also contains every field the
+    // generic adapter still needs for its residual filtering and sorting.
+    const projection = resolveArtifactListProjection(query);
+    if (projection !== 'full') filter.projection = projection;
 
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
