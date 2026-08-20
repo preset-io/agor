@@ -33,7 +33,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await initializeDatabase(db);
     });
 
-    it('preserves the permission matrix, moved-primary visibility, and tenant isolation', async () => {
+    it('preserves representative access paths, moved-primary visibility, and tenant isolation', async () => {
       const tenantA = `rbac-query-a-${generateId()}`;
       const tenantB = `rbac-query-b-${generateId()}`;
       const viewerId = generateId() as UUID;
@@ -137,15 +137,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           branch_unique_id: unique++,
           created_by: ownerId,
           board_id: oldPrimaryBoard.board_id,
-          permission_source: 'override',
-          others_can: 'none',
+          permission_source: 'board',
           custom_context: {
             teammate: { kind: 'teammate', displayName: 'Moved primary' },
           },
         });
         await boards.setPrimaryTeammate(oldPrimaryBoard.board_id, primary.branch_id);
         await branches.update(primary.branch_id, { board_id: currentPrimaryBoard.board_id });
-        await branches.addOwner(primary.branch_id, viewerId);
+        await boards.addOwner(currentPrimaryBoard.board_id, viewerId);
 
         const sessionByBranch = new Map<string, string>();
         for (const branch of [

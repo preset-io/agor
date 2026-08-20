@@ -26,9 +26,11 @@ and compiled 546 functions.
 Factoring the two branch-to-board references into one logically equivalent
 `EXISTS` reduced the member plan cost from **148,740.19 to 87,499.29**, avoided
 JIT, and reduced warm-cache execution from a seven-run median of **415.808 ms
-to 31.921 ms (13.0x)**. With JIT forced off on both shapes, execution improved
-from **34.903 ms to 17.040 ms (2.05x)**, which separates the duplicated physical
-work from the JIT cliff. The result set remained exactly 830 boards.
+to 31.921 ms (13.0x)**. One additional JIT-disabled comparison observed
+**34.903 ms before and 17.040 ms after**. That single pair is directional
+evidence that reducing duplicated physical work matters beyond the JIT cliff,
+not a stable estimate of the JIT-independent speedup. The result set remained
+exactly 830 boards.
 
 No index or cache change is justified by these plans. The implemented change is
 code-only, has no migration lock/rollout cost, and preserves SQLite semantics.
@@ -253,7 +255,8 @@ capacity benchmark. All reported plans had zero shared reads after warm-up.
 
 The second tenant has the same counts and disjoint IDs. The PostgreSQL
 regression test additionally creates private/shared, direct/group/fallback,
-moved-primary, and cross-tenant cases through repositories under live RLS.
+board-aligned ownership, moved-primary, and cross-tenant cases through
+repositories under live RLS.
 
 ### Current representative plans
 
@@ -283,10 +286,12 @@ Seven alternating member runs, JIT at defaults:
 | one factored branch `EXISTS`        |  830 |  87,499.29 |        8.318 ms |    31.921 ms (16.904-40.598) |       9,276 |                        0 / 0 ms |
 
 One earlier cold capture of the old shape took 786.541 ms; it is not included
-in the seven-run median. With JIT disabled on both shapes, the exact executions
-were 34.903 ms before and 17.040 ms after. The new shape does somewhat more
-indexed buffer work, but avoids two full visible-branch materializations and,
-at default settings, the much larger compilation cliff.
+in the seven-run median. A separate single-execution comparison with JIT
+disabled observed 34.903 ms before and 17.040 ms after; unlike the alternating
+default-JIT runs, that pair should not be treated as a benchmark distribution.
+The new shape does somewhat more indexed buffer work, but avoids two full
+visible-branch materializations and, at default settings, the much larger
+compilation cliff.
 
 Abbreviated actual plan trees from the member captures (rows and loops are
 PostgreSQL's `Actual Rows` / `Actual Loops`) make the structural change explicit:
@@ -375,18 +380,20 @@ authorization relaxation was introduced.
 Added `branch-access.postgres.test.ts`, which runs through repositories under
 real forced RLS and asserts:
 
-- fallback `view`, direct owner, and active group grant visibility;
+- fallback `view`, direct owner, active group grant, and board-aligned board
+  owner visibility;
 - private hidden branch/board exclusion;
 - moved-primary board visibility through both reference paths;
 - exclusion of a shared board belonging to a second tenant;
-- and PostgreSQL session page data and `total` equality over the same permission
-  matrix.
+- and PostgreSQL session page data and `total` equality over the same
+  representative access paths.
 
 Existing SQLite group/board suites cover all grant tiers, archived groups,
 `none`, board alignment, and the moved-primary behavior. The focused run passed
 495 related SQLite repository tests; the new PostgreSQL RLS test passed in its
-live PostgreSQL lane. The complete isolated-database PostgreSQL lane also passed
-all 15 test files (one pre-existing test remained explicitly skipped).
+live PostgreSQL lane. A local core-only isolated-database lane passed 15 files
+with one pre-existing skipped test. The required PR workflow subsequently
+passed **128 tests with zero skips across 26 isolated core and daemon files**.
 
 This is a code-only rollout. There is no schema migration, index build, table
 lock, backfill, or SQLite/PostgreSQL version skew. A staged deployment should
@@ -399,12 +406,16 @@ application rollback.
 - Production cardinalities, PostgreSQL settings, hardware, pool contention,
   and cache state were not supplied. The absolute synthetic timings should not
   be projected onto Agor Cloud.
-- PostgreSQL may choose a different generic/custom plan for prepared statements
-  at other data distributions. Capture the production SQL plan with tenant/user
-  values protected before declaring the incident closed.
+- Agor's PostgreSQL client sets `prepare: false`, so generic/custom prepared-plan
+  selection is not expected on the repository path. Different production
+  cardinalities and PostgreSQL settings can still select a different ad hoc
+  plan. Confirm that no alternate/proxy path prepares the statement and capture
+  the production SQL plan with tenant/user values protected before declaring
+  the incident closed.
 - A member with access to almost every private board may cause more loops in
-  the new indexed correlated subplan. The JIT-off result and existing indexes
-  still favor the new shape in this fixture, but production percentiles matter.
+  the new indexed correlated subplan. The single JIT-disabled comparison and
+  existing indexes still favor the new shape in this fixture, but production
+  percentiles matter.
 - Point authorization still has redundant indexed reads. Removing those safely
   requires a typed distinction between direct branch ownership and inherited
   board ownership plus service-level query-count benchmarks.
