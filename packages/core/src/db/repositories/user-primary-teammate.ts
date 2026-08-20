@@ -1,4 +1,5 @@
 import type { Branch, BranchID, UserID } from '@agor/core/types';
+import { isTeammate } from '@agor/core/types';
 import { analyticsLogger } from '../../analytics/logger';
 import type { Database } from '../client';
 import { AppVariableRepository } from './app-variables';
@@ -25,6 +26,11 @@ export interface SetPrimaryTeammateOptions {
   source: PrimaryTeammateAssignmentSource;
   /** Actor for the app_variable audit column; defaults to the target user. */
   updatedBy?: UserID | null;
+}
+
+export interface ResolvePrimaryTeammateOptions {
+  /** Apply the session-or-better access policy used by session creation. */
+  enforceAccess?: boolean;
 }
 
 export function buildPrimaryTeammateSetAnalyticsProperties(
@@ -59,18 +65,31 @@ export class UserPrimaryTeammateRepository {
   }
 
   /**
-   * Resolve the user's primary teammate branch, or null when unset OR the user
-   * can no longer access the stored branch (deleted, unshared, ownership
-   * removed). Null is the unambiguous "needs picking" signal for callers.
-   *
-   * The access check reuses the same branch-visibility predicate boards use to
-   * resolve `primary_teammate_id`, so a teammate embedded on another board
-   * still resolves as long as the user retains access to it.
+   * Resolve the user's active primary teammate branch, or null when unset,
+   * ineligible, or no longer usable under the configured access policy. Null is
+   * the unambiguous "needs picking" signal for callers.
    */
-  async resolvePrimaryTeammate(userId: UserID): Promise<Branch | null> {
+  async resolvePrimaryTeammate(
+    userId: UserID,
+    options: ResolvePrimaryTeammateOptions = {}
+  ): Promise<Branch | null> {
     const branchId = await this.getBranchId(userId);
     if (!branchId) return null;
-    return this.branches.findAccessibleById(branchId, userId);
+    return this.findEligiblePrimaryTeammate(branchId, userId, options);
+  }
+
+  /** Resolve an active teammate the caller can actually start a session on. */
+  async findEligiblePrimaryTeammate(
+    branchId: BranchID,
+    userId: UserID,
+    options: ResolvePrimaryTeammateOptions = {}
+  ): Promise<Branch | null> {
+    const branch = await this.branches.findAccessibleById(branchId, userId, {
+      minimumPermission: 'session',
+      enforceAccess: options.enforceAccess,
+    });
+    if (!branch || branch.archived || !isTeammate(branch)) return null;
+    return branch;
   }
 
   /** Set the user's primary teammate branch and emit the assignment event. */
@@ -90,6 +109,28 @@ export class UserPrimaryTeammateRepository {
       buildPrimaryTeammateSetAnalyticsProperties(userId, branchId, options.source),
       { userId }
     );
+  }
+
+  /** Set a default only when no explicit/concurrent selection already exists. */
+  async setPrimaryTeammateIfUnset(
+    userId: UserID,
+    branchId: BranchID,
+    options: SetPrimaryTeammateOptions
+  ): Promise<boolean> {
+    const inserted = await this.variables.setIfAbsent({
+      namespace: USER_PRIMARY_TEAMMATE_NAMESPACE,
+      key: userId,
+      value: branchId,
+      updated_by: options.updatedBy ?? userId,
+    });
+    if (inserted) {
+      analyticsLogger.track(
+        USER_PRIMARY_TEAMMATE_SET_EVENT,
+        buildPrimaryTeammateSetAnalyticsProperties(userId, branchId, options.source),
+        { userId }
+      );
+    }
+    return inserted;
   }
 
   /** Clear the user's primary teammate branch. */

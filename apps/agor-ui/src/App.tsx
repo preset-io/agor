@@ -40,6 +40,7 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
+import { normalizeNewSessionCreationOutcome } from './components/NewSessionModal';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -787,7 +788,10 @@ function AppContent() {
       onCreateBranch: handleCreateBranch,
       onUpdateBranch: (branchId, updates) =>
         handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
-      onCreateSession: handleCreateSession,
+      onCreateSession: async (config, boardId) => {
+        const outcome = await handleCreateSession(config, boardId);
+        return outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
+      },
       onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
     });
     const branchId = seeded.branchId ?? retainedSeed?.branchId ?? result.branchId;
@@ -1050,6 +1054,7 @@ function AppContent() {
         // typed text is valid — the attachment block becomes the message — so we
         // send whenever there is prompt text OR at least one attachment.
         const trimmedPrompt = config.initialPrompt?.trim() ?? '';
+        let initialContentDelivered = true;
         if (attachmentFiles?.length) {
           try {
             const uploaded = await uploadFilesToSession({
@@ -1063,7 +1068,11 @@ function AppContent() {
               uploaded.files
             );
             if (finalPrompt.trim()) {
-              await handleSendPrompt(session.session_id, finalPrompt, config.permissionMode);
+              initialContentDelivered = await handleSendPrompt(
+                session.session_id,
+                finalPrompt,
+                config.permissionMode
+              );
             }
           } catch (error) {
             // Never silently drop the user's words: surface the upload failure
@@ -1073,6 +1082,7 @@ function AppContent() {
                 error instanceof Error ? error.message : String(error)
               }`
             );
+            initialContentDelivered = false;
             if (trimmedPrompt) {
               await handleSendPrompt(
                 session.session_id,
@@ -1082,11 +1092,14 @@ function AppContent() {
             }
           }
         } else if (trimmedPrompt) {
-          await handleSendPrompt(session.session_id, config.initialPrompt, config.permissionMode);
+          initialContentDelivered = await handleSendPrompt(
+            session.session_id,
+            config.initialPrompt,
+            config.permissionMode
+          );
         }
 
-        // Return the session ID so AgorApp can open the drawer
-        return session.session_id;
+        return { sessionId: session.session_id, initialContentDelivered };
       } else {
         showError('Failed to create session');
         return null;

@@ -1,8 +1,10 @@
-import type { AgorClient, Branch } from '@agor-live/client';
+import type { AgorClient, Branch, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
+import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NewSessionCreationOutcome } from '../NewSessionModal';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -30,14 +32,35 @@ vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: ({
     tool,
     leadingField,
+    branchId,
+    validateModelSelection,
+    onConfigValidityChange,
   }: {
     tool: string;
     leadingField?: React.ReactNode;
-  }) => (
-    <div data-testid="config-chip-row" data-tool={tool}>
-      {leadingField}
-    </div>
-  ),
+    branchId?: string;
+    validateModelSelection?: boolean;
+    onConfigValidityChange?: (valid: boolean, reason?: string) => void;
+  }) => {
+    useEffect(() => onConfigValidityChange?.(true), [onConfigValidityChange]);
+    return (
+      <div
+        data-testid="config-chip-row"
+        data-tool={tool}
+        data-branch-id={branchId}
+        data-validates-model={String(Boolean(validateModelSelection))}
+      >
+        {leadingField}
+        <button
+          type="button"
+          data-testid="invalidate-config"
+          onClick={() => onConfigValidityChange?.(false, 'Invalid configuration')}
+        >
+          invalidate
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('../AgentSelectionGrid', () => ({
@@ -172,7 +195,9 @@ function renderCompose(opts: {
   primary: Branch | null;
   currentBoardId?: string;
   pathname?: string;
-  onCreateSession?: (config: unknown, boardId: string) => Promise<string | null>;
+  currentUser?: User | null;
+  disabled?: boolean;
+  onCreateSession?: (config: unknown, boardId: string) => Promise<NewSessionCreationOutcome | null>;
 }) {
   const onCreateSession = opts.onCreateSession ?? vi.fn().mockResolvedValue('session-new');
   const result = render(
@@ -180,9 +205,10 @@ function renderCompose(opts: {
       <AntApp>
         <NavbarComposeButton
           client={makeClient(opts.primary)}
-          currentUser={null}
+          currentUser={opts.currentUser ?? null}
           currentBoardId={opts.currentBoardId ?? 'board-current'}
           onCreateSession={onCreateSession as never}
+          disabled={opts.disabled}
         />
       </AntApp>
     </MemoryRouter>
@@ -292,6 +318,31 @@ describe('NavbarComposeButton', () => {
     expect(agentGrid).toHaveAttribute('data-variant', 'select');
     // Agent field lives in the config row's leadingField slot (side-by-side layout).
     expect(screen.getByTestId('config-chip-row')).toContainElement(agentGrid);
+  });
+
+  it('validates configuration for the resolved primary branch and blocks invalid submission', async () => {
+    const { onCreateSession } = renderCompose({ primary: primaryBranch });
+    openPopover();
+    const config = await screen.findByTestId('config-chip-row');
+    expect(config).toHaveAttribute('data-branch-id', 'branch-primary');
+    expect(config).toHaveAttribute('data-validates-model', 'true');
+
+    fireEvent.change(screen.getByTestId('compose-prompt'), { target: { value: 'go' } });
+    fireEvent.click(screen.getByTestId('invalidate-config'));
+    expect(screen.getByRole('button', { name: 'Send & Open' })).toBeDisabled();
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('inherits MCP servers from the primary branch before user defaults', async () => {
+    const branch = makeBranch({ mcp_server_ids: ['branch-mcp'] });
+    const user = { default_mcp_server_ids: ['user-mcp'] } as unknown as User;
+    const { onCreateSession } = renderCompose({ primary: branch, currentUser: user });
+    openPopover();
+    fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'go' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['branch-mcp'] });
   });
 
   it('shows a board-switch wayfinding line when the primary lives on another board', async () => {
@@ -423,6 +474,35 @@ describe('NavbarComposeButton', () => {
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(goToSession).not.toHaveBeenCalled();
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
+  });
+
+  it('preserves the draft and avoids a false success when initial delivery fails', async () => {
+    const onCreateSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-undelivered',
+      initialContentDelivered: false,
+    });
+    renderCompose({ primary: primaryBranch, onCreateSession });
+    openPopover();
+    const prompt = await screen.findByTestId('compose-prompt');
+    fireEvent.change(prompt, { target: { value: 'do not lose me' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send in Background' }));
+
+    expect(
+      await screen.findByText('Session created, but some content was not sent')
+    ).toBeInTheDocument();
+    expect(prompt).toHaveValue('do not lose me');
+    expect(screen.getByRole('button', { name: 'Send in Background' })).toBeDisabled();
+    expect(goToSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open session' }));
+    expect(goToSession).toHaveBeenCalledWith('session-undelivered');
+  });
+
+  it('disables the compose mutation surface while the connection is unavailable', () => {
+    renderCompose({ primary: primaryBranch, disabled: true });
+    expect(
+      screen.getByRole('button', { name: 'Compose — ask your primary assistant' })
+    ).toBeDisabled();
   });
 
   it('shows the inline picker for a null primary and resumes the send with the typed prompt', async () => {

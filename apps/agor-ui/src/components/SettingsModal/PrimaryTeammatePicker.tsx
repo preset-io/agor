@@ -11,6 +11,7 @@ interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
   /** Drop the heading/description chrome for embedding in a tight surface (e.g. a popover). */
   compact?: boolean;
+  disabled?: boolean;
   /** Fired after a successful pick so an embedder can continue an in-flight action. */
   onPicked?: (branch: Branch) => void;
 }
@@ -46,6 +47,7 @@ function teammateContext(
 export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   client,
   compact = false,
+  disabled = false,
   onPicked,
 }) => {
   const { message } = AntApp.useApp();
@@ -55,20 +57,28 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
 
   const [current, setCurrent] = useState<Branch | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!client) return;
+    if (!client) {
+      setLoading(false);
+      setLoadFailed(true);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
+    setLoadFailed(false);
     client
       .service('users')
       .getPrimaryTeammate()
       .then((branch) => {
-        if (!cancelled) setCurrent(branch);
+        if (!cancelled) {
+          setCurrent(branch && isTeammate(branch) && !branch.archived ? branch : null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setCurrent(null);
+        if (!cancelled) setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -130,6 +140,10 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
 
       {loading ? (
         <Spin />
+      ) : loadFailed ? (
+        <Typography.Text type="danger">
+          Couldn't load your primary assistant. Check the connection and try again.
+        </Typography.Text>
       ) : current ? (
         <Typography.Text>
           Currently <Typography.Text strong>{teammateLabel(current)}</Typography.Text> on{' '}
@@ -144,7 +158,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       <Select
         showSearch
         loading={saving}
-        disabled={saving || !client}
+        disabled={disabled || saving || !client || loadFailed}
         placeholder="Select a primary assistant"
         value={current?.branch_id}
         onChange={handleChange}

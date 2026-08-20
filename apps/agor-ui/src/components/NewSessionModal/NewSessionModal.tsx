@@ -71,6 +71,23 @@ export interface NewSessionConfig {
   attachmentFiles?: File[];
 }
 
+export interface NewSessionCreationResult {
+  sessionId: string;
+  /** False when the session exists but its initial prompt or attachments were not delivered. */
+  initialContentDelivered: boolean;
+}
+
+/** String remains accepted for lightweight callers/tests that create an empty session. */
+export type NewSessionCreationOutcome = string | NewSessionCreationResult;
+
+export function normalizeNewSessionCreationOutcome(
+  outcome: NewSessionCreationOutcome
+): NewSessionCreationResult {
+  return typeof outcome === 'string'
+    ? { sessionId: outcome, initialContentDelivered: true }
+    : outcome;
+}
+
 export interface NewSessionModalProps {
   open: boolean;
   onClose: () => void;

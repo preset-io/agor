@@ -140,6 +140,20 @@ describe('UserPrimaryTeammateRepository', () => {
     expect(await repo.resolvePrimaryTeammate(user)).toBeNull();
   });
 
+  dbTest('setPrimaryTeammateIfUnset preserves an existing explicit selection', async ({ db }) => {
+    const repo = new UserPrimaryTeammateRepository(db);
+    const user = await createUser(db, 'conditional@example.com');
+    const board = await createBoard(db, { access_mode: 'shared' });
+    const explicit = await createBranch(db, board.board_id as UUID);
+    const fallback = await createBranch(db, board.board_id as UUID);
+
+    await repo.setPrimaryTeammate(user, explicit, { source: 'explicit' });
+    await expect(
+      repo.setPrimaryTeammateIfUnset(user, fallback, { source: 'default' })
+    ).resolves.toBe(false);
+    expect(await repo.getBranchId(user)).toBe(explicit);
+  });
+
   dbTest('emits an assignment event carrying the source', async ({ db }) => {
     const events: CapturedEvent[] = [];
     setAnalyticsLoggerForTests(createCapturingLogger(events));

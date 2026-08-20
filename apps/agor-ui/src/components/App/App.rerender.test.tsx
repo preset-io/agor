@@ -49,6 +49,8 @@ vi.mock('../CreateDialog', () => ({
 }));
 vi.mock('../NewSessionModal', () => ({
   NewSessionModal: () => null,
+  normalizeNewSessionCreationOutcome: (outcome: string | { sessionId: string }) =>
+    typeof outcome === 'string' ? { sessionId: outcome, initialContentDelivered: true } : outcome,
 }));
 vi.mock('../SessionSettingsModal', () => ({
   SessionSettingsModal: () => null,

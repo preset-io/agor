@@ -60,10 +60,15 @@ export async function backfillUserPrimaryTeammates(
       continue;
     }
 
-    await primaryTeammates.setPrimaryTeammate(user.user_id, teammateBranchId as BranchID, {
-      source: 'default',
-    });
-    result.assigned++;
+    const assigned = await primaryTeammates.setPrimaryTeammateIfUnset(
+      user.user_id,
+      teammateBranchId as BranchID,
+      {
+        source: 'default',
+      }
+    );
+    if (assigned) result.assigned++;
+    else result.alreadySet++;
   }
 
   return result;

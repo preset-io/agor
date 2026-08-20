@@ -26,7 +26,12 @@ async function ensureCaller(db: Database) {
 
 async function createBranch(
   db: Database,
-  overrides?: { created_by?: UUID; others_can?: 'none' | 'session' }
+  overrides?: {
+    created_by?: UUID;
+    others_can?: 'none' | 'view' | 'session';
+    teammate?: boolean;
+    archived?: boolean;
+  }
 ): Promise<BranchID> {
   const slug = `repo-${uniqueId}`;
   const repo = await new RepoRepository(db).create({
@@ -49,7 +54,9 @@ async function createBranch(
     created_by: overrides?.created_by ?? CALLER,
     permission_source: 'override',
     others_can: overrides?.others_can ?? 'session',
-    custom_context: { teammate: { kind: 'teammate', displayName: name } },
+    archived: overrides?.archived,
+    custom_context:
+      overrides?.teammate === false ? {} : { teammate: { kind: 'teammate', displayName: name } },
   });
   return branch.branch_id as BranchID;
 }
@@ -91,6 +98,52 @@ describe('UsersService primary teammate', () => {
       service.setPrimaryTeammate({ branchId: inaccessible }, CALLER_PARAMS)
     ).rejects.toThrow();
   });
+
+  dbTest('setPrimaryTeammate rejects view-only access', async ({ db }) => {
+    await ensureCaller(db);
+    const branchId = await createBranch(db, {
+      created_by: generateId() as UUID,
+      others_can: 'view',
+    });
+
+    await expect(
+      createUsersService(db).setPrimaryTeammate({ branchId }, CALLER_PARAMS)
+    ).rejects.toThrow(/create sessions/);
+  });
+
+  dbTest('setPrimaryTeammate rejects non-teammate and archived branches', async ({ db }) => {
+    await ensureCaller(db);
+    const ordinaryBranch = await createBranch(db, { teammate: false });
+    const archivedTeammate = await createBranch(db, { archived: true });
+    const service = createUsersService(db);
+
+    await expect(
+      service.setPrimaryTeammate({ branchId: ordinaryBranch }, CALLER_PARAMS)
+    ).rejects.toThrow(/active teammate/);
+    await expect(
+      service.setPrimaryTeammate({ branchId: archivedTeammate }, CALLER_PARAMS)
+    ).rejects.toThrow(/active teammate/);
+  });
+
+  dbTest(
+    'open-access mode permits any active teammate regardless of branch ACL',
+    async ({ db }) => {
+      await ensureCaller(db);
+      const branchId = await createBranch(db, {
+        created_by: generateId() as UUID,
+        others_can: 'none',
+      });
+      const app = { get: () => ({ execution: { branch_rbac: false } }) } as never;
+      const service = createUsersService(db, app);
+
+      await expect(service.setPrimaryTeammate({ branchId }, CALLER_PARAMS)).resolves.toMatchObject({
+        branch_id: branchId,
+      });
+      await expect(service.getPrimaryTeammate(undefined, CALLER_PARAMS)).resolves.toMatchObject({
+        branch_id: branchId,
+      });
+    }
+  );
 
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);

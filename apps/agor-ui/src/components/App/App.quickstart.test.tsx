@@ -75,7 +75,11 @@ vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({ SettingsModal: () => null, UserSettingsModal: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
-vi.mock('../NewSessionModal', () => ({ NewSessionModal: () => null }));
+vi.mock('../NewSessionModal', () => ({
+  NewSessionModal: () => null,
+  normalizeNewSessionCreationOutcome: (outcome: string | { sessionId: string }) =>
+    typeof outcome === 'string' ? { sessionId: outcome, initialContentDelivered: true } : outcome,
+}));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({ TerminalModal: () => null, WEB_TERMINAL_MIN_ROLE: 'member' }));
 vi.mock('../ThemeEditorModal', () => ({ ThemeEditorModal: () => null }));

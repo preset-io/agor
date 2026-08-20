@@ -86,7 +86,12 @@ import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
 import { NewSessionButton } from '../NewSessionButton';
-import { type NewSessionConfig, NewSessionModal } from '../NewSessionModal';
+import {
+  type NewSessionConfig,
+  type NewSessionCreationOutcome,
+  NewSessionModal,
+  normalizeNewSessionCreationOutcome,
+} from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
@@ -168,7 +173,10 @@ export interface AppProps {
   suppressLeftPanel?: boolean; // Temporarily hide the teammate/comments panel behind modal-first flows
   /** Rendered between AppHeader and main content (used for onboarding banners). */
   topBanner?: React.ReactNode;
-  onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
+  onCreateSession?: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<NewSessionCreationOutcome | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -844,7 +852,8 @@ export const App: React.FC<AppProps> = ({
   };
 
   const handleCreateSession = async (config: NewSessionConfig) => {
-    const sessionId = await onCreateSession?.(config, currentBoardId);
+    const outcome = await onCreateSession?.(config, currentBoardId);
+    const sessionId = outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
     setNewSessionBranchId(null);
 
     // Select synchronously, then let the URL catch up. The create seam inserts
@@ -878,7 +887,7 @@ export const App: React.FC<AppProps> = ({
       const branch = agorStore.getState().branchById.get(branchId as Branch['branch_id']);
       const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
 
-      const sessionId = await onCreateSession?.(
+      const outcome = await onCreateSession?.(
         {
           branch_id: branchId,
           agent: tool,
@@ -887,7 +896,8 @@ export const App: React.FC<AppProps> = ({
         },
         currentBoardId
       );
-      if (!sessionId) return null;
+      if (!outcome) return null;
+      const sessionId = normalizeNewSessionCreationOutcome(outcome).sessionId;
 
       // Select the new session synchronously, in the same render that clears
       // the picker, so the drawer never has a frame with neither target set.
@@ -1056,7 +1066,10 @@ export const App: React.FC<AppProps> = ({
         branchId: branch.branch_id,
         boardId: branch.board_id || currentBoardId,
         sessionConfig,
-        onCreateSession,
+        onCreateSession: async (config, boardId) => {
+          const outcome = await onCreateSession(config, boardId);
+          return outcome ? normalizeNewSessionCreationOutcome(outcome).sessionId : null;
+        },
         onStatusChange: progress?.onStatusChange,
       });
       navigation.goToSession(sessionId);

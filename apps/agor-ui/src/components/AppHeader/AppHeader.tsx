@@ -17,7 +17,7 @@ import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import type { NewSessionConfig } from '../NewSessionModal';
+import type { NewSessionConfig, NewSessionCreationOutcome } from '../NewSessionModal';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -58,7 +58,10 @@ export interface AppHeaderProps {
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
   /** Session-creation seam behind the navbar compose affordance. */
-  onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
+  onCreateSession?: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<NewSessionCreationOutcome | null>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -300,6 +303,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             currentUser={user}
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
+            disabled={mutationDisabled}
           />
         )}
         <AppHeaderGlobalSearch

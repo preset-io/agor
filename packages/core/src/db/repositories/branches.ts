@@ -1298,27 +1298,26 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     return result;
   }
 
-  /**
-   * Find a single branch by ID only when it is visible to the user.
-   *
-   * Same predicate as findAccessibleBranches, scoped to one id. Mirrors the
-   * accessiblePrimaryTeammateExists check used to resolve boards'
-   * primary_teammate_id across board boundaries. Returns null when the branch
-   * is missing or the user has no access.
-   */
-  async findAccessibleById(branchId: string, userId: UUID): Promise<Branch | null> {
-    const rows = await select(this.db, getTableColumns(branches))
-      .from(branches)
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
-      .where(and(eq(branches.branch_id, branchId), visibleBranchAccessCondition(this.db, userId)))
-      .all();
+  /** Find a branch by ID when the caller meets the requested point-access policy. */
+  async findAccessibleById(
+    branchId: string,
+    userId: UUID,
+    options: {
+      /** Minimum app-layer permission required when access enforcement is enabled. */
+      minimumPermission?: NonNullable<Branch['others_can']>;
+      /** Disable the point check when branch RBAC is disabled instance-wide. */
+      enforceAccess?: boolean;
+    } = {}
+  ): Promise<Branch | null> {
+    const branch = await this.findById(branchId);
+    if (!branch) return null;
+    if (options.enforceAccess === false) return branch;
 
-    if (rows.length === 0) return null;
-    const baseUrl = await getBaseUrl();
-    return this.rowToBranch(rows[0] as BranchRow, baseUrl);
+    const effectivePermission = await this.resolveUserPermission(branch, userId);
+    const minimumPermission = options.minimumPermission ?? 'view';
+    return BRANCH_PERMISSION_RANK[effectivePermission] >= BRANCH_PERMISSION_RANK[minimumPermission]
+      ? branch
+      : null;
   }
 
   /**

@@ -29,7 +29,6 @@ import {
 } from '@agor/core/config';
 import {
   and,
-  BranchRepository,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -380,7 +379,7 @@ export class UsersService {
 
   constructor(
     protected db: TenantScopeAwareDatabase,
-    app?: Application,
+    protected app?: Application,
     config?: AgorConfig
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
@@ -1303,7 +1302,24 @@ export class UsersService {
    */
   async getPrimaryTeammate(_data: unknown, params?: Params): Promise<Branch | null> {
     const userId = requireCallerId(params);
-    return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId);
+    return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+  }
+
+  private shouldEnforcePrimaryTeammateAccess(params?: Params): boolean {
+    // Services instantiated without an Application (focused repository/service
+    // tests) retain the safer RBAC-on behavior. Production supplies the app.
+    if (!this.app) return true;
+    const execution = this.app.get('config').execution;
+    if (execution?.branch_rbac !== true) return false;
+    if (
+      execution.allow_superadmin === true &&
+      hasMinimumRole(params?.user?.role, ROLES.SUPERADMIN)
+    ) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1319,12 +1335,17 @@ export class UsersService {
       throw new Forbidden('A branchId is required to set a primary teammate');
     }
 
-    const branch = await new BranchRepository(this.db).findAccessibleById(branchId, userId);
+    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
+    const branch = await primaryTeammates.findEligiblePrimaryTeammate(branchId, userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
     if (!branch) {
-      throw new Forbidden('Cannot set a primary teammate you do not have access to');
+      throw new Forbidden(
+        'Primary assistant must be an active teammate you can create sessions on'
+      );
     }
 
-    await new UserPrimaryTeammateRepository(this.db).setPrimaryTeammate(userId, branchId, {
+    await primaryTeammates.setPrimaryTeammate(userId, branchId, {
       source: 'explicit',
       updatedBy: userId,
     });

@@ -15,6 +15,7 @@ import {
 } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
+  Alert,
   App as AntApp,
   Button,
   Drawer,
@@ -28,7 +29,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
@@ -43,7 +44,11 @@ import {
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import type { NewSessionConfig } from '../NewSessionModal';
+import {
+  type NewSessionConfig,
+  type NewSessionCreationOutcome,
+  normalizeNewSessionCreationOutcome,
+} from '../NewSessionModal';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -59,7 +64,11 @@ export interface NavbarComposeButtonProps {
   currentUser?: User | null;
   /** The board currently in view, or '' on a non-board surface (home/knowledge). */
   currentBoardId?: string;
-  onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
+  onCreateSession?: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<NewSessionCreationOutcome | null>;
+  disabled?: boolean;
 }
 
 /** Knowledge Base renders no board even when a board id lingers in app state. */
@@ -87,6 +96,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   currentUser,
   currentBoardId,
   onCreateSession,
+  disabled = false,
 }) => {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
@@ -100,11 +110,19 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const [open, setOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [resolveFailed, setResolveFailed] = useState(false);
   const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_TOOL);
   const [prompt, setPrompt] = useState('');
   const [pendingSend, setPendingSend] = useState<SendMode | null>(null);
   const [submitting, setSubmitting] = useState<SendMode | null>(null);
+  const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
+    valid: true,
+  });
+  const [deliveryFailure, setDeliveryFailure] = useState<{
+    sessionId: string;
+    branch: Branch;
+  } | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
   );
@@ -130,14 +148,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!client) return;
     let cancelled = false;
     setResolving(true);
+    setResolveFailed(false);
     client
       .service('users')
       .getPrimaryTeammate()
       .then((branch) => {
-        if (!cancelled) setPrimaryBranch(branch);
+        if (!cancelled) {
+          setPrimaryBranch(branch);
+          setResolveFailed(false);
+        }
       })
       .catch(() => {
-        if (!cancelled) setPrimaryBranch(null);
+        if (!cancelled) setResolveFailed(true);
       })
       .finally(() => {
         if (!cancelled) setResolving(false);
@@ -162,6 +184,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     });
   }, [open, form]);
 
+  // Apply branch MCP inheritance after the primary resolves. Depending only on
+  // the branch id avoids wiping edits when live branch objects refresh.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: branch identity is the reset boundary
+  useEffect(() => {
+    if (!open || !primaryBranch) return;
+    const branchMcpIds = primaryBranch.mcp_server_ids;
+    form.setFieldValue(
+      'mcpServerIds',
+      branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : currentUser?.default_mcp_server_ids
+    );
+  }, [open, primaryBranch?.branch_id, form]);
+
   // Re-seed config defaults when the picked tool changes (mirrors NewSessionModal).
   useEffect(() => {
     const tool = selectedAgent as AgenticToolName;
@@ -182,8 +216,15 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setPrompt('');
     setPendingSend(null);
     setPrimaryBranch(null);
+    setDeliveryFailure(null);
     clearAttachments();
   };
+
+  const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {
+    setConfigValidity((previous) =>
+      previous.valid === valid && previous.reason === reason ? previous : { valid, reason }
+    );
+  }, []);
 
   const buildConfig = (branch: Branch): NewSessionConfig => {
     const tool = selectedAgent as AgenticToolName;
@@ -246,11 +287,16 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!onCreateSession) return;
     setSubmitting(mode);
     try {
-      const sessionId = await onCreateSession(
+      const outcome = await onCreateSession(
         buildConfig(branch),
         branch.board_id ?? currentBoardId ?? ''
       );
-      if (!sessionId) return; // onCreateSession already surfaced the failure
+      if (!outcome) return; // onCreateSession already surfaced the failure
+      const { sessionId, initialContentDelivered } = normalizeNewSessionCreationOutcome(outcome);
+      if (!initialContentDelivered) {
+        setDeliveryFailure({ sessionId, branch });
+        return;
+      }
 
       if (mode === 'background') {
         message.success(`Sent to ${teammateName(branch)} in the background`);
@@ -275,13 +321,20 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     }
   };
 
-  const runSend = (mode: SendMode) => {
-    if (!primaryBranch) {
-      // Null primary: arm the send; the inline picker resumes it once chosen.
+  const runSend = async (mode: SendMode, branch = primaryBranch) => {
+    if (disabled || resolveFailed || deliveryFailure || !configValidity.valid) return;
+    if (!branch) {
+      // Arm synchronously so a fast picker selection cannot outrun validation.
+      // The picked branch path validates immediately before creating.
       setPendingSend(mode);
       return;
     }
-    void doSend(mode, primaryBranch);
+    try {
+      await form.validateFields();
+    } catch {
+      return;
+    }
+    await doSend(mode, branch);
   };
 
   const handlePicked = (branch: Branch) => {
@@ -289,12 +342,18 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (pendingSend) {
       const mode = pendingSend;
       setPendingSend(null);
-      void doSend(mode, branch);
+      void runSend(mode, branch);
     }
   };
 
   const sendDisabled =
-    resolving || submitting !== null || (!prompt.trim() && attachments.length === 0);
+    disabled ||
+    resolving ||
+    resolveFailed ||
+    deliveryFailure !== null ||
+    !configValidity.valid ||
+    submitting !== null ||
+    (!prompt.trim() && attachments.length === 0);
 
   const wayfinding = (() => {
     if (!primaryBranch) return null;
@@ -356,6 +415,13 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         <Flex justify="center" style={{ padding: token.paddingLG }}>
           <Spin />
         </Flex>
+      ) : resolveFailed ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Couldn't load your primary assistant"
+          description="Check the connection and reopen this composer to retry."
+        />
       ) : (
         <Form form={form} layout="vertical" requiredMark={false}>
           {!primaryBranch && (
@@ -367,7 +433,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                   it anytime in Settings.
                 </Typography.Text>
               </div>
-              <PrimaryTeammatePicker client={client} compact onPicked={handlePicked} />
+              <PrimaryTeammatePicker
+                client={client}
+                compact
+                disabled={disabled}
+                onPicked={handlePicked}
+              />
             </div>
           )}
 
@@ -376,7 +447,10 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
+            branchId={primaryBranch?.branch_id}
+            validateModelSelection
             showEffort
+            onConfigValidityChange={handleConfigValidity}
             leadingField={
               <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>
                 <AgentSelectionGrid
@@ -392,10 +466,13 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           />
 
           <Form.Item style={{ marginBottom: token.marginXS }}>
-            <SessionComposerDropZone disabled={submitting !== null} onFilesDrop={addAttachments}>
+            <SessionComposerDropZone
+              disabled={disabled || submitting !== null}
+              onFilesDrop={addAttachments}
+            >
               <SessionAttachmentTray
                 attachments={attachments}
-                disabled={submitting !== null}
+                disabled={disabled || submitting !== null}
                 onRemove={removeAttachment}
               />
               <AutocompleteTextarea
@@ -411,7 +488,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                 enableKnowledgeMentions
                 kbLinkTarget="absolute-route"
                 onFilesDrop={addAttachments}
-                filesDropDisabled={submitting !== null}
+                filesDropDisabled={disabled || submitting !== null}
                 showFilesDropOverlay={false}
               />
             </SessionComposerDropZone>
@@ -433,11 +510,32 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               Pick a primary assistant above to send.
             </Typography.Text>
           )}
+          {deliveryFailure && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Session created, but some content was not sent"
+              description="Your draft is still here. Open the session to retry without creating a duplicate."
+              action={
+                <Button
+                  size="small"
+                  onClick={() => {
+                    const sessionId = deliveryFailure.sessionId;
+                    setOpen(false);
+                    navigation.goToSession(sessionId);
+                  }}
+                >
+                  Open session
+                </Button>
+              }
+              style={{ marginBottom: token.marginXS }}
+            />
+          )}
 
           <Flex justify="flex-end" gap={token.marginXS}>
             <Tooltip title={backgroundTooltip}>
               <Button
-                onClick={() => runSend('background')}
+                onClick={() => void runSend('background')}
                 loading={submitting === 'background'}
                 disabled={sendDisabled}
               >
@@ -447,7 +545,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             <Tooltip title={openTooltip}>
               <Button
                 type="primary"
-                onClick={() => runSend('open')}
+                onClick={() => void runSend('open')}
                 loading={submitting === 'open'}
                 disabled={sendDisabled}
               >
@@ -464,7 +562,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     <>
       <Popover
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(nextOpen) => {
+          if (!disabled) setOpen(nextOpen);
+        }}
         trigger="click"
         placement="bottomRight"
         destroyTooltipOnHide
@@ -474,6 +574,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           <Button
             type="default"
             aria-label="Compose — ask your primary assistant"
+            disabled={disabled}
             style={{
               display: 'flex',
               alignItems: 'center',

@@ -87,6 +87,15 @@ describe('PrimaryTeammatePicker', () => {
     expect(await screen.findByText(/No primary assistant set/)).toBeInTheDocument();
   });
 
+  it('does not present an archived stored branch as a valid primary assistant', async () => {
+    const archived = teammate('branch-old', 'Old', { archived: true });
+    seedStore([archived, teammate('branch-2', 'Grace')]);
+    renderPicker(createClient(archived).client);
+
+    expect(await screen.findByText(/No primary assistant set/)).toBeInTheDocument();
+    expect(screen.queryByText(/Currently/)).not.toBeInTheDocument();
+  });
+
   it('writes the picked teammate as an explicit change', async () => {
     seedStore([teammate('branch-1', 'Ada'), teammate('branch-2', 'Grace')]);
     const { client, setPrimaryTeammate } = createClient(null);

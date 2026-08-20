@@ -841,7 +841,7 @@ describe('createClient', () => {
     // service.methods(...) call on the client, calling these threw
     // "client.service(...).<method> is not a function" — observed during prod branch
     // creation. These assertions guard the client-side mirror of the daemon's methods list.
-    it('registers users.getGitEnvironment custom method on client', () => {
+    it('registers users custom methods on client', () => {
       const client = createClient();
       const usersService = client.service('users') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
@@ -850,7 +850,9 @@ describe('createClient', () => {
         'getGitEnvironment',
         'getAvatarSettings',
         'updateAvatarSettings',
-        'syncAvatars'
+        'syncAvatars',
+        'getPrimaryTeammate',
+        'setPrimaryTeammate'
       );
     });
 
