@@ -149,7 +149,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
   {
     id: 'hand-off-build',
     title: 'Hand off the build',
-    description: 'A working app or dashboard, live on your board.',
+    description: 'A working app or dashboard, spun up on a live test env.',
     mcpRecs: ['github', 'figma'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',

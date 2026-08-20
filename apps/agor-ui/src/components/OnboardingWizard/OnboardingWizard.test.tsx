@@ -173,7 +173,7 @@ describe('OnboardingWizard', () => {
     }
     // Title + description still render.
     expect(screen.getByText('Hand off the build')).toBeInTheDocument();
-    expect(screen.getByText('A working app or dashboard, live on your board.')).toBeInTheDocument();
+    expect(screen.getByText('A working app or dashboard, spun up on a live test env.')).toBeInTheDocument();
   });
 
   it('gives every goal card an even title→description gap and equal-height cards', () => {
