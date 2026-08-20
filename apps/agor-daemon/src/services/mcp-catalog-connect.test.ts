@@ -101,6 +101,20 @@ function buildApp(
   const refreshed: string[] = [];
   const resourceLookups: string[] = [];
   const patched: Array<{ id: string; data: Record<string, unknown> }> = [];
+  const generationClaims: Array<{
+    ownerUserId: string;
+    catalogEntryName: string;
+    value: number;
+  }> = [];
+  const generationFinalizations: Array<{
+    id: string;
+    ownerUserId: string;
+    catalogEntryName: string;
+    value: number;
+  }> = [];
+  const generations = new Map<string, number>();
+  const generationKey = (ownerUserId: string, catalogEntryName: string) =>
+    JSON.stringify([ownerUserId, catalogEntryName]);
   const services: Record<string, unknown> = {
     'mcp-catalog': { get: vi.fn(async () => entry) },
     '/mcp-servers/oauth-refresh': {
@@ -110,6 +124,18 @@ function buildApp(
       }),
     },
     'mcp-servers': {
+      // This is deliberately stateful rather than a `mockResolvedValue(1)`.
+      // Production allocates a durable monotonic generation per owner/catalog
+      // identity, and finalization succeeds only while its claim is current.
+      claimCatalogConnectGeneration: vi.fn(
+        async (ownerUserId: string, catalogEntryName: string) => {
+          const key = generationKey(ownerUserId, catalogEntryName);
+          const value = (generations.get(key) ?? 0) + 1;
+          generations.set(key, value);
+          generationClaims.push({ ownerUserId, catalogEntryName, value });
+          return value;
+        }
+      ),
       find: vi.fn(async () => existingServers),
       get: vi.fn(async (id: string) =>
         (existingServers as Array<{ mcp_server_id?: string }>).find(
@@ -141,7 +167,25 @@ function buildApp(
       // Stands in for the real service's write-then-redact: what comes back
       // from a patch is the stored row with its secrets replaced, which is what
       // connect hands on as `mcp_server`.
-      patch: vi.fn(async (id: string, data: Record<string, unknown>) => {
+      patch: vi.fn(async (id: string, data: Record<string, unknown>, patchParams?: unknown) => {
+        const generation = (
+          patchParams as {
+            mcpCatalogConnectGeneration?: {
+              ownerUserId: string;
+              catalogEntryName: string;
+              value: number;
+            };
+          }
+        )?.mcpCatalogConnectGeneration;
+        if (generation) {
+          const current = generations.get(
+            generationKey(generation.ownerUserId, generation.catalogEntryName)
+          );
+          if (current !== generation.value) {
+            throw new Error('A newer marketplace connect superseded this request');
+          }
+          generationFinalizations.push({ id, ...generation });
+        }
         patched.push({ id, data });
         const target = existingServers.find(
           (server) => (server as { mcp_server_id?: string }).mcp_server_id === id
@@ -194,6 +238,8 @@ function buildApp(
     resourceLookups,
     deps,
     patched,
+    generationClaims,
+    generationFinalizations,
   };
 }
 
@@ -212,7 +258,12 @@ const request = {
 /** Typed access to the stub services a test needs to make fail. */
 type StubFn = ReturnType<typeof vi.fn>;
 const serversOf = (app: { service: (p: string) => unknown }) =>
-  app.service('mcp-servers') as { create: StubFn; patch: StubFn; remove: StubFn };
+  app.service('mcp-servers') as {
+    create: StubFn;
+    patch: StubFn;
+    remove: StubFn;
+    claimCatalogConnectGeneration: StubFn;
+  };
 const sessionsOf = (app: { service: (p: string) => unknown }) =>
   app.service('sessions') as { create: StubFn; remove: StubFn };
 const attachOf = (app: { service: (p: string) => unknown }) =>
@@ -1652,15 +1703,46 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     // The alternative is a connect that reports success while the server keeps
     // authenticating with the key the user just replaced — invisible, because
     // both keys read back as the same sentinel.
-    const { app, patched } = buildApp(KEY_ENTRY, [keyInstallOf()]);
+    const { app, patched, generationClaims, generationFinalizations } = buildApp(KEY_ENTRY, [
+      keyInstallOf(),
+    ]);
 
     const result = await createMCPCatalogConnectService(app).create(keyRequest, params);
 
     expect(patched).toEqual([
       { id: 'server-existing', data: { auth: { type: 'bearer', token: NEW_KEY } } },
     ]);
+    expect(generationClaims).toEqual([{ ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 }]);
+    expect(generationFinalizations).toEqual([
+      { id: 'server-existing', ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 },
+    ]);
     // What comes back to the caller is the patched row, redacted.
     expect(result.mcp_server.auth?.token).toBe(MCP_HEADER_REDACTED_SENTINEL);
+  });
+
+  it('rejects a stale key finalization after a newer connect claims the identity', async () => {
+    const { app, patched, generationFinalizations } = buildApp(KEY_ENTRY, [keyInstallOf()]);
+    const serverService = serversOf(app);
+    const first = await serverService.claimCatalogConnectGeneration(ALICE, LINEAR);
+    const second = await serverService.claimCatalogConnectGeneration(ALICE, LINEAR);
+
+    await expect(
+      serverService.patch(
+        'server-existing',
+        { auth: { type: 'bearer', token: 'stale-key' } },
+        {
+          mcpCatalogConnectGeneration: {
+            ownerUserId: ALICE,
+            catalogEntryName: LINEAR,
+            value: first,
+          },
+        }
+      )
+    ).rejects.toThrow(/newer marketplace connect superseded/);
+
+    expect(second).toBe(2);
+    expect(patched).toEqual([]);
+    expect(generationFinalizations).toEqual([]);
   });
 
   it('does not patch the key when a later step of the connect fails', async () => {
@@ -1683,12 +1765,22 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     // search, and every install is stamped private to its installer — but that
     // is three mechanisms holding at once, and the failure they prevent is
     // silent. So it is asserted here as well.
-    const { app, created, patched } = buildApp(KEY_ENTRY, [keyInstallOf({ owner_user_id: BOB })]);
+    const { app, created, patched, generationFinalizations } = buildApp(KEY_ENTRY, [
+      keyInstallOf({ owner_user_id: BOB }),
+    ]);
 
     const result = await createMCPCatalogConnectService(app).create(keyRequest, params);
 
     expect(result.reused_existing_server).toBe(false);
-    expect(patched).toEqual([]);
+    // Bearer connects finalize even a newly-created row through the generation
+    // fence. The important boundary is that Alice's new row, not Bob's
+    // existing credential row, is the target.
+    expect(patched).toEqual([
+      { id: 'server-1', data: { auth: { type: 'bearer', token: NEW_KEY } } },
+    ]);
+    expect(generationFinalizations).toEqual([
+      { id: 'server-1', ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 },
+    ]);
     expect(created.mcpServers).toHaveLength(1);
     expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'bearer', token: NEW_KEY } });
   });
