@@ -122,4 +122,35 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     expect(offenders, `goal titles must stay one line:\n${offenders.join('\n')}`).toEqual([]);
   });
+
+  it('fits all six step-1 goal cards without internal scroll, clear of the footer', async () => {
+    renderWizardAt('goals');
+    await wait(300);
+
+    // The step-1 content region (.onb-step) must not need to scroll: all six
+    // cards + the title/intro fit inside its fixed height. scrollHeight beyond
+    // clientHeight means the bottom card row is clipped and an internal scrollbar
+    // appears — exactly the bug this padding pass fixes.
+    const step = document.querySelector('.onb-step') as HTMLElement | null;
+    expect(step, 'the step-1 content region (.onb-step) should exist').toBeTruthy();
+    if (!step) return;
+    expect(
+      step.scrollHeight,
+      `goal cards overflow their container (scrollHeight ${step.scrollHeight} > clientHeight ${step.clientHeight}) → internal scroll`
+    ).toBeLessThanOrEqual(step.clientHeight + 1);
+
+    // And the last card must sit fully above the pinned Back/Continue footer.
+    const cards = Array.from(document.querySelectorAll('button.onb-card')) as HTMLElement[];
+    expect(cards.length).toBe(6);
+    const lastCardBottom = cards[cards.length - 1].getBoundingClientRect().bottom;
+    const continueBtn = Array.from(document.querySelectorAll('button')).find((btn) =>
+      /continue/i.test(btn.textContent ?? '')
+    );
+    expect(continueBtn, 'the footer Continue button should exist').toBeTruthy();
+    if (!continueBtn) return;
+    expect(
+      lastCardBottom,
+      'the last goal card must end above the pinned footer, not under it'
+    ).toBeLessThanOrEqual(continueBtn.getBoundingClientRect().top + 1);
+  });
 });

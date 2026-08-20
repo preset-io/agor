@@ -102,7 +102,9 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
       }}
       styles={{ body: { padding: token.paddingSM } }}
     >
-      <Flex vertical gap={token.marginXS}>
+      {/* Tight internal rhythm (marginXXS) so the card is no taller than its
+          content — keeps the gallery fitting without unnecessary scroll. */}
+      <Flex vertical gap={token.marginXXS}>
         {/* Tidy top row: the colored category pill on the left carries the category
             hue (the icon tile was removed); the distinct Recommended badge (blue
             "processing") sits on the right. */}
@@ -346,7 +348,9 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
             // 190px is the widest floor that still packs 3 columns into the step-2
             // content width without ever admitting a 4th.
             gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-            gap: token.marginSM,
+            // Tighter inter-card gap (marginXS) so more cards fit before the
+            // region needs to scroll; matches the step-1 goal grid's density.
+            gap: token.marginXS,
             // Room for card focus rings at the grid edges.
             padding: token.paddingXXS,
           }}

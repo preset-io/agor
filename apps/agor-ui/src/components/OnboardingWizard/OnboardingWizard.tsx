@@ -1093,7 +1093,9 @@ export function OnboardingWizard({
                     backdropFilter: 'blur(20px)',
                     WebkitBackdropFilter: 'blur(20px)',
                     borderRadius: 12,
-                    padding: '15px 13px',
+                    // Tightened vertical rhythm (esp. the bottom) so all six cards
+                    // fit above the footer without internal scroll; sides unchanged.
+                    padding: '13px 13px 11px',
                     cursor: isDisabled ? 'not-allowed' : 'pointer',
                     opacity: isDisabled ? 0.45 : 1,
                     textAlign: 'left',
@@ -1115,7 +1117,7 @@ export function OnboardingWizard({
                       width: 30,
                       height: 30,
                       borderRadius: 8,
-                      marginBottom: 11,
+                      marginBottom: 8,
                       background: 'rgba(255,255,255,0.06)',
                       border: '1px solid rgba(255,255,255,0.1)',
                     }}
@@ -1138,16 +1140,16 @@ export function OnboardingWizard({
                   >
                     {goal.title}
                   </div>
-                  {/* Reserve a fixed 2-line block so every card is the same
-                      height regardless of description length. Font/line-height
-                      are tuned so the longest description fits in 2 lines at the
-                      standard modal width without shrinking the copy. */}
+                  {/* One-line floor (not two): every goal description now fits on a
+                      single line at the 2-col modal width, so reserving a second
+                      line only added dead space below and clipped the bottom row.
+                      Row-mates still equalize via the grid's default stretch. */}
                   <div
                     style={{
                       color: TEXT_MUTED,
                       fontSize: 11.5,
                       lineHeight: 1.4,
-                      minHeight: '2.8em',
+                      minHeight: '1.4em',
                     }}
                   >
                     {goal.description}
