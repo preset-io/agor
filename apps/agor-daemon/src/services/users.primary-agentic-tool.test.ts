@@ -47,7 +47,10 @@ describe('UsersService primary agentic tool', () => {
     const { user, params } = await makeCaller(service);
     await service.patch(user.user_id as UserID, { primary_agentic_tool: 'codex' });
 
-    const result = await service.setPrimaryAgenticToolIfUnset({ tool: 'gemini' }, params);
+    const result = await service.setPrimaryAgenticToolIfUnset(
+      { tool: 'gemini', expectedUserId: user.user_id },
+      params
+    );
 
     expect(result.primary_agentic_tool).toBe('codex');
     expect((await service.get(user.user_id as UserID)).primary_agentic_tool).toBe('codex');
@@ -58,8 +61,11 @@ describe('UsersService primary agentic tool', () => {
     const { user, params } = await makeCaller(service);
 
     const results = await Promise.all([
-      service.setPrimaryAgenticToolIfUnset({ tool: 'codex' }, params),
-      service.setPrimaryAgenticToolIfUnset({ tool: 'gemini' }, params),
+      service.setPrimaryAgenticToolIfUnset({ tool: 'codex', expectedUserId: user.user_id }, params),
+      service.setPrimaryAgenticToolIfUnset(
+        { tool: 'gemini', expectedUserId: user.user_id },
+        params
+      ),
     ]);
     const persisted = (await service.get(user.user_id as UserID)).primary_agentic_tool;
 
@@ -67,15 +73,38 @@ describe('UsersService primary agentic tool', () => {
     expect(results.map((result) => result.primary_agentic_tool)).toEqual([persisted, persisted]);
   });
 
+  dbTest('bootstrap refuses an identity that changed before the RPC arrived', async ({ db }) => {
+    const service = new UsersService(db);
+    const { user: initiatingUser } = await makeCaller(service);
+    const { user: authenticatedUser, params: authenticatedParams } = await makeCaller(service);
+
+    await expect(
+      service.setPrimaryAgenticToolIfUnset(
+        { tool: 'codex', expectedUserId: initiatingUser.user_id },
+        authenticatedParams
+      )
+    ).rejects.toThrow(/authority/i);
+
+    expect(
+      (await service.get(initiatingUser.user_id as UserID)).primary_agentic_tool
+    ).toBeUndefined();
+    expect(
+      (await service.get(authenticatedUser.user_id as UserID)).primary_agentic_tool
+    ).toBeUndefined();
+  });
+
   dbTest('bootstrap requires an authenticated member', async ({ db }) => {
     const service = new UsersService(db);
     const { user } = await makeCaller(service);
 
     await expect(
-      service.setPrimaryAgenticToolIfUnset({ tool: 'codex' }, {} as never)
+      service.setPrimaryAgenticToolIfUnset(
+        { tool: 'codex', expectedUserId: user.user_id },
+        {} as never
+      )
     ).rejects.toThrow(/Authentication required/);
     await expect(
-      service.setPrimaryAgenticToolIfUnset({ tool: 'codex' }, {
+      service.setPrimaryAgenticToolIfUnset({ tool: 'codex', expectedUserId: user.user_id }, {
         user: { user_id: user.user_id, role: 'viewer' },
       } as never)
     ).rejects.toThrow(/Member role/);

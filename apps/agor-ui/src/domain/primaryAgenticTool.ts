@@ -12,5 +12,7 @@ export async function setPrimaryAgenticToolIfUnset(
   tool: AgenticToolName
 ): Promise<User | null> {
   if (!client || !user || getUserPrimaryAgenticTool(user)) return user ?? null;
-  return client.service('users').setPrimaryAgenticToolIfUnset({ tool });
+  return client
+    .service('users')
+    .setPrimaryAgenticToolIfUnset({ tool, expectedUserId: user.user_id });
 }

@@ -1434,10 +1434,13 @@ export class UsersService {
    * successful choice win without overwriting an explicit Settings change.
    */
   async setPrimaryAgenticToolIfUnset(
-    data: { tool: AgenticToolName },
+    data: { tool: AgenticToolName; expectedUserId: UserID },
     params?: Params
   ): Promise<User> {
     const userId = this.requireMemberCaller(params, 'set a primary coding agent');
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
     const tool = data?.tool;
     if (!isAgenticToolName(tool)) {
       throw new BadRequest('Invalid primary agentic tool');

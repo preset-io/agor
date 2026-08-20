@@ -67,6 +67,7 @@ import type {
   UserAvatarSettings,
   UserAvatarSyncRequest,
   UserAvatarSyncResult,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -580,7 +581,10 @@ export interface UsersService extends AgorService<User> {
   /** Set an onboarding/default teammate only when the caller is still unset. */
   setPrimaryTeammateIfUnset(data: { branchId: string }, params?: Params): Promise<Branch | null>;
   /** Seed the caller's primary coding agent without overwriting an existing preference. */
-  setPrimaryAgenticToolIfUnset(data: { tool: AgenticToolName }, params?: Params): Promise<User>;
+  setPrimaryAgenticToolIfUnset(
+    data: { tool: AgenticToolName; expectedUserId: UserID },
+    params?: Params
+  ): Promise<User>;
 }
 
 /**

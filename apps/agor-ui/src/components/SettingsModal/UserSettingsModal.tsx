@@ -16,6 +16,7 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  AGENTIC_TOOL_NAMES,
   canAssignUserRole,
   hasMinimumRole,
   hasRoleAuthorityOver,
@@ -90,14 +91,7 @@ import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
 
-const AGENTIC_TOOL_TABS = [
-  'claude-code',
-  'codex',
-  'gemini',
-  'opencode',
-  'copilot',
-  'cursor',
-] as const satisfies readonly AgenticToolName[];
+const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES;
 
 // Panels that own the shared `form` instance. Every other panel (tokens,
 // env-vars, providers) keeps the instance alive via a hidden connector.
