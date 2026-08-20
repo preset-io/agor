@@ -251,7 +251,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             RecentBoardPills, theme, external doc link, presence display)
             stays fully alive — those never depend on the daemon.
             See docs/disconnected-state-design.md. */}
-        <div style={{ minWidth: 200 }}>
+        <div style={{ width: 200 }}>
           <BoardSwitcher
             boards={boards}
             currentBoardId={currentBoardId}

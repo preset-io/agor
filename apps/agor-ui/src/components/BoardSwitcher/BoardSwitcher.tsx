@@ -15,7 +15,7 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { BoardEditModal } from '../BoardEditModal';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
@@ -68,6 +68,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [triggerActive, setTriggerActive] = useState(false);
+  const [keyboardTooltipBoardId, setKeyboardTooltipBoardId] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const screens = Grid.useBreakpoint();
   const coarsePointer = useCoarsePointer();
 
@@ -90,6 +93,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const closeDropdown = useCallback(() => {
     setDropdownOpen(false);
     setFilterText('');
+    setKeyboardTooltipBoardId(null);
   }, []);
 
   const handleHomeClick = useCallback(() => {
@@ -133,24 +137,43 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       return {
         key: board.board_id,
         label: (
-          <Flex align="center" justify="space-between" gap={8} style={{ padding: '4px 0' }}>
+          <Flex align="center" gap={8} style={{ padding: '4px 0' }}>
             <Flex align="center" gap={8} style={{ flex: 1, minWidth: 0 }}>
               <BoardTile emoji={getBoardEmoji(board, branchById)} size={24} />
-              <Text strong={isActive} ellipsis={{ tooltip: board.name }} style={{ minWidth: 0 }}>
+              <Text
+                strong={isActive}
+                ellipsis={{
+                  tooltip:
+                    keyboardTooltipBoardId === board.board_id
+                      ? { title: board.name, open: true }
+                      : board.name,
+                }}
+                style={{ flex: 1, minWidth: 0 }}
+                data-board-name
+              >
                 {board.name}
               </Text>
             </Flex>
             <Badge
               count={branchCount}
               showZero
-              style={{
-                flexShrink: 0,
-                backgroundColor: isActive ? token.colorPrimary : token.colorBgTextHover,
+              styles={{
+                root: { flexShrink: 0 },
+                indicator: {
+                  backgroundColor: isActive ? token.colorPrimary : token.colorBgTextHover,
+                },
               }}
             />
           </Flex>
         ),
         onClick: () => handleBoardClick(board.board_id),
+        onFocus: (event: React.FocusEvent<HTMLLIElement>) => {
+          const name = event.currentTarget.querySelector<HTMLElement>('[data-board-name]');
+          setKeyboardTooltipBoardId(
+            name && name.scrollWidth > name.clientWidth ? board.board_id : null
+          );
+        },
+        onBlur: () => setKeyboardTooltipBoardId(null),
       };
     });
   }, [
@@ -162,6 +185,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     token,
     filterText,
     showFilter,
+    keyboardTooltipBoardId,
   ]);
 
   const homeRow = (
@@ -216,20 +240,38 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       >
         <Dropdown
           menu={{ items: boardMenuItems }}
+          styles={{ itemContent: { minWidth: 0 } }}
           trigger={['click']}
           placement="bottomLeft"
           open={dropdownOpen}
           onOpenChange={(open) => {
+            const restoreTriggerFocus =
+              !open && popupRef.current?.contains(document.activeElement) === true;
             setDropdownOpen(open);
-            if (!open) setFilterText('');
+            if (!open) {
+              setFilterText('');
+              setKeyboardTooltipBoardId(null);
+              if (restoreTriggerFocus) {
+                window.requestAnimationFrame(() => triggerRef.current?.focus());
+              }
+            }
           }}
           popupRender={(menu) => (
             <div
+              ref={popupRef}
+              data-testid="board-switcher-popup"
+              tabIndex={-1}
+              onFocus={(event) => {
+                if (event.target === event.currentTarget) {
+                  event.currentTarget.querySelector<HTMLElement>('[role="menu"]')?.focus();
+                }
+              }}
               style={{
                 backgroundColor: token.colorBgElevated,
                 borderRadius: token.borderRadiusLG,
                 boxShadow: token.boxShadowSecondary,
                 width: 320,
+                maxWidth: `calc(100vw - ${token.marginLG * 2}px)`,
               }}
             >
               <div
@@ -268,6 +310,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
           )}
         >
           <Button
+            ref={triggerRef}
             type="text"
             style={{
               width: '100%',
@@ -276,20 +319,21 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               textAlign: 'left',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
             }}
           >
-            <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
+            <Flex align="center" gap={8} style={{ flex: 1, minWidth: 0 }}>
               {currentBoard ? (
                 <BoardTile emoji={getBoardEmoji(currentBoard, branchById)} size={24} />
               ) : (
                 <HomeOutlined style={{ fontSize: 18 }} />
               )}
-              <Text strong ellipsis style={{ minWidth: 0 }}>
+              <Text strong ellipsis style={{ flex: 1, minWidth: 0 }} data-current-board-name>
                 {currentBoard?.name || 'Home'}
               </Text>
-            </Space>
-            <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+            </Flex>
+            <DownOutlined
+              style={{ fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
           </Button>
         </Dropdown>
         {editButton && (
