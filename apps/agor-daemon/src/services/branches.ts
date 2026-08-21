@@ -70,6 +70,7 @@ import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   getTeammateConfig,
   isTeammate,
+  TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
@@ -673,6 +674,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
+    if (
+      withDefaults.base_remote_url !== undefined &&
+      withDefaults.base_remote_url !== TEAMMATE_FRAMEWORK_REPO_URL
+    ) {
+      throw new BadRequest(
+        'base_remote_url is restricted to the canonical Agor teammate template repository.'
+      );
+    }
     const config = this.app.get('config');
     const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode = withDefaults.storage_mode ?? defaultMode;
@@ -1046,6 +1055,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    if (Object.hasOwn(data, 'base_remote_url')) {
+      throw new BadRequest('base_remote_url is immutable after branch creation.');
+    }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);

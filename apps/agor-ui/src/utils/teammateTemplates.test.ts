@@ -10,6 +10,7 @@ import {
   getTemplateForFrameworkSource,
   recommendedTemplateIds,
   resolveTemplateSourceBranch,
+  resolveTemplateSourceRemoteUrl,
   TEAMMATE_GALLERY_CARDS,
   TEAMMATE_TEMPLATES,
   TEMPLATE_CATEGORIES,
@@ -26,8 +27,17 @@ describe('TEAMMATE_TEMPLATES', () => {
       expect(template.emoji.length).toBeGreaterThan(0);
       // The parallel agor-teammate workstream keys off these exact names.
       expect(template.sourceBranch).toMatch(/^template\//);
+      expect(template.sourceRemoteUrl).toBe('https://github.com/preset-io/agor-teammate.git');
       expect(typeof template.icon).toBe('object');
     }
+  });
+
+  it('qualifies real template refs with their source remote but leaves blank on the destination', () => {
+    expect(resolveTemplateSourceRemoteUrl('deal-desk')).toBe(
+      'https://github.com/preset-io/agor-teammate.git'
+    );
+    expect(resolveTemplateSourceRemoteUrl(BLANK_TEMPLATE_ID)).toBeUndefined();
+    expect(resolveTemplateSourceRemoteUrl()).toBeUndefined();
   });
 
   it('pins the exact source-branch contract names', () => {

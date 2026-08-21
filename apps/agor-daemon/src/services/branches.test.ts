@@ -904,6 +904,27 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
+  it('rejects changing the trusted template remote after creation', async () => {
+    const branchId = 'teammate-template-remote' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: {
+        branch_id: branchId,
+        board_id: 'board-a' as BoardID,
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+      },
+      updated: {
+        branch_id: branchId,
+        board_id: 'board-a' as BoardID,
+        base_remote_url: 'https://attacker.example/template.git',
+      },
+    });
+
+    await expect(
+      service.patch(branchId, { base_remote_url: 'https://attacker.example/template.git' })
+    ).rejects.toThrow(/immutable/);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;

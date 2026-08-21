@@ -46,7 +46,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
@@ -613,6 +613,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      /** Remote that owns sourceBranch when it differs from the destination repo. */
+      sourceRemoteUrl?: string;
       issue_url?: string;
       pull_request_url?: string;
       boardId: string;
@@ -642,6 +644,28 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const repo = await this.get(id, params);
+
+    let baseRemoteUrl: string | undefined;
+    if (data.sourceRemoteUrl) {
+      if (!data.createBranch || !data.sourceBranch) {
+        throw new BadRequest(
+          'sourceRemoteUrl requires createBranch=true and a sourceBranch to qualify.'
+        );
+      }
+      baseRemoteUrl = stripGitUrlCredentials(data.sourceRemoteUrl);
+      if (!isValidGitUrl(baseRemoteUrl)) {
+        throw new BadRequest(`Invalid sourceRemoteUrl: ${redactGitUrlCredentials(baseRemoteUrl)}`);
+      }
+      if (baseRemoteUrl !== TEAMMATE_FRAMEWORK_REPO_URL) {
+        throw new BadRequest(
+          'sourceRemoteUrl must identify the canonical Agor teammate template repository.'
+        );
+      }
+      // Persist the server-owned constant rather than a client spelling of it.
+      // The executor may attach the caller's Git credential to this host, so
+      // this must never become an arbitrary client-selected outbound target.
+      baseRemoteUrl = TEAMMATE_FRAMEWORK_REPO_URL;
+    }
 
     console.log('🔍 RepoService.createBranch - repo lookup result:', {
       repo_id: repo.repo_id,
@@ -786,6 +810,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ref: data.ref,
         ref_type: data.refType,
         base_ref: data.sourceBranch,
+        base_remote_url: baseRemoteUrl,
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor

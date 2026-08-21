@@ -9,6 +9,8 @@ export interface TeammateCreationInput {
   repoId: string;
   branchName?: string;
   sourceBranch?: string;
+  /** Remote that owns sourceBranch when it differs from the destination repo. */
+  sourceRemoteUrl?: string;
   /**
    * Reuse an existing board for the teammate instead of creating a new one.
    * The onboarding wizard already creates a board in its workspace step, so it
@@ -30,6 +32,7 @@ export interface TeammateCreationDeps {
       ref: string;
       createBranch: boolean;
       sourceBranch: string;
+      sourceRemoteUrl?: string;
       pullLatest: boolean;
       boardId?: string;
       custom_context?: Record<string, unknown>;
@@ -105,6 +108,7 @@ export async function createTeammateBranch(
     ref: branchName,
     createBranch: true,
     sourceBranch,
+    ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
     pullLatest: true,
     boardId,
     custom_context: { teammate: teammateConfig },

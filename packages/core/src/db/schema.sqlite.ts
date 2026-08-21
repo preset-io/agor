@@ -775,6 +775,7 @@ export const branches = sqliteTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
         tracking_branch?: string; // Remote tracking branch

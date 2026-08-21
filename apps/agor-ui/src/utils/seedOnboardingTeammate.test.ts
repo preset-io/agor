@@ -242,11 +242,17 @@ describe('seedOnboardingTeammate', () => {
     } as Branch);
     startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
 
-    const { input } = setup({ sourceBranch: 'template/legal-analyst' });
+    const { input } = setup({
+      sourceBranch: 'template/legal-analyst',
+      sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+    });
     await seedOnboardingTeammate(input);
 
     expect(createTeammateBranchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceBranch: 'template/legal-analyst' }),
+      expect.objectContaining({
+        sourceBranch: 'template/legal-analyst',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+      }),
       expect.anything()
     );
   });
