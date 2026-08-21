@@ -136,6 +136,18 @@ interface ManagedProcess {
 }
 
 /**
+ * Identifies whether a health observation was requested by a user-facing
+ * status action or by the background lifecycle monitor.
+ *
+ * Explicit requests may bypass the periodic cooldown and may return an
+ * ephemeral diagnostic for an errored environment. Automatic observations
+ * are restricted to active lifecycle states.
+ */
+export type EnvironmentHealthCheckOptions =
+  | { intent: 'automatic'; signal?: AbortSignal }
+  | { intent: 'explicit'; signal?: AbortSignal };
+
+/**
  * Extended branches service with custom methods
  */
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
@@ -2303,7 +2315,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   async checkHealth(
     id: BranchID,
     params?: BranchParams,
-    internalOptions?: { signal?: AbortSignal; automatic?: boolean }
+    internalOptions?: EnvironmentHealthCheckOptions
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const _repo = await this.withTenantDatabase(
@@ -2323,6 +2335,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // but an inactive lifecycle must not acquire monitoring ownership or be
     // revived by that observation. Return the observation ephemerally.
     if (currentStatus === 'error') {
+      if (internalOptions?.intent === 'automatic') return branch;
       const observation = await this.fetchEnvironmentHealthObservation(
         branch,
         internalOptions?.signal
@@ -2356,7 +2369,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         claimToken,
         leaseDurationMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
         identity,
-        ignoreCooldown: !internalOptions?.automatic,
+        ignoreCooldown: internalOptions?.intent !== 'automatic',
       })
     );
     if (claimResult.outcome !== 'claimed') {
@@ -2414,7 +2427,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
     }
     if (!isAllowedHealthCheckUrl(healthUrl)) {
-      console.warn(`⚠️ Blocked health check to disallowed URL: ${healthUrl}`);
       return {
         status: 'unhealthy',
         message: 'Health check URL blocked by security policy',

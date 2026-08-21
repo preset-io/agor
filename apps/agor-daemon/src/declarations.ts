@@ -42,6 +42,7 @@ import type {
   TaskPendingDispatchStatus,
 } from '@agor/core/types';
 import type { DaemonMetrics } from './metrics/index.js';
+import type { EnvironmentHealthCheckOptions } from './services/branches.js';
 import type {
   ExecuteTaskData,
   SessionArchiveOptions,
@@ -336,7 +337,7 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   checkHealth(
     id: BranchID,
     params?: FeathersParams,
-    internalOptions?: { signal?: AbortSignal; automatic?: boolean }
+    internalOptions?: EnvironmentHealthCheckOptions
   ): Promise<Branch>;
   getLogs(
     id: BranchID,

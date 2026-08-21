@@ -2102,7 +2102,7 @@ describe('BranchesService.create permission defaults', () => {
   );
 });
 
-describe('BranchesService explicit environment health', () => {
+describe('BranchesService environment health requests', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
@@ -2158,6 +2158,67 @@ describe('BranchesService explicit environment health', () => {
       status: 'error',
       last_health_check: { status: 'healthy', message: 'HTTP 200' },
     });
+  });
+
+  it('does not probe an errored environment for an automatic observation', async () => {
+    const branch = {
+      branch_id: 'wt-health-error-automatic' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-error-automatic',
+      path: '/tmp/wt-health-error-automatic',
+      branch_unique_id: 2,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    globalThis.fetch = vi.fn();
+
+    await expect(
+      service.checkHealth(branch.branch_id, undefined, { intent: 'automatic' })
+    ).resolves.toBe(branch);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns a blocked diagnostic without logging a user-authored health URL', async () => {
+    const branch = {
+      branch_id: 'wt-health-blocked-url' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-blocked-url',
+      path: '/tmp/wt-health-blocked-url',
+      branch_unique_id: 3,
+      health_check_url: 'http://169.254.169.254/latest?credential=secret',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+    warn.mockRestore();
   });
 
   it.each([

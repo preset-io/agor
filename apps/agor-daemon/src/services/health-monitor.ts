@@ -11,7 +11,10 @@
  * - Graceful cleanup on daemon shutdown
  */
 
-import { ENVIRONMENT } from '@agor/core/config';
+import {
+  DEFAULT_ENVIRONMENT_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS,
+  ENVIRONMENT,
+} from '@agor/core/config';
 import {
   BranchRepository,
   getHiddenTenantId,
@@ -59,6 +62,8 @@ export interface HealthMonitorOptions {
   requireTenantParams?: boolean;
   /** Test seam for startup discovery. Production uses BranchRepository when db is provided. */
   discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
+  /** Maximum time shutdown waits for aborted observations to settle. */
+  shutdownDrainTimeoutMs?: number;
 }
 
 interface HealthMonitorTimer {
@@ -83,8 +88,10 @@ export class HealthMonitor {
    * last interval was retained in the map; the others could never be stopped.
    */
   private timers = new Map<BranchID, HealthMonitorTimer>();
-  private checksInFlight = new Set<BranchID>();
-  private checkAbortControllers = new Map<BranchID, AbortController>();
+  private checksInFlight = new Map<
+    BranchID,
+    { controller: AbortController; work: Promise<void> }
+  >();
   private branchParams = new Map<BranchID, HealthMonitorParams>();
   private isShuttingDown = false;
   private defaultParams?: HealthMonitorParams;
@@ -93,6 +100,8 @@ export class HealthMonitor {
   private tenantId?: TenantID | string;
   private requireTenantParams: boolean;
   private discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
+  private shutdownDrainTimeoutMs: number;
+  private cleanupPromise?: Promise<void>;
 
   private readonly onBranchPatched = (branch: Branch) => this.handleBranchUpdate(branch);
   private readonly onBranchCreated = (branch: Branch) => this.handleBranchUpdate(branch);
@@ -112,6 +121,8 @@ export class HealthMonitor {
         : undefined;
     this.requireTenantParams = options.requireTenantParams ?? false;
     this.discoverActiveEnvironmentRefs = options.discoverActiveEnvironmentRefs;
+    this.shutdownDrainTimeoutMs =
+      options.shutdownDrainTimeoutMs ?? DEFAULT_ENVIRONMENT_HEALTH_SHUTDOWN_DRAIN_TIMEOUT_MS;
     this.setupBranchListeners();
   }
 
@@ -225,24 +236,33 @@ export class HealthMonitor {
       else clearInterval(timer.handle);
       this.timers.delete(branchId);
     }
-    this.checkAbortControllers
+    this.checksInFlight
       .get(branchId)
-      ?.abort(new Error('Environment is no longer eligible for health monitoring'));
+      ?.controller.abort(new Error('Environment is no longer eligible for health monitoring'));
   }
 
   /**
    * Perform health check for a specific branch
    */
-  private async checkHealth(branchId: BranchID) {
+  private checkHealth(branchId: BranchID): Promise<void> {
     // `setInterval` does not await async callbacks. The normal HTTP timeout is
     // shorter than the poll interval, but DB stalls or executor/service delays
     // can exceed it. Never let two observations for one branch race and write a
     // stale healthy/unhealthy result over the newer one.
-    if (this.checksInFlight.has(branchId)) return;
-    this.checksInFlight.add(branchId);
+    const existing = this.checksInFlight.get(branchId);
+    if (existing) return existing.work;
     const controller = new AbortController();
-    this.checkAbortControllers.set(branchId, controller);
+    let work: Promise<void>;
+    work = this.performHealthCheck(branchId, controller).finally(() => {
+      if (this.checksInFlight.get(branchId)?.work === work) {
+        this.checksInFlight.delete(branchId);
+      }
+    });
+    this.checksInFlight.set(branchId, { controller, work });
+    return work;
+  }
 
+  private async performHealthCheck(branchId: BranchID, controller: AbortController): Promise<void> {
     try {
       const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
 
@@ -282,7 +302,7 @@ export class HealthMonitor {
         // realtime patches.
         await branchesService.checkHealth(branchId, params as never, {
           signal: controller.signal,
-          automatic: true,
+          intent: 'automatic',
         });
       };
 
@@ -309,11 +329,6 @@ export class HealthMonitor {
         `❌ Health check failed for branch ${shortId(branchId)}:`,
         error instanceof Error ? error.message : error
       );
-    } finally {
-      this.checksInFlight.delete(branchId);
-      if (this.checkAbortControllers.get(branchId) === controller) {
-        this.checkAbortControllers.delete(branchId);
-      }
     }
   }
 
@@ -461,7 +476,8 @@ export class HealthMonitor {
    *
    * Called on daemon shutdown
    */
-  cleanup() {
+  cleanup(): Promise<void> {
+    if (this.cleanupPromise) return this.cleanupPromise;
     this.isShuttingDown = true;
 
     // Clear pending grace periods and active intervals.
@@ -472,15 +488,34 @@ export class HealthMonitor {
     }
 
     this.timers.clear();
-    for (const controller of this.checkAbortControllers.values()) {
+    const inFlight = [...this.checksInFlight.values()];
+    for (const { controller } of inFlight) {
       controller.abort(new Error('Environment health monitor is shutting down'));
     }
-    this.checkAbortControllers.clear();
     this.branchParams.clear();
     const branchesService = this.app.service('branches');
     branchesService.off('patched', this.onBranchPatched);
     branchesService.off('created', this.onBranchCreated);
     branchesService.off('removed', this.onBranchRemoved);
+
+    this.cleanupPromise = this.drainCleanup(inFlight, stoppedCount);
+    return this.cleanupPromise;
+  }
+
+  private async drainCleanup(
+    inFlight: Array<{ work: Promise<void> }>,
+    stoppedCount: number
+  ): Promise<void> {
+    const drain = Promise.allSettled(inFlight.map(({ work }) => work)).then(() => undefined);
+    let timeout: NodeJS.Timeout | undefined;
+    await Promise.race([
+      drain,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, this.shutdownDrainTimeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
     console.log(`🏥 Health Monitor cleaned up (${stoppedCount} monitor(s) stopped)`);
   }
 
