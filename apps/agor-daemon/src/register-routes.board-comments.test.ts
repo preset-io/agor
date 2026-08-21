@@ -1,4 +1,5 @@
-import type { BoardComment, UUID } from '@agor/core/types';
+import { getCurrentTenantDatabaseScope, getCurrentTenantId } from '@agor/core/db';
+import type { BoardComment, HookContext, UUID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -6,6 +7,7 @@ import {
   authorizeBoardCommentRouteAccess,
   boardCommentReactionInput,
   boardCommentReplyInput,
+  createTenantScopedAuthenticatedRouteRegistrar,
 } from './register-routes.js';
 
 const USER = '018f0000-0000-7000-8000-000000000001';
@@ -121,6 +123,7 @@ describe('board comment custom-route authorization', () => {
         },
         params: params(),
         findBoard: async () => null,
+        findVisibleBoard: async () => null,
       })
     ).resolves.toBeUndefined();
 
@@ -133,6 +136,7 @@ describe('board comment custom-route authorization', () => {
         },
         params: params(),
         findBoard: async () => null,
+        findVisibleBoard: async () => null,
       })
     ).rejects.toThrow(/attachments cannot be changed/);
 
@@ -140,6 +144,7 @@ describe('board comment custom-route authorization', () => {
       authorizeBoardCommentReposition({
         comment: branchComment,
         data: {
+          branch_id: 'branch-1' as never,
           position: {
             relative: {
               parent_id: 'hidden-branch',
@@ -151,6 +156,7 @@ describe('board comment custom-route authorization', () => {
         },
         params: params(),
         findBoard: async () => null,
+        findVisibleBoard: async () => null,
       })
     ).rejects.toThrow(/does not match its attachment/);
   });
@@ -159,7 +165,7 @@ describe('board comment custom-route authorization', () => {
     const ownComment = { ...COMMENT, created_by: USER } as BoardComment;
     const position = {
       relative: {
-        parent_id: 'zone-1',
+        parent_id: '1',
         parent_type: 'zone' as const,
         offset_x: 2,
         offset_y: 3,
@@ -168,28 +174,165 @@ describe('board comment custom-route authorization', () => {
     await expect(
       authorizeBoardCommentReposition({
         comment: ownComment,
-        data: { position },
+        data: { branch_id: null, position },
         params: params(),
         findBoard: async () =>
+          ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'zone' } } }) as never,
+        findVisibleBoard: async () =>
           ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'zone' } } }) as never,
       })
     ).resolves.toBeUndefined();
     await expect(
       authorizeBoardCommentReposition({
         comment: ownComment,
-        data: { position },
+        data: { branch_id: null, position },
         params: params(),
         findBoard: async () =>
+          ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'markdown' } } }) as never,
+        findVisibleBoard: async () =>
           ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'markdown' } } }) as never,
       })
     ).rejects.toThrow(/Board resource not found/);
     await expect(
       authorizeBoardCommentReposition({
         comment: COMMENT,
-        data: { position: { absolute: { x: 1, y: 2 } } },
+        data: { branch_id: null, position: { absolute: { x: 1, y: 2 } } },
         params: params(),
         findBoard: async () => null,
+        findVisibleBoard: async () => null,
       })
     ).rejects.toThrow(/Only the comment author/);
+  });
+
+  it('does not expose a known zone on a board hidden from an attached-branch viewer', async () => {
+    const branchVisibleComment = {
+      ...COMMENT,
+      created_by: USER,
+      branch_id: 'branch-visible',
+    } as BoardComment;
+    const data = {
+      branch_id: 'branch-visible' as never,
+      position: {
+        relative: {
+          parent_id: 'secret',
+          parent_type: 'zone' as const,
+          offset_x: 2,
+          offset_y: 3,
+        },
+      },
+    };
+    const findBoard = vi.fn(async () =>
+      Promise.resolve({
+        board_id: COMMENT.board_id,
+        objects: { 'zone-secret': { type: 'zone' } },
+      } as never)
+    );
+
+    const hidden = await authorizeBoardCommentReposition({
+      comment: branchVisibleComment,
+      data,
+      params: params(),
+      findBoard,
+      findVisibleBoard: async () => null,
+    }).catch((error: Error & { code?: number }) => ({ code: error.code, message: error.message }));
+    const missing = await authorizeBoardCommentReposition({
+      comment: branchVisibleComment,
+      data,
+      params: params(),
+      findBoard,
+      findVisibleBoard: async () => ({ board_id: COMMENT.board_id, objects: {} }) as never,
+    }).catch((error: Error & { code?: number }) => ({ code: error.code, message: error.message }));
+
+    expect(hidden).toEqual(missing);
+    expect(hidden).toMatchObject({ code: 404, message: 'Board resource not found' });
+    expect(findBoard).not.toHaveBeenCalled();
+  });
+});
+
+describe('tenant-scoped custom-route registration', () => {
+  function installRoute(execute: ReturnType<typeof vi.fn>) {
+    let installed:
+      | {
+          around?: {
+            all?: Array<(context: HookContext, next: () => Promise<void>) => Promise<void>>;
+          };
+        }
+      | undefined;
+    const tx = { execute };
+    const db = {
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const app = {
+      use: vi.fn(),
+      service: vi.fn(() => ({
+        hooks: (hooks: typeof installed) => {
+          installed = hooks;
+        },
+      })),
+    };
+    const register = createTenantScopedAuthenticatedRouteRegistrar({
+      db: db as never,
+      config: { multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-route' } },
+      jwtSecret: 'secret',
+    });
+    register(
+      app,
+      '/board-comments/:id/reposition',
+      { async create() {} },
+      { create: { role: ROLES.MEMBER, action: 'reposition board comments' } },
+      async (context: HookContext) => context
+    );
+    return { installed, tx };
+  }
+
+  async function runInstalledAroundHooks(
+    installed: {
+      around?: { all?: Array<(context: HookContext, next: () => Promise<void>) => Promise<void>> };
+    },
+    next: () => Promise<void>
+  ) {
+    const context = { method: 'create', params: {}, data: {} } as HookContext;
+    const run = (installed.around?.all ?? []).reduceRight<() => Promise<void>>(
+      (inner, hook) => () => hook(context, inner),
+      next
+    );
+    await run();
+    return context;
+  }
+
+  it('installs the tenant transaction and write gate on routes registered after service hooks', async () => {
+    const execute = vi.fn(async () => []);
+    const { installed, tx } = installRoute(execute);
+    const handler = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBe('tenant-route');
+      expect(getCurrentTenantDatabaseScope()?.db).toBe(tx);
+    });
+
+    expect(installed?.around?.all).toHaveLength(2);
+    await runInstalledAroundHooks(installed ?? {}, handler);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks a custom mutation when the installed tenant write gate is held', async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          value_text: JSON.stringify({
+            generation: 'gate-generation',
+            acquiredAt: '2026-08-21T00:00:00.000Z',
+          }),
+        },
+      ]);
+    const { installed } = installRoute(execute);
+    const handler = vi.fn(async () => undefined);
+
+    await expect(runInstalledAroundHooks(installed ?? {}, handler)).rejects.toMatchObject({
+      code: 503,
+    });
+    expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -44,7 +44,7 @@ describe('publicBoardCommentCreateInput', () => {
 });
 
 describe('publicBoardCommentRepositionInput', () => {
-  it('projects a bounded position and optional branch precondition', () => {
+  it('projects a bounded position and required branch precondition', () => {
     expect(
       publicBoardCommentRepositionInput({
         position: {
@@ -74,17 +74,28 @@ describe('publicBoardCommentRepositionInput', () => {
     expect(() =>
       publicBoardCommentRepositionInput({
         position: { absolute: { x: 1, y: 2 }, relative: {} },
+        branch_id: null,
       })
     ).toThrow(/exactly one/);
     expect(() =>
-      publicBoardCommentRepositionInput({ position: { absolute: { x: Number.NaN, y: 2 } } })
+      publicBoardCommentRepositionInput({
+        position: { absolute: { x: Number.NaN, y: 2 } },
+        branch_id: null,
+      })
     ).toThrow(/finite x and y/);
     expect(() =>
       publicBoardCommentRepositionInput({
         position: { absolute: { x: 1, y: 2 } },
+        branch_id: null,
         reactions: [],
       })
     ).toThrow(/Unsupported board comment reposition fields/);
+  });
+
+  it('requires the immutable audience-anchor precondition', () => {
+    expect(() =>
+      publicBoardCommentRepositionInput({ position: { absolute: { x: 1, y: 2 } } })
+    ).toThrow(/branch_id audience precondition required/);
   });
 });
 

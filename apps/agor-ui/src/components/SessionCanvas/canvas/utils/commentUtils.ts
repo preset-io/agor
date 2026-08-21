@@ -5,12 +5,56 @@
  * including labels and colors for UI display.
  */
 
-import type { Board, Branch } from '@agor-live/client';
+import type { Board, BoardComment, BoardCommentReposition, Branch } from '@agor-live/client';
 
 export interface ParentInfo {
   parentId?: string;
   parentLabel?: string;
   parentColor?: string;
+}
+
+export interface CommentSpatialParent {
+  id: string;
+  type: 'zone' | 'branch';
+  absolutePosition: { x: number; y: number };
+  reactFlowParentId: string;
+}
+
+export interface BoardCommentRepositionPlan {
+  data: BoardCommentReposition;
+  reactFlowParentId?: string;
+}
+
+/**
+ * Build the exact persistence request for a comment drag. The comment's branch
+ * attachment is an immutable audience anchor, distinct from its visual parent.
+ * A drop on another branch therefore remains absolute instead of attempting a
+ * forbidden reattachment; zones and free space may still be used visually.
+ */
+export function planBoardCommentReposition(
+  comment: BoardComment,
+  absolutePosition: { x: number; y: number },
+  spatialParent?: CommentSpatialParent
+): BoardCommentRepositionPlan {
+  const data: BoardCommentReposition = {
+    branch_id: comment.branch_id ?? null,
+    position: { absolute: absolutePosition },
+  };
+
+  const canUseParent =
+    spatialParent?.type === 'zone' ||
+    (spatialParent?.type === 'branch' && comment.branch_id === spatialParent.id);
+  if (!spatialParent || !canUseParent) return { data };
+
+  data.position = {
+    relative: {
+      parent_id: spatialParent.id,
+      parent_type: spatialParent.type,
+      offset_x: absolutePosition.x - spatialParent.absolutePosition.x,
+      offset_y: absolutePosition.y - spatialParent.absolutePosition.y,
+    },
+  };
+  return { data, reactFlowParentId: spatialParent.reactFlowParentId };
 }
 
 /**
@@ -28,7 +72,7 @@ export interface ParentInfo {
  * // { parentId: 'zone-zone_123', parentLabel: '📍 My Zone', parentColor: '#ff0000' }
  */
 export function getZoneParentInfo(zoneId: string, board?: Board): ParentInfo {
-  const zone = board?.objects?.[zoneId];
+  const zone = board?.objects?.[`zone-${zoneId}`];
   return {
     parentId: `zone-${zoneId}`,
     parentLabel: zone?.type === 'zone' ? `📍 ${zone.label}` : undefined,

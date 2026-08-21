@@ -235,6 +235,22 @@ mutation fields. The final boundaries additionally:
   audience anchor. All comment custom mutation routes now run in the same
   tenant database/RLS scope as ordinary comment CRUD.
 
+A fourth review pass adversarially exercised that spatial boundary itself. The
+final implementation additionally:
+
+- resolves zone parents only after the caller's current board ACL succeeds,
+  returning the same `NotFound` for known hidden zones and missing resources;
+- requires the immutable branch-audience precondition on every reposition and
+  uses one tested UI planner for branch, zone, and free-space drags. A drop on
+  another branch remains absolute rather than attempting a forbidden audience
+  change or leaving an optimistic node diverged from storage;
+- exposes the dynamic reposition URL through a typed client service contract,
+  so callers cannot fall through to the unconstrained generic service type; and
+- centralizes the tenant transaction and tenant write-freeze gate in the custom
+  authenticated-route registrar. Its installed around hooks are executed
+  directly in tests, replacing the ineffective static-path membership claim
+  for routes registered after ordinary service hooks.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -274,7 +290,9 @@ mutation fields. The final boundaries additionally:
 
 Observed results on the audit branch:
 
-- daemon suite: 251 files passed, 14 skipped; 3,310 tests passed, 87 skipped;
+- daemon suite: 251 files passed, 14 skipped; 3,313 tests passed, 87 skipped;
+- latest reposition/tenant-route focused suites: 310 tests passed across daemon,
+  core repository, and UI planner coverage;
 - focused realtime/security suite: 12 files and 430 tests passed;
 - PostgreSQL/RLS suite: 140 tests passed across 30 isolated databases, with the
   application role verified as `NOSUPERUSER` and `NOBYPASSRLS`;

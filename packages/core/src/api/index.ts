@@ -13,6 +13,7 @@ import type {
   BoardComment,
   BoardCommentCreate,
   BoardCommentPatch,
+  BoardCommentReposition,
   BoardExportBlob,
   BoardGroupGrantWithGroup,
   Branch,
@@ -460,6 +461,11 @@ export type BoardCommentsService = Omit<
   'update'
 >;
 
+/** Dedicated comment-position command; the URL supplies the comment identity. */
+export interface BoardCommentRepositionService {
+  create(data: ClientInput<BoardCommentReposition>, params?: Params): Promise<BoardComment>;
+}
+
 /**
  * Repos service with branch management
  */
@@ -742,6 +748,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
   service(path: 'opencode-auth'): OpenCodeAuthService;
   service(path: 'opencode-models'): OpenCodeModelsService;
+  service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 
   // Standard services (CRUD only)
   service(path: 'cards'): AgorService<CardWithType>;

@@ -22,13 +22,11 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
-  assertTenantWritable,
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
   CardRepository,
-  getCurrentTenantDatabaseScope,
   isPostgresDatabaseHandle,
   isTenantWriteMethodName,
   requireCurrentTenantId,
@@ -38,7 +36,6 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
-  TenantWriteGateActiveError,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -49,13 +46,7 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import {
-  BadRequest,
-  Forbidden,
-  NotAuthenticated,
-  NotFound,
-  Unavailable,
-} from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -213,6 +204,7 @@ import {
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
+  enforceTenantWriteGateForHook,
 } from './utils/tenant-db-scope.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 import { protectExternalWidgetMessageWrites } from './widgets/message-boundary.js';
@@ -487,9 +479,6 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'session-mcp-servers',
   'user-mcp-oauth-tokens',
   'board-comments',
-  'board-comments/:id/toggle-reaction',
-  'board-comments/:id/reply',
-  'board-comments/:id/reposition',
   'gateway-channels',
   'gateway',
   'thread-session-map',
@@ -938,33 +927,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  // Enforce the per-tenant write gate on request-driven writes. Runs after
-  // scopeTenantBefore has resolved the trusted tenant. Reads are never gated;
-  // custom mutators as well as CRUD writes are blocked while a freeze is held. This is
-  // the request-traffic enforcement point for the generic write gate; deferred
-  // operators (scheduler/gateway/executor/queue) enforce at their own entry
-  // points. Fails closed with 503 so an orchestrator sees a transient block.
-  const writeGateBefore = async (context: HookContext): Promise<HookContext> => {
-    if (!isTenantWriteMethodName(context.method)) return context;
-    const tenantId = context.params.tenant?.tenant_id;
-    if (!tenantId) return context;
-    // Only enforce inside an active tenant database scope — the one the around
-    // hook (`tenantDatabaseScopeAround`) opens before these before-hooks run.
-    // The gate read joins that transaction; without an active scope there is no
-    // tenant transaction to read against (e.g. identity-only services, or a unit
-    // test that invokes the before-hooks directly), so there is nothing to
-    // enforce here and we must not open a stray transaction.
-    if (!getCurrentTenantDatabaseScope()) return context;
-    try {
-      await assertTenantWritable(db, tenantId);
-    } catch (error) {
-      if (error instanceof TenantWriteGateActiveError) {
-        throw new Unavailable(error.message);
-      }
-      throw error;
-    }
-    return context;
-  };
+  // This shared gate is also installed by the custom-route registrar. Custom
+  // routes are registered after this function and therefore cannot rely on the
+  // static service-path loop below to receive tenant write fencing.
+  const writeGateBefore = (context: HookContext) => enforceTenantWriteGateForHook(db, context);
 
   const registerTenantHooks = (): void => {
     for (const path of tenantOwnedServicePaths) {

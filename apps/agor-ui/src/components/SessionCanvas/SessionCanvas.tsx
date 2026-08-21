@@ -4,7 +4,6 @@ import type {
   Board,
   BoardComment,
   BoardCommentCreate,
-  BoardCommentReposition,
   BoardEntityObject,
   BoardID,
   BoardObject,
@@ -93,7 +92,11 @@ import { MarkdownNode } from './canvas/MarkdownNode';
 import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
 import { useBoardObjects } from './canvas/useBoardObjects';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
-import { getBranchParentInfo, getZoneParentInfo } from './canvas/utils/commentUtils';
+import {
+  getBranchParentInfo,
+  getZoneParentInfo,
+  planBoardCommentReposition,
+} from './canvas/utils/commentUtils';
 import {
   absoluteToRelative,
   calculateStoragePosition,
@@ -1855,11 +1858,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             const markdownUpdates: Record<string, { x: number; y: number }> = {};
             const artifactUpdates: Record<string, { x: number; y: number }> = {};
             const commentUpdates: Array<{
-              comment_id: string;
+              comment: BoardComment;
               position: { x: number; y: number };
               parentId?: string;
               parentType?: 'zone' | 'branch';
-              newReactFlowParentId?: string;
             }> = [];
 
             // Find all current nodes to check types
@@ -1881,6 +1883,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               } else if (draggedNode?.type === 'comment') {
                 // Comment pin moved - extract comment_id from node id
                 const commentId = nodeId.replace('comment-', '');
+                const comment = commentById.get(commentId);
+                if (!comment) continue;
 
                 // Use the absolute position we stored at drag time
                 // Don't recalculate from draggedNode because WebSocket might have already
@@ -1895,24 +1899,20 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
                 let parentId: string | undefined;
                 let parentType: 'zone' | 'branch' | undefined;
-                let newReactFlowParentId: string | undefined;
 
                 if (branchNode) {
                   parentId = branchNode.id; // Branch ID has no prefix
                   parentType = 'branch';
-                  newReactFlowParentId = branchNode.id; // React Flow uses same ID
                 } else if (zoneNode) {
                   parentId = zoneNode.id.replace('zone-', ''); // Database uses ID without prefix
                   parentType = 'zone';
-                  newReactFlowParentId = zoneNode.id; // React Flow uses 'zone-{id}'
                 }
 
                 commentUpdates.push({
-                  comment_id: commentId,
+                  comment,
                   position: absolutePosition, // Always use absolute position for DB storage calculation
                   parentId,
                   parentType,
-                  newReactFlowParentId, // Track new parentId for immediate React Flow update
                 });
               } else if (draggedNode?.type === 'cardNode') {
                 // Card node moved - extract card_id from node id
@@ -2110,100 +2110,50 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }
 
             // Update comment positions
-            for (const {
-              comment_id,
-              position,
-              parentId,
-              parentType,
-              newReactFlowParentId,
-            } of commentUpdates) {
-              const commentData: Partial<BoardCommentReposition> = {};
+            for (const { comment, position, parentId, parentType } of commentUpdates) {
+              const reactFlowParentId =
+                parentId && parentType === 'zone'
+                  ? `zone-${parentId}`
+                  : parentId && parentType === 'branch'
+                    ? parentId
+                    : undefined;
+              const parentNode = reactFlowParentId
+                ? currentNodes.find((candidate) => candidate.id === reactFlowParentId)
+                : undefined;
+              const plan = planBoardCommentReposition(
+                comment,
+                position,
+                parentId && parentType && parentNode && reactFlowParentId
+                  ? {
+                      id: parentId,
+                      type: parentType,
+                      absolutePosition: getNodeAbsolutePosition(parentNode, currentNodes),
+                      reactFlowParentId,
+                    }
+                  : undefined
+              );
 
-              if (parentId && parentType === 'zone') {
-                // Comment pinned to zone
-                const zoneNode = currentNodes.find((n) => n.id === `zone-${parentId}`);
-                if (zoneNode) {
-                  const zoneAbsPos = getNodeAbsolutePosition(zoneNode, currentNodes);
-                  const relativePos = calculateStoragePosition(position, {
-                    id: parentId,
-                    position: zoneAbsPos,
-                  });
-                  commentData.position = {
-                    relative: {
-                      parent_id: parentId,
-                      parent_type: 'zone',
-                      offset_x: relativePos.x,
-                      offset_y: relativePos.y,
-                    },
-                  };
-                  commentData.branch_id = null;
-                } else {
-                  commentData.position = { absolute: position };
-                  commentData.branch_id = null;
-                }
-              } else if (parentId && parentType === 'branch') {
-                // Comment pinned to branch
-                const branchNode = currentNodes.find((n) => n.id === parentId);
-                if (branchNode) {
-                  const branchAbsPos = getNodeAbsolutePosition(branchNode, currentNodes);
-                  const relativePos = calculateStoragePosition(position, {
-                    id: parentId,
-                    position: branchAbsPos,
-                  });
-                  commentData.branch_id = parentId as BranchID;
-                  commentData.position = {
-                    relative: {
-                      parent_id: parentId,
-                      parent_type: 'branch',
-                      offset_x: relativePos.x,
-                      offset_y: relativePos.y,
-                    },
-                  };
-                } else {
-                  commentData.position = { absolute: position };
-                  commentData.branch_id = null;
-                }
-              } else {
-                // Free-floating comment - use absolute positioning
-                commentData.position = { absolute: position };
-                // IMPORTANT: Use null to explicitly clear branch association
-                // (undefined would be omitted from the patch, leaving old value)
-                commentData.branch_id = null;
-              }
-
-              await client.service(`board-comments/${comment_id}/reposition`).create(commentData);
+              await client
+                .service(`board-comments/${comment.comment_id}/reposition`)
+                .create(plan.data);
 
               // Clear localPositionsRef immediately after patching
               // We've saved the correct position to DB, no need to keep overriding
-              delete localPositionsRef.current[`comment-${comment_id}`];
+              delete localPositionsRef.current[`comment-${comment.comment_id}`];
 
               // Immediately update React Flow node to reflect new parentId
               // This prevents visual glitches while waiting for WebSocket sync
               setNodes((prevNodes) =>
                 prevNodes.map((n) => {
-                  if (n.id === `comment-${comment_id}`) {
+                  if (n.id === `comment-${comment.comment_id}`) {
                     // Update parentId to match new parent (or undefined if free-floating)
-                    const updates: Partial<Node> = { parentId: newReactFlowParentId };
-
-                    // If parent changed, also update position
-                    if (newReactFlowParentId !== n.parentId) {
-                      if (newReactFlowParentId) {
-                        // Now has parent - convert to relative position
-                        const parent = prevNodes.find((p) => p.id === newReactFlowParentId);
-                        if (parent) {
-                          const parentAbsPos = getNodeAbsolutePosition(parent, prevNodes);
-                          const relativePos = calculateStoragePosition(position, {
-                            id: newReactFlowParentId,
-                            position: parentAbsPos,
-                          });
-
-                          updates.position = relativePos;
-                        }
-                      } else {
-                        // No parent - use absolute position
-                        updates.position = position;
-                      }
-                    }
+                    const relative = plan.data.position.relative;
+                    const updates: Partial<Node> = {
+                      parentId: plan.reactFlowParentId,
+                      position: relative
+                        ? { x: relative.offset_x, y: relative.offset_y }
+                        : position,
+                    };
 
                     return { ...n, ...updates };
                   }
@@ -2223,6 +2173,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         nodes,
         boardObjectByBranch,
         boardObjectByCard,
+        commentById,
         setNodes,
       ]
     );

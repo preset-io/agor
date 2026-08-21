@@ -207,6 +207,7 @@ import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-valid
 import {
   createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
+  createTenantWriteGateAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
 import {
@@ -389,6 +390,26 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
   };
 }
 
+/**
+ * Register an authenticated custom route with the same tenant transaction and
+ * write-freeze gate as ordinary tenant-owned Feathers services. Custom routes
+ * are installed after `registerHooks()`, so this registrar—not a static path
+ * list—is their authoritative database boundary.
+ */
+export function createTenantScopedAuthenticatedRouteRegistrar(options: {
+  db: TenantScopeAwareDatabase;
+  config: AgorConfig;
+  jwtSecret: string;
+}): typeof registerAuthenticatedRouteBase {
+  const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook(options);
+  const tenantWriteGateAround = createTenantWriteGateAroundHook(options.db);
+  return (routeApp, path, service, authConfig, routeRequireAuth, routeOptions = {}) =>
+    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+      ...routeOptions,
+      around: [tenantDatabaseScopeAround, tenantWriteGateAround, ...(routeOptions.around ?? [])],
+    });
+}
+
 type BoardCommentRouteParams = Pick<AuthenticatedParams, 'provider' | 'user'>;
 
 /**
@@ -455,6 +476,10 @@ export async function authorizeBoardCommentReposition(input: {
   data: BoardCommentReposition;
   params: BoardCommentRouteParams;
   findBoard: (boardId: string) => Promise<import('@agor/core/types').Board | null>;
+  findVisibleBoard: (
+    userId: UUID,
+    boardId: string
+  ) => Promise<import('@agor/core/types').Board | null>;
 }): Promise<void> {
   const user = input.params.user;
   if (!user) throw new NotAuthenticated('Authentication required');
@@ -463,11 +488,9 @@ export async function authorizeBoardCommentReposition(input: {
     throw new Forbidden('Only the comment author may reposition this board comment');
   }
 
-  if (Object.hasOwn(input.data, 'branch_id')) {
-    const expectedBranchId = input.comment.branch_id ?? null;
-    if (input.data.branch_id !== expectedBranchId) {
-      throw new Forbidden('Board comment attachments cannot be changed while repositioning');
-    }
+  const expectedBranchId = input.comment.branch_id ?? null;
+  if (input.data.branch_id !== expectedBranchId) {
+    throw new Forbidden('Board comment attachments cannot be changed while repositioning');
   }
 
   const relative = input.data.position.relative;
@@ -479,8 +502,10 @@ export async function authorizeBoardCommentReposition(input: {
     throw new Forbidden('Board comment session position does not match its attachment');
   }
   if (relative.parent_type === 'zone') {
-    const board = await input.findBoard(input.comment.board_id);
-    if (board?.objects?.[relative.parent_id]?.type !== 'zone') {
+    const board = privileged
+      ? await input.findBoard(input.comment.board_id)
+      : await input.findVisibleBoard(user.user_id as UUID, input.comment.board_id);
+    if (board?.objects?.[`zone-${relative.parent_id}`]?.type !== 'zone') {
       throw new NotFound('Board resource not found');
     }
   }
@@ -645,7 +670,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
-  const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook({ db, config, jwtSecret });
   const tenantIdentityAround = createTenantDatabaseScopeAroundHook({
     db,
     config,
@@ -665,18 +689,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     deferWithTenantContext(params, fn);
   }
 
-  const registerAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
-    routeApp,
-    path,
-    service,
-    authConfig,
-    routeRequireAuth,
-    options = {}
-  ) =>
-    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
-      ...options,
-      around: [tenantDatabaseScopeAround, ...(options.around ?? [])],
-    });
+  const registerAuthenticatedRoute = createTenantScopedAuthenticatedRouteRegistrar({
+    db,
+    config,
+    jwtSecret,
+  });
 
   const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
     routeApp,
@@ -3701,6 +3718,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             data: reposition,
             params,
             findBoard: (boardId) => boardCommentBoardRepository.findById(boardId),
+            findVisibleBoard: (userId, boardId) =>
+              boardCommentBoardRepository.findVisibleById(userId, boardId),
           });
           const updated = await boardCommentsService.reposition(
             comment.comment_id,

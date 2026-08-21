@@ -369,16 +369,6 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('wraps custom board-comment mutation routes in tenant database scope', () => {
-    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
-      expect.arrayContaining([
-        'board-comments/:id/toggle-reaction',
-        'board-comments/:id/reply',
-        'board-comments/:id/reposition',
-      ])
-    );
-  });
-
   it('wraps MCP OAuth/session database helpers in tenant scope without holding network I/O open', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([

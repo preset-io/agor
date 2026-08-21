@@ -8,13 +8,15 @@ import {
   assertTenantWritable,
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
 } from '@agor/core/db';
-import { NotAuthenticated } from '@agor/core/feathers';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
@@ -44,6 +46,39 @@ function readHeaderValue(
 type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefined;
 
 export type TenantDatabaseRunner = <T>(work: () => Promise<T>) => Promise<T>;
+
+const TENANT_WRITE_METHODS = new Set(['create', 'update', 'patch', 'remove']);
+
+/**
+ * Enforce the tenant freeze gate inside an already-open tenant transaction.
+ * Shared by ordinary Feathers services and custom authenticated routes so a
+ * route registered after `registerHooks()` cannot silently miss the gate.
+ */
+export async function enforceTenantWriteGateForHook(
+  db: TenantScopeAwareDatabase,
+  context: HookContext
+): Promise<HookContext> {
+  if (!TENANT_WRITE_METHODS.has(context.method)) return context;
+  const tenantId = context.params.tenant?.tenant_id;
+  if (!tenantId || !getCurrentTenantDatabaseScope()) return context;
+  try {
+    await assertTenantWritable(db, tenantId);
+  } catch (error) {
+    if (error instanceof TenantWriteGateActiveError) {
+      throw new Unavailable(error.message);
+    }
+    throw error;
+  }
+  return context;
+}
+
+/** Around-hook adapter for custom routes whose inner handler performs writes. */
+export function createTenantWriteGateAroundHook(db: TenantScopeAwareDatabase) {
+  return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
+    await enforceTenantWriteGateForHook(db, context);
+    await next();
+  };
+}
 
 export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
   const scopedParams = params as TenantScopedParams;

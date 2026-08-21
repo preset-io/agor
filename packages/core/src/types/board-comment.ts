@@ -212,8 +212,8 @@ export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved
 /** Dedicated spatial mutation DTO; generic patch deliberately excludes it. */
 export interface BoardCommentReposition {
   position: NonNullable<BoardComment['position']>;
-  /** Optional audience-anchor precondition; the route never changes it. */
-  branch_id?: BranchID | null;
+  /** Required audience-anchor precondition; the route never changes it. */
+  branch_id: BranchID | null;
 }
 
 // ============================================================================

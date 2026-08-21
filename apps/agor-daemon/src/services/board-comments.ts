@@ -127,11 +127,10 @@ export function publicBoardCommentRepositionInput(data: unknown): BoardCommentRe
   if (!hasOnlyFields(record, new Set(['position', 'branch_id']))) {
     throw new BadRequest('Unsupported board comment reposition fields');
   }
-  if (
-    Object.hasOwn(record, 'branch_id') &&
-    record.branch_id !== null &&
-    (typeof record.branch_id !== 'string' || !record.branch_id)
-  ) {
+  if (!Object.hasOwn(record, 'branch_id')) {
+    throw new BadRequest('branch_id audience precondition required');
+  }
+  if (record.branch_id !== null && (typeof record.branch_id !== 'string' || !record.branch_id)) {
     throw new BadRequest('branch_id must be a non-empty string or null');
   }
   if (!record.position || typeof record.position !== 'object' || Array.isArray(record.position)) {
@@ -187,9 +186,7 @@ export function publicBoardCommentRepositionInput(data: unknown): BoardCommentRe
 
   return {
     position: projectedPosition,
-    ...(Object.hasOwn(record, 'branch_id')
-      ? { branch_id: record.branch_id as BoardCommentReposition['branch_id'] }
-      : {}),
+    branch_id: record.branch_id as BoardCommentReposition['branch_id'],
   };
 }
 
