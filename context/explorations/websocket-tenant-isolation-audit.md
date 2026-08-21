@@ -49,7 +49,8 @@ fails closed.
    joins. Additive grants and non-ACL resource changes use a cache-only form of
    the same distributed signal so they cannot interrupt the operation that
    created them. Full eviction includes permission-source/default-policy
-   changes and board/user deletion, not only direct grant edits.
+   changes, filesystem-access reductions, and board/user deletion, not only
+   direct grant edits.
 7. Socket.IO connection-state recovery is not enabled. A reconnect therefore
    performs a new handshake rather than restoring old rooms.
 
@@ -179,9 +180,12 @@ gaps. They were fixed before merge:
 2. Authorization invalidation clears every replica's realtime access cache.
    Revocation-capable changes, including branch removal, additionally
    disconnect sockets before a reconnect can reuse a warm pre-revocation
-   decision. Additive changes and the primary-teammate pointer use the
-   cache-only form: the selected branch must already be attached to the board,
-   while attachment removal remains a full-eviction operation.
+   decision. Additive changes use the cache-only form. Primary-teammate changes
+   capture trusted pre-mutation state: an absent or still-attached prior
+   primary is cache-only, while a detached/unresolved prior primary fully
+   evicts because its pointer can be the user's last board-visibility anchor.
+   Branch attachment removal and filesystem-access reductions also remain
+   full-eviction operations.
 3. Browsers can no longer issue raw terminal-room joins. An authorized
    `terminals.create` installs the server-owned attachment capability, and an
    authorization invalidation retires the tenant's local terminal attachments.

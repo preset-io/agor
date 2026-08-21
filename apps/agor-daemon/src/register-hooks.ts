@@ -811,6 +811,31 @@ export const redactMCPServerSecretFields = async (context: HookContext) => {
 
 export type RealtimeAuthorizationInvalidationMode = 'none' | 'cache' | 'evict';
 
+const PRIMARY_TEAMMATE_INVALIDATION_MODE = Symbol('primaryTeammateInvalidationMode');
+
+type PrimaryTeammateAuthorizationState = Pick<Board, 'board_id' | 'primary_teammate_id'>;
+type PrimaryTeammateBranchState = Pick<Branch, 'branch_id' | 'board_id'>;
+
+/**
+ * Decide whether replacing/clearing a primary-teammate pointer can revoke the
+ * board visibility it currently provides.
+ *
+ * A null pointer is additive/no-op. An attached primary is redundant with the
+ * branch's normal board reference, so removing the pointer cannot narrow
+ * access. A detached or unresolved primary can be the caller's only remaining
+ * visibility anchor and must therefore trigger full capability eviction.
+ */
+export function classifyPrimaryTeammateAuthorizationInvalidation(
+  board: PrimaryTeammateAuthorizationState,
+  primaryBranch: PrimaryTeammateBranchState | null
+): Exclude<RealtimeAuthorizationInvalidationMode, 'none'> {
+  if (!board.primary_teammate_id) return 'cache';
+  return primaryBranch?.branch_id === board.primary_teammate_id &&
+    primaryBranch.board_id === board.board_id
+    ? 'cache'
+    : 'evict';
+}
+
 /**
  * Classify authorization mutations by the capability they can stale.
  *
@@ -854,7 +879,7 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (context.path === 'branches') {
     if (context.method === 'create') return 'none';
     if (context.method === 'remove') return 'evict';
-    return ['board_id', 'others_can', 'permission_source'].some((field) =>
+    return ['board_id', 'others_can', 'others_fs_access', 'permission_source'].some((field) =>
       Object.hasOwn(data, field)
     )
       ? 'evict'
@@ -864,9 +889,12 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (context.path === 'boards') {
     if (context.method === 'create') return 'none';
     if (context.method === 'remove') return 'evict';
-    return ['access_mode', 'primary_teammate_id', 'default_others_can'].some((field) =>
-      Object.hasOwn(data, field)
-    )
+    return [
+      'access_mode',
+      'primary_teammate_id',
+      'default_others_can',
+      'default_others_fs_access',
+    ].some((field) => Object.hasOwn(data, field))
       ? 'evict'
       : 'none';
   }
@@ -1304,9 +1332,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const evictStaleRealtimeAuthorization = (context: HookContext): HookContext => {
-    const mode = classifyRealtimeAuthorizationInvalidation(context);
-    if (mode === 'none') return context;
+  const scheduleRealtimeAuthorizationInvalidation = (
+    context: HookContext,
+    mode: Exclude<RealtimeAuthorizationInvalidationMode, 'none'>
+  ): HookContext => {
     deferWithTenantContext(
       context.params,
       async () => {
@@ -1320,18 +1349,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const invalidateRealtimeAuthorizationCache = (context: HookContext): HookContext => {
-    deferWithTenantContext(
-      context.params,
-      async () => {
-        app.emit('realtime:authorization-invalidated', {
-          tenantId: requireCurrentTenantId(),
-          disconnectSockets: false,
-        });
-      },
-      () => console.warn('[realtime] Failed to schedule authorization eviction')
-    );
-    return context;
+  const evictStaleRealtimeAuthorization = (context: HookContext): HookContext => {
+    const mode = classifyRealtimeAuthorizationInvalidation(context);
+    return mode === 'none' ? context : scheduleRealtimeAuthorizationInvalidation(context, mode);
   };
 
   for (const path of [
@@ -3233,6 +3253,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // BoardRepository for RBAC find-scope hook (single instance reused across
   // requests). Cheap to construct — just wraps the shared db handle.
+  const boardIdentifierFromHookContext = (context: HookContext): string | undefined => {
+    // biome-ignore lint/suspicious/noExplicitAny: Custom Feathers method args are dynamic.
+    const args = (context as any).arguments as unknown[] | undefined;
+    const firstArg = args?.[0];
+    return typeof context.id === 'string'
+      ? context.id
+      : typeof context.params.route?.id === 'string'
+        ? context.params.route.id
+        : typeof firstArg === 'string'
+          ? firstArg
+          : firstArg && typeof firstArg === 'object'
+            ? ((firstArg as { boardId?: string; id?: string; slug?: string }).boardId ??
+              (firstArg as { boardId?: string; id?: string; slug?: string }).id ??
+              (firstArg as { boardId?: string; id?: string; slug?: string }).slug)
+            : undefined;
+  };
+
   const ensureBoardAccess = (mode: 'view' | 'mutate', action: string) => {
     return async (context: HookContext) => {
       if (!executionMode.appRbacEnabled || !context.params.provider) return context;
@@ -3245,21 +3282,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         return context;
       }
 
-      // biome-ignore lint/suspicious/noExplicitAny: Custom Feathers method args are dynamic.
-      const args = (context as any).arguments as unknown[] | undefined;
-      const firstArg = args?.[0];
-      const id =
-        typeof context.id === 'string'
-          ? context.id
-          : typeof context.params.route?.id === 'string'
-            ? context.params.route.id
-            : typeof firstArg === 'string'
-              ? firstArg
-              : firstArg && typeof firstArg === 'object'
-                ? ((firstArg as { boardId?: string; id?: string; slug?: string }).boardId ??
-                  (firstArg as { boardId?: string; id?: string; slug?: string }).id ??
-                  (firstArg as { boardId?: string; id?: string; slug?: string }).slug)
-                : undefined;
+      const id = boardIdentifierFromHookContext(context);
       if (!id) throw new BadRequest('Board ID is required');
 
       const board = await boardRepository.findBySlugOrId(id);
@@ -3280,6 +3303,45 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
   const ensureCanViewBoard = (action: string) => ensureBoardAccess('view', action);
   const ensureCanMutateBoard = (action: string) => ensureBoardAccess('mutate', action);
+
+  type PrimaryTeammateInvalidationParams = HookContext['params'] & {
+    [PRIMARY_TEAMMATE_INVALIDATION_MODE]?: Exclude<RealtimeAuthorizationInvalidationMode, 'none'>;
+  };
+
+  const capturePrimaryTeammateInvalidationMode = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    // Fail closed unless the tenant-scoped pre-mutation state proves that the
+    // current primary pointer is absent or redundant with an attached branch.
+    let mode: Exclude<RealtimeAuthorizationInvalidationMode, 'none'> = 'evict';
+    const boardIdentifier = boardIdentifierFromHookContext(context);
+    if (boardIdentifier) {
+      try {
+        const board = await boardRepository.findBySlugOrId(boardIdentifier);
+        if (board) {
+          const primaryBranch = board.primary_teammate_id
+            ? await branchRepository.findById(board.primary_teammate_id)
+            : null;
+          mode = classifyPrimaryTeammateAuthorizationInvalidation(board, primaryBranch);
+        }
+      } catch {
+        // The mutation itself will return its normal non-enumerating error. If
+        // it does succeed despite an unresolved pre-state, evict rather than
+        // retaining a possibly revoked passive capability.
+      }
+    }
+    (context.params as PrimaryTeammateInvalidationParams)[PRIMARY_TEAMMATE_INVALIDATION_MODE] =
+      mode;
+    return context;
+  };
+
+  const invalidatePrimaryTeammateAuthorization = (context: HookContext): HookContext => {
+    const mode = (context.params as PrimaryTeammateInvalidationParams)[
+      PRIMARY_TEAMMATE_INVALIDATION_MODE
+    ];
+    // A missing capture is unexpected, but full eviction is the safe fallback.
+    return scheduleRealtimeAuthorizationInvalidation(context, mode ?? 'evict');
+  };
 
   const emitBoardPatched = (board: Board | undefined, context: HookContext<Board>) => {
     if (board) {
@@ -3457,10 +3519,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       setPrimaryTeammate: [
         requireMinimumRole(ROLES.MEMBER, 'set primary teammate'),
         ensureCanMutateBoard('set primary teammate'),
+        capturePrimaryTeammateInvalidationMode,
       ],
       clearPrimaryTeammate: [
         requireMinimumRole(ROLES.MEMBER, 'clear primary teammate'),
         ensureCanMutateBoard('clear primary teammate'),
+        capturePrimaryTeammateInvalidationMode,
       ],
       ensureTeammateWelcomeNote: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
@@ -3584,10 +3648,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
-        // A primary teammate must already be attached to this board. Changing
-        // the display pointer therefore cannot narrow the board/branch ACL,
-        // but every replica still drops any derived visibility cache.
-        invalidateRealtimeAuthorizationCache,
+        // Replacing an attached primary is cache-only because its board_id is
+        // an equivalent visibility anchor. Replacing a stale detached primary
+        // can revoke the only remaining board access and fully evicts.
+        invalidatePrimaryTeammateAuthorization,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;
@@ -3595,9 +3659,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
-        // Branch detachment is the revoking operation and has its own full
-        // eviction; clearing this redundant display pointer is cache-only.
-        invalidateRealtimeAuthorizationCache,
+        // Use trusted pre-mutation state captured inside this request's tenant
+        // transaction; unresolved/detached primaries fail closed to eviction.
+        invalidatePrimaryTeammateAuthorization,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;

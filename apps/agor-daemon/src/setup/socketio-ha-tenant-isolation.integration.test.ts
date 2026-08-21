@@ -177,6 +177,50 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
     replicaVisibilityUsers = [USER_A];
   });
 
+  it('clears a remote replica cache for additive grants without disconnecting sockets', async () => {
+    const adapterKey = `agor-socket-cache-refresh-${Date.now()}-${Math.random()}`;
+    replicaVisibilityUsers = [];
+    const [replicaA, replicaB] = await Promise.all([
+      startReplica(adapterKey, 'replica-a'),
+      startReplica(adapterKey, 'replica-b'),
+    ]);
+    replicas.push(replicaA, replicaB);
+
+    const tokenA = issueRuntimeToken(
+      { sub: USER_A, type: 'access', tenant_id: TENANT_A },
+      JWT_SECRET,
+      '5m'
+    );
+    const senderA = createClient(replicaA.url, false, { reconnectionAttempts: 0 });
+    const peerA = createClient(replicaB.url, false, { reconnectionAttempts: 0 });
+    clients.push(senderA, peerA);
+    senderA.io.auth = { token: tokenA };
+    peerA.io.auth = { token: tokenA };
+    for (const client of clients) client.io.connect();
+    await Promise.all(clients.map(waitForConnect));
+
+    await expect(replicaB.accessCache.getBranchVisibility('branch-a')).resolves.toEqual({
+      mode: 'explicitUsers',
+      userIds: new Set(),
+    });
+    await expect(watchBoard(peerA, BOARD_A)).resolves.toEqual({ ok: false });
+
+    replicaVisibilityUsers = [USER_A];
+    replicaA.app.emit('realtime:authorization-invalidated', {
+      tenantId: TENANT_A,
+      disconnectSockets: false,
+    });
+    await delay(200);
+
+    expect(senderA.io.connected).toBe(true);
+    expect(peerA.io.connected).toBe(true);
+    await expect(replicaB.accessCache.getBranchVisibility('branch-a')).resolves.toEqual({
+      mode: 'explicitUsers',
+      userIds: new Set([USER_A]),
+    });
+    await expect(watchBoard(peerA, BOARD_A)).resolves.toEqual({ ok: true });
+  });
+
   it('delivers an authorized event across replicas once and evicts stale tenant rooms on every replica', async () => {
     const adapterKey = `agor-socket-isolation-${Date.now()}-${Math.random()}`;
     const [replicaA, replicaB] = await Promise.all([

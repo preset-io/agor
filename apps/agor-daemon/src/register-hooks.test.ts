@@ -28,6 +28,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
+  classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
@@ -90,9 +91,11 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
 
   it.each([
     ['branches', 'patch', { others_can: 'none' }],
+    ['branches', 'patch', { others_fs_access: 'none' }],
     ['branches', 'patch', { board_id: 'board-2' }],
     ['branches', 'remove', {}],
     ['boards', 'patch', { access_mode: 'private' }],
+    ['boards', 'patch', { default_others_fs_access: 'read' }],
     ['boards', 'remove', {}],
     ['users', 'patch', { role: 'suspended' }],
     ['users', 'remove', {}],
@@ -107,6 +110,44 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
 
   it('ignores branch metadata patches that cannot change authorization', () => {
     expect(classify('branches', 'patch', { name: 'Renamed' })).toBe('none');
+  });
+});
+
+describe('classifyPrimaryTeammateAuthorizationInvalidation', () => {
+  const board = {
+    board_id: 'board-1',
+    primary_teammate_id: 'branch-1',
+  } as const;
+
+  it('uses cache-only invalidation when the prior primary remains attached', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(board, {
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+      })
+    ).toBe('cache');
+  });
+
+  it('fully evicts when a detached primary could be the only visibility anchor', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(board, {
+        branch_id: 'branch-1',
+        board_id: 'board-2',
+      })
+    ).toBe('evict');
+  });
+
+  it('fails closed when the existing primary cannot be resolved', () => {
+    expect(classifyPrimaryTeammateAuthorizationInvalidation(board, null)).toBe('evict');
+  });
+
+  it('does not evict for an initial assignment with no previous primary', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(
+        { board_id: 'board-1', primary_teammate_id: null },
+        null
+      )
+    ).toBe('cache');
   });
 });
 
