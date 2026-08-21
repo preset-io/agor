@@ -109,7 +109,16 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
   app.use('boards', {
     async get(id: BoardID, params?: TestParams) {
       const tenantId = tenantFrom(params);
-      if (id === BOARD_A && tenantId === TENANT_A) return { board_id: id };
+      if (id === BOARD_A && tenantId === TENANT_A) {
+        const visibility = await accessCache.getBranchVisibility('branch-a');
+        if (
+          visibility?.mode === 'explicitUsers' &&
+          params?.user?.user_id &&
+          visibility.userIds.has(params.user.user_id)
+        ) {
+          return { board_id: id };
+        }
+      }
       if (id === BOARD_B && tenantId === TENANT_B) return { board_id: id };
       throw new Error('Board unavailable');
     },
@@ -235,5 +244,16 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
       mode: 'explicitUsers',
       userIds: new Set(),
     });
+    peerA.io.connect();
+    await waitForConnect(peerA);
+    await expect(watchBoard(peerA, BOARD_A)).resolves.toEqual({ ok: false });
+    peerA.io.emit('cursor-move', {
+      boardId: BOARD_A,
+      x: 30,
+      y: 40,
+      timestamp: Date.now(),
+    });
+    await delay(120);
+    expect(foreignEvents).toEqual([]);
   });
 });

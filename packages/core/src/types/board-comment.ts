@@ -115,6 +115,20 @@ export interface BoardComment {
 }
 
 /**
+ * Domain-owned attachment policy shared by persistence authorization and
+ * realtime publication. Adding another attachment kind must update this one
+ * descriptor rather than two independent field lists.
+ */
+export const BOARD_COMMENT_ATTACHMENT_POLICY = [
+  { field: 'branch_id', resource: 'branch' },
+  { field: 'session_id', resource: 'session' },
+  { field: 'task_id', resource: 'task' },
+  { field: 'message_id', resource: 'message' },
+] as const;
+
+export type BoardCommentAttachment = (typeof BOARD_COMMENT_ATTACHMENT_POLICY)[number];
+
+/**
  * Comment attachment type determination
  *
  * Hierarchy (most specific → least specific):
@@ -176,12 +190,17 @@ export function getCommentAttachmentType(comment: BoardComment): CommentAttachme
 /**
  * Create input for new comment (omits auto-generated fields)
  */
-export type BoardCommentCreate = Omit<
+export type BoardCommentCreate = Pick<
   BoardComment,
-  'comment_id' | 'created_at' | 'updated_at' | 'content_preview'
-> & {
-  content: string; // Will auto-generate content_preview
-};
+  | 'board_id'
+  | 'content'
+  | 'branch_id'
+  | 'session_id'
+  | 'task_id'
+  | 'message_id'
+  | 'position'
+  | 'mentions'
+>;
 
 /**
  * Patch input for updating comment (partial)

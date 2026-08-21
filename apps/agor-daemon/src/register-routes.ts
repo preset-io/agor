@@ -94,6 +94,7 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-capability.js';
 import { isExecutorSessionTokenPayload } from './auth/executor-session-token.js';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
@@ -715,7 +716,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const { ServiceJWTStrategy } = await import('./auth/service-jwt-strategy.js');
 
   // Register authentication strategies
-  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService, tenantTokenClaim));
+  authentication.register(
+    'jwt',
+    new ServiceJWTStrategy(
+      sessionTokenService,
+      tenantTokenClaim,
+      getOrCreateExecutorConnectionRevocationFence(app)
+    )
+  );
   authentication.register('local', new AgorLocalStrategy());
 
   // Register API key authentication strategy
@@ -3576,9 +3584,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         async create(data: { user_id?: string; emoji?: string }, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          await authorizeBoardCommentRoute(id, params);
+          const comment = await authorizeBoardCommentRoute(id, params);
           const updated = await boardCommentsService.toggleReaction(
-            id,
+            comment.comment_id,
             boardCommentReactionInput(data, params),
             params
           );
@@ -3606,9 +3614,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         async create(data: Partial<import('@agor/core/types').BoardComment>, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          await authorizeBoardCommentRoute(id, params);
+          const parent = await authorizeBoardCommentRoute(id, params);
           const reply = await boardCommentsService.createReply(
-            id,
+            parent.comment_id,
             boardCommentReplyInput(data, params),
             params
           );

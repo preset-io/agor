@@ -12,48 +12,21 @@
 
 import { JWTStrategy } from '@agor/core/feathers';
 import type { Params, UserAuthMetadata } from '@agor/core/types';
-import type { SessionTokenService } from '../services/session-token-service.js';
+import {
+  fingerprintExecutorSessionToken,
+  type SessionTokenService,
+} from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import {
+  attachExecutorConnectionCapabilityCandidate,
+  type ExecutorConnectionRevocationFence,
+} from './executor-connection-capability.js';
 import {
   getExecutorSessionTokenSessionId,
   isExecutorSessionTokenPayload,
 } from './executor-session-token.js';
 import { readRuntimeTenantClaim } from './runtime-tokens.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
-
-type JwtConnectionState = {
-  authentication?: { strategy?: string; accessToken?: string; payload?: unknown };
-  feathers?: { authentication?: { strategy?: string; accessToken?: string; payload?: unknown } };
-};
-
-function persistExecutorJwtPayloadOnConnection(
-  params: unknown,
-  accessToken: string | undefined,
-  payload: unknown
-): void {
-  const connection = (params as { connection?: JwtConnectionState } | undefined)?.connection;
-  if (!connection) return;
-
-  // For Socket.io, Feathers service params are built from the per-socket
-  // `feathers` connection object on subsequent calls. Depending on the call
-  // path, `params.connection` may be that object directly, or the socket-like
-  // wrapper that owns it. Persist the decoded executor JWT payload in whichever
-  // object will become future `params.authentication`, otherwise the executor
-  // reconnects as the session creator user but loses the task-scoped claims.
-  let target: JwtConnectionState;
-  if ('feathers' in connection) {
-    connection.feathers ??= {};
-    target = connection.feathers;
-  } else {
-    target = connection;
-  }
-  target.authentication = {
-    ...(target.authentication ?? {}),
-    strategy: 'jwt',
-    ...(accessToken ? { accessToken } : {}),
-    payload,
-  };
-}
 
 function propagateTenantFromJwtPayload(
   params: Params,
@@ -77,7 +50,8 @@ function propagateTenantFromJwtPayload(
 export class ServiceJWTStrategy extends JWTStrategy {
   constructor(
     private sessionTokenService?: SessionTokenService,
-    private tenantClaim?: string
+    private tenantClaim?: string,
+    private executorRevocationFence?: ExecutorConnectionRevocationFence
   ) {
     super();
   }
@@ -212,8 +186,13 @@ export class ServiceJWTStrategy extends JWTStrategy {
         throw new Error('Executor token validation unavailable');
       }
       const sessionId = getExecutorSessionTokenSessionId(payload);
+      if (!sessionId || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
+        throw new Error('Executor token is missing durable connection scope');
+      }
+      const tenantId = readRuntimeTenantClaim(payload, this.tenantClaim);
+      const revocationSnapshot = this.executorRevocationFence?.snapshot(tenantId);
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
-        tenantId: readRuntimeTenantClaim(payload, this.tenantClaim),
+        tenantId,
         userId: typeof payload.sub === 'string' ? payload.sub : undefined,
         sessionId,
         taskId: payload.task_id,
@@ -222,13 +201,24 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!sessionInfo) {
         throw new Error('Invalid or expired executor token');
       }
-      persistExecutorJwtPayloadOnConnection(params, token, payload);
-      return {
+      const executorResult = {
         ...result,
         session_id: sessionInfo.session_id,
         task_id: sessionInfo.task_id,
         branch_id: sessionInfo.branch_id,
       };
+      if (revocationSnapshot) {
+        attachExecutorConnectionCapabilityCandidate(executorResult, {
+          ...(tenantId ? { tenantId } : {}),
+          sessionId: sessionInfo.session_id,
+          ...(sessionInfo.task_id ? { taskId: sessionInfo.task_id } : {}),
+          ...(sessionInfo.branch_id ? { branchId: sessionInfo.branch_id } : {}),
+          expiresAt: payload.exp * 1000,
+          tokenFingerprint: fingerprintExecutorSessionToken(token),
+          revocationSnapshot,
+        });
+      }
+      return executorResult;
     }
 
     if (

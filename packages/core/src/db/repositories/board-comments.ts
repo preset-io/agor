@@ -8,6 +8,7 @@
 import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { and, eq, isNotNull, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { BOARD_COMMENT_ATTACHMENT_POLICY } from '../../types/board-comment.js';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type BoardCommentInsert, type BoardCommentRow, boardComments, boards } from '../schema';
@@ -32,6 +33,25 @@ import {
  */
 function generatePreview(content: string): string {
   return content.length > 200 ? `${content.slice(0, 200)}...` : content;
+}
+
+function visibleAttachmentCondition(
+  db: Database,
+  userId: UUID,
+  resource: (typeof BOARD_COMMENT_ATTACHMENT_POLICY)[number]['resource'],
+  // biome-ignore lint/suspicious/noExplicitAny: accepts either a Drizzle column or bound SQL value
+  value: any
+): SQL {
+  switch (resource) {
+    case 'branch':
+      return visibleBranchReferenceAccessExists(db, userId, value);
+    case 'session':
+      return visibleSessionReferenceAccessExists(db, userId, value);
+    case 'task':
+      return visibleTaskReferenceAccessExists(db, userId, value);
+    case 'message':
+      return visibleMessageReferenceAccessExists(db, userId, value);
+  }
 }
 
 /**
@@ -130,6 +150,20 @@ export class BoardCommentsRepository
     });
   }
 
+  /** Resolve a short id only among rows this caller may observe. */
+  private async resolveVisibleId(userId: UUID, id: string): Promise<string> {
+    return resolveByShortIdPrefix(id, 'BoardComment', async (pattern) => {
+      const rows = await select(this.db)
+        .from(boardComments)
+        .where(
+          and(like(boardComments.comment_id, pattern), this.buildVisibleToUserCondition(userId))
+        )
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((row: { comment_id: string }) => row.comment_id);
+    });
+  }
+
   /**
    * Create a new comment
    */
@@ -185,7 +219,7 @@ export class BoardCommentsRepository
    */
   async findVisibleById(userId: UUID, id: string): Promise<BoardComment | null> {
     try {
-      const fullId = await this.resolveId(id);
+      const fullId = await this.resolveVisibleId(userId, id);
       const row = await select(this.db)
         .from(boardComments)
         .where(and(eq(boardComments.comment_id, fullId), this.buildVisibleToUserCondition(userId)))
@@ -218,28 +252,14 @@ export class BoardCommentsRepository
   ): Promise<boolean> {
     if (!references.board_id) return false;
     const hasAttachment = Boolean(
-      references.branch_id || references.session_id || references.task_id || references.message_id
+      BOARD_COMMENT_ATTACHMENT_POLICY.some(({ field }) => references[field])
     );
     const conditions: SQL[] = [];
-    if (references.branch_id) {
-      conditions.push(
-        visibleBranchReferenceAccessExists(this.db, userId, sql`${references.branch_id}`)
-      );
-    }
-    if (references.session_id) {
-      conditions.push(
-        visibleSessionReferenceAccessExists(this.db, userId, sql`${references.session_id}`)
-      );
-    }
-    if (references.task_id) {
-      conditions.push(
-        visibleTaskReferenceAccessExists(this.db, userId, sql`${references.task_id}`)
-      );
-    }
-    if (references.message_id) {
-      conditions.push(
-        visibleMessageReferenceAccessExists(this.db, userId, sql`${references.message_id}`)
-      );
+    for (const { field, resource } of BOARD_COMMENT_ATTACHMENT_POLICY) {
+      const value = references[field];
+      if (value) {
+        conditions.push(visibleAttachmentCondition(this.db, userId, resource, sql`${value}`));
+      }
     }
     if (!hasAttachment) {
       conditions.push(
@@ -316,11 +336,14 @@ export class BoardCommentsRepository
   }
 
   private buildVisibleToUserCondition(userId: UUID): SQL {
+    const attachmentColumns = {
+      branch_id: boardComments.branch_id,
+      session_id: boardComments.session_id,
+      task_id: boardComments.task_id,
+      message_id: boardComments.message_id,
+    } as const;
     const hasAttachedResource = or(
-      isNotNull(boardComments.branch_id),
-      isNotNull(boardComments.session_id),
-      isNotNull(boardComments.task_id),
-      isNotNull(boardComments.message_id)
+      ...BOARD_COMMENT_ATTACHMENT_POLICY.map(({ field }) => isNotNull(attachmentColumns[field]))
     );
 
     return (
@@ -329,21 +352,11 @@ export class BoardCommentsRepository
         // visible through its branch/session chain. We intentionally do not also
         // require board visibility in that case: the attachment is the stronger,
         // more specific access path.
-        or(
-          isNull(boardComments.branch_id),
-          visibleBranchReferenceAccessExists(this.db, userId, boardComments.branch_id)
-        ),
-        or(
-          isNull(boardComments.session_id),
-          visibleSessionReferenceAccessExists(this.db, userId, boardComments.session_id)
-        ),
-        or(
-          isNull(boardComments.task_id),
-          visibleTaskReferenceAccessExists(this.db, userId, boardComments.task_id)
-        ),
-        or(
-          isNull(boardComments.message_id),
-          visibleMessageReferenceAccessExists(this.db, userId, boardComments.message_id)
+        ...BOARD_COMMENT_ATTACHMENT_POLICY.map(({ field, resource }) =>
+          or(
+            isNull(attachmentColumns[field]),
+            visibleAttachmentCondition(this.db, userId, resource, attachmentColumns[field])
+          )
         ),
         // Pure board/spatial comments have no stronger attachment, so they
         // inherit board visibility.

@@ -13,8 +13,52 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { BoardCommentsRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
-import type { BoardComment, QueryParams, UUID } from '@agor/core/types';
+import { BadRequest } from '@agor/core/feathers';
+import type { BoardComment, BoardCommentCreate, QueryParams, UUID } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+
+const PUBLIC_BOARD_COMMENT_CREATE_FIELDS = new Set([
+  'board_id',
+  'content',
+  'branch_id',
+  'session_id',
+  'task_id',
+  'message_id',
+  'position',
+  'mentions',
+]);
+
+/**
+ * Enforce the public thread-root contract. Ownership, ids, previews, state,
+ * reactions, timestamps, and parent links are server-owned. Replies have a
+ * separate operation that authorizes the parent and inherits its attachments.
+ */
+export function publicBoardCommentCreateInput(data: unknown): BoardCommentCreate {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new BadRequest('Board comment input must be an object');
+  }
+  const record = data as Record<string, unknown>;
+  const unsupported = Object.keys(record).filter(
+    (field) => !PUBLIC_BOARD_COMMENT_CREATE_FIELDS.has(field)
+  );
+  if (unsupported.length > 0) {
+    throw new BadRequest(
+      `Unsupported board comment create fields: ${unsupported.sort().join(', ')}`
+    );
+  }
+  if (typeof record.board_id !== 'string' || !record.board_id) {
+    throw new BadRequest('board_id required');
+  }
+  if (typeof record.content !== 'string' || !record.content) {
+    throw new BadRequest('content required');
+  }
+
+  const projected: Record<string, unknown> = {};
+  for (const field of PUBLIC_BOARD_COMMENT_CREATE_FIELDS) {
+    if (Object.hasOwn(record, field)) projected[field] = record[field];
+  }
+  return projected as BoardCommentCreate;
+}
 
 /**
  * Board comments service params

@@ -25,6 +25,10 @@ import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  commitExecutorConnectionCapability,
+  getOrCreateExecutorConnectionRevocationFence,
+} from '../auth/executor-connection-capability.js';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   boardPresenceRoomName,
@@ -352,19 +356,23 @@ it('fences an already-authenticated task executor on exact and HA session revoca
     },
   });
   const exactToken = 'executor-token-exact';
+  const fence = getOrCreateExecutorConnectionRevocationFence(app);
   const exact = makeSocket('executor-exact', io);
-  exact.feathers = {
-    authentication: {
-      accessToken: exactToken,
-      payload: {
-        type: 'executor-session',
-        purpose: 'executor-task',
-        session_id: 'session-1',
-        task_id: 'task-1',
-      },
+  exact.feathers = {};
+  const tenantA = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
+  commitExecutorConnectionCapability(
+    exact.feathers,
+    {
+      tenantId: tenantA.tenant_id,
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      expiresAt: Date.now() + 60_000,
+      tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
+      revocationSnapshot: fence.snapshot(tenantA.tenant_id),
     },
-  };
-  exact.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+    tenantA,
+    fence
+  );
   connect(io, exact);
 
   (app as any).eventHandlers.get('realtime:executor-token-invalidated')?.({
@@ -381,18 +389,21 @@ it('fences an already-authenticated task executor on exact and HA session revoca
   });
 
   const session = makeSocket('executor-session', io);
-  session.feathers = {
-    authentication: {
-      accessToken: 'another-token',
-      payload: {
-        type: 'executor-session',
-        purpose: 'executor-task',
-        session_id: 'session-2',
-        task_id: 'task-2',
-      },
+  session.feathers = {};
+  const tenantB = { tenant_id: 'tenant-b', source: 'auth_claim' } as const;
+  commitExecutorConnectionCapability(
+    session.feathers,
+    {
+      tenantId: tenantB.tenant_id,
+      sessionId: 'session-2',
+      taskId: 'task-2',
+      expiresAt: Date.now() + 60_000,
+      tokenFingerprint: fingerprintExecutorSessionToken('another-token'),
+      revocationSnapshot: fence.snapshot(tenantB.tenant_id),
     },
-  };
-  session.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+    tenantB,
+    fence
+  );
   connect(io, session);
 
   io.serverHandlers.get(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT)?.({
@@ -2214,6 +2225,30 @@ describe('configureChannels tenant isolation', () => {
     return { app: app as unknown as Application, handlers, joins, leaves };
   }
 
+  function installTaskExecutorCapability(
+    app: Application,
+    connection: object,
+    tenantId: string,
+    sessionId: string,
+    taskId: string
+  ) {
+    const fence = getOrCreateExecutorConnectionRevocationFence(app);
+    const tenant = { tenant_id: tenantId, source: 'auth_claim' } as const;
+    return commitExecutorConnectionCapability(
+      connection,
+      {
+        tenantId,
+        sessionId,
+        taskId,
+        expiresAt: Date.now() + 60_000,
+        tokenFingerprint: fingerprintExecutorSessionToken(`${sessionId}:${taskId}`),
+        revocationSnapshot: fence.snapshot(tenantId),
+      },
+      tenant,
+      fence
+    );
+  }
+
   it('joins authenticated sockets to tenant-scoped channels on login', () => {
     const { app, handlers, joins } = makeChannelHarness();
     configureChannels(app, {
@@ -2354,6 +2389,7 @@ describe('configureChannels tenant isolation', () => {
       },
     });
     const connection = { data: {} } as any;
+    installTaskExecutorCapability(app, connection, 'tenant-a', 'session-1', 'task-1');
 
     handlers.get('login')?.(
       {
@@ -2407,7 +2443,8 @@ describe('configureChannels tenant isolation', () => {
       multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
     });
     const connection = { data: {} } as any;
-    const login = (taskId: string) =>
+    const login = (taskId: string) => {
+      installTaskExecutorCapability(app, connection, 'tenant-a', 'session-1', taskId);
       handlers.get('login')?.(
         {
           user: { user_id: ALICE },
@@ -2422,6 +2459,7 @@ describe('configureChannels tenant isolation', () => {
         },
         { connection }
       );
+    };
 
     login('task-1');
     login('task-2');

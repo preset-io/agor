@@ -192,6 +192,30 @@ private board, warm-cache revoke/reconnect, browser terminal rejoin after
 invalidation, local and cross-replica active executor revocation, and
 post-connect contradictory-claim authentication.
 
+A second review pass then found connection-ordering and identifier-resolution
+edge cases. The final implementation also:
+
+- installs a non-enumerable, server-owned executor connection capability only
+  in the final Socket.IO login event, after Feathers replaces connection auth
+  state; tenant/session/task/branch, expiry, and only a token fingerprint are
+  retained;
+- records bounded per-tenant revocation generations/tombstones before scanning
+  sockets, so authority validation that raced a local or HA revocation cannot
+  install a late task-room capability;
+- resolves board-comment and card short IDs inside the caller's current
+  visibility predicate, then canonicalizes authorized IDs before mutation, so
+  hidden collisions neither create ambiguity nor disclose full IDs;
+- rejects IDs, ownership/state fields, and `parent_comment_id` on generic
+  public comment creation. Only the authorized reply operation may establish a
+  parent and inherit its attachments; and
+- shares one domain attachment-policy descriptor between comment repository
+  authorization and realtime publication, and exercises actual reconnect
+  denial in the Redis HA fixture.
+
+The executor regression uses a real Socket.IO client plus the production
+Feathers `AuthenticationService`/`ServiceJWTStrategy`, including a deterministic
+pause-after-authority-validation revoke race.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -231,7 +255,7 @@ post-connect contradictory-claim authentication.
 
 Observed results on the audit branch:
 
-- daemon suite: 248 files passed, 14 skipped; 3,275 tests passed, 87 skipped;
+- daemon suite: 251 files passed, 14 skipped; 3,288 tests passed, 87 skipped;
 - focused realtime/security suite: 12 files and 430 tests passed;
 - PostgreSQL/RLS suite: 140 tests passed across 30 isolated databases, with the
   application role verified as `NOSUPERUSER` and `NOBYPASSRLS`;

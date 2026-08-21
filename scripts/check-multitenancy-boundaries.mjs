@@ -79,7 +79,9 @@ const checks = [
       // packet across two real adapter-backed replicas. Production room names
       // and authorization still come from the centralized routing/config code.
       'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 3,
-      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 1,
+      // The second cursor packet is deliberately sent after revoke/reconnect
+      // denial to prove a stale client cannot publish through its former room.
+      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,
     },
   },
 

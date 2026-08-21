@@ -20,6 +20,7 @@ import {
   type RealtimeRelayEnvelope,
 } from '@agor/core/realtime';
 import {
+  BOARD_COMMENT_ATTACHMENT_POLICY,
   type BoardID,
   type BoardRemovalRealtimeVisibilitySnapshot,
   type BranchID,
@@ -544,38 +545,40 @@ async function resolveBranchIdsFromBoardResource(
 
   const branchIds = new Set<BranchID>();
   let hasAttachment = false;
-  const directBranchId = extractBranchId(data, context);
-  if (directBranchId) {
+  for (const { field, resource } of BOARD_COMMENT_ATTACHMENT_POLICY) {
+    const attachmentId = pickString(record, field);
+    let branchId: BranchID | null | undefined;
+    switch (resource) {
+      case 'branch': {
+        const directBranchId = attachmentId ?? extractBranchId(data, context);
+        if (directBranchId) branchId = directBranchId as BranchID;
+        break;
+      }
+      case 'session': {
+        if (attachmentId) branchId = await sessionBranchId(attachmentId, accessCache);
+        break;
+      }
+      case 'task': {
+        if (attachmentId) {
+          const resolvedSessionId = await taskSessionId(context, attachmentId);
+          branchId = resolvedSessionId
+            ? await sessionBranchId(resolvedSessionId, accessCache)
+            : null;
+        }
+        break;
+      }
+      case 'message': {
+        if (attachmentId) {
+          const resolvedSessionId = await messageSessionId(context, attachmentId);
+          branchId = resolvedSessionId
+            ? await sessionBranchId(resolvedSessionId, accessCache)
+            : null;
+        }
+        break;
+      }
+    }
+    if (branchId === undefined) continue;
     hasAttachment = true;
-    branchIds.add(directBranchId as BranchID);
-  }
-
-  const sessionId = extractSessionId(data);
-  if (sessionId) {
-    hasAttachment = true;
-    const branchId = await sessionBranchId(sessionId, accessCache);
-    if (!branchId) return null;
-    branchIds.add(branchId);
-  }
-
-  const taskId = extractTaskId(data);
-  if (taskId) {
-    hasAttachment = true;
-    const resolvedSessionId = await taskSessionId(context, taskId);
-    const branchId = resolvedSessionId
-      ? await sessionBranchId(resolvedSessionId, accessCache)
-      : null;
-    if (!branchId) return null;
-    branchIds.add(branchId);
-  }
-
-  const messageId = extractMessageId(data);
-  if (messageId) {
-    hasAttachment = true;
-    const resolvedSessionId = await messageSessionId(context, messageId);
-    const branchId = resolvedSessionId
-      ? await sessionBranchId(resolvedSessionId, accessCache)
-      : null;
     if (!branchId) return null;
     branchIds.add(branchId);
   }

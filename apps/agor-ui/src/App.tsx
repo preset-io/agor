@@ -1853,9 +1853,7 @@ function AppContent() {
     try {
       await client.service('board-comments').create({
         board_id: boardId,
-        created_by: user?.user_id || 'unknown',
         content,
-        content_preview: content.slice(0, 200),
       });
     } catch (error) {
       showError(

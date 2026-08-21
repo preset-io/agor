@@ -4,7 +4,7 @@
  * Focused on the find filters that back the SQL pushdown on CardsService.find.
  */
 
-import type { BoardID } from '@agor/core/types';
+import type { BoardID, CardID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -74,5 +74,46 @@ describe('CardRepository.findAll', () => {
 
     const result = await repo.findAll({ board_id: boardA, archived: false });
     expect(result.map((c) => c.title)).toEqual(['a-active']);
+  });
+});
+
+describe('CardRepository.findVisibleById', () => {
+  dbTest('resolves prefixes only among boards visible to the caller', async ({ db }) => {
+    const userId = generateId() as UUID;
+    const boards = new BoardRepository(db);
+    const visibleBoard = await boards.create({
+      board_id: generateId(),
+      name: 'Visible private board',
+      created_by: userId,
+      access_mode: 'private',
+    });
+    const hiddenBoard = await boards.create({
+      board_id: generateId(),
+      name: 'Hidden private board',
+      created_by: generateId(),
+      access_mode: 'private',
+    });
+    const repo = new CardRepository(db);
+    const visible = await repo.create({
+      card_id: '01933e5a-1111-7c35-a8f3-000000000001' as CardID,
+      board_id: visibleBoard.board_id,
+      title: 'visible',
+    });
+    await repo.create({
+      card_id: '01933e5a-2222-7c35-a8f3-000000000002' as CardID,
+      board_id: hiddenBoard.board_id,
+      title: 'hidden collision',
+    });
+    const hiddenOnly = await repo.create({
+      card_id: '01933e5b-2222-7c35-a8f3-000000000003' as CardID,
+      board_id: hiddenBoard.board_id,
+      title: 'hidden only',
+    });
+
+    await expect(repo.findVisibleById(userId, '01933e5a')).resolves.toMatchObject({
+      card_id: visible.card_id,
+    });
+    await expect(repo.findVisibleById(userId, '01933e5b')).resolves.toBeNull();
+    await expect(repo.findVisibleById(userId, hiddenOnly.card_id)).resolves.toBeNull();
   });
 });

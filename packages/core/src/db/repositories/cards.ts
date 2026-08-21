@@ -19,6 +19,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleBoardReferenceAccessExists } from './branch-access';
 
 const ALLOWED_URL_PROTOCOLS = ['http:', 'https:', 'mailto:'];
 
@@ -64,6 +65,22 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
         .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
         .all();
       return rows.map((r: { card_id: string }) => r.card_id);
+    });
+  }
+
+  private async resolveVisibleId(userId: UUID, id: string): Promise<string> {
+    return resolveByShortIdPrefix(id, 'Card', async (pattern) => {
+      const rows = await select(this.db)
+        .from(cards)
+        .where(
+          and(
+            like(cards.card_id, pattern),
+            visibleBoardReferenceAccessExists(this.db, userId, cards.board_id)
+          )
+        )
+        .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+        .all();
+      return rows.map((row: { card_id: string }) => row.card_id);
     });
   }
 
@@ -115,6 +132,30 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find card: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Resolve short ids only inside boards visible to the caller. */
+  async findVisibleById(userId: UUID, id: string): Promise<Card | null> {
+    try {
+      const fullId = await this.resolveVisibleId(userId, id);
+      const row = await select(this.db)
+        .from(cards)
+        .where(
+          and(
+            eq(cards.card_id, fullId),
+            visibleBoardReferenceAccessExists(this.db, userId, cards.board_id)
+          )
+        )
+        .one();
+      return row ? this.rowToCard(row) : null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find visible card: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

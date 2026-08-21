@@ -121,6 +121,7 @@ import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
+import { publicBoardCommentCreateInput } from './services/board-comments.js';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './services/codex-auth-shared.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -1076,6 +1077,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       if (typeof context.id === 'string' && !existing) {
         throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
+      if (existing) context.id = existing.comment_id;
       if (context.method === 'create') {
         const allowed = data
           ? await boardCommentsRepository.canViewReferences(user.user_id as UUID, data)
@@ -1109,14 +1111,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return context;
     };
 
+  const enforcePublicBoardCommentCreate = async (context: HookContext): Promise<HookContext> => {
+    if (context.params.provider) {
+      context.data = publicBoardCommentCreateInput(context.data) as typeof context.data;
+    }
+    return context;
+  };
+
   const cardAccess =
     (mode: 'view' | 'mutate', action: string) =>
     async (context: HookContext): Promise<HookContext> => {
       const requestedBoardId = (context.data as { board_id?: string } | undefined)?.board_id;
-      const existingBoardId =
+      const user = context.params.user;
+      const requiresVisibleResolution =
+        executionMode.appRbacEnabled &&
+        Boolean(context.params.provider) &&
+        user &&
+        !user._isServiceAccount &&
+        !hasMinimumRole(user.role, ROLES.ADMIN);
+      const existing =
         typeof context.id === 'string'
-          ? (await cardRepository.findById(context.id))?.board_id
+          ? requiresVisibleResolution
+            ? await cardRepository.findVisibleById(user.user_id as UUID, context.id)
+            : await cardRepository.findById(context.id)
           : undefined;
+      if (typeof context.id === 'string' && requiresVisibleResolution && !existing) {
+        throw new Forbidden(`Board resource is unavailable to ${action}`);
+      }
+      if (existing) context.id = existing.card_id;
+      const existingBoardId = existing?.board_id;
       await authorizeExternalBoard(context, existingBoardId ?? requestedBoardId, mode, action);
       if (existingBoardId && requestedBoardId && requestedBoardId !== existingBoardId) {
         await authorizeExternalBoard(context, requestedBoardId, mode, action);
@@ -1821,6 +1844,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       get: [boardCommentAccess('view', 'view this board comment')],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create board comments'),
+        enforcePublicBoardCommentCreate,
         boardCommentAccess('view', 'comment on this board'),
         injectCreatedBy(),
       ],

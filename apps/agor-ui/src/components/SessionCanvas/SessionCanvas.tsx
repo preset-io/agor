@@ -15,7 +15,6 @@ import type {
   Session,
   SpawnConfig,
   User,
-  UserID,
   ZoneTrigger,
 } from '@agor-live/client';
 import {
@@ -2433,11 +2432,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Prepare comment data based on placement target
         const commentData: BoardCommentCreate = {
           board_id: board.board_id,
-          created_by: currentUserId as UserID,
           content: commentInput.trim(),
-          resolved: false,
-          edited: false,
-          reactions: [],
         };
 
         if (branchNode) {
