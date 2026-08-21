@@ -96,14 +96,24 @@ describe('useThemedMessage', () => {
   it('keeps errors past the former timeout and preserves an explicit duration escape hatch', async () => {
     renderHarness();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show persistent error' }));
+    const trigger = screen.getByRole('button', { name: 'Show persistent error' });
+    trigger.focus();
+    fireEvent.click(trigger);
     expect(await screen.findByText('Persistent failure')).toBeInTheDocument();
 
     await act(() => sleep(6_100));
     expect(screen.getByText('Persistent failure')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss error message' }));
+    const dismissButton = screen.getByRole('button', { name: 'Dismiss error message' });
+    expect(dismissButton.tagName).toBe('BUTTON');
+    expect(dismissButton).toHaveAccessibleName('Dismiss error message');
+    expect(dismissButton).toHaveAttribute('title', 'Dismiss error message');
+    expect(dismissButton).toHaveTextContent(/^$/);
+
+    dismissButton.focus();
+    fireEvent.click(dismissButton);
     await waitFor(() => expect(screen.queryByText('Persistent failure')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show transient error' }));
     expect(await screen.findByText('Transient failure')).toBeInTheDocument();
