@@ -23,8 +23,10 @@ import type {
 } from '@libsql/client';
 
 interface Coordinator {
-  tail: Promise<void>;
+  locked: boolean;
+  waiters: Array<{ resolve: (release: () => void) => void; reject: (error: Error) => void }>;
   activeOwner?: symbol;
+  poisoned?: Error;
 }
 
 interface OwnedTransactionState {
@@ -38,14 +40,30 @@ interface DrizzleNestedTransactionScope {
 }
 
 async function acquire(coordinator: Coordinator): Promise<() => void> {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const previous = coordinator.tail;
-  coordinator.tail = previous.then(() => gate);
-  await previous;
-  return release;
+  if (coordinator.poisoned) throw coordinator.poisoned;
+  if (!coordinator.locked) {
+    coordinator.locked = true;
+    return () => releaseCoordinator(coordinator);
+  }
+  return new Promise((resolve, reject) => coordinator.waiters.push({ resolve, reject }));
+}
+
+function releaseCoordinator(coordinator: Coordinator): void {
+  if (coordinator.poisoned) return;
+  const next = coordinator.waiters.shift();
+  if (next) next.resolve(() => releaseCoordinator(coordinator));
+  else coordinator.locked = false;
+}
+
+function poisonCoordinator(coordinator: Coordinator, cause: unknown): Error {
+  if (!coordinator.poisoned) {
+    coordinator.poisoned = new Error(
+      'Literal-memory SQLite connection is permanently unavailable after transaction cleanup failed',
+      { cause }
+    );
+    for (const waiter of coordinator.waiters.splice(0)) waiter.reject(coordinator.poisoned);
+  }
+  return coordinator.poisoned;
 }
 
 function statementSql(statement: InStatement | [string, InArgs?]): InStatement {
@@ -58,6 +76,8 @@ function beginStatement(mode: TransactionMode | undefined): string {
   // race while this handle owns its one physical connection.
   return mode === 'read' || mode === 'deferred' ? 'BEGIN' : 'BEGIN IMMEDIATE';
 }
+
+class UnsafeTerminalRecoveryError extends AggregateError {}
 
 async function recoverRollback(raw: Client, primaryError: unknown): Promise<never> {
   const rollbackErrors: unknown[] = [];
@@ -89,12 +109,15 @@ async function recoverRollback(raw: Client, primaryError: unknown): Promise<neve
   } catch (error) {
     resetError = error;
   }
-  throw new AggregateError(
+  const terminal = new AggregateError(
     [primaryError, ...rollbackErrors, ...(resetError === undefined ? [] : [resetError])],
     resetError === undefined
       ? 'SQLite transaction failed and the connection was reset after rollback failed'
       : 'SQLite transaction failed and rollback/connection reset both failed'
   );
+  if (resetError !== undefined)
+    throw new UnsafeTerminalRecoveryError(terminal.errors, terminal.message);
+  throw terminal;
 }
 
 async function finishTransaction(
@@ -115,6 +138,7 @@ async function finishTransaction(
   // two operations at once.
   state.finishing = (async () => {
     await state.tail;
+    let safeToRelease = true;
     try {
       if (command === 'COMMIT') {
         try {
@@ -129,13 +153,21 @@ async function finishTransaction(
           await recoverRollback(raw, rollbackError);
         }
       }
+    } catch (error) {
+      if (error instanceof UnsafeTerminalRecoveryError) {
+        safeToRelease = false;
+        throw poisonCoordinator(coordinator, error);
+      }
+      throw error;
     } finally {
       // `recoverRollback` returns only by throwing after rollback or a hard
       // connection reset has completed, so no raw open transaction is ever
       // released through this finally block.
       state.phase = 'closed';
-      if (coordinator.activeOwner === owner) coordinator.activeOwner = undefined;
-      release();
+      if (safeToRelease) {
+        if (coordinator.activeOwner === owner) coordinator.activeOwner = undefined;
+        release();
+      }
     }
   })();
   return state.finishing;
@@ -198,6 +230,7 @@ function createOwnedTransaction(
 
 async function runBatch(
   raw: Client,
+  coordinator: Coordinator,
   statements: Array<InStatement | [string, InArgs?]>,
   mode?: TransactionMode
 ): Promise<ResultSet[]> {
@@ -208,7 +241,14 @@ async function runBatch(
     await raw.execute('COMMIT');
     return results;
   } catch (error) {
-    return recoverRollback(raw, error);
+    try {
+      return await recoverRollback(raw, error);
+    } catch (terminal) {
+      if (terminal instanceof UnsafeTerminalRecoveryError) {
+        throw poisonCoordinator(coordinator, terminal);
+      }
+      throw terminal;
+    }
   }
 }
 
@@ -285,7 +325,7 @@ export function coordinateInMemorySQLiteDatabase<T extends object>(raw: T): T {
 
 /** Decorate one literal-memory client so no Drizzle path can bypass ownership. */
 export function coordinateInMemorySQLiteClient(raw: Client): Client {
-  const coordinator: Coordinator = { tail: Promise.resolve() };
+  const coordinator: Coordinator = { locked: false, waiters: [] };
 
   const coordinated = async <T>(operation: () => Promise<T>): Promise<T> => {
     const release = await acquire(coordinator);
@@ -308,13 +348,13 @@ export function coordinateInMemorySQLiteClient(raw: Client): Client {
             );
         case 'batch':
           return (statements: Array<InStatement | [string, InArgs?]>, mode?: TransactionMode) =>
-            coordinated(() => runBatch(target, statements, mode));
+            coordinated(() => runBatch(target, coordinator, statements, mode));
         case 'migrate':
           return (statements: InStatement[]) =>
             coordinated(async () => {
               await target.execute('PRAGMA foreign_keys = OFF');
               try {
-                return await runBatch(target, statements, 'deferred');
+                return await runBatch(target, coordinator, statements, 'deferred');
               } finally {
                 await target.execute('PRAGMA foreign_keys = ON');
               }

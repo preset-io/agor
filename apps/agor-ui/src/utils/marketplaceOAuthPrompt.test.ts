@@ -411,6 +411,29 @@ describe('Marketplace OAuth prompt handoff', () => {
     expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
   });
 
+  it.each(['failed', 'cancelled', 'expired', 'unknown'])(
+    'lets terminal %s permanently clean even when the claimant is stale',
+    async (status) => {
+      const pending = value();
+      savePendingMarketplaceOAuthPrompt(pending);
+      let current = true;
+      const claim = claimMarketplaceOAuthPrompt({
+        client: clientWith({
+          attempt_id: pending.attemptId,
+          mcp_server_id: pending.serverId,
+          status,
+        }),
+        sessionId: pending.sessionId,
+        authenticatedServerIds: new Set(),
+        authority,
+        isCurrent: () => current,
+      });
+      current = false;
+      await expect(claim).resolves.toBeNull();
+      expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
+    }
+  );
+
   it('removes cancelled, stale, or wrong-authority handoffs', async () => {
     const pending = value();
     savePendingMarketplaceOAuthPrompt(pending);

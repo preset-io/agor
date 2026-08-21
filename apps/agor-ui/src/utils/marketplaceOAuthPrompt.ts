@@ -20,6 +20,12 @@ export interface PendingMarketplaceOAuthPrompt extends MarketplaceOAuthHandoffAu
   createdAt: number;
 }
 
+export interface MarketplacePromptSuggestionState extends MarketplaceOAuthHandoffAuthority {
+  sessionId: string;
+  attemptId: string;
+  prompt: string;
+}
+
 const key = (sessionId: string) => `${KEY_PREFIX}${sessionId}`;
 const suggestionKey = (sessionId: string) => `${SUGGESTION_KEY_PREFIX}${sessionId}`;
 
@@ -265,6 +271,26 @@ export async function claimMarketplaceOAuthPrompt(input: {
   try {
     const outcome = await flight.outcome;
     if (flight.cancelled || flight.finalized) return null;
+    // Durable terminal authority wins over a stale React claimant. Never let
+    // unmount/logout restore a failed, cancelled, pruned, malformed, or
+    // wrong-server attempt.
+    if (outcome.kind === 'missing') {
+      finalizeClaimFlight(storage, flights, flight, false);
+      return null;
+    }
+    if (outcome.kind === 'found') {
+      const { attempt } = outcome;
+      if (
+        attempt.attempt_id !== pending.attemptId ||
+        (attempt.status === 'succeeded' && attempt.mcp_server_id !== pending.serverId) ||
+        (attempt.status !== 'pending' &&
+          attempt.status !== 'exchanging' &&
+          attempt.status !== 'succeeded')
+      ) {
+        finalizeClaimFlight(storage, flights, flight, false);
+        return null;
+      }
+    }
     // Effect cancellation is not terminal: a replacement effect/remount with
     // the same authority joins this flight, or the last stale claimant restores
     // the exact handoff for a later remount.
@@ -276,15 +302,7 @@ export async function claimMarketplaceOAuthPrompt(input: {
       retry = true;
       return null;
     }
-    if (outcome.kind === 'missing') {
-      finalizeClaimFlight(storage, flights, flight, false);
-      return null;
-    }
     const { attempt } = outcome;
-    if (attempt.attempt_id !== pending.attemptId) {
-      finalizeClaimFlight(storage, flights, flight, false);
-      return null;
-    }
     if (attempt.status === 'succeeded' && attempt.mcp_server_id === pending.serverId) {
       // The attempt row and the authoritative authenticated-server projection
       // can land in either event order. Keep the exact-attempt handoff until both
@@ -299,19 +317,17 @@ export async function claimMarketplaceOAuthPrompt(input: {
       // microtask, its replacement can still consume this suggestion exactly
       // once. This never touches the cross-tab composer draft.
       saveMarketplacePromptSuggestion(
-        { sessionId: pending.sessionId, prompt: pending.prompt, authority: input.authority },
+        {
+          sessionId: pending.sessionId,
+          attemptId: pending.attemptId,
+          prompt: pending.prompt,
+          authority: input.authority,
+        },
         storage
       );
       flight.consumed = true;
       finalizeClaimFlight(storage, flights, flight, false);
       return pending.prompt;
-    }
-    if (
-      (attempt.status === 'succeeded' && attempt.mcp_server_id !== pending.serverId) ||
-      (attempt.status !== 'pending' && attempt.status !== 'exchanging')
-    ) {
-      finalizeClaimFlight(storage, flights, flight, false);
-      return null;
     }
     retry = true;
     return null;
@@ -336,6 +352,7 @@ export async function claimMarketplaceOAuthPrompt(input: {
 export function saveMarketplacePromptSuggestion(
   input: {
     sessionId: string;
+    attemptId?: string;
     prompt: string;
     authority: MarketplaceOAuthHandoffAuthority;
   },
@@ -347,6 +364,7 @@ export function saveMarketplacePromptSuggestion(
       suggestionKey(input.sessionId),
       JSON.stringify({
         sessionId: input.sessionId,
+        attemptId: input.attemptId ?? `connect:${input.sessionId}`,
         prompt: input.prompt,
         ...input.authority,
         createdAt: Date.now(),
@@ -362,6 +380,14 @@ export function consumeMarketplacePromptSuggestion(
   authority: MarketplaceOAuthHandoffAuthority,
   storage?: PromptStorage
 ): string | null {
+  return consumeMarketplacePromptSuggestionState(sessionId, authority, storage)?.prompt ?? null;
+}
+
+export function consumeMarketplacePromptSuggestionState(
+  sessionId: string,
+  authority: MarketplaceOAuthHandoffAuthority,
+  storage?: PromptStorage
+): MarketplacePromptSuggestionState | null {
   try {
     const promptStorage = tabStorage(storage);
     const raw = promptStorage.getItem(suggestionKey(sessionId));
@@ -372,6 +398,7 @@ export function consumeMarketplacePromptSuggestion(
       value.userId !== authority.userId ||
       value.role !== authority.role ||
       value.authGeneration !== authority.authGeneration ||
+      typeof value.attemptId !== 'string' ||
       typeof value.prompt !== 'string' ||
       typeof value.createdAt !== 'number' ||
       Date.now() - value.createdAt > MAX_AGE_MS
@@ -380,7 +407,7 @@ export function consumeMarketplacePromptSuggestion(
       return null;
     }
     promptStorage.removeItem(suggestionKey(sessionId));
-    return value.prompt;
+    return value as MarketplacePromptSuggestionState;
   } catch {
     try {
       tabStorage(storage).removeItem(suggestionKey(sessionId));
@@ -400,4 +427,20 @@ export function discardMarketplacePromptSuggestion(
   } catch {
     // ignore unavailable storage
   }
+}
+
+/** Fail closed when the initiating identity is removed (logout/session reset). */
+export function discardMarketplaceOAuthAuthorityState(
+  sessionId: string,
+  storage?: PromptStorage
+): void {
+  const promptStorage = tabStorage(storage);
+  const flight = claimFlights(promptStorage).get(sessionId);
+  if (flight) {
+    flight.cancelled = true;
+    flight.finalized = true;
+    claimFlights(promptStorage).delete(sessionId);
+  }
+  remove(sessionId, promptStorage);
+  discardMarketplacePromptSuggestion(sessionId, promptStorage);
 }

@@ -66,8 +66,10 @@ import {
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import {
   claimMarketplaceOAuthPrompt,
-  consumeMarketplacePromptSuggestion,
+  consumeMarketplacePromptSuggestionState,
+  discardMarketplaceOAuthAuthorityState,
   discardMarketplacePromptSuggestion,
+  type MarketplacePromptSuggestionState,
 } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -439,9 +441,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
-  const [marketplacePromptSuggestion, setMarketplacePromptSuggestion] = React.useState<
-    string | null
-  >(null);
+  const [marketplacePromptSuggestion, setMarketplacePromptSuggestion] =
+    React.useState<MarketplacePromptSuggestionState | null>(null);
   const marketplaceSuggestionSessionId = session?.session_id;
 
   // Suggestions are tab-local presentation state, intentionally separate from
@@ -452,13 +453,29 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       return;
     }
     setMarketplacePromptSuggestion(
-      consumeMarketplacePromptSuggestion(marketplaceSuggestionSessionId, {
+      consumeMarketplacePromptSuggestionState(marketplaceSuggestionSessionId, {
         userId: currentUserId,
         role: currentRole,
         authGeneration,
       })
     );
   }, [authGeneration, currentRole, currentUserId, marketplaceSuggestionSessionId]);
+
+  React.useLayoutEffect(() => {
+    if (marketplaceSuggestionSessionId && (!currentUserId || !currentRole)) {
+      discardMarketplaceOAuthAuthorityState(marketplaceSuggestionSessionId);
+      setMarketplacePromptSuggestion(null);
+    }
+  }, [currentRole, currentUserId, marketplaceSuggestionSessionId]);
+
+  const visibleMarketplaceSuggestion =
+    marketplacePromptSuggestion &&
+    marketplacePromptSuggestion.sessionId === marketplaceSuggestionSessionId &&
+    marketplacePromptSuggestion.userId === currentUserId &&
+    marketplacePromptSuggestion.role === currentRole &&
+    marketplacePromptSuggestion.authGeneration === authGeneration
+      ? marketplacePromptSuggestion
+      : null;
 
   // Marketplace OAuth presents its starter prompt only after the durable grant
   // has been observed by the same authoritative store this panel uses. It is
@@ -482,7 +499,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isCurrent: operation.isCurrent,
     }).then((prompt) => {
       if (operation.isCurrent()) {
-        const staged = consumeMarketplacePromptSuggestion(marketplaceSuggestionSessionId, {
+        const staged = consumeMarketplacePromptSuggestionState(marketplaceSuggestionSessionId, {
           userId: currentUserId,
           role: currentRole,
           authGeneration,
@@ -510,12 +527,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [marketplaceSuggestionSessionId]);
 
   const insertMarketplacePromptSuggestion = React.useCallback(() => {
-    if (!marketplacePromptSuggestion || !promptRef.current) return;
+    if (!visibleMarketplaceSuggestion || !promptRef.current) return;
     // PromptInput.insertText appends to (and never replaces) the current
     // composer value. This mutation occurs only from this explicit click.
-    promptRef.current.insertText(marketplacePromptSuggestion);
+    promptRef.current.insertText(visibleMarketplaceSuggestion.prompt);
     dismissMarketplacePromptSuggestion();
-  }, [dismissMarketplacePromptSuggestion, marketplacePromptSuggestion]);
+  }, [dismissMarketplacePromptSuggestion, visibleMarketplaceSuggestion]);
 
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local
@@ -926,9 +943,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return null;
     return (
       <>
-        {marketplacePromptSuggestion && (
+        {visibleMarketplaceSuggestion && (
           <MarketplacePromptSuggestion
-            prompt={marketplacePromptSuggestion}
+            prompt={visibleMarketplaceSuggestion.prompt}
             onInsert={insertMarketplacePromptSuggestion}
             onDismiss={dismissMarketplacePromptSuggestion}
             style={{ marginBottom: token.marginXS, borderRadius: token.borderRadius }}
@@ -1020,7 +1037,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     stableFooterHandlers,
     token.borderRadius,
     token.marginXS,
-    marketplacePromptSuggestion,
+    visibleMarketplaceSuggestion,
     dismissMarketplacePromptSuggestion,
     insertMarketplacePromptSuggestion,
   ]);

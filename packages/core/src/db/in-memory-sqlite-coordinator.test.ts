@@ -144,4 +144,28 @@ describe('literal-memory SQLite interactive transaction terminal ownership', () 
     await expect(client.execute('after connection reset')).resolves.toBe(result);
     expect(order.at(-1)).toBe('after connection reset');
   });
+
+  it('permanently poisons and drains waiters when reset cannot be proven', async () => {
+    const order: string[] = [];
+    const { raw, reconnect } = fakeClient(async (statement) => {
+      const text = statementText(statement);
+      order.push(text);
+      if (text === 'COMMIT') throw new Error('commit failed');
+      if (text === 'ROLLBACK') throw new Error('rollback failed');
+      return result;
+    });
+    reconnect.mockRejectedValueOnce(new Error('reconnect failed'));
+    const client = coordinateInMemorySQLiteClient(raw);
+    const transaction = await client['transaction']();
+    const commit = transaction.commit();
+    const queued = client.execute('queued outside');
+
+    const poison = await commit.catch((error) => error as Error);
+    expect(poison.message).toContain('permanently unavailable');
+    await expect(queued).rejects.toBe(poison);
+    await expect(client.execute('future outside')).rejects.toBe(poison);
+    await expect(client['transaction']()).rejects.toBe(poison);
+    expect(order).not.toContain('queued outside');
+    expect(order).not.toContain('future outside');
+  });
 });
