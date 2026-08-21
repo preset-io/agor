@@ -159,6 +159,7 @@ import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
@@ -562,7 +563,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
-    methods: ['find', 'create', 'remove'],
+    methods: [...GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db));
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
@@ -3161,14 +3162,14 @@ export async function registerMCPServices(
   });
   app.use(
     '/mcp-marketplace/remove-unattached',
-    new MCPMarketplaceRemoveServerService(new MCPServerRepository(db), db, (userIds, params) =>
+    new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
       emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
-    new MCPMarketplaceToolPermissionService(new MCPServerRepository(db), db, (userIds, params) =>
+    new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
       emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
@@ -3177,8 +3178,17 @@ export async function registerMCPServices(
   // repository transactions, so they explicitly emit the user-targeted empty
   // Marketplace invalidation rather than pretending the ordinary MCP CRUD
   // service emitted a lifecycle event.
-  app.service('mcp-marketplace/remove-unattached').publish(() => []);
-  app.service('mcp-marketplace/tool-permission').publish(() => []);
+  for (const path of [
+    'mcp-marketplace/remove-unattached',
+    'mcp-marketplace/tool-permission',
+  ] as const) {
+    // Feathers services have `publish` once a realtime provider is configured.
+    // Narrow service-only harnesses intentionally omit that provider.
+    const action = app.service(path) as unknown as {
+      publish?: (publisher: () => never[]) => void;
+    };
+    action.publish?.(() => []);
+  }
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {
@@ -5243,6 +5253,15 @@ export async function registerMCPServices(
                   })),
                 })),
               })
+            );
+            // Discovery writes through a short repository transaction rather
+            // than the generic MCP service. Refresh every device belonging to
+            // the actor and durable owner with the same empty, tenant-targeted
+            // control event used by Marketplace actions.
+            emitMarketplaceInvalidation(
+              app,
+              tenantId,
+              [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
             );
           }
 

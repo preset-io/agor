@@ -20,7 +20,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import {
-  canAddMcpServer,
+  canDeleteMcpServer,
+  canEditMcpServer,
+  canRefreshMcpServer,
   explainManageRestriction,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
@@ -66,18 +68,41 @@ export const MyServersTab: React.FC<{
     [connectionReady, currentUser, memberPolicy.canConfigure, memberPolicy.policy]
   );
   const policyState = policyPendingState(memberPolicy);
-  const canMutate = !policyState.pending && canAddMcpServer(capability);
-  const mutationAuthorityKey =
-    canMutate && client && currentUser
-      ? [
-          currentUser.user_id,
-          currentUser.role,
-          authGeneration,
-          client,
-          memberPolicy.policy,
-          memberPolicy.canConfigure,
-        ]
-      : null;
+  const authorityFor = (server: MCPMarketplaceOverview['servers'][number]) => ({
+    owner_user_id: currentUser?.user_id,
+    transport: server.transport,
+  });
+  const hasAnyAction =
+    !policyState.pending &&
+    overview.servers.some((server) => {
+      const authority = authorityFor(server);
+      return (
+        canRefreshMcpServer(authority, capability) ||
+        canEditMcpServer(authority, capability) ||
+        canDeleteMcpServer(authority, capability)
+      );
+    });
+  const mutationAuthorityKey = useMemo(
+    () =>
+      hasAnyAction && client && currentUser
+        ? [
+            currentUser.user_id,
+            currentUser.role,
+            authGeneration,
+            client,
+            memberPolicy.policy,
+            memberPolicy.canConfigure,
+          ]
+        : null,
+    [
+      authGeneration,
+      client,
+      currentUser,
+      hasAnyAction,
+      memberPolicy.canConfigure,
+      memberPolicy.policy,
+    ]
+  );
   const guard = useAuthorityOperationGuard(mutationAuthorityKey);
   // Per-operation tracking permits safe concurrent A/B tool toggles while
   // preventing a second click on the same control. The daemon mutation itself
@@ -85,12 +110,16 @@ export const MyServersTab: React.FC<{
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
   useEffect(() => {
-    if (canMutate) return;
-    // An open confirmation captured under older authority must not remain an
-    // actionable portal after demotion, policy invalidation, or reconnect.
+    // Open portals and pending visual state belong to this exact authority
+    // epoch. Individual controls below still derive their narrower predicate.
+    if (mutationAuthorityKey === null) {
+      setRemoveConfirm(null);
+      setBusy(new Set());
+      return;
+    }
     setRemoveConfirm(null);
     setBusy(new Set());
-  }, [canMutate]);
+  }, [mutationAuthorityKey]);
   const cursorServerIds = useMemo(
     () =>
       new Set(
@@ -101,9 +130,14 @@ export const MyServersTab: React.FC<{
     [overview.attachments]
   );
 
-  const mutate = async (key: string, work: () => Promise<unknown>, success: string) => {
+  const mutate = async (
+    key: string,
+    allowed: boolean,
+    work: () => Promise<unknown>,
+    success: string
+  ) => {
     const operation = guard.begin();
-    if (!client || !canMutate || !operation.isCurrent()) return;
+    if (!client || !allowed || !operation.isCurrent()) return;
     setBusy((current) => new Set(current).add(key));
     try {
       await work();
@@ -144,7 +178,7 @@ export const MyServersTab: React.FC<{
         message="Tool controls apply to future MCP configuration"
         description="Work already in flight may keep its current tools. Off stores an explicit deny; On returns the tool to its agent's default. Existing Ask choices are preserved."
       />
-      {!canMutate && (
+      {(policyState.pending || !capability.canConfigure) && (
         <Alert
           type="warning"
           showIcon
@@ -154,124 +188,138 @@ export const MyServersTab: React.FC<{
       <List
         loading={loading}
         dataSource={overview.servers}
-        renderItem={(server) => (
-          <List.Item>
-            <Card style={{ width: '100%' }}>
-              <Flex justify="space-between" align="flex-start" gap={16} wrap>
-                <div>
-                  <Title level={5} style={{ margin: 0 }}>
-                    {server.display_name ?? server.name}
-                  </Title>
-                  <Space wrap>
-                    <Tag>{server.source === 'catalog' ? 'Catalog' : 'Manual'}</Tag>
-                    <Text type="secondary">
-                      {server.session_count} {server.session_count === 1 ? 'session' : 'sessions'}
-                    </Text>
-                    {!server.enabled && <Tag color="warning">Disabled</Tag>}
-                  </Space>
-                  {server.description && (
-                    <div>
-                      <Text type="secondary">{server.description}</Text>
-                    </div>
-                  )}
-                </div>
-                <Space>
-                  <Button
-                    aria-label={`Refresh tools for ${server.display_name ?? server.name}`}
-                    icon={<ReloadOutlined />}
-                    disabled={!canMutate}
-                    loading={busy.has(`discover:${server.mcp_server_id}`)}
-                    onClick={() =>
-                      void mutate(
-                        `discover:${server.mcp_server_id}`,
-                        () =>
-                          client!
-                            .service('mcp-servers/discover')
-                            .create({ mcp_server_id: server.mcp_server_id }),
-                        'Tools refreshed'
-                      )
-                    }
-                  >
-                    Refresh tools
-                  </Button>
-                  <Popconfirm
-                    open={removeConfirm === server.mcp_server_id && canMutate}
-                    title="Remove this unattached server?"
-                    description="Agor checks attachments again when you confirm. If a session attaches it first, nothing is removed and you can detach it before retrying."
-                    onOpenChange={(next) =>
-                      setRemoveConfirm(next && canMutate ? server.mcp_server_id : null)
-                    }
-                    disabled={server.session_count > 0 || !canMutate}
-                    onConfirm={() =>
-                      void mutate(
-                        `remove:${server.mcp_server_id}`,
-                        () =>
-                          client!.service('mcp-marketplace/remove-unattached').create({
-                            mcp_server_id: server.mcp_server_id,
-                          }),
-                        'Server removed'
-                      )
-                    }
-                  >
+        renderItem={(server) => {
+          const serverAuthority = authorityFor(server);
+          const canRefresh =
+            !policyState.pending && canRefreshMcpServer(serverAuthority, capability);
+          const canChangeTools =
+            !policyState.pending && canEditMcpServer(serverAuthority, capability);
+          const canRemove = !policyState.pending && canDeleteMcpServer(serverAuthority, capability);
+          return (
+            <List.Item>
+              <Card style={{ width: '100%' }}>
+                <Flex justify="space-between" align="flex-start" gap={16} wrap>
+                  <div>
+                    <Title level={5} style={{ margin: 0 }}>
+                      {server.display_name ?? server.name}
+                    </Title>
+                    <Space wrap>
+                      <Tag>{server.source === 'catalog' ? 'Catalog' : 'Manual'}</Tag>
+                      <Text type="secondary">
+                        {server.session_count} {server.session_count === 1 ? 'session' : 'sessions'}
+                      </Text>
+                      {!server.enabled && <Tag color="warning">Disabled</Tag>}
+                    </Space>
+                    {server.description && (
+                      <div>
+                        <Text type="secondary">{server.description}</Text>
+                      </div>
+                    )}
+                  </div>
+                  <Space>
                     <Button
-                      aria-label={`Remove ${server.display_name ?? server.name}`}
-                      danger
-                      icon={<DeleteOutlined />}
-                      disabled={server.session_count > 0 || !canMutate}
-                      loading={busy.has(`remove:${server.mcp_server_id}`)}
+                      aria-label={`Refresh tools for ${server.display_name ?? server.name}`}
+                      icon={<ReloadOutlined />}
+                      disabled={!canRefresh}
+                      loading={busy.has(`discover:${server.mcp_server_id}`)}
+                      onClick={() =>
+                        void mutate(
+                          `discover:${server.mcp_server_id}`,
+                          canRefresh,
+                          () =>
+                            client!
+                              .service('mcp-servers/discover')
+                              .create({ mcp_server_id: server.mcp_server_id }),
+                          'Tools refreshed'
+                        )
+                      }
                     >
-                      Remove
+                      Refresh tools
                     </Button>
-                  </Popconfirm>
-                </Space>
-              </Flex>
-              {cursorServerIds.has(server.mcp_server_id) && (
-                <Alert
-                  style={{ marginTop: 12 }}
-                  type="warning"
-                  showIcon
-                  message="Cursor cannot enforce per-tool choices"
-                  description="When any tool is Off or Ask, Agor withholds this entire server from Cursor rather than exposing more than you allowed."
-                />
-              )}
-              <List
-                style={{ marginTop: 8 }}
-                size="small"
-                locale={{ emptyText: 'No tools discovered yet' }}
-                dataSource={server.tools}
-                renderItem={(tool) => (
-                  <List.Item
-                    actions={[
-                      <Space key="control">
-                        {tool.permission === 'ask' && <Tag color="gold">Ask</Tag>}
-                        <Switch
-                          aria-label={`${server.display_name ?? server.name}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
-                          checked={tool.permission !== 'deny'}
-                          disabled={!canMutate}
-                          loading={busy.has(`tool:${server.mcp_server_id}:${tool.name}`)}
-                          onChange={(checked) =>
-                            void mutate(
-                              `tool:${server.mcp_server_id}:${tool.name}`,
-                              () =>
-                                client!.service('mcp-marketplace/tool-permission').create({
-                                  mcp_server_id: server.mcp_server_id,
-                                  tool_name: tool.name,
-                                  enabled: checked,
-                                }),
-                              checked ? `${tool.name} uses the default` : `${tool.name} is off`
-                            )
-                          }
-                        />
-                      </Space>,
-                    ]}
-                  >
-                    <List.Item.Meta title={tool.name} description={tool.description || undefined} />
-                  </List.Item>
+                    <Popconfirm
+                      open={removeConfirm === server.mcp_server_id && canRemove}
+                      title="Remove this unattached server?"
+                      description="Agor checks attachments again when you confirm. If a session attaches it first, nothing is removed and you can detach it before retrying."
+                      onOpenChange={(next) =>
+                        setRemoveConfirm(next && canRemove ? server.mcp_server_id : null)
+                      }
+                      disabled={server.session_count > 0 || !canRemove}
+                      onConfirm={() =>
+                        void mutate(
+                          `remove:${server.mcp_server_id}`,
+                          canRemove,
+                          () =>
+                            client!.service('mcp-marketplace/remove-unattached').create({
+                              mcp_server_id: server.mcp_server_id,
+                            }),
+                          'Server removed'
+                        )
+                      }
+                    >
+                      <Button
+                        aria-label={`Remove ${server.display_name ?? server.name}`}
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={server.session_count > 0 || !canRemove}
+                        loading={busy.has(`remove:${server.mcp_server_id}`)}
+                      >
+                        Remove
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </Flex>
+                {cursorServerIds.has(server.mcp_server_id) && (
+                  <Alert
+                    style={{ marginTop: 12 }}
+                    type="warning"
+                    showIcon
+                    message="Cursor cannot enforce per-tool choices"
+                    description="When any tool is Off or Ask, Agor withholds this entire server from Cursor rather than exposing more than you allowed."
+                  />
                 )}
-              />
-            </Card>
-          </List.Item>
-        )}
+                <List
+                  style={{ marginTop: 8 }}
+                  size="small"
+                  locale={{ emptyText: 'No tools discovered yet' }}
+                  dataSource={server.tools}
+                  renderItem={(tool) => (
+                    <List.Item
+                      actions={[
+                        <Space key="control">
+                          {tool.permission === 'ask' && <Tag color="gold">Ask</Tag>}
+                          <Switch
+                            aria-label={`${server.display_name ?? server.name}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
+                            checked={tool.permission !== 'deny'}
+                            disabled={!canChangeTools}
+                            loading={busy.has(`tool:${server.mcp_server_id}:${tool.name}`)}
+                            onChange={(checked) =>
+                              void mutate(
+                                `tool:${server.mcp_server_id}:${tool.name}`,
+                                canChangeTools,
+                                () =>
+                                  client!.service('mcp-marketplace/tool-permission').create({
+                                    mcp_server_id: server.mcp_server_id,
+                                    tool_name: tool.name,
+                                    enabled: checked,
+                                  }),
+                                checked ? `${tool.name} uses the default` : `${tool.name} is off`
+                              )
+                            }
+                          />
+                        </Space>,
+                      ]}
+                    >
+                      <List.Item.Meta
+                        title={tool.name}
+                        description={tool.description || undefined}
+                      />
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            </List.Item>
+          );
+        }}
       />
     </Flex>
   );

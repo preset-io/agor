@@ -1,5 +1,8 @@
-import { describe, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { UserID } from '../../types';
+import { createDatabaseAsync } from '../client';
+import { runDatabaseTransaction } from '../database-wrapper';
+import { runMigrations } from '../migrate';
 import { dbTest } from '../test-helpers';
 import { MCPCatalogCandidateRepository } from './mcp-catalog-candidates';
 import { MCPServerRepository } from './mcp-servers';
@@ -10,6 +13,73 @@ const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-000000000b0b' as UserID;
 
 describe('Marketplace MCP atomic repository actions', () => {
+  it('keeps schema and writes on the same literal :memory: SQLite connection', async () => {
+    const db = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    await runMigrations(db);
+    const repo = new MCPServerRepository(db);
+    const server = await repo.create({
+      name: 'literal-memory-tools',
+      transport: 'http',
+      url: 'https://example.test/mcp',
+      scope: 'session',
+      source: 'user',
+      owner_user_id: ALICE,
+    });
+
+    await runDatabaseTransaction(
+      db,
+      (tx) =>
+        new MCPServerRepository(tx).setToolEnabledInCurrentTransaction(
+          server.mcp_server_id,
+          'issues.create',
+          false
+        ),
+      { sqliteImmediate: true }
+    );
+
+    await expect(repo.findById(server.mcp_server_id)).resolves.toMatchObject({
+      tool_permissions: { 'issues.create': 'deny' },
+    });
+  });
+
+  dbTest(
+    'uses the active :memory: SQLite transaction connection without nesting',
+    async ({ db }) => {
+      const server = await new MCPServerRepository(db).create({
+        name: 'same-connection-tools',
+        transport: 'http',
+        url: 'https://example.test/mcp',
+        scope: 'session',
+        source: 'user',
+        owner_user_id: ALICE,
+      });
+
+      await runDatabaseTransaction(
+        db,
+        async (tx) => {
+          const transactional = new MCPServerRepository(tx);
+          await expect(
+            transactional.getWriteAuthorityProjectionForUpdate(server.mcp_server_id)
+          ).resolves.toMatchObject({ transport: 'http', owner_user_id: ALICE });
+          await expect(
+            transactional.setToolEnabledInCurrentTransaction(
+              server.mcp_server_id,
+              'issues.create',
+              false
+            )
+          ).resolves.toBe(true);
+        },
+        { sqliteImmediate: true }
+      );
+
+      await expect(
+        new MCPServerRepository(db).findById(server.mcp_server_id)
+      ).resolves.toMatchObject({
+        tool_permissions: { 'issues.create': 'deny' },
+      });
+    }
+  );
+
   dbTest(
     'merges concurrent tool toggles without losing Ask or undiscovered rules',
     async ({ db }) => {

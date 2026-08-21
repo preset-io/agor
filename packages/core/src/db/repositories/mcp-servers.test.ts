@@ -5,7 +5,7 @@
  * scope model ('global' | 'session').
  */
 
-import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
+import type { MCPServer, MCPServerID, UpdateMCPServerInput, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { MCP_HEADER_REDACTED_SENTINEL } from '../../tools/mcp/http-headers';
@@ -261,6 +261,25 @@ describe('MCPServerRepository.update', () => {
       })
     ).rejects.toThrow(/must be either strict or legacy/);
   });
+
+  dbTest(
+    'keeps materialized provenance aligned with an internal whole-row update',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({ source: 'catalog', catalog_entry_name: 'catalog/original' })
+      );
+
+      await repo.update(created.mcp_server_id, {
+        catalog_entry_name: 'catalog/drifted',
+      } as unknown as UpdateMCPServerInput);
+
+      await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+        catalog_entry_name: 'catalog/drifted',
+      });
+      await expect(repo.findAll({ catalogEntryName: 'catalog/drifted' })).resolves.toHaveLength(1);
+    }
+  );
 });
 
 // ============================================================================

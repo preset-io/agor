@@ -216,6 +216,43 @@ export class MCPServerRepository
   }
 
   /**
+   * Transactional authority read. The row lock orders configuration changes
+   * (including HTTP→stdio, scope, and ownership) against the authorization
+   * decision and the narrow mutation that follows it.
+   */
+  async getWriteAuthorityProjectionForUpdate(
+    id: string
+  ): Promise<Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'> | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const where = eq(mcpServers.mcp_server_id, fullId);
+      await lockRowForUpdate(this.db, this.db, mcpServers, where);
+      const row = await select(this.db, {
+        mcp_server_id: mcpServers.mcp_server_id,
+        owner_user_id: mcpServers.owner_user_id,
+        transport: mcpServers.transport,
+        scope: mcpServers.scope,
+      })
+        .from(mcpServers)
+        .where(where)
+        .one();
+      if (!row) return null;
+      return {
+        mcp_server_id: row.mcp_server_id as MCPServerID,
+        ...(row.owner_user_id ? { owner_user_id: row.owner_user_id as UserID } : {}),
+        transport: row.transport,
+        scope: row.scope,
+      };
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw new RepositoryError(
+        `Failed to lock MCP server write authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Create a new MCP server
    */
   async create(data: CreateMCPServerInput): Promise<MCPServer> {
@@ -374,6 +411,7 @@ export class MCPServerRepository
                 enabled: insertData.enabled,
                 scope: insertData.scope,
                 transport: insertData.transport,
+                catalog_entry_name: insertData.catalog_entry_name,
                 updated_at: new Date(),
                 data: insertData.data,
               })
@@ -479,6 +517,7 @@ export class MCPServerRepository
               enabled: insertData.enabled,
               scope: insertData.scope,
               transport: insertData.transport,
+              catalog_entry_name: insertData.catalog_entry_name,
               updated_at: new Date(),
               data: insertData.data,
             })
@@ -562,41 +601,8 @@ export class MCPServerRepository
       const mutate = () =>
         runDatabaseTransaction(
           this.db,
-          async (tx) => {
-            if (generation) {
-              const generationWhere = and(
-                eq(
-                  appVariables.namespace,
-                  MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE
-                ),
-                eq(
-                  appVariables.key,
-                  MCPServerRepository.catalogConnectGenerationKey(
-                    generation.ownerUserId,
-                    generation.catalogEntryName
-                  )
-                )
-              );
-              await lockRowForUpdate(tx, this.db, appVariables, generationWhere!);
-              const generationRow = await select(tx)
-                .from(appVariables)
-                .where(generationWhere)
-                .one();
-              if (Number(generationRow?.value_text) !== generation.value) return false;
-            }
-            await lockRowForUpdate(tx, this.db, mcpServers, eq(mcpServers.mcp_server_id, fullId));
-            const attachment = await select(tx)
-              .from(sessionMcpServers)
-              .where(eq(sessionMcpServers.mcp_server_id, fullId))
-              .limit(1)
-              .one();
-            if (attachment) return false;
-
-            const result = await deleteFrom(tx, mcpServers)
-              .where(eq(mcpServers.mcp_server_id, fullId))
-              .run();
-            return result.rowsAffected > 0;
-          },
+          (tx) =>
+            new MCPServerRepository(tx).deleteIfUnattachedInCurrentTransaction(fullId, generation),
           { sqliteImmediate: true }
         );
       for (let attempt = 0; ; attempt++) {
@@ -623,6 +629,43 @@ export class MCPServerRepository
         error
       );
     }
+  }
+
+  /**
+   * Transaction-body variant used when caller authority and this mutation are
+   * one atomic unit. It deliberately opens no nested transaction, which keeps
+   * libsql `:memory:` and runtime SQLite on the same transaction connection.
+   */
+  async deleteIfUnattachedInCurrentTransaction(
+    id: string,
+    generation?: { ownerUserId: string; catalogEntryName: string; value: number }
+  ): Promise<boolean> {
+    const fullId = await this.resolveId(id);
+    if (generation) {
+      const generationWhere = and(
+        eq(appVariables.namespace, MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE),
+        eq(
+          appVariables.key,
+          MCPServerRepository.catalogConnectGenerationKey(
+            generation.ownerUserId,
+            generation.catalogEntryName
+          )
+        )
+      );
+      await lockRowForUpdate(this.db, this.db, appVariables, generationWhere!);
+      const generationRow = await select(this.db).from(appVariables).where(generationWhere).one();
+      if (Number(generationRow?.value_text) !== generation.value) return false;
+    }
+    const where = eq(mcpServers.mcp_server_id, fullId);
+    await lockRowForUpdate(this.db, this.db, mcpServers, where);
+    const attachment = await select(this.db)
+      .from(sessionMcpServers)
+      .where(eq(sessionMcpServers.mcp_server_id, fullId))
+      .limit(1)
+      .one();
+    if (attachment) return false;
+    const result = await deleteFrom(this.db, mcpServers).where(where).run();
+    return result.rowsAffected > 0;
   }
 
   /** Materialized-column ownership read; never loads the secret-bearing JSON blob. */
@@ -663,35 +706,13 @@ export class MCPServerRepository
       const mutate = () =>
         runDatabaseTransaction(
           this.db,
-          async (tx) => {
-            const target = ownerUserId
-              ? and(
-                  eq(mcpServers.mcp_server_id, fullId),
-                  eq(mcpServers.owner_user_id, ownerUserId)
-                )!
-              : eq(mcpServers.mcp_server_id, fullId);
-            await lockRowForUpdate(tx, this.db, mcpServers, target);
-
-            // SQLite's JSON path grammar supports quoted object keys. Escape the
-            // two characters meaningful inside that quoted segment; the value is
-            // still a bound parameter, never executable SQL.
-            const sqlitePath = `$."tool_permissions"."${toolName
-              .replace(/\\/g, '\\\\')
-              .replace(/"/g, '\\"')}"`;
-            const nextData = isPostgresDatabase(this.db)
-              ? enabled
-                ? sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) - ${toolName}, true)`
-                : sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) || jsonb_build_object(${toolName}, 'deny'), true)`
-              : enabled
-                ? sql`json_remove(${mcpServers.data}, ${sqlitePath})`
-                : sql`json_set(${mcpServers.data}, ${sqlitePath}, ${'deny'})`;
-
-            const result = await update(tx, mcpServers)
-              .set({ data: nextData, updated_at: new Date() })
-              .where(target)
-              .run();
-            return result.rowsAffected > 0;
-          },
+          (tx) =>
+            new MCPServerRepository(tx).setToolEnabledInCurrentTransaction(
+              fullId,
+              toolName,
+              enabled,
+              ownerUserId
+            ),
           { sqliteImmediate: true }
         );
       // libsql can reject one of two simultaneous BEGIN IMMEDIATE calls
@@ -719,6 +740,36 @@ export class MCPServerRepository
         error
       );
     }
+  }
+
+  /** No nested transaction; see {@link deleteIfUnattachedInCurrentTransaction}. */
+  async setToolEnabledInCurrentTransaction(
+    id: string,
+    toolName: string,
+    enabled: boolean,
+    ownerUserId?: UserID
+  ): Promise<boolean> {
+    const fullId = await this.resolveId(id);
+    const target = ownerUserId
+      ? and(eq(mcpServers.mcp_server_id, fullId), eq(mcpServers.owner_user_id, ownerUserId))!
+      : eq(mcpServers.mcp_server_id, fullId);
+    await lockRowForUpdate(this.db, this.db, mcpServers, target);
+
+    const sqlitePath = `$."tool_permissions"."${toolName
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')}"`;
+    const nextData = isPostgresDatabase(this.db)
+      ? enabled
+        ? sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) - ${toolName}, true)`
+        : sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) || jsonb_build_object(${toolName}, 'deny'), true)`
+      : enabled
+        ? sql`json_remove(${mcpServers.data}, ${sqlitePath})`
+        : sql`json_set(${mcpServers.data}, ${sqlitePath}, ${'deny'})`;
+    const result = await update(this.db, mcpServers)
+      .set({ data: nextData, updated_at: new Date() })
+      .where(target)
+      .run();
+    return result.rowsAffected > 0;
   }
 
   /** Backwards-compatible owner-CAS primitive for trusted repository callers. */

@@ -1,3 +1,4 @@
+import type { MCPOAuthAttemptResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -5,7 +6,9 @@ import {
   consumePendingMarketplaceOAuthPrompt,
   readPendingMarketplaceOAuthPrompt,
   savePendingMarketplaceOAuthPrompt,
+  stageClaimedMarketplaceOAuthPrompt,
 } from './marketplaceOAuthPrompt';
+import { getPromptDraft, savePromptDraft } from './promptDrafts';
 
 const authority = { userId: 'alice', role: 'member', authGeneration: 7 };
 const value = () => ({
@@ -64,6 +67,44 @@ describe('Marketplace OAuth prompt handoff', () => {
       })
     ).resolves.toBe(pending.prompt);
     expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
+  });
+
+  it("never overwrites another tab's draft written while attempt status is awaited", async () => {
+    const pending = value();
+    savePendingMarketplaceOAuthPrompt(pending);
+    let resolveAttempt!: (value: MCPOAuthAttemptResult) => void;
+    const held = new Promise<MCPOAuthAttemptResult>((resolve) => (resolveAttempt = resolve));
+    const client = {
+      service: () => ({ get: vi.fn(() => held) }),
+    } as unknown as AgorClient;
+    const claim = claimMarketplaceOAuthPrompt({
+      client,
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set([pending.serverId]),
+      authority,
+      isCurrent: () => true,
+    });
+
+    savePromptDraft(pending.sessionId, 'Draft from another tab');
+    resolveAttempt({
+      attempt_id: pending.attemptId,
+      mcp_server_id: pending.serverId,
+      status: 'succeeded',
+    } as MCPOAuthAttemptResult);
+    const prompt = await claim;
+    const insertText = vi.fn();
+
+    expect(prompt).toBe(pending.prompt);
+    expect(
+      stageClaimedMarketplaceOAuthPrompt({
+        sessionId: pending.sessionId,
+        prompt: prompt!,
+        currentComposerText: '',
+        insertText,
+      })
+    ).toBe(false);
+    expect(getPromptDraft(pending.sessionId)).toBe('Draft from another tab');
+    expect(insertText).not.toHaveBeenCalled();
   });
 
   it('removes cancelled, stale, or wrong-authority handoffs', async () => {

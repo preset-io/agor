@@ -19,7 +19,7 @@ import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import type { Database } from './client';
+import { type Database, IN_MEMORY_SQLITE_DATABASE } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
 import type { DatabaseDialect } from './schema-factory';
@@ -43,6 +43,31 @@ export async function runDatabaseTransaction<T>(
   work: (tx: Database) => Promise<T>,
   options: { sqliteImmediate?: boolean } = {}
 ): Promise<T> {
+  // `@libsql/client` implements `transaction()` by moving its current native
+  // connection into a transaction object and lazily opening a different one
+  // for the base client. That is correct for files, but every connection named
+  // `:memory:` is a different empty database. Keep test/embedded in-memory
+  // transactions on the original connection so schema and committed rows
+  // remain visible after commit. Production file SQLite and PostgreSQL retain
+  // their native transaction handles below.
+  if (
+    isSQLiteDatabase(db) &&
+    (db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] === true
+  ) {
+    await db.run(sql.raw(options.sqliteImmediate ? 'BEGIN IMMEDIATE' : 'BEGIN'));
+    try {
+      const result = await work(db);
+      await db.run(sql.raw('COMMIT'));
+      return result;
+    } catch (error) {
+      try {
+        await db.run(sql.raw('ROLLBACK'));
+      } catch {
+        // Preserve the operation error if SQLite already rolled the unit back.
+      }
+      throw error;
+    }
+  }
   const transaction = (
     db as unknown as {
       transaction(

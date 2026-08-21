@@ -1,6 +1,6 @@
 import type { AgenticToolName } from './agentic-tool';
 import type { SessionID } from './id';
-import type { MCPServer, MCPServerID, MCPSource, ToolPermission } from './mcp';
+import type { MCPServer, MCPServerID, MCPSource, MCPTransport, ToolPermission } from './mcp';
 import type { SessionStatus } from './session';
 
 /** A discovered tool as the Marketplace may safely present it. */
@@ -25,6 +25,8 @@ export interface MCPMarketplaceServer {
   display_name?: string;
   description?: string;
   source: MCPSource;
+  /** Nonsecret transport discriminator used only to predict action capability. */
+  transport: MCPTransport;
   catalog_entry_name?: string;
   enabled: boolean;
   tools: MCPMarketplaceTool[];

@@ -106,6 +106,21 @@ export const GROUPS_SERVICE_TRANSPORT_METHODS = [
   'remove',
 ] as const;
 
+/** Nested ACL services expose only their meaningful verbs. */
+export const GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS = ['find', 'create', 'remove'] as const;
+export const BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'create',
+  'patch',
+  'remove',
+] as const;
+export const BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS = [
+  'find',
+  'create',
+  'patch',
+  'remove',
+] as const;
+
 export function createGroupsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
   return {
@@ -326,7 +341,7 @@ export function setupBranchGroupGrantsService(
         return removed;
       },
     },
-    { methods: ['find', 'create', 'patch', 'remove'] }
+    { methods: [...BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS] }
   );
 
   app.service('branches/:id/group-grants').hooks({
@@ -399,7 +414,7 @@ export function setupBoardGroupGrantsService(
         return removed;
       },
     },
-    { methods: ['find', 'create', 'patch', 'remove'] }
+    { methods: [...BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS] }
   );
 
   app.service('boards/:id/group-grants').hooks({

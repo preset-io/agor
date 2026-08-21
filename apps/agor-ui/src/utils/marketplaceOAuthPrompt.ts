@@ -1,5 +1,6 @@
 import type { MCPOAuthAttemptResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
+import { savePromptDraftIfEmpty } from './promptDrafts';
 
 const KEY_PREFIX = 'agor-marketplace-oauth-prompt:';
 const MAX_AGE_MS = 60 * 60 * 1000;
@@ -143,4 +144,21 @@ export async function claimMarketplaceOAuthPrompt(input: {
     remove(input.sessionId);
   }
   return null;
+}
+
+/**
+ * Commit a claimed prompt only if both the mounted composer and the canonical
+ * localStorage draft are still empty at this exact moment. The second check is
+ * what protects text another tab wrote while OAuth-attempt status was awaited.
+ */
+export function stageClaimedMarketplaceOAuthPrompt(input: {
+  sessionId: string;
+  prompt: string;
+  currentComposerText: string;
+  insertText: (prompt: string) => void;
+}): boolean {
+  if (!input.prompt.trim() || input.currentComposerText.trim()) return false;
+  if (!savePromptDraftIfEmpty(input.sessionId, input.prompt)) return false;
+  input.insertText(input.prompt);
+  return true;
 }

@@ -201,9 +201,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       case 'oauth':
         return {
           readiness: 'sign-in',
-          label: 'Sign in after connecting',
+          label: `Connect with ${title || 'provider'}`,
           detail:
-            'The endpoint now requires OAuth. Connecting sets it up, then you sign in from the session.',
+            'The endpoint now requires OAuth. Connecting opens the provider sign-in automatically in a secure popup.',
         } as const;
       case 'not_accepted':
         return {
@@ -527,7 +527,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               </Button>
               <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {runtimeStatus?.readiness === 'sign-in'
-                  ? `Opens a new session with ${title} attached; sign in there before using its tools.`
+                  ? `Opens ${title}'s sign-in popup and a recoverable new session; its starter prompt appears after sign-in succeeds.`
                   : runtimeStatus?.readiness === 'unchecked'
                     ? `Checks ${title}'s live authentication requirement before opening a session.`
                     : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`}

@@ -31,6 +31,7 @@ import { visibleSessionReferenceAccessExists } from './branch-access';
 type SafeServerRow = {
   mcp_server_id: string;
   name: string;
+  transport: MCPMarketplaceServer['transport'];
   enabled: unknown;
   source: MCPSource;
   catalog_entry_name: string | null;
@@ -173,6 +174,7 @@ export class MCPMarketplaceRepository {
       const serverRows = (await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
         name: mcpServers.name,
+        transport: mcpServers.transport,
         enabled: mcpServers.enabled,
         source: mcpServers.source,
         catalog_entry_name: mcpServers.catalog_entry_name,
@@ -261,6 +263,7 @@ export class MCPMarketplaceRepository {
         return {
           mcp_server_id: row.mcp_server_id as MCPServerID,
           name: row.name,
+          transport: row.transport,
           ...(stringValue(row.display_name) ? { display_name: stringValue(row.display_name) } : {}),
           ...(stringValue(row.description) ? { description: stringValue(row.description) } : {}),
           source: row.source,

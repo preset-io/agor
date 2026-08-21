@@ -242,6 +242,7 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
+  'branches/:id/owners': User;
   'boards/:id/owners': User;
   'boards/:id/group-grants': BoardGroupGrantWithGroup;
   'branches/:id/group-grants': BranchGroupGrantWithGroup;

@@ -12,6 +12,7 @@ const overview: MCPMarketplaceOverview = {
       name: 'github',
       display_name: 'GitHub',
       source: 'user',
+      transport: 'http',
       enabled: true,
       tools: [],
       session_count: 1,

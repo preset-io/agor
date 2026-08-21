@@ -11,6 +11,7 @@ const overview: MCPMarketplaceOverview = {
       name: 'github',
       display_name: 'GitHub',
       source: 'user',
+      transport: 'http',
       enabled: true,
       tools: [{ name: 'issues.create', description: 'Create an issue', permission: 'default' }],
       session_count: 0,
@@ -58,6 +59,64 @@ describe('Marketplace server actions', () => {
       enabled: false,
     });
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  });
+
+  it('allows owner refresh under use_existing_only but refuses configuration actions', async () => {
+    const service = vi.fn((path: string) =>
+      path === 'mcp-member-policy'
+        ? { find: vi.fn(async () => ({ policy: 'use_existing_only', can_configure: false })) }
+        : { create: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    );
+    render(
+      <MyServersTab
+        client={{ service } as unknown as AgorClient}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={{ user_id: 'alice', role: 'member' } as never}
+        overview={overview}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Refresh tools for GitHub' })).toBeEnabled()
+    );
+    expect(screen.getByRole('switch', { name: 'GitHub: issues.create on' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove GitHub' })).toBeDisabled();
+  });
+
+  it('accounts for transport separately across refresh, tools, and removal', async () => {
+    const service = vi.fn((path: string) =>
+      path === 'mcp-member-policy'
+        ? { find: vi.fn(async () => ({ policy: 'allow_private_only', can_configure: true })) }
+        : { create: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    );
+    const stdioOverview: MCPMarketplaceOverview = {
+      ...overview,
+      servers: overview.servers.map((server) => ({ ...server, transport: 'stdio' })),
+    };
+    render(
+      <MyServersTab
+        client={{ service } as unknown as AgorClient}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={{ user_id: 'alice', role: 'member' } as never}
+        overview={stdioOverview}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove GitHub' })).toBeEnabled()
+    );
+    expect(screen.getByRole('button', { name: 'Refresh tools for GitHub' })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'GitHub: issues.create on' })).toBeDisabled();
   });
 
   it('closes an open removal confirmation and disables controls on demotion', async () => {

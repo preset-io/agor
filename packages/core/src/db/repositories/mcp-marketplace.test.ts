@@ -122,6 +122,7 @@ describe('MCPMarketplaceRepository', () => {
       expect(result.attachments).toHaveLength(1);
       expect(result.attachments[0].session_id).toBe(aliceSession.session_id);
       expect(result.servers[0].session_count).toBe(1);
+      expect(result.servers[0].transport).toBe('http');
       expect(result.credentials).toMatchObject([
         {
           mcp_server_id: aliceServer.mcp_server_id as MCPServerID,

@@ -1445,6 +1445,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   ): Promise<HookContext> => captureMarketplaceTargets(context, usersRepository, app);
   const publishMarketplaceInvalidation = (context: HookContext): HookContext =>
     publishCapturedMarketplaceInvalidation(context, app);
+  const captureBoardAlignedBranchMarketplaceTargets = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+    const changesAlignedBranchVisibility = items.some(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        itemHasAnyField(item as Record<string, unknown>, ['access_mode', 'default_others_can'])
+    );
+    return changesAlignedBranchVisibility
+      ? captureMarketplaceInvalidationTargets(context)
+      : context;
+  };
 
   /**
    * Authorization chain shared by the two externally-initiated prompt writes,
@@ -2005,6 +2019,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  const branchUpdateAuthorization = [
+    requireMinimumRole(ROLES.MEMBER, 'update branches'),
+    requireAdminForEnvConfig(),
+    validateBranchEnvPolicyHook(config),
+    ...(executionMode.appRbacEnabled
+      ? [
+          loadBranch(branchRepository),
+          ensureBranchPermission('all', 'update branches', superadminOpts),
+        ]
+      : []),
+    captureMarketplaceInvalidationTargets,
+  ];
+
   app.service('branches').hooks({
     before: {
       all: [typedValidateQuery(branchQueryValidator), requireAuth],
@@ -2027,22 +2054,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         validateBranchEnvPolicyHook(config),
         injectCreatedBy(),
       ],
-      update: [
-        requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(config),
-      ],
+      update: [...branchUpdateAuthorization],
       patch: [
-        requireMinimumRole(ROLES.MEMBER, 'update branches'),
-        requireAdminForEnvConfig(),
-        validateBranchEnvPolicyHook(config),
-        ...(executionMode.appRbacEnabled
-          ? [
-              loadBranch(branchRepository),
-              ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
-            ]
-          : []),
-        captureMarketplaceInvalidationTargets,
+        ...branchUpdateAuthorization,
         // Capture previous others_fs_access for comparison in after Unix sync hook.
       ],
       remove: [
@@ -2054,6 +2068,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : [ensureBranchOwnerOrAdmin('delete branches')]),
         captureBranchRemovalRealtimeVisibility,
+        captureMarketplaceInvalidationTargets,
       ],
     },
     after: {
@@ -2080,8 +2095,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         invalidateRealtimeBranchFromResult,
       ],
+      update: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
       patch: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
-      remove: [invalidateRealtimeBranchFromResult],
+      remove: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
     },
   });
 
@@ -3450,6 +3466,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
   };
 
+  const boardUpdateAuthorization = [
+    requireMinimumRole(ROLES.MEMBER, 'update boards'),
+    ensureCanMutateBoard('update this board'),
+    captureBoardAlignedBranchMarketplaceTargets,
+  ];
+
   safeService('boards')?.hooks({
     before: {
       all: [typedValidateQuery(boardQueryValidator), requireAuth],
@@ -3466,13 +3488,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // Whole-row replacement carries the same authorization as patch. The
       // `_action` dispatcher below is patch-only: those atomic board-object
       // operations are addressed through PATCH and have no PUT equivalent.
-      update: [
-        requireMinimumRole(ROLES.MEMBER, 'update boards'),
-        ensureCanMutateBoard('update this board'),
-      ],
+      update: [...boardUpdateAuthorization],
       patch: [
-        requireMinimumRole(ROLES.MEMBER, 'update boards'),
-        ensureCanMutateBoard('update this board'),
+        ...boardUpdateAuthorization,
         async (context: HookContext<Board>) => {
           // Handle atomic board object operations via _action parameter
           const contextData = context.data || {};
@@ -3599,6 +3617,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'delete boards'),
         ensureCanMutateBoard('delete this board'),
         captureBoardRemovalRealtimeVisibility,
+        captureMarketplaceInvalidationTargets,
       ],
       toBlob: [
         requireMinimumRole(ROLES.MEMBER, 'export boards'),
@@ -3695,8 +3714,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      patch: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      update: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      patch: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
       // Emit created events for custom methods that create boards
       // Custom methods don't automatically trigger app.publish(), so we emit manually
       clone: [

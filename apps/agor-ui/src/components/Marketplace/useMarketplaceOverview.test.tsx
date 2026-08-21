@@ -34,8 +34,9 @@ describe('useMarketplaceOverview live recovery', () => {
         generated_at: new Date(++generation).toISOString(),
       })
     );
-    const service = (path: string) =>
-      path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() };
+    const service = vi.fn((path: string) =>
+      path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() }
+    );
     const client = { service, io } as unknown as AgorClient;
     const { result } = renderHook(() =>
       useMarketplaceOverview({
@@ -48,6 +49,9 @@ describe('useMarketplaceOverview live recovery', () => {
       })
     );
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+    expect(service).toHaveBeenCalledWith('boards');
+    expect(service).toHaveBeenCalledWith('boards/:id/owners');
+    expect(service).toHaveBeenCalledWith('boards/:id/group-grants');
 
     act(() => serviceEvents.emit('created'));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
@@ -66,6 +70,7 @@ describe('useMarketplaceOverview live recovery', () => {
           mcp_server_id: 'server-private',
           name: 'private',
           source: 'user',
+          transport: 'http',
           enabled: true,
           tools: [],
           session_count: 0,
@@ -134,6 +139,7 @@ describe('useMarketplaceOverview live recovery', () => {
           mcp_server_id: 'server-alice',
           name: 'alice-private',
           source: 'user',
+          transport: 'http',
           enabled: true,
           tools: [],
           session_count: 0,

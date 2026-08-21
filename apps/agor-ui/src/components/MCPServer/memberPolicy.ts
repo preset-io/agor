@@ -142,6 +142,7 @@ export function canEditMcpServer(
   // its transport is one a member may hold, it cannot — so the floor is asked
   // here too rather than assumed from the policy.
   if (!isAtLeastMemberRole(context.role)) return false;
+  if (!context.canConfigure) return false;
   return (
     mayMemberManageMCPServer(server, context.policy, context.userId) &&
     mayMemberUseMCPTransport(server.transport)
@@ -156,7 +157,22 @@ export function canDeleteMcpServer(
   if (!context.connectionReady) return false;
   if (context.isAdmin) return true;
   if (!isAtLeastMemberRole(context.role)) return false;
+  if (!context.canConfigure) return false;
   return mayMemberManageMCPServer(server, context.policy, context.userId);
+}
+
+/**
+ * Discovery exercises an existing credential but does not configure it.
+ * Consequently an owner may refresh a remote server under
+ * `use_existing_only`; stdio has no daemon-side discovery transport.
+ */
+export function canRefreshMcpServer(
+  server: Pick<MCPServer, 'owner_user_id' | 'transport'>,
+  context: MCPServerCapabilityContext
+): boolean {
+  if (!context.connectionReady || !isAtLeastMemberRole(context.role)) return false;
+  if (!mayMemberUseMCPTransport(server.transport)) return false;
+  return context.isAdmin || (!!context.userId && server.owner_user_id === context.userId);
 }
 
 const READ_ONLY_RESTRICTION =

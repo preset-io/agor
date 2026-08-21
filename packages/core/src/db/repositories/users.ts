@@ -22,7 +22,7 @@ import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-va
 import { generateId, shortId } from '../../lib/ids';
 import { isValidExecutionHomeKey } from '../../types/user';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
 import { isExecutionHomeKeyAvailable } from '../user-execution-home';
@@ -94,6 +94,31 @@ export class UsersRepository
     } catch (error) {
       throw new RepositoryError(
         `Failed to list user IDs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Lock and reload only the caller identity fields used by a write
+   * authorizer. Role changes use the same users row, so a concurrent demotion
+   * is ordered either before this read (and is observed) or after the guarded
+   * mutation commits.
+   */
+  async getWriteAuthorityProjectionForUpdate(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string } | null> {
+    try {
+      const where = eq(users.user_id, userId);
+      await lockRowForUpdate(this.db, this.db, users, where);
+      const row = await select(this.db, { user_id: users.user_id, role: users.role })
+        .from(users)
+        .where(where)
+        .one();
+      return row ? { user_id: row.user_id as UserID, role: row.role } : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read user write authority: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -228,7 +253,7 @@ export class UsersRepository
    */
   private async resolveId(id: string): Promise<string> {
     return resolveByShortIdPrefix(id, 'User', async (pattern) => {
-      const rows = await select(this.db)
+      const rows = await select(this.db, { user_id: users.user_id })
         .from(users)
         .where(like(users.user_id, pattern))
         .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)

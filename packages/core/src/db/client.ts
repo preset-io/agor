@@ -24,6 +24,27 @@ import * as sqliteSchema from './schema.sqlite';
 import { detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
 
 /**
+ * Marks the one SQLite configuration whose connection lifetime is part of the
+ * database's identity. The local libsql client detaches its current native
+ * connection when the client starts a transaction; reopening `:memory:` after
+ * commit would otherwise produce a brand-new empty database.
+ */
+export const IN_MEMORY_SQLITE_DATABASE = Symbol.for('agor.db.sqlite.in-memory');
+
+function isInMemorySQLiteUrl(url: string): boolean {
+  return (
+    url === ':memory:' || url.startsWith('file::memory:') || /[?&]mode=memory(?:&|$)/.test(url)
+  );
+}
+
+function markInMemorySQLiteDatabase<T extends object>(db: T, url: string): T {
+  if (isInMemorySQLiteUrl(url)) {
+    Object.defineProperty(db, IN_MEMORY_SQLITE_DATABASE, { value: true });
+  }
+  return db;
+}
+
+/**
  * Database configuration options
  */
 export interface DbConfig {
@@ -261,7 +282,10 @@ function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof pos
  */
 function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSchema> {
   const client = createLibSQLClient(config);
-  const db = drizzleSQLite(client, { schema: sqliteSchema });
+  const db = markInMemorySQLiteDatabase(
+    drizzleSQLite(client, { schema: sqliteSchema }),
+    config.url
+  );
 
   // Configure SQLite pragmas asynchronously (fire-and-forget)
   // This doesn't block database creation but pragmas will be set shortly after
@@ -296,7 +320,10 @@ export async function createDatabaseAsync(config: DbConfig): Promise<RawDatabase
 
   // SQLite: Wait for pragmas to be configured
   const client = createLibSQLClient(config);
-  const db = drizzleSQLite(client, { schema: sqliteSchema });
+  const db = markInMemorySQLiteDatabase(
+    drizzleSQLite(client, { schema: sqliteSchema }),
+    config.url
+  );
   await configureSQLitePragmas(client);
   return db as unknown as RawDatabase;
 }

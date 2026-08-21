@@ -61,6 +61,16 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).not.toMatch(/\bMCPServerRepository\s*\(/);
   });
 
+  it('emits the user-targeted Marketplace invalidation after durable persistence', () => {
+    const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
+    const invalidate = discoverBlock.indexOf('emitMarketplaceInvalidation(');
+    expect(persist).toBeGreaterThan(-1);
+    expect(invalidate).toBeGreaterThan(persist);
+    expect(discoverBlock.slice(invalidate, invalidate + 260)).toContain(
+      'authoritativeServer?.owner_user_id'
+    );
+  });
+
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {
     const probeIdx = discoverBlock.search(/\bresolveProbeServerTemplates\s*\(/);
     const headersIdx = discoverBlock.search(/\bresolveMCPAuthHeaders\s*\(/);

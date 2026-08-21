@@ -580,9 +580,9 @@ describe('connect', () => {
    * the composer with one here means pressing Connect produces a loaded prompt
    * whose only result is a tool-less answer.
    *
-   * These pin the split. Landing in the session is unchanged: the session is
-   * where the sign-in lives (the notice above the composer, the warning MCP badge,
-   * the pill that starts OAuth on activation). Only the loaded gun is withheld.
+   * These pin the split. The automatic provider popup runs alongside the new,
+   * recoverable session. Its notice, warning MCP badge, and server pill remain
+   * available if the popup is cancelled; only the loaded gun is withheld.
    */
   async function connectAndLand(mcpServer: Record<string, unknown>) {
     connectImpl = async () => ({
@@ -607,11 +607,11 @@ describe('connect', () => {
     expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
   });
 
-  it('still lands in the session so the sign-in is reachable', async () => {
+  it('lands in the recoverable session while the automatic popup signs in', async () => {
     await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
 
     // Withholding the prompt must not withhold the session: the MCP badge and
-    // the pill that starts OAuth are both inside it.
+    // the server recovery controls are both inside it if the popup is cancelled.
     expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
     expect(connectCalls).toHaveLength(1);
   });

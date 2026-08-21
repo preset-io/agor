@@ -37,8 +37,11 @@ export interface DiscoveredMCPCapabilities {
  * routing through the service would take an OAuth grant configuration lock and
  * re-read the row twice to reach an answer that is always "no change".
  *
- * The cost of the bypass is that no `mcp-servers` service event is emitted, so
- * other clients keep a stale capability list until they refetch.
+ * No `mcp-servers` service event is emitted by this repository write. The
+ * discover route therefore follows a successful commit with the explicit
+ * empty, user-targeted `marketplace:invalidated` control event; keeping that
+ * publication beside the route retains the actor/owner and tenant authority
+ * that this persistence helper deliberately does not accept.
  *
  * What discovery does still owe the tenant is the database boundary every
  * other write in this endpoint honors. `/mcp-servers/discover` carries tenant

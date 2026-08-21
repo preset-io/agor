@@ -64,7 +64,10 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
-import { claimMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
+import {
+  claimMarketplaceOAuthPrompt,
+  stageClaimedMarketplaceOAuthPrompt,
+} from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
@@ -451,11 +454,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isCurrent: operation.isCurrent,
     }).then((prompt) => {
       if (!prompt || !operation.isCurrent()) return;
-      // The user may type while the durable attempt read is in flight. Their
-      // text wins even though the handoff has now been consumed exactly once.
-      if ((promptRef.current?.getValue() ?? inputValueRef.current).trim()) return;
-      savePromptDraft(session.session_id, prompt);
-      promptRef.current?.insertText(prompt);
+      stageClaimedMarketplaceOAuthPrompt({
+        sessionId: session.session_id,
+        prompt,
+        currentComposerText: promptRef.current?.getValue() ?? inputValueRef.current,
+        insertText: (value) => promptRef.current?.insertText(value),
+      });
     });
     return operation.cancel;
   }, [
