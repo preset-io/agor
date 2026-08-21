@@ -68,7 +68,14 @@ export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' |
    * Checked around every physical dispatch, response/error, and redirect hop.
    */
   assertCurrent?: () => void;
+  /** Injectable DNS boundary for deterministic authority-race tests. */
+  resolveDns?: OutboundDnsLookup;
 }
+
+export type OutboundDnsLookup = (
+  hostname: string,
+  options: { all: true; verbatim: true }
+) => Promise<Array<{ address: string; family: number }>>;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMER_MS = 2_147_483_647;
@@ -155,14 +162,15 @@ function assertSafeParsedUrl(url: URL, allowLocalhostHttp: boolean): void {
 async function resolvePinnedAddress(
   url: URL,
   allowLocalhostHttp: boolean,
-  signal: AbortSignal
+  signal: AbortSignal,
+  resolveDns: OutboundDnsLookup
 ): Promise<{ address: string; family: 4 | 6 }> {
   throwIfAborted(signal);
   const hostname = normalizedHostname(url);
   const literalFamily = isIP(hostname);
   const addresses = literalFamily
     ? [{ address: hostname, family: literalFamily as 4 | 6 }]
-    : await withAbort(lookup(hostname, { all: true, verbatim: true }), signal);
+    : await withAbort(resolveDns(hostname, { all: true, verbatim: true }), signal);
   throwIfAborted(signal);
   if (addresses.length === 0) throw new UnsafeOutboundUrlError('OAuth destination did not resolve');
   for (const candidate of addresses) {
@@ -218,7 +226,12 @@ async function requestOnce(
 ): Promise<Response> {
   throwIfAborted(signal);
   assertSafeParsedUrl(url, options.allowLocalhostHttp === true);
-  const pinned = await resolvePinnedAddress(url, options.allowLocalhostHttp === true, signal);
+  const pinned = await resolvePinnedAddress(
+    url,
+    options.allowLocalhostHttp === true,
+    signal,
+    options.resolveDns ?? lookup
+  );
   const body = requestBody(options.body);
   const headers = new Headers(options.headers);
   if (body != null && !headers.has('content-length')) {

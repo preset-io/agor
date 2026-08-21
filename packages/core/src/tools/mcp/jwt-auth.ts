@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import type { MCPAuth } from '../../types/mcp';
-import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { type OutboundDnsLookup, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
@@ -32,6 +32,8 @@ export interface JWTTokenFetchOptions {
   cache?: boolean;
   /** Optional live request authority for secret-bearing provider work. */
   assertCurrent?: () => void;
+  /** Injectable DNS boundary for deterministic authority-race tests. */
+  resolveDns?: OutboundDnsLookup;
 }
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
@@ -92,6 +94,7 @@ export async function fetchJWTToken(
       secret: api_secret,
     }),
     assertCurrent: options.assertCurrent,
+    resolveDns: options.resolveDns,
   });
 
   if (!response.ok) {

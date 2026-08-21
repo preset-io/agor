@@ -17,6 +17,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
+import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
@@ -88,11 +89,13 @@ type TestProvider = {
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
   mcpRequested: Deferred<void>;
+  dcrRequested: Deferred<void>;
   releaseToken: () => void;
   releaseTokenRequest: (requestNumber: number) => void;
   waitForTokenRequest: (requestNumber: number) => Promise<void>;
   releaseRefresh: () => void;
   releaseMcp: () => void;
+  releaseDcr: () => void;
   close: () => Promise<void>;
 };
 
@@ -104,6 +107,7 @@ async function createTestProvider(
     holdRefresh?: boolean;
     invalidRefresh?: boolean;
     rejectDynamicRegistration?: boolean;
+    holdDynamicRegistration?: boolean;
     resourceScopes?: string[];
     holdMcpChallenge?: boolean;
   } = {}
@@ -130,6 +134,8 @@ async function createTestProvider(
   const releaseRefresh = deferred<void>();
   const mcpRequested = deferred<void>();
   const releaseMcp = deferred<void>();
+  const dcrRequested = deferred<void>();
+  const releaseDcr = deferred<void>();
   let tokenRequestCount = 0;
   let baseUrl = '';
 
@@ -163,7 +169,7 @@ async function createTestProvider(
           issuer: baseUrl,
           authorization_endpoint: `${baseUrl}/authorize`,
           token_endpoint: `${baseUrl}/token`,
-          ...(options.rejectDynamicRegistration
+          ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
             ? { registration_endpoint: `${baseUrl}/register` }
             : {}),
           response_types_supported: ['code'],
@@ -171,17 +177,38 @@ async function createTestProvider(
           // The DCR fixture deliberately omits RFC 9207 response-issuer
           // support. Reaching /register therefore proves that the canonical
           // catalog row selected Marketplace policy rather than strict.
-          ...(options.rejectDynamicRegistration
+          ...(options.rejectDynamicRegistration || options.holdDynamicRegistration
             ? {}
             : { authorization_response_iss_parameter_supported: true }),
         })
       );
       return;
     }
-    if (url.pathname === '/register' && options.rejectDynamicRegistration) {
+    if (
+      url.pathname === '/register' &&
+      (options.rejectDynamicRegistration || options.holdDynamicRegistration)
+    ) {
       let body = '';
       for await (const chunk of request) body += String(chunk);
       recordedRequest.jsonBody = body ? (JSON.parse(body) as Record<string, unknown>) : {};
+      dcrRequested.resolve();
+      if (options.holdDynamicRegistration) {
+        await releaseDcr.promise;
+        const redirectUris = Array.isArray(recordedRequest.jsonBody?.redirect_uris)
+          ? recordedRequest.jsonBody.redirect_uris
+          : [];
+        response.writeHead(201, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            client_id: 'held-dcr-client',
+            redirect_uris: redirectUris,
+            grant_types: ['authorization_code'],
+            response_types: ['code'],
+            token_endpoint_auth_method: 'none',
+          })
+        );
+        return;
+      }
       // The DCR POST has crossed the provider boundary here. This controlled
       // fixture records it, then returns 418 without allocating a client or
       // grant; it is not an Agor-side pre-provider-mutation abort seam.
@@ -230,6 +257,14 @@ async function createTestProvider(
           expires_in: 3600,
         })
       );
+      return;
+    }
+    if (url.pathname === '/jwt') {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      recordedRequest.jsonBody = body ? (JSON.parse(body) as Record<string, unknown>) : {};
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ access_token: 'jwt-provider-token' }));
       return;
     }
     if (url.pathname === '/saved/mcp') {
@@ -288,6 +323,7 @@ async function createTestProvider(
     tokenRequested,
     refreshRequested,
     mcpRequested,
+    dcrRequested,
     releaseToken: () => {
       for (const gate of tokenReleaseGates.values()) gate.resolve();
     },
@@ -295,10 +331,12 @@ async function createTestProvider(
     waitForTokenRequest: (requestNumber: number) => tokenRequestMilestone(requestNumber).promise,
     releaseRefresh: () => releaseRefresh.resolve(),
     releaseMcp: () => releaseMcp.resolve(),
+    releaseDcr: () => releaseDcr.resolve(),
     close: () => {
       for (const gate of tokenReleaseGates.values()) gate.resolve();
       releaseRefresh.resolve();
       releaseMcp.resolve();
+      releaseDcr.resolve();
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
@@ -331,6 +369,7 @@ async function createHarness(
     catalogEntry?: MCPCatalogEntry;
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
+    outboundDnsLookup?: OutboundDnsLookup;
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -402,6 +441,7 @@ async function createHarness(
     deployment: {} as RegisterServicesContext['deployment'],
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
+    mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
 
   const invokeCallback = async (
@@ -453,6 +493,18 @@ function paramsFor(harness: SQLiteHarness): AuthenticatedParams & { connection: 
     connection: harness.liveSocket.feathers,
     authentication: harness.liveSocket.feathers.authentication,
   } as AuthenticatedParams & { connection: { id: string } };
+}
+
+function replaceLiveSocketAuthority(harness: SQLiteHarness, suffix = 'replacement'): void {
+  harness.liveSocket.feathers.user = {
+    ...harness.user,
+    user_id: `01900000-0000-7000-8000-${suffix.padStart(12, '0').slice(-12)}` as UserID,
+    email: `${suffix}@example.test`,
+  };
+  harness.liveSocket.feathers.authentication = {
+    strategy: 'jwt',
+    accessToken: `${suffix}-authority-token`,
+  };
 }
 
 function addLiveAuthority(
@@ -586,6 +638,188 @@ afterEach(async () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('does not dispatch test-jwt caller secrets when socket authority changes during DNS', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const dnsStarted = deferred<void>();
+    const releaseDns = deferred<void>();
+    const outboundDnsLookup: OutboundDnsLookup = async (hostname) => {
+      expect(hostname).toBe('localhost');
+      dnsStarted.resolve();
+      await releaseDns.promise;
+      return [{ address: '127.0.0.1', family: 4 }];
+    };
+    const harness = await createHarness(provider, undefined, { outboundDnsLookup });
+    databases.push(harness.rawDb);
+
+    const request = harness.app.service('mcp-servers/test-jwt').create(
+      {
+        api_url: `${provider.baseUrl.replace('127.0.0.1', 'localhost')}/jwt`,
+        api_token: 'admin-a-api-token',
+        api_secret: 'admin-a-api-secret',
+      },
+      paramsFor(harness)
+    );
+    await dnsStarted.promise;
+    replaceLiveSocketAuthority(harness, 'b00b');
+    releaseDns.resolve();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests.filter((entry) => entry.path === '/jwt')).toEqual([]);
+    expect(
+      provider.requests.some(
+        (entry) =>
+          entry.jsonBody?.name === 'admin-a-api-token' ||
+          entry.jsonBody?.secret === 'admin-a-api-secret'
+      )
+    ).toBe(false);
+  });
+
+  it('tests JWT credentials normally while keeping provider tokens out of the response', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+
+    await expect(
+      harness.app.service('mcp-servers/test-jwt').create(
+        {
+          api_url: `${provider.baseUrl}/jwt`,
+          api_token: 'normal-api-token',
+          api_secret: 'normal-api-secret',
+        },
+        paramsFor(harness)
+      )
+    ).resolves.toEqual({ success: true, tokenValid: true });
+    expect(provider.requests.filter((entry) => entry.path === '/jwt')).toEqual([
+      expect.objectContaining({
+        jsonBody: { name: 'normal-api-token', secret: 'normal-api-secret' },
+      }),
+    ]);
+  });
+
+  it('does not dispatch oauth-start initialize when authority changes during DNS', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const dnsStarted = deferred<void>();
+    const releaseDns = deferred<void>();
+    const outboundDnsLookup: OutboundDnsLookup = async (hostname) => {
+      expect(hostname).toBe('localhost');
+      dnsStarted.resolve();
+      await releaseDns.promise;
+      return [{ address: '127.0.0.1', family: 4 }];
+    };
+    const harness = await createHarness(provider, undefined, { outboundDnsLookup });
+    databases.push(harness.rawDb);
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      url: provider.savedMcpUrl.replace('127.0.0.1', 'localhost'),
+    });
+
+    const request = harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await dnsStarted.promise;
+    replaceLiveSocketAuthority(harness, 'b00f');
+    releaseDns.resolve();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests).toEqual([]);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('abandons oauth-start when its authoritative saved-row read finishes under B', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const rowRead = deferred<void>();
+    const releaseRow = deferred<void>();
+    const originalFindById = MCPServerRepository.prototype.findById;
+    let held = false;
+    const findSpy = vi
+      .spyOn(MCPServerRepository.prototype, 'findById')
+      .mockImplementation(async function (serverId) {
+        const row = await originalFindById.call(this, serverId);
+        if (!held && serverId === harness.server.mcp_server_id) {
+          held = true;
+          rowRead.resolve();
+          await releaseRow.promise;
+        }
+        return row;
+      });
+    try {
+      const request = harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      await rowRead.promise;
+      replaceLiveSocketAuthority(harness, 'b00c');
+      releaseRow.resolve();
+
+      await expect(request).rejects.toThrow(/authority/i);
+      expect(provider.requests).toEqual([]);
+      expect(harness.emittedBrowserEvents).toEqual([]);
+    } finally {
+      releaseRow.resolve();
+      findSpy.mockRestore();
+    }
+  });
+
+  it('stops oauth-start after a held initialize probe when the socket becomes B', async () => {
+    const provider = await createTestProvider({ holdMcpChallenge: true });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+
+    const request = harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await provider.mcpRequested.promise;
+    replaceLiveSocketAuthority(harness, 'b00d');
+    provider.releaseMcp();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests.filter((entry) => entry.path.startsWith('/.well-known/'))).toEqual([]);
+    expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('does not create an oauth-start pending flow when authority changes during DCR', async () => {
+    const provider = await createTestProvider({ holdDynamicRegistration: true });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/oauth-start-held-dcr',
+      title: 'Held DCR fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises request authority around DCR.',
+      starter_prompt: 'Exercise request authority.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_998,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    vi.mocked(loadCatalog)
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry]);
+    const harness = await createHarness(provider, undefined, { catalogEntry });
+    databases.push(harness.rawDb);
+
+    const request = harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    await provider.dcrRequested.promise;
+    replaceLiveSocketAuthority(harness, 'b00e');
+    provider.releaseDcr();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests.filter((entry) => entry.path === '/register')).toHaveLength(1);
+    expect(provider.requests.filter((entry) => entry.path === '/token')).toEqual([]);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
   it('derives Marketplace policy and all advertised scopes at the service DCR boundary', async () => {
     const advertisedScopes = ['configure', 'read', 'read:sensitive', 'write', 'write:live'];
     const provider = await createTestProvider({
@@ -1367,6 +1601,10 @@ describe('SQLite saved-row OAuth authority', () => {
     databases.push(harness.rawDb);
     const service = harness.app.service('mcp-servers/oauth-browser-reservations');
     const issuedAt = Date.now();
+    // The full daemon suite can take longer than the production TTL under
+    // worker contention. Freeze issuance so this quota contract tests its
+    // own explicit expiry transition rather than ambient wall-clock speed.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt);
 
     const reserve = (tenant: number, user: number, socket: number) => {
       const params = addLiveAuthority(
@@ -1381,53 +1619,53 @@ describe('SQLite saved-row OAuth authority', () => {
       );
     };
 
-    // Fill tenant 1 in layers. Each rejected boundary is followed by a request
-    // in the next isolation scope to prove the lower-scope exhaustion is local.
-    for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, 1);
-    await expect(reserve(1, 1, 1)).rejects.toThrow(/connection/i);
-    await expect(reserve(1, 1, 2)).resolves.toMatchObject({
-      reservation_token: expect.any(String),
-    });
-    // Socket 2 already has one; bring the user's total to 32.
-    for (let slot = 1; slot < 8; slot += 1) await reserve(1, 1, 2);
-    for (let socket = 3; socket <= 4; socket += 1) {
-      for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, socket);
-    }
-    await expect(reserve(1, 1, 5)).rejects.toThrow(/user/i);
-    await expect(reserve(1, 2, 1)).resolves.toMatchObject({
-      reservation_token: expect.any(String),
-    });
-    // User 2 has one; fill it and two more users to the tenant cap of 128.
-    for (let slot = 1; slot < 8; slot += 1) await reserve(1, 2, 1);
-    for (let socket = 2; socket <= 4; socket += 1) {
-      for (let slot = 0; slot < 8; slot += 1) await reserve(1, 2, socket);
-    }
-    for (let user = 3; user <= 4; user += 1) {
-      for (let socket = 1; socket <= 4; socket += 1) {
-        for (let slot = 0; slot < 8; slot += 1) await reserve(1, user, socket);
+    try {
+      // Fill tenant 1 in layers. Each rejected boundary is followed by a request
+      // in the next isolation scope to prove the lower-scope exhaustion is local.
+      for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, 1);
+      await expect(reserve(1, 1, 1)).rejects.toThrow(/connection/i);
+      await expect(reserve(1, 1, 2)).resolves.toMatchObject({
+        reservation_token: expect.any(String),
+      });
+      // Socket 2 already has one; bring the user's total to 32.
+      for (let slot = 1; slot < 8; slot += 1) await reserve(1, 1, 2);
+      for (let socket = 3; socket <= 4; socket += 1) {
+        for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, socket);
       }
-    }
-    await expect(reserve(1, 5, 1)).rejects.toThrow(/tenant/i);
-    await expect(reserve(2, 1, 1)).resolves.toMatchObject({
-      reservation_token: expect.any(String),
-    });
-
-    // Tenant 2 already has one reservation; fill tenants 2–8 to the global
-    // cap. Per-tenant caps ensure tenant 1 could not starve tenant 2 by itself.
-    for (let tenant = 2; tenant <= 8; tenant += 1) {
-      for (let user = 1; user <= 4; user += 1) {
+      await expect(reserve(1, 1, 5)).rejects.toThrow(/user/i);
+      await expect(reserve(1, 2, 1)).resolves.toMatchObject({
+        reservation_token: expect.any(String),
+      });
+      // User 2 has one; fill it and two more users to the tenant cap of 128.
+      for (let slot = 1; slot < 8; slot += 1) await reserve(1, 2, 1);
+      for (let socket = 2; socket <= 4; socket += 1) {
+        for (let slot = 0; slot < 8; slot += 1) await reserve(1, 2, socket);
+      }
+      for (let user = 3; user <= 4; user += 1) {
         for (let socket = 1; socket <= 4; socket += 1) {
-          for (let slot = 0; slot < 8; slot += 1) {
-            if (tenant === 2 && user === 1 && socket === 1 && slot === 0) continue;
-            await reserve(tenant, user, socket);
+          for (let slot = 0; slot < 8; slot += 1) await reserve(1, user, socket);
+        }
+      }
+      await expect(reserve(1, 5, 1)).rejects.toThrow(/tenant/i);
+      await expect(reserve(2, 1, 1)).resolves.toMatchObject({
+        reservation_token: expect.any(String),
+      });
+
+      // Tenant 2 already has one reservation; fill tenants 2–8 to the global
+      // cap. Per-tenant caps ensure tenant 1 could not starve tenant 2 by itself.
+      for (let tenant = 2; tenant <= 8; tenant += 1) {
+        for (let user = 1; user <= 4; user += 1) {
+          for (let socket = 1; socket <= 4; socket += 1) {
+            for (let slot = 0; slot < 8; slot += 1) {
+              if (tenant === 2 && user === 1 && socket === 1 && slot === 0) continue;
+              await reserve(tenant, user, socket);
+            }
           }
         }
       }
-    }
-    await expect(reserve(9, 1, 1)).rejects.toThrow(/pending OAuth browser reservations$/i);
+      await expect(reserve(9, 1, 1)).rejects.toThrow(/pending OAuth browser reservations$/i);
 
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 60_001);
-    try {
+      clock.mockReturnValue(issuedAt + 60_001);
       await expect(reserve(9, 1, 1)).resolves.toMatchObject({
         reservation_token: expect.any(String),
       });
