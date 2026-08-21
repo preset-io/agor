@@ -635,6 +635,63 @@ describe('OnboardingWizard', () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
+  it('does not revive an invalidated operation after reopening for the same auth owner', async () => {
+    const oldOwner = { userId: 'user-1', authenticationGeneration: 4, activationGeneration: 1 };
+    let currentOwner: typeof oldOwner | null = oldOwner;
+    let resolveUser!: (user: User) => void;
+    const usersService = {
+      get: vi.fn(
+        () =>
+          new Promise<User>((resolve) => {
+            resolveUser = resolve;
+          })
+      ),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return usersService;
+        return {};
+      }),
+    };
+    const onUpdateUser = vi.fn(async () => undefined);
+    const onComplete = vi.fn();
+    const rendered = renderWizard({
+      initialStep: 'done',
+      client: client as never,
+      isCurrent: () => currentOwner === oldOwner,
+      onUpdateUser,
+      onComplete,
+    });
+
+    clickButton(/open my board/i);
+    await waitFor(() => expect(usersService.get).toHaveBeenCalledTimes(1));
+
+    // Eligibility loss invalidates the old operation. Reopening without a new
+    // login still receives a fresh activation generation, so the old retained
+    // promise must never become current again.
+    currentOwner = null;
+    const reopenedOwner = { ...oldOwner, activationGeneration: 2 };
+    currentOwner = reopenedOwner;
+    rendered.rerender(
+      <OnboardingWizard
+        {...rendered.props}
+        key={reopenedOwner.activationGeneration}
+        isCurrent={() => currentOwner === reopenedOwner}
+      />
+    );
+
+    resolveUser(makeUser());
+    await Promise.resolve();
+
+    expect(onUpdateUser).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it('workspace step renders the template gallery below the name field', () => {
     renderWizard({ initialStep: 'workspace' });
 

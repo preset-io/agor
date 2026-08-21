@@ -104,7 +104,7 @@ interface PendingEnvironmentToast {
 interface OnboardingOperationOwner {
   userId: UUID;
   authenticationGeneration: number;
-  wizardInstance: number;
+  activationGeneration: number;
 }
 
 function isSameOnboardingOwner(
@@ -117,7 +117,7 @@ function isSameOnboardingOwner(
       !!right &&
       left.userId === right.userId &&
       left.authenticationGeneration === right.authenticationGeneration &&
-      left.wizardInstance === right.wizardInstance)
+      left.activationGeneration === right.activationGeneration)
   );
 }
 
@@ -563,7 +563,7 @@ function AppContent() {
   const [onboardingWizardOwner, setOnboardingWizardOwnerState] =
     useState<OnboardingOperationOwner | null>(null);
   const onboardingWizardOwnerRef = useRef<OnboardingOperationOwner | null>(null);
-  const onboardingWizardInstanceRef = useRef(0);
+  const onboardingActivationSequenceRef = useRef(0);
   const setOnboardingWizardOwner = useCallback((owner: OnboardingOperationOwner | null) => {
     if (isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner)) return;
     // Invalidate retained callbacks synchronously; waiting for React to commit
@@ -571,6 +571,32 @@ function AppContent() {
     onboardingWizardOwnerRef.current = owner;
     setOnboardingWizardOwnerState(owner);
   }, []);
+  const activateOnboardingWizard = useCallback(
+    (userId: UUID, ownerAuthenticationGeneration: number, replaceActive = false) => {
+      const activeOwner = onboardingWizardOwnerRef.current;
+      if (
+        !replaceActive &&
+        activeOwner?.userId === userId &&
+        activeOwner.authenticationGeneration === ownerAuthenticationGeneration
+      ) {
+        return activeOwner;
+      }
+
+      // Allocate a new opaque generation for every activation from an
+      // invalidated state. Never reconstruct a prior owner tuple: promises
+      // retained by an unmounted wizard must not become current again if the
+      // same user/authentication generation later becomes eligible to reopen.
+      onboardingActivationSequenceRef.current += 1;
+      const owner: OnboardingOperationOwner = {
+        userId,
+        authenticationGeneration: ownerAuthenticationGeneration,
+        activationGeneration: onboardingActivationSequenceRef.current,
+      };
+      setOnboardingWizardOwner(owner);
+      return owner;
+    },
+    [setOnboardingWizardOwner]
+  );
   const isOnboardingOwnerCurrent = useCallback(
     (owner: OnboardingOperationOwner) =>
       isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner) &&
@@ -766,11 +792,7 @@ function AppContent() {
       currentSurface.startsWorkspaceRuntime &&
       !loading
     ) {
-      setOnboardingWizardOwner({
-        userId: currentUser.user_id,
-        authenticationGeneration,
-        wizardInstance: onboardingWizardInstanceRef.current,
-      });
+      activateOnboardingWizard(currentUser.user_id, authenticationGeneration);
     }
   }, [
     currentUser,
@@ -780,6 +802,7 @@ function AppContent() {
     currentSurface.startsWorkspaceRuntime,
     loading,
     authenticationGeneration,
+    activateOnboardingWizard,
     setOnboardingWizardOwner,
   ]);
 
@@ -1318,12 +1341,7 @@ function AppContent() {
     }
 
     setOpenUserSettings(false);
-    onboardingWizardInstanceRef.current += 1;
-    setOnboardingWizardOwner({
-      userId: operationUserId,
-      authenticationGeneration: operationAuthenticationGeneration,
-      wizardInstance: onboardingWizardInstanceRef.current,
-    });
+    activateOnboardingWizard(operationUserId, operationAuthenticationGeneration, true);
   };
 
   // Handle delete user
@@ -2020,7 +2038,7 @@ function AppContent() {
             invalidate the old wizard and any pending completion work. */}
       <ConfigProvider theme={ONBOARDING_DARK_THEME}>
         <OnboardingWizard
-          key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.wizardInstance ?? 0}`}
+          key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
           open={onboardingWizardOpen}
           isCurrent={() =>
             !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
