@@ -109,6 +109,7 @@ export function useMarketplaceOverview(input: {
     }
     client.io.on('oauth:completed', schedule);
     client.io.on('oauth:disconnected', schedule);
+    client.io.on('marketplace:invalidated', schedule);
     const onFocus = schedule;
     const onVisibility = () => document.visibilityState === 'visible' && schedule();
     window.addEventListener('focus', onFocus);
@@ -120,6 +121,7 @@ export function useMarketplaceOverview(input: {
       }
       client.io.off('oauth:completed', schedule);
       client.io.off('oauth:disconnected', schedule);
+      client.io.off('marketplace:invalidated', schedule);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
     };

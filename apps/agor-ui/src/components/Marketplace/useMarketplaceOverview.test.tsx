@@ -57,6 +57,52 @@ describe('useMarketplaceOverview live recovery', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('clears visible rows immediately on the user-targeted revocation signal', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    const populated = {
+      servers: [
+        {
+          mcp_server_id: 'server-private',
+          name: 'private',
+          source: 'user',
+          enabled: true,
+          tools: [],
+          session_count: 0,
+          created_at: new Date(0).toISOString(),
+          updated_at: new Date(0).toISOString(),
+        },
+      ],
+      attachments: [],
+      credentials: [],
+      generated_at: new Date(0).toISOString(),
+    } as MCPMarketplaceOverview;
+    const held = new Promise<MCPMarketplaceOverview>(() => undefined);
+    const find = vi.fn().mockResolvedValueOnce(populated).mockReturnValue(held);
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client,
+        connected: true,
+        connecting: false,
+        authGeneration: 1,
+        userId: 'alice',
+        role: 'member',
+      })
+    );
+    await waitFor(() => expect(result.current.overview.servers).toHaveLength(1));
+
+    act(() => io.emit('marketplace:invalidated'));
+
+    expect(result.current.overview.servers).toHaveLength(0);
+    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+  });
+
   it('synchronously clears Alice data while Bob is held, clears on failure, and discards Alice', async () => {
     const serviceEvents = emitter();
     const io = emitter();

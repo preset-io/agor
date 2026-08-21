@@ -15,7 +15,7 @@ import type {
 import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
-import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
+import { Alert, Button, Col, Empty, Flex, message, Pagination, Row, Skeleton, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -292,7 +292,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)) {
           if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
-              await launchMarketplaceOAuth(client, result, oauthPopup, {
+              const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
                 authority: {
                   userId: currentUser!.user_id,
                   role: currentUser!.role,
@@ -300,14 +300,25 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
                 },
                 isCurrent: operation.isCurrent,
               });
+              if (!launched && operation.isCurrent()) {
+                message.warning(
+                  'Sign-in could not start automatically. Continue from MCP settings in the new session.'
+                );
+              }
               if (!operation.isCurrent()) {
                 oauthPopup.close();
                 return;
               }
-            } catch {
+            } catch (cause) {
               // The server and session now exist. Land in the recoverable
               // session rather than pretending the whole Connect failed.
               oauthPopup.close();
+              if (!operation.isCurrent()) return;
+              message.error(
+                cause instanceof Error
+                  ? cause.message
+                  : 'Sign-in could not open. Continue from MCP settings in the new session.'
+              );
             }
           } else {
             // Readiness is advisory. If a formerly-open endpoint raced to

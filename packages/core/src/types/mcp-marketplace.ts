@@ -122,5 +122,11 @@ export interface MCPCatalogServerCandidate {
     expires_at?: number;
     refresh_status: 'idle' | 'refreshing' | 'ambiguous';
     resource_uri?: string;
+    /**
+     * Secret-free structural binding decision for advisory readiness. Normal
+     * server configuration writes revoke the grant; Connect still performs
+     * the full HMAC check at its final authority boundary before reuse.
+     */
+    binding_ready: boolean;
   };
 }

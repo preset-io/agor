@@ -11,6 +11,7 @@
 
 import type { User } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ArrowLeftOutlined, ShopOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Tabs, Typography, theme } from 'antd';
 import { useEffect } from 'react';
@@ -79,7 +80,11 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     role: currentUser?.role,
   });
   const authorityKey =
-    client && connected && !connecting && currentUser?.user_id
+    client &&
+    connected &&
+    !connecting &&
+    currentUser?.user_id &&
+    hasMinimumRole(currentUser.role, ROLES.MEMBER)
       ? ([currentUser.user_id, currentUser.role, authGeneration, client] as const)
       : null;
 
@@ -154,7 +159,14 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                 key: 'servers',
                 label: `My Servers${overview.overview.servers.length ? ` (${overview.overview.servers.length})` : ''}`,
                 children: (
-                  <MyServersTab client={client} authorityKey={authorityKey} {...overview} />
+                  <MyServersTab
+                    client={client}
+                    connected={connected}
+                    connecting={connecting}
+                    authGeneration={authGeneration}
+                    currentUser={currentUser}
+                    {...overview}
+                  />
                 ),
               },
               {

@@ -1,8 +1,8 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath, shortId } from '@agor-live/client';
-import { Alert, Button, Empty, Flex, message, Table, Tag, Typography } from 'antd';
-import { useState } from 'react';
+import { Alert, Button, Empty, Flex, message, Popconfirm, Table, Tag, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 
@@ -17,6 +17,12 @@ export const SessionsTab: React.FC<{
   const navigate = useNavigate();
   const guard = useAuthorityOperationGuard(authorityKey);
   const [detaching, setDetaching] = useState<string | null>(null);
+  const [detachConfirm, setDetachConfirm] = useState<string | null>(null);
+  useEffect(() => {
+    if (authorityKey) return;
+    setDetachConfirm(null);
+    setDetaching(null);
+  }, [authorityKey]);
   const names = new Map(
     overview.servers.map((server) => [server.mcp_server_id, server.display_name ?? server.name])
   );
@@ -34,6 +40,7 @@ export const SessionsTab: React.FC<{
         />
       )}
       <Table
+        scroll={{ x: 'max-content' }}
         loading={loading}
         rowKey={(row) => `${row.session_id}:${row.mcp_server_id}`}
         dataSource={overview.attachments}
@@ -62,11 +69,18 @@ export const SessionsTab: React.FC<{
             title: '',
             render: (_, row) => {
               const key = `${row.session_id}:${row.mcp_server_id}`;
+              const serverName = names.get(row.mcp_server_id) ?? shortId(row.mcp_server_id);
+              const sessionName = row.session_title || shortId(row.session_id);
               return (
-                <Button
-                  danger
-                  loading={detaching === key}
-                  onClick={async () => {
+                <Popconfirm
+                  open={detachConfirm === key && authorityKey !== null}
+                  title={`Detach ${serverName}?`}
+                  description={`This removes it from ${sessionName}. Work already in flight may keep its current MCP configuration.`}
+                  okText="Detach"
+                  okButtonProps={{ danger: true }}
+                  disabled={authorityKey === null}
+                  onOpenChange={(next) => setDetachConfirm(next && authorityKey ? key : null)}
+                  onConfirm={async () => {
                     const operation = guard.begin();
                     if (!client || !operation.isCurrent()) return;
                     setDetaching(key);
@@ -87,8 +101,15 @@ export const SessionsTab: React.FC<{
                     }
                   }}
                 >
-                  Detach
-                </Button>
+                  <Button
+                    aria-label={`Detach ${serverName} from session ${sessionName}`}
+                    danger
+                    disabled={authorityKey === null}
+                    loading={detaching === key}
+                  >
+                    Detach
+                  </Button>
+                </Popconfirm>
               );
             },
           },

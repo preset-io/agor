@@ -1,7 +1,19 @@
 import type { MCPCatalogConnectResult, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { savePendingMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
+import {
+  discardPendingMarketplaceOAuthPrompt,
+  savePendingMarketplaceOAuthPrompt,
+} from '../../utils/marketplaceOAuthPrompt';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
+
+export class MarketplaceOAuthPopupNavigationError extends Error {
+  constructor() {
+    super(
+      'The sign-in window closed before it could open the provider. Continue sign-in from the new session.'
+    );
+    this.name = 'MarketplaceOAuthPopupNavigationError';
+  }
+}
 
 /** Start OAuth only for the authoritative saved server returned by Connect. */
 export async function launchMarketplaceOAuth(
@@ -43,5 +55,17 @@ export async function launchMarketplaceOAuth(
   }
   // Guard once more inside the launch helper immediately before handing the
   // third-party URL to the pre-opened window.
-  return popup.navigate(started.authorizationUrl, options.isCurrent);
+  try {
+    if (popup.navigate(started.authorizationUrl, options.isCurrent)) return true;
+  } catch {
+    // Fall through to exact-attempt cleanup. The durable server, session, and
+    // OAuth attempt remain recoverable from the session UI.
+  }
+  discardPendingMarketplaceOAuthPrompt(
+    result.session.session_id,
+    started.attempt_id,
+    popup.operationId
+  );
+  popup.close();
+  throw new MarketplaceOAuthPopupNavigationError();
 }

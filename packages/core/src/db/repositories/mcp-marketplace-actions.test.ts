@@ -103,7 +103,19 @@ describe('Marketplace MCP atomic repository actions', () => {
       });
 
       const [candidate] = await new MCPCatalogCandidateRepository(db).listForUser(user.user_id);
-      expect(candidate.grant).toMatchObject({ has_access_token: true });
+      expect(candidate.grant).toMatchObject({
+        has_access_token: true,
+        binding_ready: true,
+      });
+      expect(Object.keys(candidate.grant ?? {})).not.toEqual(
+        expect.arrayContaining([
+          'oauth_access_token',
+          'oauth_refresh_token',
+          'oauth_client_id',
+          'oauth_client_secret',
+          'grant_binding_fingerprint',
+        ])
+      );
       expect(candidate.server.headers).toEqual({ __configured__: '••••••••' });
       const serialized = JSON.stringify(candidate);
       for (const secret of [

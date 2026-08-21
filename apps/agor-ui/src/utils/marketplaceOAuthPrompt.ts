@@ -29,6 +29,18 @@ function remove(sessionId: string): void {
   }
 }
 
+/** Remove only the handoff created by this exact popup/attempt operation. */
+export function discardPendingMarketplaceOAuthPrompt(
+  sessionId: string,
+  attemptId: string,
+  popupOperationId: string
+): void {
+  const pending = readPendingMarketplaceOAuthPrompt(sessionId);
+  if (pending?.attemptId === attemptId && pending.popupOperationId === popupOperationId) {
+    remove(sessionId);
+  }
+}
+
 /** Nonsecret handoff only; OAuth protocol data and credentials never enter it. */
 export function savePendingMarketplaceOAuthPrompt(value: PendingMarketplaceOAuthPrompt): void {
   try {

@@ -1,5 +1,6 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -15,24 +16,81 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
+import {
+  canAddMcpServer,
+  explainManageRestriction,
+  policyPendingState,
+} from '../MCPServer/memberPolicy';
 
 const { Text, Title } = Typography;
 
 export const MyServersTab: React.FC<{
   client: AgorClient | null;
-  authorityKey: readonly unknown[] | null;
+  connected: boolean;
+  connecting: boolean;
+  authGeneration: number;
+  currentUser?: User | null;
   overview: MCPMarketplaceOverview;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-}> = ({ client, authorityKey, overview, loading, error, refresh }) => {
-  const guard = useAuthorityOperationGuard(authorityKey);
+}> = ({
+  client,
+  connected,
+  connecting,
+  authGeneration,
+  currentUser,
+  overview,
+  loading,
+  error,
+  refresh,
+}) => {
+  const connectionReady = connected && !connecting;
+  const memberPolicy = useMcpMemberPolicy(client, {
+    connectionReady,
+    currentUser,
+    authGeneration,
+  });
+  const capability = useMemo(
+    () => ({
+      role: currentUser?.role,
+      isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
+      connectionReady,
+      policy: memberPolicy.policy,
+      userId: currentUser?.user_id,
+      canConfigure: memberPolicy.canConfigure,
+    }),
+    [connectionReady, currentUser, memberPolicy.canConfigure, memberPolicy.policy]
+  );
+  const policyState = policyPendingState(memberPolicy);
+  const canMutate = !policyState.pending && canAddMcpServer(capability);
+  const mutationAuthorityKey =
+    canMutate && client && currentUser
+      ? [
+          currentUser.user_id,
+          currentUser.role,
+          authGeneration,
+          client,
+          memberPolicy.policy,
+          memberPolicy.canConfigure,
+        ]
+      : null;
+  const guard = useAuthorityOperationGuard(mutationAuthorityKey);
   // Per-operation tracking permits safe concurrent A/B tool toggles while
   // preventing a second click on the same control. The daemon mutation itself
   // is an atomic one-tool merge, so no whole-policy lost update is possible.
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
+  useEffect(() => {
+    if (canMutate) return;
+    // An open confirmation captured under older authority must not remain an
+    // actionable portal after demotion, policy invalidation, or reconnect.
+    setRemoveConfirm(null);
+    setBusy(new Set());
+  }, [canMutate]);
   const cursorServerIds = useMemo(
     () =>
       new Set(
@@ -45,7 +103,7 @@ export const MyServersTab: React.FC<{
 
   const mutate = async (key: string, work: () => Promise<unknown>, success: string) => {
     const operation = guard.begin();
-    if (!client || !operation.isCurrent()) return;
+    if (!client || !canMutate || !operation.isCurrent()) return;
     setBusy((current) => new Set(current).add(key));
     try {
       await work();
@@ -86,6 +144,13 @@ export const MyServersTab: React.FC<{
         message="Tool controls apply to future MCP configuration"
         description="Work already in flight may keep its current tools. Off stores an explicit deny; On returns the tool to its agent's default. Existing Ask choices are preserved."
       />
+      {!canMutate && (
+        <Alert
+          type="warning"
+          showIcon
+          message={policyState.pending ? policyState.hint : explainManageRestriction(capability)}
+        />
+      )}
       <List
         loading={loading}
         dataSource={overview.servers}
@@ -112,7 +177,9 @@ export const MyServersTab: React.FC<{
                 </div>
                 <Space>
                   <Button
+                    aria-label={`Refresh tools for ${server.display_name ?? server.name}`}
                     icon={<ReloadOutlined />}
+                    disabled={!canMutate}
                     loading={busy.has(`discover:${server.mcp_server_id}`)}
                     onClick={() =>
                       void mutate(
@@ -128,9 +195,13 @@ export const MyServersTab: React.FC<{
                     Refresh tools
                   </Button>
                   <Popconfirm
+                    open={removeConfirm === server.mcp_server_id && canMutate}
                     title="Remove this unattached server?"
                     description="Agor checks attachments again when you confirm. If a session attaches it first, nothing is removed and you can detach it before retrying."
-                    disabled={server.session_count > 0}
+                    onOpenChange={(next) =>
+                      setRemoveConfirm(next && canMutate ? server.mcp_server_id : null)
+                    }
+                    disabled={server.session_count > 0 || !canMutate}
                     onConfirm={() =>
                       void mutate(
                         `remove:${server.mcp_server_id}`,
@@ -143,9 +214,10 @@ export const MyServersTab: React.FC<{
                     }
                   >
                     <Button
+                      aria-label={`Remove ${server.display_name ?? server.name}`}
                       danger
                       icon={<DeleteOutlined />}
-                      disabled={server.session_count > 0}
+                      disabled={server.session_count > 0 || !canMutate}
                       loading={busy.has(`remove:${server.mcp_server_id}`)}
                     >
                       Remove
@@ -175,6 +247,7 @@ export const MyServersTab: React.FC<{
                         <Switch
                           aria-label={`${server.display_name ?? server.name}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
                           checked={tool.permission !== 'deny'}
+                          disabled={!canMutate}
                           loading={busy.has(`tool:${server.mcp_server_id}:${tool.name}`)}
                           onChange={(checked) =>
                             void mutate(

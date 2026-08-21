@@ -201,6 +201,13 @@ beforeEach(() => {
   });
   mockNavigate.mockClear();
   localStorage.clear();
+  vi.spyOn(window, 'open').mockReturnValue({
+    opener: null,
+    closed: false,
+    close: vi.fn(),
+    location: { replace: vi.fn() },
+    document: { title: '', body: { textContent: '' } },
+  } as unknown as Window);
 });
 
 afterEach(() => vi.restoreAllMocks());

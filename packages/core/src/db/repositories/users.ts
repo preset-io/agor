@@ -13,6 +13,7 @@ import type {
   InternalUser,
   StoredAgenticTools,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
@@ -79,6 +80,24 @@ export class UsersRepository
   implements BaseRepository<InternalUser, UsersRepositoryCreate, UsersRepositoryUpdate>
 {
   constructor(private db: Database) {}
+
+  /**
+   * Explicit nonsecret principal projection for user-targeted invalidations.
+   * Tenant scoping is supplied by the repository's current database unit of
+   * work; callers never need to hydrate user preferences or credentials merely
+   * to name a realtime room.
+   */
+  async listUserIds(): Promise<UserID[]> {
+    try {
+      const rows = await select(this.db, { user_id: users.user_id }).from(users).all();
+      return rows.map((row: { user_id: string }) => row.user_id as UserID);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list user IDs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
 
   /**
    * Convert database row to User type.

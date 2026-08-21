@@ -416,6 +416,7 @@ function buildApp(
         ? {
             grant: {
               has_access_token: Boolean(originalAuth.oauth_access_token),
+              binding_ready: true,
               ...(originalAuth.oauth_token_expires_at
                 ? { expires_at: originalAuth.oauth_token_expires_at }
                 : {}),

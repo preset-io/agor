@@ -44,6 +44,7 @@ describe('realtime routing boundary', () => {
       'repo:cloneError',
       'oauth:completed',
       'oauth:disconnected',
+      'marketplace:invalidated',
     ]);
     const target = { emit: vi.fn() };
     emitHaNativeSocketEvent(target, 'cursor-left', {

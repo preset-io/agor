@@ -290,7 +290,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       acknowledged &&
       branchId &&
       !connecting &&
-      !readinessLoading &&
       (!needsApiKey || bearerToken)
   );
 
@@ -488,6 +487,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   if (!branchId) return;
                   let oauthPopup: MarketplaceOAuthPopup | undefined;
                   const needsOAuthWindow =
+                    readinessLoading ||
+                    !readiness ||
+                    Boolean(readinessError) ||
                     entry.auth_type === 'oauth' ||
                     credentialRequirement === 'oauth' ||
                     readiness?.state === 'oauth_required' ||

@@ -171,13 +171,48 @@ export class MCPServerRepository
    */
   private async resolveId(id: string): Promise<string> {
     return resolveByShortIdPrefix(id, 'MCPServer', async (pattern) => {
-      const rows = await select(this.db)
+      const rows = await select(this.db, { mcp_server_id: mcpServers.mcp_server_id })
         .from(mcpServers)
         .where(like(mcpServers.mcp_server_id, pattern))
         .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
         .all();
       return rows.map((r: { mcp_server_id: string }) => r.mcp_server_id);
     });
+  }
+
+  /**
+   * Materialized columns sufficient for the daemon's write authorizer. This is
+   * intentionally not `findById`: deciding ownership/policy must not hydrate
+   * bearer tokens, OAuth client secrets, headers, or environment values.
+   */
+  async getWriteAuthorityProjection(
+    id: string
+  ): Promise<Pick<MCPServer, 'mcp_server_id' | 'owner_user_id' | 'transport' | 'scope'> | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const row = await select(this.db, {
+        mcp_server_id: mcpServers.mcp_server_id,
+        owner_user_id: mcpServers.owner_user_id,
+        transport: mcpServers.transport,
+        scope: mcpServers.scope,
+      })
+        .from(mcpServers)
+        .where(eq(mcpServers.mcp_server_id, fullId))
+        .one();
+      if (!row) return null;
+      return {
+        mcp_server_id: row.mcp_server_id as MCPServerID,
+        ...(row.owner_user_id ? { owner_user_id: row.owner_user_id as UserID } : {}),
+        transport: row.transport,
+        scope: row.scope,
+      };
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw new RepositoryError(
+        `Failed to read MCP server write authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
   }
 
   /**
@@ -609,18 +644,19 @@ export class MCPServerRepository
   }
 
   /**
-   * Atomically change exactly one tool policy on a caller-owned row.
+   * Atomically change exactly one tool policy after an authoritative service
+   * has decided who may mutate the row.
    *
    * Discovery and ordinary patches take the same row lock, so neither can
    * overwrite a concurrent per-tool decision with a stale whole JSON object.
    * The SQL expression edits only `tool_permissions[toolName]`; undiscovered
    * rules, explicit Ask rules, and another concurrent toggle remain intact.
    */
-  async setOwnedToolEnabled(
+  async setToolEnabled(
     id: string,
-    ownerUserId: UserID,
     toolName: string,
-    enabled: boolean
+    enabled: boolean,
+    ownerUserId?: UserID
   ): Promise<boolean> {
     try {
       const fullId = await this.resolveId(id);
@@ -628,11 +664,13 @@ export class MCPServerRepository
         runDatabaseTransaction(
           this.db,
           async (tx) => {
-            const owned = and(
-              eq(mcpServers.mcp_server_id, fullId),
-              eq(mcpServers.owner_user_id, ownerUserId)
-            )!;
-            await lockRowForUpdate(tx, this.db, mcpServers, owned);
+            const target = ownerUserId
+              ? and(
+                  eq(mcpServers.mcp_server_id, fullId),
+                  eq(mcpServers.owner_user_id, ownerUserId)
+                )!
+              : eq(mcpServers.mcp_server_id, fullId);
+            await lockRowForUpdate(tx, this.db, mcpServers, target);
 
             // SQLite's JSON path grammar supports quoted object keys. Escape the
             // two characters meaningful inside that quoted segment; the value is
@@ -650,7 +688,7 @@ export class MCPServerRepository
 
             const result = await update(tx, mcpServers)
               .set({ data: nextData, updated_at: new Date() })
-              .where(owned)
+              .where(target)
               .run();
             return result.rowsAffected > 0;
           },
@@ -681,6 +719,16 @@ export class MCPServerRepository
         error
       );
     }
+  }
+
+  /** Backwards-compatible owner-CAS primitive for trusted repository callers. */
+  async setOwnedToolEnabled(
+    id: string,
+    ownerUserId: UserID,
+    toolName: string,
+    enabled: boolean
+  ): Promise<boolean> {
+    return this.setToolEnabled(id, toolName, enabled, ownerUserId);
   }
 
   /**

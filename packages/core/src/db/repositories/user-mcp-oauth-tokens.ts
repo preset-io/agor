@@ -288,13 +288,13 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
-   * Minimal grant authority used by Marketplace selection.
+   * Full grant authority used only by authoritative Marketplace Connect.
    *
-   * Access and refresh token columns are reduced to access-token presence in
-   * SQL and never selected/decrypted. Binding verification still requires the
-   * registered client identity (and, when one exists, its client secret), so
-   * those two fields alone are opened for an otherwise-compatible OAuth row.
-   * Nothing returned by this method crosses an API boundary.
+   * Advisory readiness must use MCPCatalogCandidateRepository's secret-free
+   * `binding_ready` projection instead. Connect calls this only at the final
+   * reuse boundary, where access and refresh token columns are still reduced
+   * to presence but the registered client identity/secret may be opened to
+   * recompute the binding HMAC. Nothing returned crosses an API boundary.
    */
   async getCatalogGrantAuthority(
     userId: UserID,

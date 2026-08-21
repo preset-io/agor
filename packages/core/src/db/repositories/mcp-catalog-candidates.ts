@@ -49,6 +49,8 @@ type CandidateRow = {
   grant_expires_at: Date | string | number | null;
   refresh_status: unknown;
   resource_uri: string | null;
+  grant_binding_version: unknown;
+  has_grant_binding_fingerprint: unknown;
 };
 
 function parseJson<T>(value: unknown): T | undefined {
@@ -176,6 +178,8 @@ export class MCPCatalogCandidateRepository {
         grant_expires_at: userMcpOauthTokens.oauth_token_expires_at,
         refresh_status: userMcpOauthTokens.refresh_status,
         resource_uri: userMcpOauthTokens.oauth_resource_uri,
+        grant_binding_version: userMcpOauthTokens.grant_binding_version,
+        has_grant_binding_fingerprint: sql<boolean>`${userMcpOauthTokens.grant_binding_fingerprint} is not null`,
       })
         .from(mcpServers)
         .leftJoin(
@@ -217,10 +221,23 @@ export class MCPCatalogCandidateRepository {
           updated_at: new Date(row.updated_at ?? row.created_at),
         };
         const expires = row.grant_expires_at ? new Date(row.grant_expires_at).getTime() : undefined;
+        const bindingVersion =
+          row.grant_binding_version == null ? undefined : Number(row.grant_binding_version);
+        // PostgreSQL has always required a versioned HMAC. Standalone keeps
+        // truly historical unbound rows usable. This projection deliberately
+        // does not verify or select client-secret material: readiness is
+        // advisory and Connect recomputes the full binding before reuse.
+        const bindingReady =
+          bindingVersion === undefined
+            ? !isPostgresDatabase(this.db)
+            : [1, 2, 3, 4].includes(bindingVersion) && Boolean(row.has_grant_binding_fingerprint);
         return {
           server,
           has_row_secret: Boolean(row.has_row_secret),
-          ...(row.has_access_token || row.resource_uri || row.grant_expires_at
+          ...(row.has_access_token ||
+          row.resource_uri ||
+          row.grant_expires_at ||
+          row.grant_binding_version != null
             ? {
                 grant: {
                   has_access_token: Boolean(row.has_access_token),
@@ -232,6 +249,7 @@ export class MCPCatalogCandidateRepository {
                       ? row.refresh_status
                       : 'idle',
                   ...(row.resource_uri ? { resource_uri: row.resource_uri } : {}),
+                  binding_ready: bindingReady,
                 },
               }
             : {}),

@@ -145,11 +145,14 @@ describe('CatalogDetailDrawer consent', () => {
 });
 
 describe('CatalogDetailDrawer OAuth activation', () => {
-  const renderOAuth = (onConnect = vi.fn()) =>
+  const renderOAuth = (
+    onConnect = vi.fn(),
+    options: { entry?: MCPCatalogEntry; readinessLoading?: boolean } = {}
+  ) =>
     render(
       <CatalogDetailDrawer
         identityKey="user-admin"
-        entry={OAUTH_LINEAR}
+        entry={options.entry ?? OAUTH_LINEAR}
         open
         onClose={vi.fn()}
         branches={BRANCHES}
@@ -158,7 +161,12 @@ describe('CatalogDetailDrawer OAuth activation', () => {
         defaultBranchId="branch-1"
         connecting={false}
         connectError={null}
-        readiness={{ catalog_key: OAUTH_LINEAR.name, state: 'oauth_required' }}
+        readiness={
+          options.readinessLoading
+            ? null
+            : { catalog_key: OAUTH_LINEAR.name, state: 'oauth_required' }
+        }
+        readinessLoading={options.readinessLoading}
         connectCapability={ALLOWED}
         policyPending={false}
         policyPendingHint={POLICY_LOADING_HINT}
@@ -187,6 +195,31 @@ describe('CatalogDetailDrawer OAuth activation', () => {
     expect(onConnect).toHaveBeenCalledWith(
       expect.objectContaining({
         oauthPopup: expect.objectContaining({ close: expect.any(Function) }),
+      })
+    );
+    open.mockRestore();
+  });
+
+  it('conservatively pre-opens on a fast click while readiness is still unknown', () => {
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect, { entry: DEEPWIKI, readinessLoading: true });
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(connectButton()).toBeEnabled();
+    fireEvent.click(connectButton());
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ operationId: expect.any(String) }),
       })
     );
     open.mockRestore();
@@ -328,6 +361,11 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     connectCapability: { ...ALLOWED, userId: identityKey ?? undefined },
     policyPending: false,
     policyPendingHint: POLICY_LOADING_HINT,
+    readiness: {
+      catalog_key: shown.name,
+      state:
+        shown.auth_type === 'credentials' ? ('bearer_required' as const) : ('no_auth' as const),
+    },
     onConnect,
   });
   const view = render(<CatalogDetailDrawer {...props(entry)} />);

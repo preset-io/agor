@@ -38,7 +38,7 @@ describe('useCatalogReadiness request coalescing', () => {
       io,
     } as unknown as AgorClient;
 
-    renderHook(() =>
+    const rendered = renderHook(() =>
       useCatalogReadiness({
         client,
         entryKey: 'io.example/server',
@@ -48,11 +48,27 @@ describe('useCatalogReadiness request coalescing', () => {
       })
     );
 
+    expect(rendered.result.current.loading).toBe(true);
+    expect(rendered.result.current.readiness).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(get).not.toHaveBeenCalled();
+    // An invalidation during the initial debounce replaces that timer rather
+    // than allowing both an initial and invalidation read to escape.
+    act(() => io.emit('marketplace:invalidated'));
+    expect(rendered.result.current.loading).toBe(true);
+    expect(rendered.result.current.readiness).toBeNull();
     await act(async () => vi.advanceTimersByTimeAsync(99));
     expect(get).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(get).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.loading).toBe(false);
+    expect(rendered.result.current.readiness?.state).toBe('oauth_required');
 
+    act(() => {
+      io.emit('marketplace:invalidated');
+    });
+    expect(rendered.result.current.loading).toBe(true);
+    expect(rendered.result.current.readiness).toBeNull();
     act(() => {
       serverEvents.emit('created');
       serverEvents.emit('patched');

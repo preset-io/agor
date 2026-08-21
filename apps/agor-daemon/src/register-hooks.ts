@@ -177,6 +177,10 @@ import { emitServiceEvent } from './utils/emit-service-event.js';
 import { redactGatewayChannelForTransport } from './utils/gateway-channel-redaction.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
+  captureMarketplaceInvalidationTargets as captureMarketplaceTargets,
+  publishCapturedMarketplaceInvalidation,
+} from './utils/marketplace-invalidation.js';
+import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
@@ -1430,6 +1434,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   }
 
   /**
+   * Snapshot tenant principals before an authority-changing write. Publication
+   * after the write cannot use the new branch audience: the principal who was
+   * just removed is precisely the browser that must clear its old rows. The
+   * ID-only repository projection keeps this control signal independent of
+   * user credential/profile material.
+   */
+  const captureMarketplaceInvalidationTargets = async (
+    context: HookContext
+  ): Promise<HookContext> => captureMarketplaceTargets(context, usersRepository, app);
+  const publishMarketplaceInvalidation = (context: HookContext): HookContext =>
+    publishCapturedMarketplaceInvalidation(context, app);
+
+  /**
    * Authorization chain shared by the two externally-initiated prompt writes,
    * `messages.create` and `tasks.create`.
    *
@@ -2025,6 +2042,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureBranchPermission('all', 'update branches', superadminOpts), // Require 'all' permission to update
             ]
           : []),
+        captureMarketplaceInvalidationTargets,
         // Capture previous others_fs_access for comparison in after Unix sync hook.
       ],
       remove: [
@@ -2062,7 +2080,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         invalidateRealtimeBranchFromResult,
       ],
-      patch: [invalidateRealtimeBranchFromResult],
+      patch: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
       remove: [invalidateRealtimeBranchFromResult],
     },
   });
@@ -2690,42 +2708,68 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   }
   safeService('groups')?.hooks(groupsHooks);
   safeService('groups')?.hooks({
+    before: {
+      patch: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      patch: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      patch: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
   safeService('group-memberships')?.hooks(groupMembershipsHooks);
   safeService('group-memberships')?.hooks({
+    before: {
+      create: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      create: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
   safeService('branches/:id/owners')?.hooks({
+    before: {
+      create: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      create: [invalidateRealtimeBranchFromRoute],
-      remove: [invalidateRealtimeBranchFromRoute],
+      create: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
+      remove: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
     },
   });
   safeService('branches/:id/group-grants')?.hooks({
+    before: {
+      create: [captureMarketplaceInvalidationTargets],
+      patch: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      create: [invalidateRealtimeBranchFromRoute],
-      patch: [invalidateRealtimeBranchFromRoute],
-      remove: [invalidateRealtimeBranchFromRoute],
+      create: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
+      patch: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
+      remove: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
     },
   });
   safeService('boards/:id/owners')?.hooks({
+    before: {
+      create: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      create: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
   safeService('boards/:id/group-grants')?.hooks({
+    before: {
+      create: [captureMarketplaceInvalidationTargets],
+      patch: [captureMarketplaceInvalidationTargets],
+      remove: [captureMarketplaceInvalidationTargets],
+    },
     after: {
-      create: [clearRealtimeBranchVisibility],
-      patch: [clearRealtimeBranchVisibility],
-      remove: [clearRealtimeBranchVisibility],
+      create: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      patch: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
+      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
 
@@ -2799,7 +2843,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // and any requested role. Hooks remain responsible for transport
       // validation only and cannot accidentally become an alternate bypass.
       create: [(context) => protectFilesystemHomeWrite(context, config)],
-      patch: [(context) => protectFilesystemHomeWrite(context, config)],
+      patch: [
+        (context) => protectFilesystemHomeWrite(context, config),
+        captureMarketplaceInvalidationTargets,
+      ],
     },
     after: {
       // Registered on `all`, not a method list: Feathers composes
@@ -2851,6 +2898,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           });
           return context;
         },
+        publishMarketplaceInvalidation,
         async (context: HookContext) => {
           if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
             return context;

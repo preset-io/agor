@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type {
   AuthenticatedParams,
   MCPCatalogEntry,
@@ -69,6 +70,7 @@ function build(servers: MCPServer[]) {
           expires_at: 4_102_444_800_000,
           refresh_status: 'idle',
           resource_uri: ENTRY.remote_url,
+          binding_ready: true,
         },
       }))
   );
@@ -88,6 +90,18 @@ function build(servers: MCPServer[]) {
 }
 
 describe('MCPCatalogReadinessService', () => {
+  it('production wiring never opens the credential-authority projection', () => {
+    const source = readFileSync(new URL('../register-services.ts', import.meta.url), 'utf8');
+    const registration = source.slice(
+      source.indexOf("'/mcp-catalog/readiness'"),
+      source.indexOf("'/mcp-marketplace'", source.indexOf("'/mcp-catalog/readiness'"))
+    );
+    expect(registration).toContain('candidate.grant?.binding_ready');
+    expect(registration).not.toMatch(
+      /getCatalogGrantAuthority|getToken|oauth_client_secret|openMCPOAuthSecret/
+    );
+  });
+
   it('reports reusable OAuth without returning peer or grant metadata', async () => {
     const built = build([peer()]);
     const result = await built.service.get(ENTRY.name, PARAMS);

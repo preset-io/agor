@@ -27,6 +27,7 @@ export const CredentialsTab: React.FC<{
         bindings, endpoints, or token fragments.
       </Typography.Paragraph>
       <Table
+        scroll={{ x: 'max-content' }}
         loading={loading}
         rowKey={(row) => `${row.mcp_server_id}:${row.method}`}
         dataSource={overview.credentials}

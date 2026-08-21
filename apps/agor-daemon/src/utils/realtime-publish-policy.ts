@@ -295,11 +295,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-marketplace/remove-unattached': {
     audience: 'none',
-    why: 'Caller-private removal acknowledgement; the initiating Marketplace refetches.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
   },
   'mcp-marketplace/tool-permission': {
     audience: 'none',
-    why: 'Caller-private mutation acknowledgement; the initiating Marketplace refetches.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
 

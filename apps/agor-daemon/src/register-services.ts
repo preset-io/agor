@@ -233,6 +233,7 @@ import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
+import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
 import { persistDiscoveredMCPCapabilities } from './utils/mcp-discovered-capabilities.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -3147,18 +3148,11 @@ export async function registerMCPServices(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
-      isGrantAuthorized: async (candidate, params) => {
-        const userId = params.user?.user_id as UserID | undefined;
-        if (!userId) return false;
-        const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
-          userId,
-          candidate.server.mcp_server_id
-        );
-        return Boolean(
-          grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
-        );
-      },
+      // Readiness is advisory and may not open credential material merely to
+      // draw a button. Normal configuration writes revoke bound grants; this
+      // ID/boolean projection is enough to predict reuse. Connect separately
+      // re-reads and verifies the full HMAC at its final authority boundary.
+      isGrantAuthorized: async (candidate) => candidate.grant?.binding_ready === true,
     }),
     { methods: ['get'] }
   );
@@ -3167,16 +3161,22 @@ export async function registerMCPServices(
   });
   app.use(
     '/mcp-marketplace/remove-unattached',
-    new MCPMarketplaceRemoveServerService(new MCPServerRepository(db)),
+    new MCPMarketplaceRemoveServerService(new MCPServerRepository(db), db, (userIds, params) =>
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+    ),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
-    new MCPMarketplaceToolPermissionService(new MCPServerRepository(db)),
+    new MCPMarketplaceToolPermissionService(new MCPServerRepository(db), db, (userIds, params) =>
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+    ),
     { methods: ['create'] }
   );
-  // Action replies are private acknowledgements; authoritative row services
-  // emit their own redacted lifecycle events.
+  // Action replies are private acknowledgements. These services mutate through
+  // repository transactions, so they explicitly emit the user-targeted empty
+  // Marketplace invalidation rather than pretending the ordinary MCP CRUD
+  // service emitted a lifecycle event.
   app.service('mcp-marketplace/remove-unattached').publish(() => []);
   app.service('mcp-marketplace/tool-permission').publish(() => []);
 
