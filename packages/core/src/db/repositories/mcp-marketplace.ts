@@ -21,7 +21,7 @@ import type {
   ToolPermission,
   UserID,
 } from '@agor/core/types';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { jsonExtract, select } from '../database-wrapper';
 import { branches, mcpServers, sessionMcpServers, sessions, userMcpOauthTokens } from '../schema';
@@ -41,6 +41,7 @@ type SafeServerRow = {
   tools_json: unknown;
   permissions_json: unknown;
   auth_type: unknown;
+  credential_configured: unknown;
   credential_created_at: Date | string | number | null;
   credential_updated_at: Date | string | number | null;
   credential_expires_at: Date | string | number | null;
@@ -120,7 +121,7 @@ function credentialFrom(row: SafeServerRow, now: number): MCPMarketplaceCredenti
         ? { server_display_name: stringValue(row.display_name) }
         : {}),
       method,
-      status: 'configured',
+      status: row.credential_configured ? 'configured' : 'not_connected',
     };
   }
 
@@ -160,6 +161,13 @@ export class MCPMarketplaceRepository {
       const tools = jsonExtract(this.db, mcpServers.data, 'tools');
       const permissions = jsonExtract(this.db, mcpServers.data, 'tool_permissions');
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
+      // Boolean presence only: SQL evaluates the secret-bearing fields but
+      // their values never enter a row returned to JavaScript.
+      const credentialConfigured = sql<boolean>`case
+        when ${authType} = 'bearer' then ${jsonExtract(this.db, mcpServers.data, 'auth.token')} is not null
+        when ${authType} = 'jwt' then ${jsonExtract(this.db, mcpServers.data, 'auth.jwt_config.api_secret')} is not null
+        else false
+      end`;
       const sessionTitle = jsonExtract(this.db, sessions.data, 'title');
 
       const serverRows = (await select(this.db, {
@@ -175,6 +183,7 @@ export class MCPMarketplaceRepository {
         tools_json: tools,
         permissions_json: permissions,
         auth_type: authType,
+        credential_configured: credentialConfigured,
         // OAuth metadata only. The access/refresh token, client registration,
         // binding, resource, issuer, and endpoint columns are intentionally
         // absent from this selection.
