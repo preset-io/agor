@@ -19,6 +19,7 @@
  */
 
 import {
+  BoardRepository,
   createTenantScopedDatabaseProxy,
   getCurrentTenantDatabaseScope,
   runWithTenantContext,
@@ -149,6 +150,122 @@ describe('classifyPrimaryTeammateAuthorizationInvalidation', () => {
       )
     ).toBe('cache');
   });
+});
+
+describe('registered primary-teammate invalidation lifecycle', () => {
+  type PrimaryMethod = 'setPrimaryTeammate' | 'clearPrimaryTeammate';
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<PrimaryMethod, RegisteredHook[]>>;
+    after?: Partial<Record<PrimaryMethod, RegisteredHook[]>>;
+  };
+
+  const runInstalledPrimaryHooks = async (options: {
+    method: PrimaryMethod;
+    previousBoardId: string | null;
+  }) => {
+    const registrations: RegisteredHooks[] = [];
+    const emit = vi.fn();
+    const service = {
+      hooks(hooks: RegisteredHooks) {
+        registrations.push(hooks);
+      },
+      emit: vi.fn(),
+    };
+    const app = {
+      service(path: string) {
+        if (path.replace(/^\//, '') === 'boards') return service;
+        return { hooks() {}, emit: vi.fn() };
+      },
+      use() {},
+      publish() {},
+      emit,
+    };
+    const board = {
+      board_id: 'board-1',
+      primary_teammate_id: 'branch-old',
+    } as const;
+    const findBoard = vi
+      .spyOn(BoardRepository.prototype, 'findBySlugOrId')
+      .mockResolvedValue(board as never);
+    const branchRepository = {
+      findById: vi.fn(async () => ({
+        branch_id: 'branch-old',
+        board_id: options.previousBoardId,
+      })),
+    };
+
+    try {
+      registerHooks({
+        db: {} as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'sqlite' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+          execution: { branch_rbac: false },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: {} as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: branchRepository as unknown as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
+
+      const firstArgument =
+        options.method === 'setPrimaryTeammate'
+          ? { boardId: 'board-1', branchId: 'branch-new' }
+          : 'board-1';
+      const context = {
+        path: 'boards',
+        method: options.method,
+        params: {
+          tenant: { tenant_id: 'registration-test', source: 'static' },
+          provider: 'socketio',
+          user: { user_id: 'member-1', role: 'member' },
+        },
+        result: board,
+        arguments: [firstArgument],
+      } as unknown as HookContext;
+
+      for (const registration of registrations) {
+        for (const hook of registration.before?.[options.method] ?? []) await hook(context);
+      }
+      expect(findBoard).toHaveBeenCalledWith('board-1');
+      expect(branchRepository.findById).toHaveBeenCalledWith('branch-old');
+      expect(Object.getOwnPropertySymbols(context.params)).toHaveLength(1);
+
+      for (const registration of registrations) {
+        for (const hook of registration.after?.[options.method] ?? []) await hook(context);
+      }
+      await vi.waitFor(() =>
+        expect(emit).toHaveBeenCalledWith('realtime:authorization-invalidated', {
+          tenantId: 'registration-test',
+          disconnectSockets: options.previousBoardId !== 'board-1',
+        })
+      );
+    } finally {
+      findBoard.mockRestore();
+    }
+  };
+
+  it.each(['setPrimaryTeammate', 'clearPrimaryTeammate'] as const)(
+    'keeps onboarding-safe cache invalidation across the installed %s hook chain',
+    async (method) => {
+      await runInstalledPrimaryHooks({ method, previousBoardId: 'board-1' });
+    }
+  );
+
+  it.each(['setPrimaryTeammate', 'clearPrimaryTeammate'] as const)(
+    'fully evicts a detached visibility anchor across the installed %s hook chain',
+    async (method) => {
+      await runInstalledPrimaryHooks({ method, previousBoardId: 'board-old' });
+    }
+  );
 });
 
 describe('protectFilesystemHomeWrite', () => {
