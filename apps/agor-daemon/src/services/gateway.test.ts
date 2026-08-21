@@ -2674,12 +2674,12 @@ describe('GatewayService Discord beta routing', () => {
     );
   });
 
-  it('uses the starter/live boundary for a newly materialized Discord summon thread', async () => {
+  it('reads a new summon boundary from its parent before later catch-up moves to the thread', async () => {
     const connector = {
       sendMessage: vi.fn(async () => undefined),
       fetchProviderHistory: vi.fn(
         async (request: { afterProviderCursor?: string; throughProviderCursor: string }) => ({
-          threadId: '723456789012345678',
+          threadId: request.threadId,
           complete: true,
           messages: [
             {
@@ -2718,7 +2718,7 @@ describe('GatewayService Discord beta routing', () => {
     await expect(harness.service.create(inbound)).resolves.toMatchObject({ success: true });
     expect(connector.fetchProviderHistory).toHaveBeenCalledWith(
       expect.objectContaining({
-        threadId: '723456789012345678',
+        threadId: '323456789012345678',
         afterProviderCursor: '523456789012345678',
         throughProviderCursor: '523456789012345678',
       })

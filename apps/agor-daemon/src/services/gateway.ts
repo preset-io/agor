@@ -3012,7 +3012,16 @@ export class GatewayService {
           const catchUp = await fetchGatewayCatchUp({
             connector,
             request: {
-              threadId: mappingForCursor?.thread_id ?? data.thread_id,
+              // Discord keeps a top-level summon's starter message in the
+              // parent channel even after it creates a public thread. Read
+              // that first live boundary from the channel where Discord
+              // actually stored it; later thread mentions are read from the
+              // canonical provider thread as usual.
+              threadId:
+                data.metadata?.discord_is_thread === false &&
+                typeof data.metadata.discord_channel_id === 'string'
+                  ? data.metadata.discord_channel_id
+                  : (mappingForCursor?.thread_id ?? data.thread_id),
               afterProviderCursor: afterCursor,
               throughProviderCursor: liveCursor,
               triggerProviderCursor: liveCursor,

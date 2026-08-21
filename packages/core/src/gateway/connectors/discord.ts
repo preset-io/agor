@@ -624,9 +624,9 @@ export class DiscordConnector implements GatewayConnector {
     }
 
     // A successful starter lookup is the accessibility proof used by the
-    // listener.  For a thread event Discord exposes the starter under the
-    // thread channel; for a top-level summon the parent-message lookup below
-    // is the authoritative starter proof.
+    // listener. Discord keeps a message-started public thread's starter in
+    // the parent channel, even though the thread channel id equals the starter
+    // message id. Callers must therefore verify it through the parent route.
     return { coordinates, type: thread?.type as number };
   }
 
@@ -706,9 +706,9 @@ export class DiscordConnector implements GatewayConnector {
     if (!thread) throw new Error('Discord public thread is inaccessible');
     const verified = await this.verifyPublicThread(thread, parentChannelId, starterMessageId);
     const starter = await this.getProviderRecord(
-      Routes.channelMessage(threadChannelId, starterMessageId)
+      Routes.channelMessage(parentChannelId, starterMessageId)
     );
-    if (!starter || starter.id !== starterMessageId) {
+    if (!starter || starter.id !== starterMessageId || starter.channel_id !== parentChannelId) {
       throw new Error('Discord public thread starter message is inaccessible or malformed');
     }
     return verified;

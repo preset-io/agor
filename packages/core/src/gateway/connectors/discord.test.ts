@@ -345,8 +345,8 @@ describe('Discord connector beta', () => {
           type: 11,
         };
       }
-      if (route === '/channels/888888888888888888/messages/888888888888888888') {
-        return { id: '888888888888888888', channel_id: '888888888888888888' };
+      if (route === '/channels/333333333333333333/messages/888888888888888888') {
+        return { id: '888888888888888888', channel_id: '333333333333333333' };
       }
       if (route.startsWith('/channels/')) {
         return { id: config.allowed_channel_ids[0], guild_id: config.guild_id, type: 0 };
@@ -397,6 +397,12 @@ describe('Discord connector beta', () => {
       },
       discord_thread_accessible: true,
     });
+    expect(rest.get).toHaveBeenCalledWith(
+      '/channels/333333333333333333/messages/888888888888888888'
+    );
+    expect(rest.get).not.toHaveBeenCalledWith(
+      '/channels/888888888888888888/messages/888888888888888888'
+    );
     await connector.sendMessage({
       threadId: 'discord:thread:333333333333333333:888888888888888888',
       text: 'thread reply',
