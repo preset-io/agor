@@ -20,13 +20,10 @@ import {
   Alert,
   App as AntApp,
   Button,
-  Drawer,
   Flex,
   Form,
   Popover,
-  Space,
   Spin,
-  Tag,
   Tooltip,
   Typography,
   theme,
@@ -116,9 +113,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
     valid: true,
   });
-  const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
-    null
-  );
   const [hintDismissed, setHintDismissed] = useLocalStorage<boolean>(HINT_DISMISSED_KEY, false);
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({
@@ -320,16 +314,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       return;
     }
 
-    if (onBoardSurface) {
-      closeAndReset();
-      navigation.goToSession(sessionId);
-    } else {
-      setOpen(false);
-      setPrompt('');
-      setPendingSend(null);
-      clearAttachments();
-      setInPlaceResult({ sessionId, branch });
-    }
+    closeAndReset();
+    navigation.goToSession(sessionId);
   };
 
   const runSend = async (mode: SendMode, branch = primaryBranch) => {
@@ -557,67 +543,32 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   );
 
   return (
-    <>
-      <Popover
-        open={open}
-        onOpenChange={(nextOpen) => {
-          if (!disabled) setOpen(nextOpen);
-        }}
-        trigger="click"
-        placement="bottomRight"
-        destroyTooltipOnHide
-        content={content}
-      >
-        <Tooltip title="Start quick session">
-          <Button
-            type="default"
-            aria-label="Compose — ask your primary assistant"
-            disabled={disabled}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: token.marginXXS,
-            }}
-          >
-            <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
-            <EditOutlined style={{ fontSize: token.fontSizeLG }} />
-          </Button>
-        </Tooltip>
-      </Popover>
-
-      <Drawer
-        open={!!inPlaceResult}
-        onClose={() => setInPlaceResult(null)}
-        title="Session started"
-        placement="right"
-        width={340}
-      >
-        {inPlaceResult && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Typography.Text>
-              Your session with{' '}
-              <Typography.Text strong>{teammateName(inPlaceResult.branch)}</Typography.Text> is
-              running.
-            </Typography.Text>
-            <Tag>
-              {(inPlaceResult.branch.board_id &&
-                boardById.get(inPlaceResult.branch.board_id)?.name) ||
-                'its board'}
-            </Tag>
-            <Button
-              type="primary"
-              onClick={() => {
-                const sessionId = inPlaceResult.sessionId;
-                setInPlaceResult(null);
-                navigation.goToSession(sessionId);
-              }}
-            >
-              Open on board
-            </Button>
-          </Space>
-        )}
-      </Drawer>
-    </>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!disabled) setOpen(nextOpen);
+      }}
+      trigger="click"
+      placement="bottomRight"
+      destroyTooltipOnHide
+      content={content}
+    >
+      <Tooltip title="Start quick session">
+        <Button
+          type="default"
+          aria-label="Compose — ask your primary assistant"
+          disabled={disabled}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: token.marginXXS,
+          }}
+        >
+          <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
+          <EditOutlined style={{ fontSize: token.fontSizeLG }} />
+        </Button>
+      </Tooltip>
+    </Popover>
   );
 };

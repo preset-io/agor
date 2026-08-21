@@ -456,18 +456,17 @@ describe('NavbarComposeButton', () => {
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
   });
 
-  it('Send & Open on a non-board surface shows an in-place panel instead of navigating', async () => {
-    renderCompose({ primary: primaryBranch, currentBoardId: '', pathname: '/knowledge' });
+  it.each([
+    ['home', '/'],
+    ['Knowledge', '/knowledge'],
+  ])('Send & Open navigates directly from the %s surface', async (_surface, pathname) => {
+    renderCompose({ primary: primaryBranch, currentBoardId: '', pathname });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'ping' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
 
-    // The in-place panel appears; no navigation happens until "Open on board".
-    expect(await screen.findByText('Session started')).toBeInTheDocument();
-    expect(goToSession).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open on board' }));
-    expect(goToSession).toHaveBeenCalledWith('session-new');
+    await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
+    expect(screen.queryByText('Session started')).not.toBeInTheDocument();
   });
 
   it('Send in Background never navigates (board surface)', async () => {
