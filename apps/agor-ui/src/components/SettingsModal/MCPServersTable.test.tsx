@@ -141,6 +141,15 @@ function renderTable(options: {
 const POLICY_LOADING_HINT = /Checking what this workspace's MCP policy allows/i;
 const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 
+// These remain state/event assertions rather than elapsed-time assertions, but
+// a cold antd Form/Select mount makes jsdom parse a large generated stylesheet.
+// The focused file completes in ~90 seconds; under the full 240-file UI run,
+// worker contention can make an individual cold mount exceed the global 15s
+// limit without changing the result. Keep the allowance local to these real
+// form integration suites rather than weakening the workspace-wide timeout.
+const ANT_FORM_INTEGRATION_TIMEOUT = 60_000;
+const AUTHORITY_TRANSITION_TIMEOUT = 120_000;
+
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
 async function openCreateForm(): Promise<void> {
@@ -159,7 +168,7 @@ async function openCreateForm(): Promise<void> {
  */
 const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
 
-describe('MCPServersTable member policy', () => {
+describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
   it('opens on the servers, with the policy a pane away', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
 
@@ -559,7 +568,9 @@ async function chooseSelect(label: string, option: string): Promise<void> {
   fireEvent.click(optionContent);
 }
 
-describe('MCPServersTable open-dialog authority transitions', () => {
+describe('MCPServersTable open-dialog authority transitions', {
+  timeout: AUTHORITY_TRANSITION_TIMEOUT,
+}, () => {
   it('destroys an admin-A create form and raw credential before admin B can use it', async () => {
     const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
     await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
@@ -595,7 +606,7 @@ describe('MCPServersTable open-dialog authority transitions', () => {
     await chooseSelect('Auth Type', 'Bearer Token');
     expect(await screen.findByLabelText('Token')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
-  }, 60_000);
+  });
 
   it('does not close or continue an A create after its parent save crosses auth generation', async () => {
     let resolveSave!: () => void;
