@@ -115,7 +115,13 @@ const checks = [
     baseline: {
       // These executor-facing routes authenticate narrow service tokens and
       // consume claims directly; they do not perform an authenticated user lookup.
-      'apps/agor-daemon/src/register-routes.ts': 2,
+      // 1: /executor/uploads/:uploadRef/content
+      // 2: /executor/gateway/slack-file-upload
+      // 3: /executor/files/downloads/:downloadRef/content — takes tenant_id and
+      //    executor_branch_id straight off the verified service-token claims and
+      //    requires them to match the transfer the browser route registered, so
+      //    there is no user identity to resolve and nothing to scope a lookup by.
+      'apps/agor-daemon/src/register-routes.ts': 3,
     },
   },
   {

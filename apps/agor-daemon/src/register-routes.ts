@@ -7,6 +7,7 @@
  */
 
 import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
@@ -154,11 +155,15 @@ import {
   checkSessionOwnerOrAdmin,
   ensureBranchPermission,
   loadScheduleAndBranch,
+  PERMISSION_RANK,
+  resolveBranchPermission,
   resolveSessionPromptAccess,
 } from './utils/branch-authorization.js';
+import { getBranchFileDownloadTransfers } from './utils/branch-file-download-transfers.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
+import { resolveDelegatedExecutionHomeKey } from './utils/executor-delegated-home.js';
 import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
@@ -180,6 +185,11 @@ import {
 } from './utils/session-task-state.js';
 import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from './utils/spawn-executor.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';
 import {
@@ -2533,6 +2543,242 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
+  );
+
+  // ============================================================================
+  // Branch file download data plane
+  //
+  // The daemon has no filesystem access to branch checkouts, and executor
+  // results travel as JSON over stdout + Socket.IO, which caps frames at
+  // SOCKET_IO_MAX_BUFFER_SIZE_BYTES. Inlining bytes there is what made files
+  // over ~1 MB undownloadable. These two routes are the streamed alternative:
+  // the browser registers a pending transfer, the executor claims it with a
+  // single-use capability token and POSTs raw bytes, and the daemon pipes those
+  // bytes straight through. No daemon-local workspace access, no base64, no
+  // Socket.IO frame in the path.
+  // ============================================================================
+
+  /** Ceiling on a single streamed branch-file download. */
+  const MAX_BRANCH_FILE_DOWNLOAD_BYTES = 1024 * 1024 * 1024;
+  /** Covers executor spawn, Feathers connect, and the transfer of a large file. */
+  const BRANCH_FILE_DOWNLOAD_TIMEOUT_MS = 300_000;
+
+  /** RFC 5987 attachment header that survives non-ASCII filenames. */
+  function attachmentDisposition(filename: string): string {
+    const fallback = filename.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'download';
+    return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  }
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).get(
+    '/branches/:branchId/files/download',
+    uploadAuthMiddleware,
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 request augmentation
+    async (req: any, res: any, next: NextFunction) => {
+      try {
+        const params = req.feathers as AuthenticatedParams;
+        ensureMinimumRole(params, ROLES.MEMBER, 'download branch files');
+        const tenantId = params.tenant?.tenant_id;
+        const userId = params.user?.user_id as UUID | undefined;
+        if (!tenantId || !userId) throw new NotAuthenticated('Authentication required');
+        const filePath = typeof req.query.path === 'string' ? req.query.path : '';
+        if (!filePath) throw new BadRequest('path query parameter is required');
+        const branchId = String(req.params.branchId);
+
+        // One short unit of work: branch lookup, branch RBAC, and the delegated
+        // home key the executor read runs under. Mirrors the `/file` service
+        // gate (member role + branch 'view') so both paths share one policy.
+        const resolved = await runWithTenantDatabaseScope(db, tenantId, async () => {
+          const branch = await branchRepo.findById(branchId);
+          if (!branch) return null;
+          if (branchRbacEnabled) {
+            const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
+            const effective = resolveBranchPermission(
+              branch,
+              userId,
+              isOwner,
+              params.user?.role,
+              superadminOpts.allowSuperadmin,
+              await branchRepo.resolveUserPermission(branch, userId)
+            );
+            if (PERMISSION_RANK[effective] < PERMISSION_RANK.view) return null;
+          }
+          const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+            db,
+            userId,
+            app.get('config')
+          );
+          return { branchId: branch.branch_id, delegatedHomeKey };
+        });
+        if (!resolved) throw new NotFound(`Branch not found: ${branchId}`);
+
+        const transfer = getBranchFileDownloadTransfers().register(
+          {
+            tenantId,
+            branchId: resolved.branchId,
+            filePath,
+            maxBytes: MAX_BRANCH_FILE_DOWNLOAD_BYTES,
+          },
+          async (metadata, body) => {
+            res.status(200);
+            res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+            res.setHeader('Content-Length', String(metadata.size));
+            res.setHeader('Content-Disposition', attachmentDisposition(metadata.filename));
+            res.setHeader('Cache-Control', 'private, no-store');
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            await pipeline(body, res);
+          },
+          BRANCH_FILE_DOWNLOAD_TIMEOUT_MS
+        );
+        // A browser that navigates away must not leave the transfer parked
+        // until its TTL.
+        res.once('close', () =>
+          transfer.cancel('Client disconnected before the download completed')
+        );
+
+        // Capability token: one action, one ref, one branch, one tenant. Minted
+        // inside a tenant scope so the service-token tenant claim is populated.
+        const sessionToken = await runWithTenantDatabaseScope(db, tenantId, async () =>
+          generateScopedServiceToken(
+            app as unknown as { settings: { authentication?: { secret?: string } } },
+            {
+              executor_action: 'files.download',
+              executor_download_ref: transfer.ref,
+              executor_branch_id: resolved.branchId,
+            }
+          )
+        );
+
+        const command = runExecutorCommand(
+          {
+            command: 'branch.files.download',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              branchId: resolved.branchId,
+              filePath,
+              downloadRef: transfer.ref,
+              maxBytes: MAX_BRANCH_FILE_DOWNLOAD_BYTES,
+            },
+          },
+          {
+            logPrefix: `[FileDownload ${shortId(resolved.branchId)}]`,
+            delegatedHomeKey: resolved.delegatedHomeKey,
+            timeoutMs: BRANCH_FILE_DOWNLOAD_TIMEOUT_MS,
+          }
+        );
+        // A missing file or an over-limit file never reaches the data plane, so
+        // the executor's failure — not the TTL — is what releases the browser.
+        command.then(
+          (result) => {
+            if (!result.success) {
+              transfer.cancel(result.error?.message ?? 'Executor download failed');
+            }
+          },
+          (error) => transfer.cancel(error instanceof Error ? error.message : String(error))
+        );
+
+        await transfer.delivered;
+      } catch (error) {
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
+        next(error);
+      }
+    }
+  );
+
+  // Executor-only data plane. The scoped service token stays in the
+  // Authorization header and binds exactly one tenant + branch + transfer ref.
+  // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
+  (app as any).post(
+    '/executor/files/downloads/:downloadRef/content',
+    // biome-ignore lint/suspicious/noExplicitAny: Express 5 request augmentation
+    async (req: any, res: any) => {
+      try {
+        const authHeader = req.headers.authorization;
+        if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+          return res.status(401).json({ error: 'Authentication required' });
+        }
+        const result = await app.service('authentication').create({
+          strategy: 'jwt',
+          accessToken: authHeader.slice(7),
+        });
+        const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+        const downloadRef = String(req.params.downloadRef);
+        const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+        if (
+          claims?.type !== 'service' ||
+          claims.executor_action !== 'files.download' ||
+          claims.executor_download_ref !== downloadRef ||
+          typeof claims.executor_branch_id !== 'string' ||
+          typeof claims.tenant_id !== 'string' ||
+          !Number.isSafeInteger(size) ||
+          size < 0 ||
+          size > MAX_BRANCH_FILE_DOWNLOAD_BYTES
+        ) {
+          return res.status(403).json({ error: 'Download transfer capability denied' });
+        }
+
+        // Single-use, and only for the tenant + branch the transfer was opened
+        // for: a replayed token finds nothing left to claim.
+        const transfer = getBranchFileDownloadTransfers().claim(downloadRef, {
+          tenantId: claims.tenant_id as string,
+          branchId: claims.executor_branch_id as string,
+        });
+        if (!transfer) {
+          return res.status(404).json({ error: 'Download transfer unavailable' });
+        }
+        if (size > transfer.scope.maxBytes) {
+          transfer.settle(new Error('Download stream exceeds its authorized size'));
+          return res.status(413).json({ error: 'Download exceeds its authorized size' });
+        }
+
+        // Hold the stream to exactly the length it declared, so a truncated or
+        // over-long body fails the download instead of reaching the browser as
+        // a silently corrupt file.
+        let received = 0;
+        const limiter = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            received += chunk.byteLength;
+            if (received > size) {
+              callback(new Error('Download stream exceeds its declared size'));
+              return;
+            }
+            callback(null, chunk);
+          },
+          flush(callback) {
+            callback(received === size ? undefined : new Error('Download stream size mismatch'));
+          },
+        });
+        req.pipe(limiter);
+
+        try {
+          await transfer.sink(
+            {
+              filename: decodeURIComponent(String(req.headers['x-agor-filename'] ?? 'download')),
+              mimeType: String(req.headers['x-agor-mime-type'] ?? 'application/octet-stream'),
+              size,
+            },
+            limiter
+          );
+          transfer.settle();
+          res.status(204).end();
+        } catch (error) {
+          transfer.settle(error instanceof Error ? error : new Error(String(error)));
+          if (!res.headersSent) res.status(500).json({ error: 'Download delivery failed' });
+          else res.destroy();
+        }
+      } catch (error) {
+        const status = (error as { code?: number }).code ?? 400;
+        if (!res.headersSent) {
+          res
+            .status(status)
+            .json({ error: error instanceof Error ? error.message : 'Download failed' });
+        } else res.destroy();
+      }
+    }
   );
 
   type UploadHttpRequest = Request & {

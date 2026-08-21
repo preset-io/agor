@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgenticToolInvokePayloadSchema,
+  BranchFilesDownloadPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
@@ -626,6 +627,57 @@ describe('Type guards', () => {
   });
 });
 
+describe('BranchFilesDownloadPayloadSchema', () => {
+  const valid = {
+    command: 'branch.files.download' as const,
+    sessionToken: 'token',
+    daemonUrl: 'http://localhost:3030',
+    params: {
+      branchId: '00000000-0000-4000-8000-000000000001',
+      filePath: 'assets/big.bin',
+      downloadRef: 'dl_00000000-0000-4000-8000-000000000002',
+      maxBytes: 1024,
+    },
+  };
+
+  it('accepts a well-formed download payload', () => {
+    expect(BranchFilesDownloadPayloadSchema.parse(valid).params.maxBytes).toBe(1024);
+  });
+
+  it('requires the dl_-prefixed ref the daemon registry mints', () => {
+    // Guards the daemon<->executor contract: BranchFileDownloadTransfers emits
+    // `dl_<uuid>`, so anything else must not reach the data plane.
+    for (const downloadRef of ['upl_00000000-0000-4000-8000-000000000002', 'dl_nope', 'dl_']) {
+      expect(() =>
+        BranchFilesDownloadPayloadSchema.parse({
+          ...valid,
+          params: { ...valid.params, downloadRef },
+        })
+      ).toThrow();
+    }
+  });
+
+  it('requires a positive byte ceiling and a non-empty path', () => {
+    expect(() =>
+      BranchFilesDownloadPayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, maxBytes: 0 },
+      })
+    ).toThrow();
+    expect(() =>
+      BranchFilesDownloadPayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, filePath: '' },
+      })
+    ).toThrow();
+  });
+
+  it('resolves through the discriminated union', () => {
+    const parsed = ExecutorPayloadSchema.parse(valid);
+    expect(parsed.command).toBe('branch.files.download');
+  });
+});
+
 describe('getSupportedCommands', () => {
   it('should return all supported commands', () => {
     const commands = getSupportedCommands();
@@ -639,6 +691,7 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('branch.files.list');
     expect(commands).toContain('branch.files.browse');
     expect(commands).toContain('branch.files.read');
+    expect(commands).toContain('branch.files.download');
     expect(commands).toContain('branch.filesystem.status');
     expect(commands).toContain('branch.artifact.publish');
     expect(commands).toContain('branch.artifact.land');
@@ -657,6 +710,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(28);
+    expect(commands.length).toBe(29);
   });
 });

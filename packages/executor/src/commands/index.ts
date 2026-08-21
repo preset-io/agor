@@ -23,6 +23,7 @@ import { handleCodexAuthFile } from './codex-auth-file.js';
 import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
 import {
   handleBranchFilesBrowse,
+  handleBranchFilesDownload,
   handleBranchFilesRead,
   handleBranchFilesystemStatus,
 } from './files.js';
@@ -246,6 +247,7 @@ registerCommand('git.branch.clean', handleGitBranchClean);
 registerCommand('branch.files.list', handleBranchFilesList);
 registerCommand('branch.files.browse', handleBranchFilesBrowse);
 registerCommand('branch.files.read', handleBranchFilesRead);
+registerCommand('branch.files.download', handleBranchFilesDownload);
 registerCommand('branch.filesystem.status', handleBranchFilesystemStatus);
 registerCommand('branch.artifact.publish', handleBranchArtifactPublish);
 registerCommand('branch.artifact.land', handleBranchArtifactLand);
