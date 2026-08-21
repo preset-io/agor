@@ -1,4 +1,4 @@
-import type { MCPAuth, MCPCatalogEntry, MCPServer, MCPServerID } from '@agor/core/types';
+import type { MCPAuth, MCPCatalogEntry, MCPCatalogServerCandidate } from '@agor/core/types';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -12,18 +12,28 @@ const CREDENTIAL_ROUTING_OVERRIDES = [
   'oauth_client_secret',
 ] as const satisfies readonly (keyof MCPAuth)[];
 
-export function hasLiveCallerOAuthGrant(server: MCPServer, now: number): boolean {
-  const auth = server.auth;
-  if (!auth?.oauth_access_token) return false;
-  const expiresAt = auth.oauth_token_expires_at;
-  return !(expiresAt && expiresAt <= now);
+export interface CatalogCredentialMatcherDeps {
+  /** Authoritative binding/mode check; returns only a decision, never material. */
+  isGrantAuthorized(candidate: MCPCatalogServerCandidate): Promise<boolean>;
+}
+
+export async function hasLiveCallerOAuthGrant(
+  candidate: MCPCatalogServerCandidate,
+  now: number,
+  deps: CatalogCredentialMatcherDeps
+): Promise<boolean> {
+  const grant = candidate.grant;
+  if (!grant?.has_access_token || grant.refresh_status !== 'idle') return false;
+  if (grant.expires_at && grant.expires_at <= now) return false;
+  return deps.isGrantAuthorized(candidate);
 }
 
 export function isCatalogCredentialPeer(
-  server: MCPServer,
+  candidate: MCPCatalogServerCandidate,
   entry: MCPCatalogEntry & { remote_url: string },
   prescribed: MCPAuth
 ): boolean {
+  const server = candidate.server;
   const auth = server.auth;
   if (auth?.type !== 'oauth' || prescribed.type !== 'oauth') return false;
   if ((auth.oauth_mode ?? 'per_user') !== 'per_user') return false;
@@ -37,11 +47,12 @@ export function isCatalogCredentialPeer(
   );
 }
 
-export async function hasCatalogCredentialPolicy(
-  server: MCPServer,
+export function hasCatalogCredentialPolicy(
+  candidate: MCPCatalogServerCandidate,
   entry: MCPCatalogEntry & { remote_url: string },
   prescribed: MCPAuth
-): Promise<boolean> {
+): boolean {
+  const server = candidate.server;
   if (server.auth?.oauth_client_id !== prescribed.oauth_client_id) return false;
   if (
     (server.auth?.oauth_dcr_mode ?? 'advertised') !== (prescribed.oauth_dcr_mode ?? 'advertised')
@@ -58,38 +69,86 @@ export async function hasCatalogCredentialPolicy(
   return actual === (entry.oauth?.compatibility_mode ?? 'marketplace');
 }
 
-export interface CatalogCredentialMatcherDeps {
-  readGrantResourceUri(serverId: MCPServerID): Promise<string | undefined>;
-}
-
-/**
- * Return compatible rows in stable order. This is deliberately shared by the
- * advisory readiness read and authoritative Connect path so they cannot drift
- * on endpoint, policy, scope, routing overrides, or protected-resource bounds.
- */
 export async function compatibleCatalogOAuthPeers(
   entry: MCPCatalogEntry & { remote_url: string },
-  servers: MCPServer[],
-  deps: CatalogCredentialMatcherDeps
-): Promise<MCPServer[]> {
+  candidates: MCPCatalogServerCandidate[]
+): Promise<MCPCatalogServerCandidate[]> {
   const prescribed = catalogOAuthConfig(entry);
-  const candidates: MCPServer[] = [];
-  for (const server of servers) {
-    if (!isCatalogCredentialPeer(server, entry, prescribed)) continue;
-    if (!(await hasCatalogCredentialPolicy(server, entry, prescribed))) continue;
-    const resourceUri = await deps.readGrantResourceUri(server.mcp_server_id);
-    if (!sameCatalogEndpoint(resourceUri, entry.remote_url)) continue;
-    candidates.push(server);
-  }
-  return candidates.sort((a, b) => (a.mcp_server_id < b.mcp_server_id ? -1 : 1));
+  return candidates
+    .filter(
+      (candidate) =>
+        isCatalogCredentialPeer(candidate, entry, prescribed) &&
+        hasCatalogCredentialPolicy(candidate, entry, prescribed) &&
+        sameCatalogEndpoint(candidate.grant?.resource_uri, entry.remote_url)
+    )
+    .sort((a, b) => (a.server.mcp_server_id < b.server.mcp_server_id ? -1 : 1));
 }
 
-export async function findLiveReusableCatalogOAuthCredential(
+export interface CatalogCandidateSelection {
+  /** Current canonical catalog row, whether or not its grant is live. */
+  currentCatalog?: MCPCatalogServerCandidate;
+  /** Owned row occupying this catalog identity and eligible for reconciliation. */
+  ownedCatalog?: MCPCatalogServerCandidate;
+  /** Live authority in actual Connect priority order. */
+  live?: MCPCatalogServerCandidate;
+  liveKind?: 'catalog_install' | 'credential_peer';
+  compatibleOAuth: MCPCatalogServerCandidate[];
+}
+
+/** One selector shared by advisory readiness and authoritative Connect. */
+export async function selectCatalogCandidate(
   entry: MCPCatalogEntry & { remote_url: string },
-  servers: MCPServer[],
+  prescribed: MCPAuth,
+  candidates: MCPCatalogServerCandidate[],
+  userId: string,
   now: number,
   deps: CatalogCredentialMatcherDeps
-): Promise<MCPServer | undefined> {
-  const peers = await compatibleCatalogOAuthPeers(entry, servers, deps);
-  return peers.find((server) => hasLiveCallerOAuthGrant(server, now));
+): Promise<CatalogCandidateSelection> {
+  const catalogRows = candidates.filter(
+    ({ server }) => server.source === 'catalog' && server.catalog_entry_name === entry.name
+  );
+  const currentCatalog = catalogRows.find(
+    ({ server, has_row_secret }) =>
+      server.enabled &&
+      isCurrentCatalogInstall(server, entry, prescribed, {
+        reconcileMissingCompatibilityMode: true,
+      }) &&
+      (!has_row_secret || server.owner_user_id === userId)
+  );
+  const ownedCatalog =
+    currentCatalog ?? catalogRows.find(({ server }) => server.owner_user_id === userId);
+  if (prescribed.type !== 'oauth') {
+    return {
+      currentCatalog,
+      ownedCatalog,
+      ...(currentCatalog ? { live: currentCatalog, liveKind: 'catalog_install' as const } : {}),
+      compatibleOAuth: [],
+    };
+  }
+
+  const compatibleOAuth = await compatibleCatalogOAuthPeers(entry, candidates);
+  // A live current install wins. Crucially, a stale catalog row does not block
+  // a live manual peer; this order is also what readiness reports.
+  if (currentCatalog && (await hasLiveCallerOAuthGrant(currentCatalog, now, deps))) {
+    return {
+      currentCatalog,
+      ownedCatalog,
+      live: currentCatalog,
+      liveKind: 'catalog_install',
+      compatibleOAuth,
+    };
+  }
+  for (const candidate of compatibleOAuth) {
+    if (candidate === currentCatalog) continue;
+    if (await hasLiveCallerOAuthGrant(candidate, now, deps)) {
+      return {
+        currentCatalog,
+        ownedCatalog,
+        live: candidate,
+        liveKind: 'credential_peer',
+        compatibleOAuth,
+      };
+    }
+  }
+  return { currentCatalog, ownedCatalog, compatibleOAuth };
 }

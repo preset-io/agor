@@ -5,10 +5,20 @@
 
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
-import type { AuthenticatedParams, MCPAuth, MCPCatalogEntry, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  MCPAuth,
+  MCPCatalogEntry,
+  MCPCatalogServerCandidate,
+  MCPServer,
+  UserID,
+} from '@agor/core/types';
 import { readCredentialRequirement } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
+import {
+  createMCPCatalogConnectService as createConnectService,
+  type MCPCatalogConnectDeps,
+} from './mcp-catalog-connect.js';
 
 const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
@@ -17,6 +27,39 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
 vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
+
+function createMCPCatalogConnectService(
+  app: { service(path: string): any },
+  deps?: MCPCatalogConnectDeps
+) {
+  if (deps) return createConnectService(app, deps);
+  const candidate = (value: MCPServer): MCPCatalogServerCandidate => ({
+    server: {
+      ...value,
+      headers: Object.keys(value.headers ?? {}).length
+        ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
+        : {},
+      auth: redactMCPAuthSecrets(value.auth),
+      created_at: new Date(value.created_at ?? 0),
+      updated_at: new Date(value.updated_at ?? 0),
+    },
+    has_row_secret: Boolean(value.auth?.type === 'bearer' && value.auth.token),
+  });
+  const fallback: MCPCatalogConnectDeps = {
+    async listCandidates(_userId, params) {
+      const result = await app.service('mcp-servers').find(params);
+      return (Array.isArray(result) ? result : result.data).map(candidate);
+    },
+    async getCandidate(_userId, serverId, params) {
+      const value = await app.service('mcp-servers').get(serverId, params);
+      return value ? candidate(value) : undefined;
+    },
+    async isGrantAuthorized() {
+      return false;
+    },
+  };
+  return createConnectService(app, fallback);
+}
 
 /** The catalog name — the entry's unique key, and what an install records. */
 const LINEAR = 'com.linear/linear';
@@ -313,7 +356,19 @@ function buildApp(
       }),
     },
   };
-  const deps = {
+  const deps: {
+    readGrantResourceUri: ReturnType<typeof vi.fn>;
+    listCandidates: (
+      userId: UserID,
+      params: AuthenticatedParams
+    ) => Promise<MCPCatalogServerCandidate[]>;
+    getCandidate: (
+      userId: UserID,
+      serverId: string,
+      params: AuthenticatedParams
+    ) => Promise<MCPCatalogServerCandidate | undefined>;
+    isGrantAuthorized: (candidate: MCPCatalogServerCandidate) => Promise<boolean>;
+  } = {
     readGrantResourceUri: vi.fn(async (serverId: string) => {
       resourceLookups.push(serverId);
       if (grantResources && serverId in grantResources) return grantResources[serverId];
@@ -321,7 +376,68 @@ function buildApp(
         (server) => server.mcp_server_id === serverId
       )?.url;
     }),
+    listCandidates: async () => [],
+    getCandidate: async () => undefined,
+    isGrantAuthorized: async () => true,
   };
+  const candidateFor = async (
+    server: Record<string, unknown>
+  ): Promise<MCPCatalogServerCandidate> => {
+    const originalAuth = server.auth as MCPAuth | undefined;
+    const safeAuth = redactMCPAuthSecrets(originalAuth);
+    if (safeAuth?.type === 'oauth') {
+      delete safeAuth.oauth_access_token;
+      delete safeAuth.oauth_refresh_token;
+      delete safeAuth.oauth_token_expires_at;
+    }
+    let resourceUri: string | undefined;
+    try {
+      resourceUri = await deps.readGrantResourceUri(String(server.mcp_server_id));
+    } catch {
+      resourceUri = undefined;
+    }
+    return {
+      server: {
+        name: 'fixture',
+        transport: 'http',
+        scope: 'session',
+        source: 'user',
+        enabled: true,
+        created_at: new Date(0),
+        updated_at: new Date(0),
+        ...(server as unknown as MCPServer),
+        headers: Object.keys((server.headers as Record<string, string> | undefined) ?? {}).length
+          ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
+          : {},
+        ...(safeAuth ? { auth: safeAuth } : {}),
+      },
+      has_row_secret: Boolean(originalAuth?.type === 'bearer' && originalAuth.token),
+      ...(originalAuth?.type === 'oauth' && resourceUri
+        ? {
+            grant: {
+              has_access_token: Boolean(originalAuth.oauth_access_token),
+              ...(originalAuth.oauth_token_expires_at
+                ? { expires_at: originalAuth.oauth_token_expires_at }
+                : {}),
+              refresh_status: 'idle' as const,
+              ...(resourceUri ? { resource_uri: resourceUri } : {}),
+            },
+          }
+        : {}),
+    };
+  };
+  const currentRows = () =>
+    serverStore.map(
+      (stored) =>
+        (existingServers as Array<Record<string, unknown>>).find(
+          (value) => value.mcp_server_id === stored.mcp_server_id
+        ) ?? stored
+    );
+  deps.listCandidates = vi.fn(async () => Promise.all(currentRows().map(candidateFor)));
+  deps.getCandidate = vi.fn(async (_userId, serverId) => {
+    const server = currentRows().find((value) => value.mcp_server_id === serverId);
+    return server ? candidateFor(server) : undefined;
+  });
 
   return {
     app: { service: (path: string) => services[path] },
@@ -487,18 +603,14 @@ describe('mcp-catalog/connect', () => {
 
   it('reuses an install rather than creating a second row', async () => {
     const existing = installOf();
-    const { app, services, created, deps } = buildApp(CURATED, [existing]);
+    const { app, created, deps } = buildApp(CURATED, [existing]);
 
     const result = await createMCPCatalogConnectService(app, deps).create(request, params);
 
     expect(created.mcpServers).toHaveLength(0);
     expect(result.reused_existing_server).toBe(true);
     expect(result.mcp_server.mcp_server_id).toBe('server-existing');
-    expect(
-      (services['mcp-servers'] as { find: ReturnType<typeof vi.fn> }).find
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ usableByUserId: ALICE }) })
-    );
+    expect(deps.listCandidates).toHaveBeenCalledWith(ALICE, params);
   });
 
   it('converges on the canonical row when a competing create wins', async () => {
@@ -880,7 +992,11 @@ describe('mcp-catalog/connect', () => {
     expect(
       (services['mcp-servers'] as { removeIfUnattached: ReturnType<typeof vi.fn> })
         .removeIfUnattached
-    ).toHaveBeenCalledWith('server-1');
+    ).toHaveBeenCalledWith('server-1', {
+      ownerUserId: ALICE,
+      catalogEntryName: CURATED.name,
+      value: 1,
+    });
   });
 
   it('takes back the server it created when the attach is refused', async () => {
@@ -1243,6 +1359,58 @@ describe('credential reuse', () => {
   const connect = (built: ReturnType<typeof buildApp>) =>
     createMCPCatalogConnectService(built.app, built.deps).create(request, params);
 
+  const expectNoSecretValues = (value: unknown, secrets: string[]) => {
+    const serialized = JSON.stringify(value);
+    for (const secret of secrets) expect(serialized).not.toContain(secret);
+  };
+
+  it('recursively projects a current canonical install without hydrated grant secrets', async () => {
+    const built = buildApp(OAUTH_ENTRY, [
+      authenticated({
+        source: 'catalog',
+        catalog_entry_name: OAUTH_ENTRY.name,
+        name: 'linear',
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_compatibility_mode: 'strict',
+          oauth_access_token: 'raw-access-canonical',
+          oauth_refresh_token: 'raw-refresh-canonical',
+          oauth_token_expires_at: 4_102_444_800_000,
+        },
+        internal_client_secret: 'raw-client-canonical',
+      }),
+    ]);
+    const result = await connect(built);
+    expect(result.reuse_kind).toBe('catalog_install');
+    expectNoSecretValues(result, [
+      'raw-access-canonical',
+      'raw-refresh-canonical',
+      'raw-client-canonical',
+    ]);
+    expect(built.patched).toHaveLength(0);
+  });
+
+  it('recursively projects a credential peer on the no-reconcile path', async () => {
+    const built = buildApp(OAUTH_ENTRY, [
+      authenticated({
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_compatibility_mode: 'strict',
+          oauth_access_token: 'raw-access-peer',
+          oauth_refresh_token: 'raw-refresh-peer',
+          oauth_token_expires_at: 4_102_444_800_000,
+        },
+        internal_client_secret: 'raw-client-peer',
+      }),
+    ]);
+    const result = await connect(built);
+    expect(result.reuse_kind).toBe('credential_peer');
+    expectNoSecretValues(result, ['raw-access-peer', 'raw-refresh-peer', 'raw-client-peer']);
+    expect(built.patched).toHaveLength(0);
+  });
+
   it('reuses a server the caller already signed in to, without a second row', async () => {
     // Signed in from anywhere — Settings, another session, another board. This
     // row was never installed from the catalog and carries no
@@ -1254,6 +1422,21 @@ describe('credential reuse', () => {
     expect(result.reused_existing_server).toBe(true);
     expect(result.mcp_server.mcp_server_id).toBe('server-signed-in');
     expect(built.created.mcpServers).toHaveLength(0);
+  });
+
+  it('prefers a live manual peer over an owned stale catalog row', async () => {
+    const staleCatalog = authenticated({
+      mcp_server_id: 'server-stale-catalog',
+      source: 'catalog',
+      catalog_entry_name: OAUTH_ENTRY.name,
+      owner_user_id: ALICE,
+      url: 'https://stale.example/mcp',
+    });
+    const built = buildApp(OAUTH_ENTRY, [staleCatalog, authenticated()]);
+    const result = await connect(built);
+    expect(result.reuse_kind).toBe('credential_peer');
+    expect(result.mcp_server.mcp_server_id).toBe('server-signed-in');
+    expect(built.patched).toHaveLength(0);
   });
 
   it('hands back a server that can answer, so the starter prompt is armed', async () => {

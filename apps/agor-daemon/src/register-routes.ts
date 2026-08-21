@@ -29,6 +29,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
+  MCPCatalogCandidateRepository,
   MessagesRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
@@ -147,6 +148,7 @@ import {
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -540,12 +542,33 @@ export function createRegisteredMCPCatalogConnectService(
   db: TenantScopeAwareDatabase
 ) {
   return createMCPCatalogConnectService(app, {
-    async readGrantResourceUri(serverId, params) {
-      const userId = params.user?.user_id as UserID | undefined;
-      if (!userId) return undefined;
+    async listCandidates(userId, params) {
       const tenantId =
         (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
-      const read = async () => new UserMCPOAuthTokenRepository(db).getResourceUri(userId, serverId);
+      const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+    async getCandidate(userId, serverId, params) {
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () => new MCPCatalogCandidateRepository(db).getForUser(userId, serverId);
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+    async isGrantAuthorized(candidate, params) {
+      const userId = params.user?.user_id as UserID | undefined;
+      if (!userId) return false;
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () => {
+        const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
+          userId,
+          candidate.server.mcp_server_id
+        );
+        return Boolean(
+          grant?.has_access_token &&
+            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+        );
+      };
       return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
     },
   });

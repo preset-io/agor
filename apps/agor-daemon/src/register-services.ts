@@ -32,6 +32,7 @@ import {
   getCurrentTenantId,
   inArray,
   isPostgresDatabaseHandle,
+  MCPCatalogCandidateRepository,
   MCPMarketplaceRepository,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
@@ -181,6 +182,10 @@ import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
 import { MCPCatalogReadinessService } from './services/mcp-catalog-readiness.js';
 import { MCPMarketplaceService } from './services/mcp-marketplace.js';
+import {
+  MCPMarketplaceRemoveServerService,
+  MCPMarketplaceToolPermissionService,
+} from './services/mcp-marketplace-actions.js';
 import {
   logMCPOAuthCompatibilityPolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -3141,11 +3146,18 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
-      readGrantResourceUri: async (serverId, params) => {
+      listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
+      isGrantAuthorized: async (candidate, params) => {
         const userId = params.user?.user_id as UserID | undefined;
-        return userId
-          ? new UserMCPOAuthTokenRepository(db).getResourceUri(userId, serverId)
-          : undefined;
+        if (!userId) return false;
+        const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
+          userId,
+          candidate.server.mcp_server_id
+        );
+        return Boolean(
+          grant?.has_access_token &&
+            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+        );
       },
     }),
     { methods: ['get'] }
@@ -3153,6 +3165,20 @@ export async function registerMCPServices(
   app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
     methods: ['find'],
   });
+  app.use(
+    '/mcp-marketplace/remove-unattached',
+    new MCPMarketplaceRemoveServerService(new MCPServerRepository(db)),
+    { methods: ['create'] }
+  );
+  app.use(
+    '/mcp-marketplace/tool-permission',
+    new MCPMarketplaceToolPermissionService(new MCPServerRepository(db)),
+    { methods: ['create'] }
+  );
+  // Action replies are private acknowledgements; authoritative row services
+  // emit their own redacted lifecycle events.
+  app.service('mcp-marketplace/remove-unattached').publish(() => []);
+  app.service('mcp-marketplace/tool-permission').publish(() => []);
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {

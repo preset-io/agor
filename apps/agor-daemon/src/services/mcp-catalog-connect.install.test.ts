@@ -16,6 +16,7 @@
 
 import {
   createDatabaseAsync,
+  MCPCatalogCandidateRepository,
   MCPServerRepository,
   runMigrations,
   setMcpMemberPolicy,
@@ -39,6 +40,7 @@ import {
   type McpServerWriteHookContext,
 } from '../utils/mcp-server-authorization.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { createMCPServersService } from './mcp-servers.js';
 
 const { probeRemoteAuthType } = vi.hoisted(() => ({ probeRemoteAuthType: vi.fn() }));
@@ -61,8 +63,6 @@ const CURATED = {
  * A caller who holds no OAuth grant anywhere, for the tests about installing
  * rather than about reuse. Reuse asks this first and stops when it says so.
  */
-const NO_GRANTS = { readGrantResourceUri: async () => undefined };
-
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
   branch_id: 'branch-1',
@@ -120,8 +120,16 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
       user: { user_id: caller.user_id, role: callerRole },
     }) as unknown as AuthenticatedParams;
 
+  const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
+  const connectDeps = {
+    listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+    getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+      candidateRepo.getForUser(userId, serverId),
+    isGrantAuthorized: async () => false,
+  };
+
   const connectAs = (caller: User, callerRole: UserRole) =>
-    createMCPCatalogConnectService(app, NO_GRANTS).create(
+    createMCPCatalogConnectService(app, connectDeps).create(
       CONNECT_REQUEST,
       paramsFor(caller, callerRole)
     );
@@ -554,14 +562,22 @@ describe('credential reuse, against real grants', () => {
 
     // The real read the daemon injects, against the real table — so "whose
     // grant" is decided by the same key the production wiring uses.
+    const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
-      async readGrantResourceUri(
-        serverId: MCPServer['mcp_server_id'],
+      listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+      getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+        candidateRepo.getForUser(userId, serverId),
+      async isGrantAuthorized(
+        candidate: import('@agor/core/types').MCPCatalogServerCandidate,
         params: AuthenticatedParams
       ) {
         const userId = params.user?.user_id as User['user_id'] | undefined;
-        if (!userId) return undefined;
-        return (await tokens.getToken(userId, serverId))?.oauth_resource_uri ?? undefined;
+        if (!userId) return false;
+        const grant = await tokens.getCatalogGrantAuthority(userId, candidate.server.mcp_server_id);
+        return Boolean(
+          grant?.has_access_token &&
+            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+        );
       },
     };
 

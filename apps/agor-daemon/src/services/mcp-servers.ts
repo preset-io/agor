@@ -151,8 +151,11 @@ export class MCPServersService extends DrizzleService<
   }
 
   /** Internal compensation primitive; deliberately not registered as a REST method. */
-  async removeIfUnattached(id: string): Promise<boolean> {
-    return this.mcpServerRepo.deleteIfUnattached(id);
+  async removeIfUnattached(
+    id: string,
+    generation?: { ownerUserId: string; catalogEntryName: string; value: number }
+  ): Promise<boolean> {
+    return this.mcpServerRepo.deleteIfUnattached(id, generation);
   }
 
   /** Internal request-order claim; not registered as a REST method. */

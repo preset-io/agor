@@ -496,6 +496,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'mcp-servers/oauth-status',
   'mcp-catalog/readiness',
   'mcp-marketplace',
+  'mcp-marketplace/remove-unattached',
+  'mcp-marketplace/tool-permission',
   'card-types',
   'cards',
   'artifacts',
@@ -2364,6 +2366,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('mcp-catalog/readiness')?.hooks({ before: { all: [requireAuth] } });
   safeService('mcp-marketplace')?.hooks({ before: { all: [requireAuth] } });
+  safeService('mcp-marketplace/remove-unattached')?.hooks({ before: { all: [requireAuth] } });
+  safeService('mcp-marketplace/tool-permission')?.hooks({ before: { all: [requireAuth] } });
 
   safeService('session-mcp-servers')?.hooks({
     before: {

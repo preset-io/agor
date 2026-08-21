@@ -1,6 +1,6 @@
 import type { AgenticToolName } from './agentic-tool';
 import type { SessionID } from './id';
-import type { MCPServerID, MCPSource, ToolPermission } from './mcp';
+import type { MCPServer, MCPServerID, MCPSource, ToolPermission } from './mcp';
 import type { SessionStatus } from './session';
 
 /** A discovered tool as the Marketplace may safely present it. */
@@ -80,4 +80,47 @@ export interface MCPMarketplaceOverview {
   attachments: MCPMarketplaceAttachment[];
   credentials: MCPMarketplaceCredential[];
   generated_at: string;
+}
+
+/** Narrow Marketplace mutation; no server configuration is accepted or returned. */
+export interface MCPMarketplaceRemoveServerData {
+  mcp_server_id: MCPServerID;
+}
+
+export interface MCPMarketplaceRemoveServerResult {
+  mcp_server_id: MCPServerID;
+  removed: true;
+}
+
+/**
+ * One atomic per-tool policy decision. `default` deletes only this tool's
+ * override; it is intentionally not a generic MCP server patch.
+ */
+export interface MCPMarketplaceToolPermissionData {
+  mcp_server_id: MCPServerID;
+  tool_name: string;
+  enabled: boolean;
+}
+
+export interface MCPMarketplaceToolPermissionResult {
+  mcp_server_id: MCPServerID;
+  tool_name: string;
+  permission: 'deny' | 'default';
+}
+
+/**
+ * Internal, explicit catalog-selection projection. It contains enough public
+ * server configuration to compare catalog policy plus boolean/temporal grant
+ * authority, but never an access token, refresh token, OAuth client secret,
+ * header value, environment value, issuer, endpoint binding, or token suffix.
+ */
+export interface MCPCatalogServerCandidate {
+  server: MCPServer;
+  has_row_secret: boolean;
+  grant?: {
+    has_access_token: boolean;
+    expires_at?: number;
+    refresh_status: 'idle' | 'refreshing' | 'ambiguous';
+    resource_uri?: string;
+  };
 }

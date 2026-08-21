@@ -42,6 +42,10 @@ import type {
   MCPCatalogEntry,
   MCPCatalogReadiness,
   MCPMarketplaceOverview,
+  MCPMarketplaceRemoveServerData,
+  MCPMarketplaceRemoveServerResult,
+  MCPMarketplaceToolPermissionData,
+  MCPMarketplaceToolPermissionResult,
   MCPMemberPolicySetting,
   MCPServer,
   Message,
@@ -207,6 +211,20 @@ export interface MCPMarketplaceService {
   find(params?: Params): Promise<MCPMarketplaceOverview>;
 }
 
+export interface MCPMarketplaceRemoveServerService {
+  create(
+    data: MCPMarketplaceRemoveServerData,
+    params?: Params
+  ): Promise<MCPMarketplaceRemoveServerResult>;
+}
+
+export interface MCPMarketplaceToolPermissionService {
+  create(
+    data: MCPMarketplaceToolPermissionData,
+    params?: Params
+  ): Promise<MCPMarketplaceToolPermissionResult>;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -235,6 +253,8 @@ export interface ServiceTypes {
   'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
   'mcp-marketplace': MCPMarketplaceOverview;
+  'mcp-marketplace/remove-unattached': MCPMarketplaceRemoveServerResult;
+  'mcp-marketplace/tool-permission': MCPMarketplaceToolPermissionResult;
   'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
@@ -784,6 +804,8 @@ export interface AgorClient
   service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
   service(path: 'mcp-marketplace'): MCPMarketplaceService;
+  service(path: 'mcp-marketplace/remove-unattached'): MCPMarketplaceRemoveServerService;
+  service(path: 'mcp-marketplace/tool-permission'): MCPMarketplaceToolPermissionService;
   service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 

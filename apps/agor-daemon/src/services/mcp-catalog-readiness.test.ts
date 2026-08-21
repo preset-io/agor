@@ -1,4 +1,10 @@
-import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  MCPCatalogEntry,
+  MCPCatalogServerCandidate,
+  MCPServer,
+  UserID,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { MCPCatalogReadinessService } from './mcp-catalog-readiness';
 
@@ -43,20 +49,41 @@ function peer(overrides: Partial<MCPServer> = {}): MCPServer {
 
 function build(servers: MCPServer[]) {
   const catalogGet = vi.fn(async () => ENTRY);
-  const serverFind = vi.fn(async () => servers);
+  const listCandidates = vi.fn(
+    async (): Promise<MCPCatalogServerCandidate[]> =>
+      servers.map((server) => ({
+        server: {
+          ...server,
+          auth:
+            server.auth?.type === 'oauth'
+              ? {
+                  ...server.auth,
+                  oauth_access_token: undefined,
+                  oauth_token_expires_at: undefined,
+                }
+              : server.auth,
+        },
+        has_row_secret: false,
+        grant: {
+          has_access_token: true,
+          expires_at: 4_102_444_800_000,
+          refresh_status: 'idle',
+          resource_uri: ENTRY.remote_url,
+        },
+      }))
+  );
   const app = {
     service(path: string) {
-      if (path === 'mcp-catalog') return { get: catalogGet, find: vi.fn() };
-      if (path === 'mcp-servers') return { get: vi.fn(), find: serverFind };
+      if (path === 'mcp-catalog') return { get: catalogGet };
       throw new Error(`unexpected service ${path}`);
     },
   };
-  const readGrantResourceUri = vi.fn(async () => ENTRY.remote_url);
+  const isGrantAuthorized = vi.fn(async () => true);
   return {
-    service: new MCPCatalogReadinessService(app, { readGrantResourceUri }),
+    service: new MCPCatalogReadinessService(app, { listCandidates, isGrantAuthorized }),
     catalogGet,
-    serverFind,
-    readGrantResourceUri,
+    listCandidates,
+    isGrantAuthorized,
   };
 }
 
@@ -78,8 +105,8 @@ describe('MCPCatalogReadinessService', () => {
       state: 'installed_ready',
     });
     expect(built.catalogGet).toHaveBeenCalledOnce();
-    expect(built.serverFind).toHaveBeenCalledOnce();
-    expect(built.readGrantResourceUri).toHaveBeenCalledOnce();
+    expect(built.listCandidates).toHaveBeenCalledOnce();
+    expect(built.isGrantAuthorized).toHaveBeenCalledOnce();
   });
 
   it('is advisory across a credential race and never carries state into Connect', async () => {
@@ -93,6 +120,19 @@ describe('MCPCatalogReadinessService', () => {
       catalog_key: ENTRY.name,
       state: 'oauth_required',
     });
-    expect(built.serverFind).toHaveBeenCalledTimes(2);
+    expect(built.listCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it('predicts the live manual peer when a stale catalog row also exists', async () => {
+    const stale = peer({
+      mcp_server_id: '00000000-0000-7000-8000-000000000002',
+      source: 'catalog',
+      catalog_entry_name: ENTRY.name,
+      url: 'https://stale.example/mcp',
+    });
+    await expect(build([stale, peer()]).service.get(ENTRY.name, PARAMS)).resolves.toEqual({
+      catalog_key: ENTRY.name,
+      state: 'reusable_oauth',
+    });
   });
 });
