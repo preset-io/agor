@@ -66,6 +66,15 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+function durableAuthorityWithCreate(
+  create: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>['create']
+): NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']> {
+  return {
+    create,
+    maintain: vi.fn(),
+  } as unknown as NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
+}
+
 type TestProvider = {
   baseUrl: string;
   savedMcpUrl: string;
@@ -317,7 +326,12 @@ type SQLiteHarness = {
 async function createHarness(
   provider: TestProvider,
   oauthMode?: 'per_user' | 'shared',
-  options: { catalogPeer?: boolean; catalogEntry?: MCPCatalogEntry } = {}
+  options: {
+    catalogPeer?: boolean;
+    catalogEntry?: MCPCatalogEntry;
+    durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
+    lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
+  } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
@@ -386,6 +400,8 @@ async function createHarness(
     allowSuperadmin: false,
     requireAuth: async (context) => context,
     deployment: {} as RegisterServicesContext['deployment'],
+    mcpOAuthPendingFlowAuthority: options.durableAuthority,
+    lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
   });
 
   const invokeCallback = async (
@@ -1008,6 +1024,166 @@ describe('SQLite saved-row OAuth authority', () => {
       clock.mockRestore();
     }
     expect(provider.requests).toHaveLength(before);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it.each(['expiry', 'socket replacement'] as const)(
+    'gives %s authority precedence when SQLite grant lookup rejects after provider discovery',
+    async (transition) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider);
+      databases.push(harness.rawDb);
+      const issuedAt = Date.now();
+      const request = await reserveBrowserEvent(harness, 'discover');
+      const lookupStarted = deferred<void>();
+      const releaseLookup = deferred<void>();
+      const originalGetToken = UserMCPOAuthTokenRepository.prototype.getToken;
+      let heldGrantPreparation = false;
+      const lookupSpy = vi
+        .spyOn(UserMCPOAuthTokenRepository.prototype, 'getToken')
+        .mockImplementation(async function (...args) {
+          const providerDiscoveryFinished = provider.requests.some(
+            (request) => request.path === '/.well-known/oauth-authorization-server'
+          );
+          if (!heldGrantPreparation && providerDiscoveryFinished) {
+            heldGrantPreparation = true;
+            lookupStarted.resolve();
+            await releaseLookup.promise;
+            throw new Error('held SQLite grant lookup failed');
+          }
+          return originalGetToken.apply(this, args);
+        });
+      const clock =
+        transition === 'expiry'
+          ? vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999)
+          : undefined;
+      try {
+        const discover = harness.app.service('mcp-servers/discover').create(
+          {
+            mcp_server_id: harness.server.mcp_server_id,
+            oauth_browser_event: request,
+          },
+          paramsFor(harness)
+        );
+        await lookupStarted.promise;
+        const requestsAtFailure = provider.requests.map((entry) => ({ ...entry }));
+
+        if (transition === 'expiry') {
+          clock!.mockReturnValue(issuedAt + 60_001);
+        } else {
+          harness.liveSocket.feathers.user = {
+            ...harness.user,
+            user_id: '01900000-0000-7000-8000-00000000cafe' as UserID,
+            email: 'replacement@example.test',
+          };
+        }
+        releaseLookup.resolve();
+
+        await expect(discover).resolves.toMatchObject({
+          success: false,
+          error: expect.stringMatching(/expired|authority|reservation/i),
+        });
+        expect(provider.requests).toEqual(requestsAtFailure);
+      } finally {
+        releaseLookup.resolve();
+        lookupSpy.mockRestore();
+        clock?.mockRestore();
+      }
+      expect(harness.emittedBrowserEvents).toEqual([]);
+      expect(
+        provider.requests.filter((request) => request.authorization?.startsWith('Bearer '))
+      ).toEqual([]);
+    }
+  );
+
+  it('gives expiry precedence when PostgreSQL grant locking rejects after discovery', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const lockStarted = deferred<void>();
+    const releaseLock = deferred<void>();
+    const durableCreate = vi.fn(async () => {
+      throw new Error('durable create must not run');
+    });
+    const lockGrantConfiguration = vi.fn(async () => {
+      lockStarted.resolve();
+      await releaseLock.promise;
+      throw new Error('held PostgreSQL lock failed');
+    });
+    const harness = await createHarness(provider, undefined, {
+      durableAuthority: durableAuthorityWithCreate(durableCreate),
+      lockGrantConfiguration,
+    });
+    databases.push(harness.rawDb);
+    const issuedAt = Date.now();
+    const request = await reserveBrowserEvent(harness, 'discover');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    try {
+      const discover = harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: request,
+        },
+        paramsFor(harness)
+      );
+      await lockStarted.promise;
+      const requestsAtFailure = provider.requests.map((entry) => ({ ...entry }));
+      clock.mockReturnValue(issuedAt + 60_001);
+      releaseLock.resolve();
+
+      await expect(discover).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/expired/i),
+      });
+      expect(provider.requests).toEqual(requestsAtFailure);
+    } finally {
+      releaseLock.resolve();
+      clock.mockRestore();
+    }
+    expect(lockGrantConfiguration).toHaveBeenCalledOnce();
+    expect(durableCreate).not.toHaveBeenCalled();
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('gives socket replacement precedence when PostgreSQL durable-flow creation rejects', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const createStarted = deferred<void>();
+    const releaseCreate = deferred<void>();
+    const durableCreate = vi.fn(async () => {
+      createStarted.resolve();
+      await releaseCreate.promise;
+      throw new Error('held PostgreSQL durable create failed');
+    });
+    const lockGrantConfiguration = vi.fn().mockResolvedValue(undefined);
+    const harness = await createHarness(provider, undefined, {
+      durableAuthority: durableAuthorityWithCreate(durableCreate),
+      lockGrantConfiguration,
+    });
+    databases.push(harness.rawDb);
+    const request = await reserveBrowserEvent(harness, 'discover');
+    const discover = harness.app.service('mcp-servers/discover').create(
+      {
+        mcp_server_id: harness.server.mcp_server_id,
+        oauth_browser_event: request,
+      },
+      paramsFor(harness)
+    );
+    await createStarted.promise;
+    const requestsAtFailure = provider.requests.map((entry) => ({ ...entry }));
+    harness.liveSocket.feathers.authentication = {
+      strategy: 'jwt',
+      accessToken: 'replacement-postgres-authority-token',
+    };
+    releaseCreate.resolve();
+
+    await expect(discover).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/authority|reservation/i),
+    });
+    expect(provider.requests).toEqual(requestsAtFailure);
+    expect(lockGrantConfiguration).toHaveBeenCalledOnce();
+    expect(durableCreate).toHaveBeenCalledOnce();
     expect(harness.emittedBrowserEvents).toEqual([]);
   });
 

@@ -75,7 +75,7 @@ describe('register-services /mcp-servers/discover wiring', () => {
   });
 
   it('routes JWT and OAuth credentials through hosted-safe outbound/cache options', () => {
-    expect(discoverBlock).toContain('allowLocalhostHttp: !durableOAuthFlows');
+    expect(discoverBlock).toContain('allowLocalhostHttp: !postgresOAuthDeployment');
     expect(discoverBlock).toContain('cacheNamespace:');
     expect(discoverBlock).toContain('disableProcessTokenCache: !!durableOAuthFlows');
   });
