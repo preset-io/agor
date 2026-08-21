@@ -1,4 +1,5 @@
 import type { AgorClient, UpdateUserInput, User } from '@agor-live/client';
+import type { CapturedAuthAuthorityCycle } from '../hooks/useAuth';
 
 interface CompleteLocalPasswordChangeOptions {
   client: AgorClient;
@@ -15,13 +16,14 @@ interface CompleteForcedPasswordChangeOptions {
   userId: string;
   email: string;
   newPassword: string;
+  authorityCycle: CapturedAuthAuthorityCycle;
   shouldApply: () => boolean;
   reauthenticate: (
     email: string,
     password: string,
-    shouldApply: () => boolean
+    authorityCycle: CapturedAuthAuthorityCycle
   ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
-  logout: (shouldApply: () => boolean) => Promise<boolean>;
+  logout: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
 }
 
 /**
@@ -62,29 +64,30 @@ export async function completeForcedPasswordChange({
   userId,
   email,
   newPassword,
+  authorityCycle,
   shouldApply,
   reauthenticate,
   logout,
 }: CompleteForcedPasswordChangeOptions): Promise<boolean | null> {
-  if (!shouldApply()) return null;
+  if (!shouldApply() || !authorityCycle.isCurrent()) return null;
   await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
-  if (!shouldApply()) return null;
+  if (!shouldApply() || !authorityCycle.isCurrent()) return null;
 
   // The password patch revokes A's old tokens, so establishing A with the new
   // password is the terminal step of this same captured authority operation.
   // Authentication happens on a disposable REST client and installs tokens
-  // only if `shouldApply` is still exact at the point of application.
-  const result = await reauthenticate(email, newPassword, shouldApply);
+  // only if the App-owned captured authority is still exact at the point of
+  // application. The initiating modal may unmount while auth loading is shown.
+  const result = await reauthenticate(email, newPassword, authorityCycle);
   if (result === 'obsolete') return null;
   // `signed-in` is a guarded authority-establishment receipt: useAuth checks
   // shouldApply immediately before synchronously installing the new tokens and
   // identity. That installation is expected to advance authGeneration, so the
   // old generation must not invalidate its own successful terminal result.
   if (result === 'signed-in') return true;
-  if (!shouldApply()) return null;
   if (result === 'failed') {
-    if (!shouldApply()) return null;
-    await logout(shouldApply);
+    if (!authorityCycle.isCurrent()) return null;
+    await logout(authorityCycle);
     return false;
   }
 

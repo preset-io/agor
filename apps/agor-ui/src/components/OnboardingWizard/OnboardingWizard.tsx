@@ -28,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import {
   MAX_ONBOARDING_GOALS,
@@ -426,6 +427,10 @@ export function OnboardingWizard({
   // A stale/deleted preference must never be treated as a valid durable step.
   const savedBoard = useAgorStore((state) =>
     savedBoardId ? state.boardById.get(savedBoardId) : undefined
+  );
+  const onboardingAuthority = useAuthenticatedAuthorityScope(
+    client,
+    user ? `${user.user_id}:${user.role}` : null
   );
 
   // ── Token-derived styles (live, theme-aware) ────────────────────────────
@@ -1537,11 +1542,17 @@ export function OnboardingWizard({
                     {authMethod === 'codex-device-auth' ? (
                       <CodexDeviceSignIn
                         client={client}
+                        operationScope={onboardingAuthority.operationScope}
                         onVerified={handleCodexDeviceVerified}
                         onUseFallback={handleCodexAuthMethodFallback}
                       />
                     ) : authMethod === 'codex-auth-json' ? (
-                      <CodexImportAuthJson client={client} onImported={handleCodexImported} />
+                      <CodexImportAuthJson
+                        client={client}
+                        identityKey={onboardingAuthority.identityKey}
+                        operationScope={onboardingAuthority.operationScope}
+                        onImported={handleCodexImported}
+                      />
                     ) : authMethod === 'claude-subscription-token' ? (
                       <>
                         <Alert

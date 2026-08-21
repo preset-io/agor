@@ -1690,6 +1690,8 @@ export async function registerMCPServices(
 
   type OAuthBrowserReservationClaim = {
     reservationToken: string;
+    /** Immutable deadline retained after the one-shot map entry is consumed. */
+    expiresAt: number;
     operation: MCPOAuthBrowserOperation;
     mcpServerId?: string;
     userId: string;
@@ -1881,6 +1883,11 @@ export async function registerMCPServices(
       compatibilityMode: effectiveCompatibilityMode,
       dcrMode: effectiveDcrMode,
       allowLocalhostHttp: !durableOAuthFlows,
+      // The reservation is consumed before provider work starts, but its
+      // deadline remains authoritative throughout discovery/DCR/flow setup.
+      assertCurrent: opts.browserReservation
+        ? () => assertOAuthBrowserReservationStillCurrent(opts.browserReservation!)
+        : undefined,
     });
     if (opts.browserReservation) {
       assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
@@ -2172,8 +2179,13 @@ export async function registerMCPServices(
 
   const OAUTH_BROWSER_RESERVATION_TTL_MS = 60_000;
   const MAX_OAUTH_BROWSER_RESERVATIONS = 1_024;
+  // Layered bounds prevent a single busy socket, user, or tenant from
+  // exhausting the process-global reservation pool. A tenant can use its full
+  // share without depending on reservation order in another tenant.
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_TENANT = 128;
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_USER = 32;
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_SOCKET = 8;
   type OAuthBrowserReservationRecord = OAuthBrowserReservationClaim & {
-    expiresAt: number;
     authorityFingerprint?: string;
     cleanupTimer: ReturnType<typeof setTimeout>;
   };
@@ -2230,6 +2242,9 @@ export async function registerMCPServices(
   const assertOAuthBrowserReservationStillCurrent = (
     reservation: OAuthBrowserReservationClaim
   ): void => {
+    if (Date.now() >= reservation.expiresAt) {
+      throw new Forbidden('OAuth browser reservation has expired');
+    }
     const authority = liveSocketAuthority(reservation.socketId);
     if (
       !authority ||
@@ -2301,6 +2316,7 @@ export async function registerMCPServices(
     }
     const claim = {
       reservationToken: token,
+      expiresAt: reservation.expiresAt,
       operation: reservation.operation,
       mcpServerId: reservation.mcpServerId,
       userId: reservation.userId,
@@ -2827,6 +2843,25 @@ export async function registerMCPServices(
         throw new Forbidden('OAuth browser reservation authority is not current');
       }
       pruneOAuthBrowserReservations();
+      let tenantReservations = 0;
+      let userReservations = 0;
+      let socketReservations = 0;
+      for (const reservation of oauthBrowserReservations.values()) {
+        if (reservation.tenantId === tenantId) {
+          tenantReservations += 1;
+          if (reservation.userId === userId) userReservations += 1;
+        }
+        if (reservation.socketId === socketId) socketReservations += 1;
+      }
+      if (socketReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_SOCKET) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this connection');
+      }
+      if (userReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_USER) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this user');
+      }
+      if (tenantReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_TENANT) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this tenant');
+      }
       if (oauthBrowserReservations.size >= MAX_OAUTH_BROWSER_RESERVATIONS) {
         throw new BadRequest('Too many pending OAuth browser reservations');
       }

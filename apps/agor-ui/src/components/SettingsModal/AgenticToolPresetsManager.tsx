@@ -57,6 +57,14 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
     setSaving(false);
   }, [form, identityKey]);
 
+  // A same-user reconnect/auth-generation change cancels the old save. Keep
+  // their open form and draft, but release the generation-owned spinner even
+  // though the stale promise's finally block is correctly forbidden to write.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationGuard identity is the semantic authority-epoch key
+  useLayoutEffect(() => {
+    setSaving(false);
+  }, [operationGuard]);
+
   const load = useCallback(
     async (parentOperation?: AuthorityOperation) => {
       const operation = parentOperation ?? operationGuard.begin();

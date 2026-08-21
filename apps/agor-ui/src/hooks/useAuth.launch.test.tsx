@@ -258,7 +258,6 @@ describe('useAuth launch-code fallback', () => {
         refreshToken: string;
         user: { user_id: string; email: string };
       }>();
-      authenticate.mockImplementationOnce(() => pendingAuth.promise);
       const refreshed = vi.fn();
       window.addEventListener(TOKENS_REFRESHED_EVENT, refreshed);
 
@@ -266,12 +265,32 @@ describe('useAuth launch-code fallback', () => {
         const { result } = renderHook(() => useAuth());
         await waitFor(() => expect(result.current.loading).toBe(false));
         let authorityA = true;
+        localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-a-access');
+        localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-a-refresh');
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent(TOKENS_REFRESHED_EVENT, {
+              detail: {
+                accessToken: 'admin-a-access',
+                refreshToken: 'admin-a-refresh',
+                user: {
+                  user_id: 'admin-a',
+                  email: 'admin-a@example.test',
+                  role: 'admin',
+                },
+              },
+            })
+          );
+        });
+        const authorityCycle = result.current.captureAuthorityCycle(() => authorityA);
+        expect(authorityCycle).not.toBeNull();
+        authenticate.mockImplementationOnce(() => pendingAuth.promise);
         let login!: Promise<'signed-in' | 'failed' | 'obsolete'>;
         act(() => {
           login = result.current.loginForAuthorityCycle(
             'admin-a@example.test',
             'new-password',
-            () => authorityA
+            authorityCycle!
           );
         });
 
@@ -284,7 +303,7 @@ describe('useAuth launch-code fallback', () => {
               detail: {
                 accessToken: 'admin-b-access',
                 refreshToken: 'admin-b-refresh',
-                user: { user_id: 'admin-b', email: 'admin-b@example.test' },
+                user: { user_id: 'admin-b', email: 'admin-b@example.test', role: 'admin' },
               },
             })
           );
@@ -294,7 +313,7 @@ describe('useAuth launch-code fallback', () => {
           pendingAuth.resolve({
             accessToken: 'stale-admin-a-access',
             refreshToken: 'stale-admin-a-refresh',
-            user: { user_id: 'admin-a', email: 'admin-a@example.test' },
+            user: { user_id: 'admin-a', email: 'admin-a@example.test', role: 'admin' },
           });
         } else {
           pendingAuth.reject(new Error('stale A credentials failed'));
@@ -308,14 +327,66 @@ describe('useAuth launch-code fallback', () => {
         expect(result.current.user?.user_id).toBe('admin-b');
         expect(result.current.loading).toBe(false);
         expect(result.current.error).toBeNull();
-        // Only B's explicit authority establishment was announced. A's stale
-        // disposable REST result never dispatches a second replacement event.
-        expect(refreshed).toHaveBeenCalledOnce();
+        // Only the explicit A fixture and B replacement were announced. A's
+        // stale disposable REST result never dispatches a third event.
+        expect(refreshed).toHaveBeenCalledTimes(2);
       } finally {
         window.removeEventListener(TOKENS_REFRESHED_EVENT, refreshed);
       }
     }
   );
+
+  it('deterministically releases loading when a captured reconnect cycle becomes obsolete', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-a-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-a-refresh');
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'admin-a-access',
+            refreshToken: 'admin-a-refresh',
+            user: { user_id: 'admin-a', email: 'admin-a@example.test', role: 'admin' },
+          },
+        })
+      );
+    });
+    let connectionReady = true;
+    const authorityCycle = result.current.captureAuthorityCycle(() => connectionReady);
+    expect(authorityCycle).not.toBeNull();
+    const pendingAuth = deferred<{
+      accessToken: string;
+      refreshToken: string;
+      user: { user_id: string; email: string; role: string };
+    }>();
+    authenticate.mockImplementationOnce(() => pendingAuth.promise);
+
+    let login!: Promise<'signed-in' | 'failed' | 'obsolete'>;
+    act(() => {
+      login = result.current.loginForAuthorityCycle(
+        'admin-a@example.test',
+        'new-password',
+        authorityCycle!
+      );
+    });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    connectionReady = false;
+    pendingAuth.resolve({
+      accessToken: 'obsolete-access',
+      refreshToken: 'obsolete-refresh',
+      user: { user_id: 'admin-a', email: 'admin-a@example.test', role: 'admin' },
+    });
+
+    await act(async () => {
+      await expect(login).resolves.toBe('obsolete');
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.user?.user_id).toBe('admin-a');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-access');
+  });
 
   it('does not let a delayed guarded current-user refresh install an obsolete row', async () => {
     window.history.replaceState({}, '', '/ui/');

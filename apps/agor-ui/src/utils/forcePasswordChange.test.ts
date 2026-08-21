@@ -16,12 +16,22 @@ function makeClient(patch = vi.fn().mockResolvedValue({})) {
   } as unknown as Parameters<typeof completeForcedPasswordChange>[0]['client'];
 }
 
+function authorityCycle(isCurrent: () => boolean = () => true) {
+  return {
+    userId: 'user-a',
+    role: 'admin',
+    accessToken: 'user-a-access',
+    isCurrent,
+  };
+}
+
 function options(overrides: Partial<Parameters<typeof completeForcedPasswordChange>[0]> = {}) {
   return {
     client: makeClient(),
     userId: 'user-a',
     email: 'a@example.test',
     newPassword: 'new-password-1234',
+    authorityCycle: authorityCycle(),
     shouldApply: () => true,
     reauthenticate: vi.fn().mockResolvedValue('signed-in' as const),
     logout: vi.fn().mockResolvedValue(true),
@@ -41,7 +51,7 @@ describe('completeForcedPasswordChange', () => {
     expect(reauthenticate).toHaveBeenCalledWith(
       'a@example.test',
       'new-password-1234',
-      expect.any(Function)
+      expect.objectContaining({ userId: 'user-a', role: 'admin' })
     );
     expect(logout).not.toHaveBeenCalled();
   });
@@ -55,6 +65,7 @@ describe('completeForcedPasswordChange', () => {
       options({
         client: makeClient(vi.fn(() => pendingPatch.promise)),
         shouldApply: () => current,
+        authorityCycle: authorityCycle(() => current),
         reauthenticate,
         logout,
       })
@@ -73,6 +84,7 @@ describe('completeForcedPasswordChange', () => {
     const result = completeForcedPasswordChange(
       options({
         shouldApply: () => current,
+        authorityCycle: authorityCycle(() => current),
         reauthenticate: vi.fn(() => pendingLogin.promise),
         logout,
       })
@@ -108,7 +120,9 @@ describe('completeForcedPasswordChange', () => {
       )
     ).resolves.toBe(false);
     expect(logout).toHaveBeenCalledOnce();
-    expect(logout).toHaveBeenCalledWith(expect.any(Function));
+    expect(logout).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-a', role: 'admin' })
+    );
   });
 });
 

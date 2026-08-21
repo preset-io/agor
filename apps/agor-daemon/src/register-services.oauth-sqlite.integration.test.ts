@@ -439,6 +439,44 @@ function paramsFor(harness: SQLiteHarness): AuthenticatedParams & { connection: 
   } as AuthenticatedParams & { connection: { id: string } };
 }
 
+function addLiveAuthority(
+  harness: SQLiteHarness,
+  tenantId: string,
+  userId: string,
+  socketId: string
+): AuthenticatedParams & { connection: { id: string } } {
+  const user = {
+    ...harness.user,
+    user_id: userId as UserID,
+    email: `${userId}@example.test`,
+    role: 'member' as const,
+  };
+  const connection = {
+    id: socketId,
+    user,
+    authentication: {
+      strategy: 'jwt',
+      accessToken: `token:${tenantId}:${userId}:${socketId}`,
+    },
+  } as AuthenticatedParams & { id: string };
+  const socket = {
+    id: socketId,
+    feathers: connection,
+    data: { tenant: { tenant_id: tenantId, source: 'auth' } },
+  };
+  (
+    harness.app.io as {
+      sockets: { sockets: Map<string, unknown> };
+    }
+  ).sockets.sockets.set(socketId, socket);
+  return {
+    user,
+    tenant: { tenant_id: tenantId, source: 'auth' },
+    connection,
+    authentication: connection.authentication,
+  } as AuthenticatedParams & { connection: { id: string } };
+}
+
 async function reserveBrowserEvent(
   harness: SQLiteHarness,
   operation: 'discover' | 'test-oauth'
@@ -922,6 +960,138 @@ describe('SQLite saved-row OAuth authority', () => {
       clock.mockRestore();
     }
     expect(provider.requests).toHaveLength(before);
+  });
+
+  it('retains the immutable deadline after consumption and aborts held discovery before DCR or browser emit', async () => {
+    const provider = await createTestProvider({
+      holdMcpChallenge: true,
+      rejectDynamicRegistration: true,
+    });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    // If the deadline guard were missing, this legacy no-client row would
+    // proceed through provider discovery and POST /register. Existing DCR
+    // coverage proves that counterfactual path; this test proves expiry stops
+    // it before the first durable provider side effect.
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_compatibility_mode: 'legacy',
+      },
+    });
+    const issuedAt = Date.now();
+    const request = await reserveBrowserEvent(harness, 'discover');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    try {
+      const discover = harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: request,
+        },
+        paramsFor(harness)
+      );
+      await provider.mcpRequested.promise;
+
+      // The map entry has already been consumed. Advancing past its immutable
+      // claim deadline must still fence every continuation after the held MCP
+      // challenge completes.
+      clock.mockReturnValue(issuedAt + 60_001);
+      provider.releaseMcp();
+
+      await expect(discover).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/expired/i),
+      });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(harness.emittedBrowserEvents).toEqual([]);
+    expect(
+      provider.requests.filter(
+        (request) =>
+          request.path.includes('.well-known') ||
+          request.path === '/register' ||
+          request.path === '/authorize'
+      )
+    ).toEqual([]);
+  });
+
+  it('enforces layered socket/user/tenant/global reservation quotas with isolation and TTL recovery', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const service = harness.app.service('mcp-servers/oauth-browser-reservations');
+    const issuedAt = Date.now();
+
+    const reserve = (tenant: number, user: number, socket: number) => {
+      const params = addLiveAuthority(
+        harness,
+        `tenant-${tenant}`,
+        `tenant-${tenant}-user-${user}`,
+        `tenant-${tenant}-user-${user}-socket-${socket}`
+      );
+      return service.create(
+        { operation: 'discover', mcp_server_id: harness.server.mcp_server_id },
+        params
+      );
+    };
+
+    // Fill tenant 1 in layers. Each rejected boundary is followed by a request
+    // in the next isolation scope to prove the lower-scope exhaustion is local.
+    for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, 1);
+    await expect(reserve(1, 1, 1)).rejects.toThrow(/connection/i);
+    await expect(reserve(1, 1, 2)).resolves.toMatchObject({
+      reservation_token: expect.any(String),
+    });
+    // Socket 2 already has one; bring the user's total to 32.
+    for (let slot = 1; slot < 8; slot += 1) await reserve(1, 1, 2);
+    for (let socket = 3; socket <= 4; socket += 1) {
+      for (let slot = 0; slot < 8; slot += 1) await reserve(1, 1, socket);
+    }
+    await expect(reserve(1, 1, 5)).rejects.toThrow(/user/i);
+    await expect(reserve(1, 2, 1)).resolves.toMatchObject({
+      reservation_token: expect.any(String),
+    });
+    // User 2 has one; fill it and two more users to the tenant cap of 128.
+    for (let slot = 1; slot < 8; slot += 1) await reserve(1, 2, 1);
+    for (let socket = 2; socket <= 4; socket += 1) {
+      for (let slot = 0; slot < 8; slot += 1) await reserve(1, 2, socket);
+    }
+    for (let user = 3; user <= 4; user += 1) {
+      for (let socket = 1; socket <= 4; socket += 1) {
+        for (let slot = 0; slot < 8; slot += 1) await reserve(1, user, socket);
+      }
+    }
+    await expect(reserve(1, 5, 1)).rejects.toThrow(/tenant/i);
+    await expect(reserve(2, 1, 1)).resolves.toMatchObject({
+      reservation_token: expect.any(String),
+    });
+
+    // Tenant 2 already has one reservation; fill tenants 2–8 to the global
+    // cap. Per-tenant caps ensure tenant 1 could not starve tenant 2 by itself.
+    for (let tenant = 2; tenant <= 8; tenant += 1) {
+      for (let user = 1; user <= 4; user += 1) {
+        for (let socket = 1; socket <= 4; socket += 1) {
+          for (let slot = 0; slot < 8; slot += 1) {
+            if (tenant === 2 && user === 1 && socket === 1 && slot === 0) continue;
+            await reserve(tenant, user, socket);
+          }
+        }
+      }
+    }
+    await expect(reserve(9, 1, 1)).rejects.toThrow(/pending OAuth browser reservations$/i);
+
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 60_001);
+    try {
+      await expect(reserve(9, 1, 1)).resolves.toMatchObject({
+        reservation_token: expect.any(String),
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('refuses catalog reuse after a current versioned SQLite grant binding drifts', async () => {

@@ -66,7 +66,10 @@ export function useOAuthBrowserEventAttempt({
         !operation.isCurrent() ||
         !reservation ||
         typeof reservation.reservation_token !== 'string' ||
-        !reservation.reservation_token
+        !reservation.reservation_token ||
+        typeof reservation.expires_at !== 'number' ||
+        !Number.isFinite(reservation.expires_at) ||
+        reservation.expires_at <= Date.now()
       ) {
         operation.cancel();
         return null;
@@ -75,14 +78,20 @@ export function useOAuthBrowserEventAttempt({
         reservation_token: reservation.reservation_token,
       };
       let active = true;
+      let expiryTimer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
         if (!active) return;
         active = false;
         client.io.off('oauth:open_browser', listener);
         cleanupByOperationIdRef.current.delete(request.reservation_token);
+        if (expiryTimer !== undefined) clearTimeout(expiryTimer);
         operation.cancel();
       };
       const listener = (event: MCPOAuthOpenBrowserEvent | null | undefined) => {
+        if (Date.now() >= reservation.expires_at) {
+          cleanup();
+          return;
+        }
         if (
           !event ||
           typeof event !== 'object' ||
@@ -104,6 +113,7 @@ export function useOAuthBrowserEventAttempt({
       };
       cleanupByOperationIdRef.current.set(request.reservation_token, cleanup);
       client.io.on('oauth:open_browser', listener);
+      expiryTimer = setTimeout(cleanup, Math.max(0, reservation.expires_at - Date.now()));
       return { request, cleanup };
     },
   };

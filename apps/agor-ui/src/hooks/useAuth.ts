@@ -40,23 +40,37 @@ interface AuthState {
   error: string | null;
 }
 
+/**
+ * Exact authenticated authority captured before an operation invalidates its
+ * own old credentials (for example, a required password change).
+ *
+ * Component mount lifetime is deliberately not part of this ticket. The App
+ * loading gate may unmount the initiating modal while a replacement login is
+ * in flight. Identity, role, credential, connection and auth-generation
+ * changes still invalidate it through the supplied authority guard and the
+ * exact auth/storage snapshots.
+ */
+export interface CapturedAuthAuthorityCycle {
+  userId: string;
+  role: string;
+  accessToken: string;
+  isCurrent: () => boolean;
+}
+
 interface UseAuthReturn extends AuthState {
-  /** Monotonic owner for caller-scoped async work. Token refresh does not advance it. */
+  /** Monotonic owner for caller-scoped async work. Routine token refresh does not advance it. */
   authenticationGeneration: number;
   isAuthenticationGenerationCurrent: (generation: number) => boolean;
-  /**
-   * Synchronously verifies the complete authenticated owner. Unlike render-time
-   * user state, this cannot be changed by an abandoned React render.
-   */
   isAuthenticationOwnerCurrent: (userId: UserID, generation: number) => boolean;
   login: (email: string, password: string) => Promise<boolean>;
+  captureAuthorityCycle: (shouldApply: () => boolean) => CapturedAuthAuthorityCycle | null;
   loginForAuthorityCycle: (
     email: string,
     password: string,
-    shouldApply: () => boolean
+    authorityCycle: CapturedAuthAuthorityCycle
   ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
   logout: () => Promise<void>;
-  logoutForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
+  logoutForAuthorityCycle: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
   reAuthenticate: () => Promise<void>;
   refreshCurrentUserForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
 }
@@ -94,9 +108,14 @@ export function useAuth(): UseAuthReturn {
     loading: true,
     error: null,
   });
+  const authStateRef = useRef(state);
+  authStateRef.current = state;
+  // Only the latest local-login attempt may install credentials or own the
+  // global loading bit. Other auth establishments explicitly supersede it.
+  const localLoginAttemptRef = useRef<object | null>(null);
   const authenticationGenerationRef = useRef(0);
   const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
-  const activeUserIdRef = useRef<UserID | null>(null);
+  const activeAuthorityRef = useRef<{ userId: UserID; role: User['role'] } | null>(null);
 
   const advanceAuthenticationGeneration = useCallback(() => {
     authenticationGenerationRef.current += 1;
@@ -104,30 +123,23 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const invalidateAuthentication = useCallback(() => {
-    activeUserIdRef.current = null;
+    activeAuthorityRef.current = null;
     advanceAuthenticationGeneration();
   }, [advanceAuthenticationGeneration]);
 
   const noteAuthenticatedUser = useCallback(
     (user: User) => {
-      const nextUserId = user.user_id;
-      // The generation identifies a committed authenticated authority, not
-      // merely an explicit logout/login operation. The first null -> user
-      // commit and a live A -> B replacement must both retire work owned by
-      // the preceding authority. A routine token refresh for the same user
-      // deliberately preserves the generation (and therefore the socket).
-      if (activeUserIdRef.current !== nextUserId) {
+      const previous = activeAuthorityRef.current;
+      if (!previous || previous.userId !== user.user_id || previous.role !== user.role) {
         advanceAuthenticationGeneration();
       }
-      activeUserIdRef.current = nextUserId;
+      activeAuthorityRef.current = { userId: user.user_id, role: user.role };
     },
     [advanceAuthenticationGeneration]
   );
 
   const noteUnauthenticated = useCallback(() => {
-    if (activeUserIdRef.current) {
-      invalidateAuthentication();
-    }
+    if (activeAuthorityRef.current) invalidateAuthentication();
   }, [invalidateAuthentication]);
 
   const isAuthenticationGenerationCurrent = useCallback(
@@ -136,7 +148,8 @@ export function useAuth(): UseAuthReturn {
   );
   const isAuthenticationOwnerCurrent = useCallback(
     (userId: UserID, generation: number) =>
-      activeUserIdRef.current === userId && authenticationGenerationRef.current === generation,
+      activeAuthorityRef.current?.userId === userId &&
+      authenticationGenerationRef.current === generation,
     []
   );
 
@@ -144,9 +157,9 @@ export function useAuth(): UseAuthReturn {
    * Re-authenticate using stored token (with automatic refresh)
    * Retries up to 3 times to handle daemon restarts gracefully
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
+    localLoginAttemptRef.current = null;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     const storedAccessToken = getStoredAccessToken();
@@ -172,7 +185,6 @@ export function useAuth(): UseAuthReturn {
           });
 
           noteAuthenticatedUser(result.user);
-
           setState({
             user: result.user,
             accessToken: result.accessToken,
@@ -194,7 +206,6 @@ export function useAuth(): UseAuthReturn {
           const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
 
           noteAuthenticatedUser(refreshResult.user);
-
           setState({
             user: refreshResult.user,
             accessToken: refreshResult.accessToken,
@@ -469,17 +480,17 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
+  }, [state.authenticated, state.accessToken]);
 
   // When the single-flight refresh helper completes from a non-React path
-  // (e.g. rejected-handshake recovery or a concurrent visibility refresh),
-  // sync our React state so the next render uses the fresh
+  // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
+  // useAgorClient), sync our React state so the next render uses the fresh
   // token and the auto-refresh effect re-schedules around the new `exp`.
   useEffect(() => {
     const handleRefreshed = (event: Event) => {
       const detail = (event as CustomEvent<RefreshResult>).detail;
       if (!detail) return;
-      noteAuthenticatedUser(detail.user);
+      localLoginAttemptRef.current = null;
       setState((prev) => ({
         ...prev,
         accessToken: detail.accessToken,
@@ -492,15 +503,17 @@ export function useAuth(): UseAuthReturn {
 
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
     return () => window.removeEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
-  }, [noteAuthenticatedUser]);
+  }, []);
 
   // When the single-flight refresh helper determines the refresh token is
   // permanently dead (e.g. the server returned 401 / NotAuthenticated from
   // the refresh endpoint), clear tokens and flip to unauthenticated. Without
-  // this, repeated rejected handshakes could leave the app disconnected
-  // without clearing a session that can no longer authenticate.
+  // this, the socket around-hook and connect-handler would each re-throw
+  // the original auth error without cleanup, and a page reload would be the
+  // only way to escape the resulting refresh/reconnect loop.
   useEffect(() => {
     const handleUnrecoverable = () => {
+      localLoginAttemptRef.current = null;
       clearTokens();
       noteUnauthenticated();
       setState({
@@ -515,64 +528,65 @@ export function useAuth(): UseAuthReturn {
     window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
     return () =>
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
-  }, [noteUnauthenticated]);
+  }, []);
 
   /**
    * Login with email and password
    */
+  const captureAuthorityCycle = useCallback(
+    (shouldApply: () => boolean): CapturedAuthAuthorityCycle | null => {
+      const captured = authStateRef.current;
+      const userId = captured.user?.user_id;
+      const role = captured.user?.role;
+      const accessToken = captured.accessToken;
+      if (
+        !shouldApply() ||
+        !captured.authenticated ||
+        !userId ||
+        !role ||
+        !accessToken ||
+        getStoredAccessToken() !== accessToken
+      ) {
+        return null;
+      }
+
+      return {
+        userId,
+        role,
+        accessToken,
+        isCurrent: () => {
+          const current = authStateRef.current;
+          return (
+            shouldApply() &&
+            current.authenticated &&
+            current.user?.user_id === userId &&
+            current.user?.role === role &&
+            current.accessToken === accessToken &&
+            getStoredAccessToken() === accessToken
+          );
+        },
+      };
+    },
+    []
+  );
+
   const loginForAuthorityCycle = async (
     email: string,
     password: string,
-    shouldApply: () => boolean
+    authorityCycle: CapturedAuthAuthorityCycle
   ): Promise<'signed-in' | 'failed' | 'obsolete'> => {
-    if (!shouldApply()) return 'obsolete';
+    if (!authorityCycle.isCurrent()) return 'obsolete';
+    const attempt = {};
+    localLoginAttemptRef.current = attempt;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    try {
-      const client = await createRestClient(getDaemonUrl());
-      const result = await client.authenticate({ strategy: 'local', email, password });
-      if (!shouldApply()) return 'obsolete';
-
-      // This is an explicit authority replacement, even when the user id is
-      // unchanged. Retire work owned by the revoked credential before exposing
-      // the new one.
-      invalidateAuthentication();
-      storeTokens(result.accessToken, result.refreshToken);
-      resetRefreshFailureState();
-      noteAuthenticatedUser(result.user);
-      setState({
-        user: result.user,
-        accessToken: result.accessToken,
-        authenticated: true,
-        loading: false,
-        error: null,
-      });
-      dispatchTokensRefreshed(result);
-      return 'signed-in';
-    } catch (error) {
-      if (!shouldApply()) return 'obsolete';
-      console.error('❌ Login failed:', error);
-      const userFacingMessage = loginErrorMessage(error);
-      const rawMessage = error instanceof Error ? error.message : 'Login failed';
-      console.error('❌ Error message:', rawMessage);
-      setState((prev) => ({ ...prev, loading: false, error: userFacingMessage }));
-      return 'failed';
-    }
-  };
-
-  const login = async (email: string, password: string): Promise<boolean> => {
-    // Invalidate caller-owned work synchronously, including a same-user
-    // logout/login or explicit re-login.
-    invalidateAuthentication();
-    // Do not keep exposing the preceding user's access token under the newly
-    // advanced generation while the replacement login is in flight.
-    setState({
-      user: null,
-      accessToken: null,
-      authenticated: false,
-      loading: true,
-      error: null,
-    });
+    const finishObsolete = (): 'obsolete' => {
+      if (localLoginAttemptRef.current === attempt) {
+        localLoginAttemptRef.current = null;
+        setState((prev) => ({ ...prev, loading: false }));
+      }
+      return 'obsolete';
+    };
 
     try {
       const client = await createRestClient(getDaemonUrl());
@@ -584,14 +598,37 @@ export function useAuth(): UseAuthReturn {
         password,
       });
 
-      // Store both access and refresh tokens
+      // Local authentication is deliberately performed on a disposable REST
+      // client. Do not install its tokens or identity into the long-lived app
+      // after the exact caller/socket authority cycle that requested it ended.
+      if (localLoginAttemptRef.current !== attempt || !authorityCycle.isCurrent()) {
+        return finishObsolete();
+      }
+      if (
+        result.user?.user_id !== authorityCycle.userId ||
+        result.user?.role !== authorityCycle.role
+      ) {
+        localLoginAttemptRef.current = null;
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error:
+            'Your account authority changed while the password was being updated. Sign in again.',
+        }));
+        return 'failed';
+      }
+
+      // Store both access and refresh tokens. This is an explicit credential
+      // replacement, so advance authority even when user id and role are unchanged.
+      localLoginAttemptRef.current = null;
+      invalidateAuthentication();
       storeTokens(result.accessToken, result.refreshToken);
+      noteAuthenticatedUser(result.user);
 
       // Fresh session — clear any stale "refresh is dead" latch from a
       // previous login so the new refresh token isn't rejected before it
       // ever gets tried.
       resetRefreshFailureState();
-      noteAuthenticatedUser(result.user);
 
       setState({
         user: result.user,
@@ -602,8 +639,12 @@ export function useAuth(): UseAuthReturn {
       });
       dispatchTokensRefreshed(result);
 
-      return true;
+      return 'signed-in';
     } catch (error) {
+      if (localLoginAttemptRef.current !== attempt || !authorityCycle.isCurrent()) {
+        return finishObsolete();
+      }
+      localLoginAttemptRef.current = null;
       console.error('❌ Login failed:', error);
       const userFacingMessage = loginErrorMessage(error);
       const rawMessage = error instanceof Error ? error.message : 'Login failed';
@@ -613,11 +654,49 @@ export function useAuth(): UseAuthReturn {
         loading: false,
         error: userFacingMessage,
       }));
+      return 'failed';
+    }
+  };
+
+  const login = async (email: string, password: string): Promise<boolean> => {
+    invalidateAuthentication();
+    // Ordinary login begins without an existing authenticated authority. Use a
+    // dedicated path rather than fabricating a captured cycle.
+    const attempt = {};
+    localLoginAttemptRef.current = attempt;
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const client = await createRestClient(getDaemonUrl());
+      const result = await client.authenticate({ strategy: 'local', email, password });
+      if (localLoginAttemptRef.current !== attempt) return false;
+      localLoginAttemptRef.current = null;
+      storeTokens(result.accessToken, result.refreshToken);
+      resetRefreshFailureState();
+      noteAuthenticatedUser(result.user);
+      setState({
+        user: result.user,
+        accessToken: result.accessToken,
+        authenticated: true,
+        loading: false,
+        error: null,
+      });
+      dispatchTokensRefreshed(result);
+      return true;
+    } catch (error) {
+      if (localLoginAttemptRef.current !== attempt) return false;
+      localLoginAttemptRef.current = null;
+      console.error('❌ Login failed:', error);
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        error: loginErrorMessage(error),
+      }));
       return false;
     }
   };
 
   const logout = async () => {
+    localLoginAttemptRef.current = null;
     invalidateAuthentication();
     clearTokens();
     setState({
@@ -629,12 +708,15 @@ export function useAuth(): UseAuthReturn {
     });
   };
 
-  const logoutForAuthorityCycle = async (shouldApply: () => boolean): Promise<boolean> => {
-    if (!shouldApply()) return false;
+  const logoutForAuthorityCycle = async (
+    authorityCycle: CapturedAuthAuthorityCycle
+  ): Promise<boolean> => {
+    if (!authorityCycle.isCurrent()) return false;
     invalidateAuthentication();
     // Token clearing and the React authority update are synchronous together;
     // no await boundary exists where a replacement identity can slip between
     // the guard and the mutation.
+    localLoginAttemptRef.current = null;
     clearTokens();
     setState({
       user: null,
@@ -697,6 +779,7 @@ export function useAuth(): UseAuthReturn {
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
     login,
+    captureAuthorityCycle,
     loginForAuthorityCycle,
     logout,
     logoutForAuthorityCycle,

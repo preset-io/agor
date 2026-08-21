@@ -1406,6 +1406,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
+  /** Daemon-owned authority/deadline assertion around provider side effects. */
+  assertCurrent?: () => void;
 }): Promise<OAuthFlowContext> {
   const {
     authServerMetadata,
@@ -1424,6 +1426,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   } = opts;
 
   const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
+  opts.assertCurrent?.();
 
   // PKCE
   const pkce = generatePKCE();
@@ -1514,6 +1517,7 @@ async function startMCPOAuthFlowWithAS(opts: {
       authServerMetadata?.registration_endpoint ||
       (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
+      opts.assertCurrent?.();
       console.log('[MCP OAuth] Using Dynamic Client Registration');
       const registrationEndpointSource = authServerMetadata?.registration_endpoint
         ? 'metadata'
@@ -1537,6 +1541,8 @@ async function startMCPOAuthFlowWithAS(opts: {
           registration_endpoint_source: registrationEndpointSource,
         });
       }
+      // Keep authority/deadline failures out of the DCR diagnostic wrapper.
+      opts.assertCurrent?.();
     } else if (hasFullOverrides) {
       throw new Error(
         'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
@@ -1566,6 +1572,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     authUrl.searchParams.set('scope', scopeString);
   }
 
+  opts.assertCurrent?.();
   return {
     metadataUrl: cacheKey,
     resourceUri,
@@ -1627,6 +1634,11 @@ export async function startMCPOAuthFlow(
     dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
+    /**
+     * Optional daemon authority/deadline assertion. Called before and after
+     * discovery and DCR boundaries; standalone/CLI callers omit it.
+     */
+    assertCurrent?: () => void;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
@@ -1634,6 +1646,7 @@ export async function startMCPOAuthFlow(
   const dcrMode = options?.dcrMode ?? 'advertised';
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
+  options?.assertCurrent?.();
   if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');
   assertSafeOAuthUrl(resourceUri, { allowLocalhostHttp });
 
@@ -1683,6 +1696,7 @@ export async function startMCPOAuthFlow(
       compatibilityMode,
       dcrMode,
       allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
     });
   }
 
@@ -1698,7 +1712,9 @@ export async function startMCPOAuthFlow(
   console.log('[MCP OAuth] Resource metadata resolved');
 
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
+  options?.assertCurrent?.();
   const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp });
+  options?.assertCurrent?.();
 
   if (
     compatibilityMode === 'strict'
@@ -1731,6 +1747,7 @@ export async function startMCPOAuthFlow(
     console.log('[MCP OAuth] Skipping auth server metadata fetch — manual overrides provided');
   } else {
     try {
+      options?.assertCurrent?.();
       authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl, {
         compatibilityMode,
         allowLocalhostHttp,
@@ -1747,6 +1764,10 @@ export async function startMCPOAuthFlow(
         throw metadataError;
       }
     }
+    // This is deliberately outside the metadata fallback catch: authority or
+    // reservation expiry must never be treated as a recoverable legacy
+    // discovery failure.
+    options?.assertCurrent?.();
   }
 
   // Steps 4-7: Delegate PKCE / DCR / endpoint resolution / auth URL build to
@@ -1773,6 +1794,7 @@ export async function startMCPOAuthFlow(
     compatibilityMode,
     dcrMode,
     allowLocalhostHttp,
+    assertCurrent: options?.assertCurrent,
   });
 }
 

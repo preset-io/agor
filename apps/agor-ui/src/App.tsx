@@ -64,6 +64,7 @@ import {
   useAuth,
   useAuthConfig,
   useBoardActions,
+  useForcedPasswordChangeHandler,
   useInitialLoaderPhase,
   useServerVersion,
   useSessionActions,
@@ -87,10 +88,7 @@ import type { CreateRepoOptions } from './types';
 import { cloneErrorHint } from './utils/cloneErrorHint';
 import { enrichAuthenticatedUser } from './utils/currentUserAuthority';
 import { isMobileDevice } from './utils/deviceDetection';
-import {
-  completeForcedPasswordChange,
-  completeLocalPasswordChange,
-} from './utils/forcePasswordChange';
+import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { savePromptDraft } from './utils/promptDrafts';
@@ -386,6 +384,7 @@ function AppContent() {
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
     login,
+    captureAuthorityCycle,
     loginForAuthorityCycle,
     logout,
     logoutForAuthorityCycle,
@@ -412,6 +411,21 @@ function AppContent() {
       ? [user.user_id, user.role, client, authGeneration]
       : null
   );
+  const handleForcePasswordChange = useForcedPasswordChangeHandler({
+    client,
+    user,
+    appAuthorityGuard,
+    captureAuthorityCycle,
+    reauthenticate: loginForAuthorityCycle,
+    logout: logoutForAuthorityCycle,
+    onCompleted: (signedIn) => {
+      showSuccess(
+        signedIn
+          ? 'Password changed successfully!'
+          : 'Password changed successfully. Please sign in again.'
+      );
+    },
+  });
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
 
   useEffect(() => {
@@ -1474,36 +1488,6 @@ function AppContent() {
       if (shouldApply && !shouldApply()) return;
       showError(`Failed to delete user: ${error instanceof Error ? error.message : String(error)}`);
     }
-  };
-
-  // Handle forced password change (from ForcePasswordChangeModal)
-  const handleForcePasswordChange = async (
-    userId: string,
-    newPassword: string,
-    shouldApply: () => boolean,
-    isSameIdentity: () => boolean
-  ) => {
-    if (!client) throw new Error('Not connected');
-    if (!currentUser?.email) throw new Error('Current user is unavailable');
-    if (currentUser.user_id !== userId || !shouldApply()) return;
-
-    const signedIn = await completeForcedPasswordChange({
-      client,
-      userId,
-      email: currentUser.email,
-      newPassword,
-      shouldApply,
-      reauthenticate: loginForAuthorityCycle,
-      logout: logoutForAuthorityCycle,
-    });
-
-    if (signedIn === null || !isSameIdentity()) return;
-
-    showSuccess(
-      signedIn
-        ? 'Password changed successfully!'
-        : 'Password changed successfully. Please sign in again.'
-    );
   };
 
   // Handle board CRUD

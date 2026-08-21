@@ -371,6 +371,7 @@ export function CodexAuthSettings({
         {allowChatgptLogin && view === 'import' && (
           <CodexImportAuthJson
             client={client}
+            identityKey={identityKey}
             operationScope={effectiveOperationScope}
             onImported={handleAuthenticated}
           />
