@@ -1,4 +1,10 @@
-import type { MCPOAuthBrowserEventRequest, MCPOAuthOpenBrowserEvent } from '@agor/core/types';
+import type {
+  MCPOAuthBrowserEventRequest,
+  MCPOAuthBrowserOperation,
+  MCPOAuthBrowserReservation,
+  MCPOAuthBrowserReservationRequest,
+  MCPOAuthOpenBrowserEvent,
+} from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useLayoutEffect, useRef } from 'react';
 import type { AuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -15,10 +21,6 @@ interface OAuthBrowserEventAttemptOptions {
   authorityGuard: AuthorityOperationGuard;
 }
 
-function newOperationId(): string {
-  return globalThis.crypto.randomUUID();
-}
-
 /**
  * Register an exact, one-shot listener before starting a blocking discovery.
  * Socket targeting alone is insufficient because launch auth can replace the
@@ -29,7 +31,12 @@ export function useOAuthBrowserEventAttempt({
   currentUserId,
   authGeneration,
   authorityGuard,
-}: OAuthBrowserEventAttemptOptions): { begin: () => OAuthBrowserEventAttempt | null } {
+}: OAuthBrowserEventAttemptOptions): {
+  begin: (request: {
+    operation: MCPOAuthBrowserOperation;
+    mcpServerId?: string;
+  }) => Promise<OAuthBrowserEventAttempt | null>;
+} {
   const cleanupByOperationIdRef = useRef(new Map<string, () => void>());
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: these values and guard identity are the authority transition keys that trigger listener teardown
@@ -42,28 +49,46 @@ export function useOAuthBrowserEventAttempt({
   );
 
   return {
-    begin: () => {
+    begin: async ({ operation: operationKind, mcpServerId }) => {
       if (!client || !currentUserId || !authorityGuard.isCurrent()) return null;
       const operation = authorityGuard.begin();
       if (!operation.isCurrent()) return null;
+      const reservationService = client.service(
+        'mcp-servers/oauth-browser-reservations'
+      ) as unknown as {
+        create(data: MCPOAuthBrowserReservationRequest): Promise<MCPOAuthBrowserReservation>;
+      };
+      const reservation = await reservationService.create({
+        operation: operationKind,
+        ...(mcpServerId ? { mcp_server_id: mcpServerId as never } : {}),
+      });
+      if (
+        !operation.isCurrent() ||
+        !reservation ||
+        typeof reservation.reservation_token !== 'string' ||
+        !reservation.reservation_token
+      ) {
+        operation.cancel();
+        return null;
+      }
       const request: MCPOAuthBrowserEventRequest = {
-        operation_id: newOperationId(),
-        auth_generation: authGeneration,
+        reservation_token: reservation.reservation_token,
       };
       let active = true;
       const cleanup = () => {
         if (!active) return;
         active = false;
         client.io.off('oauth:open_browser', listener);
-        cleanupByOperationIdRef.current.delete(request.operation_id);
+        cleanupByOperationIdRef.current.delete(request.reservation_token);
         operation.cancel();
       };
-      const listener = (event: MCPOAuthOpenBrowserEvent) => {
+      const listener = (event: MCPOAuthOpenBrowserEvent | null | undefined) => {
         if (
+          !event ||
+          typeof event !== 'object' ||
           !active ||
           !operation.isCurrent() ||
-          event.operation_id !== request.operation_id ||
-          event.auth_generation !== authGeneration ||
+          event.reservation_token !== request.reservation_token ||
           event.caller_user_id !== currentUserId ||
           typeof event.attempt_id !== 'string' ||
           !event.attempt_id ||
@@ -77,7 +102,7 @@ export function useOAuthBrowserEventAttempt({
         cleanup();
         window.open(event.authUrl, '_blank', 'noopener,noreferrer');
       };
-      cleanupByOperationIdRef.current.set(request.operation_id, cleanup);
+      cleanupByOperationIdRef.current.set(request.reservation_token, cleanup);
       client.io.on('oauth:open_browser', listener);
       return { request, cleanup };
     },

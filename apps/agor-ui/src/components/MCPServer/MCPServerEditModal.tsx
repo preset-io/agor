@@ -220,6 +220,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       showError('Connection test is not available for stdio transport');
       return;
     }
+    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
     try {
       await form.validateFields(['headers']);
     } catch {
@@ -229,11 +230,13 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     }
     if (!operation.isCurrent()) return;
 
-    setTesting(true);
-    setTestResult(null);
-    const browserAttempt = oauthBrowserEvents.begin();
-
     try {
+      setTesting(true);
+      setTestResult(null);
+      browserAttempt = await oauthBrowserEvents.begin({
+        operation: 'discover',
+        mcpServerId: server.mcp_server_id,
+      });
       if (!operation.isCurrent()) return;
       const data = (await client.service('mcp-servers/discover').create({
         mcp_server_id: server.mcp_server_id,

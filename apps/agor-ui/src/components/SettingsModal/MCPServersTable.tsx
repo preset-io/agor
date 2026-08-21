@@ -75,8 +75,8 @@ interface MCPServersTableProps {
   /** Resolves `owner_user_id` to a person; unowned servers name no user. */
   userById: Map<string, User>;
   currentUser?: User | null;
-  onCreate?: (data: CreateMCPServerInput) => void;
-  onDelete?: (serverId: string) => void;
+  onCreate?: (data: CreateMCPServerInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onDelete?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
 
 /** How an unowned server reads: it is the workspace's, not nobody's. */
@@ -345,7 +345,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setCreatedServerId(null);
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (createdServerId) {
       resetCreateModal();
       return;
@@ -357,23 +357,23 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     }
 
     const operation = operationGuard.begin();
-    createForm
-      .validateFields()
-      .then(() => {
-        if (!operation.isCurrent()) return;
-        if (!addIsCurrentlyAllowed()) {
-          showError(capabilityRef.current.addRestriction);
-          return;
-        }
-        const data = buildCreateData(createForm.getFieldsValue(true));
-        onCreate?.(data);
-        resetCreateModal();
-      })
-      .catch((error) => {
-        if (!operation.isCurrent()) return;
-        console.error('Form validation failed:', error);
-        showError(firstFormErrorMessage(error) || 'Please fill in required fields');
-      });
+    try {
+      await createForm.validateFields();
+      if (!operation.isCurrent()) return;
+      if (!addIsCurrentlyAllowed()) {
+        showError(capabilityRef.current.addRestriction);
+        return;
+      }
+      const data = buildCreateData(createForm.getFieldsValue(true));
+      if (!operation.isCurrent()) return;
+      await onCreate?.(data, operation.isCurrent);
+      if (!operation.isCurrent()) return;
+      resetCreateModal();
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      console.error('Form validation failed:', error);
+      showError(firstFormErrorMessage(error) || 'Please fill in required fields');
+    }
   };
 
   // Test connection from create modal (always inline config, no persistence).
@@ -404,11 +404,11 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     }
     if (!operation.isCurrent()) return;
 
-    setTesting(true);
-    setTestResult(null);
-    const browserAttempt = oauthBrowserEvents.begin();
-
+    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
     try {
+      setTesting(true);
+      setTestResult(null);
+      browserAttempt = await oauthBrowserEvents.begin({ operation: 'discover' });
       if (!operation.isCurrent()) return;
       const data = (await client.service('mcp-servers/discover').create({
         url: values.url,
@@ -484,9 +484,11 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
 
   const handleDelete = useCallback(
     (serverId: string) => {
-      onDelete?.(serverId);
+      const operation = operationGuard.begin();
+      if (!operation.isCurrent()) return;
+      void onDelete?.(serverId, operation.isCurrent);
     },
-    [onDelete]
+    [onDelete, operationGuard]
   );
 
   // An editor must be able to show the scope a row already carries, including

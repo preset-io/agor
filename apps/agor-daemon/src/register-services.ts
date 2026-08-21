@@ -5,6 +5,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
@@ -65,6 +66,9 @@ import type {
   MCPAuth,
   MCPOAuthAttemptID,
   MCPOAuthBrowserEventRequest,
+  MCPOAuthBrowserOperation,
+  MCPOAuthBrowserReservation,
+  MCPOAuthBrowserReservationRequest,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
@@ -82,6 +86,7 @@ import {
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
+  MCP_OAUTH_BROWSER_OPERATIONS,
   ROLES,
   TaskStatus,
 } from '@agor/core/types';
@@ -1683,30 +1688,15 @@ export async function registerMCPServices(
     return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
   }
 
-  const readOAuthBrowserEventRequest = (
-    value: unknown
-  ): MCPOAuthBrowserEventRequest | undefined => {
-    if (value === undefined) return undefined;
-    if (!value || typeof value !== 'object') {
-      throw new BadRequest('oauth_browser_event must be an object');
-    }
-    const candidate = value as Partial<MCPOAuthBrowserEventRequest>;
-    if (
-      typeof candidate.operation_id !== 'string' ||
-      !/^[A-Za-z0-9_-]{16,128}$/.test(candidate.operation_id)
-    ) {
-      throw new BadRequest('oauth_browser_event.operation_id is invalid');
-    }
-    if (
-      !Number.isSafeInteger(candidate.auth_generation) ||
-      (candidate.auth_generation as number) < 0
-    ) {
-      throw new BadRequest('oauth_browser_event.auth_generation is invalid');
-    }
-    return {
-      operation_id: candidate.operation_id,
-      auth_generation: candidate.auth_generation as number,
-    };
+  type OAuthBrowserReservationClaim = {
+    reservationToken: string;
+    operation: MCPOAuthBrowserOperation;
+    mcpServerId?: string;
+    userId: string;
+    role: string;
+    tenantId?: string;
+    socketId: string;
+    authorityFingerprint?: string;
   };
 
   type StartTwoPhaseOAuthOptions = {
@@ -1737,7 +1727,7 @@ export async function registerMCPServices(
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
-    browserEvent?: MCPOAuthBrowserEventRequest;
+    browserReservation?: OAuthBrowserReservationClaim;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -1770,6 +1760,9 @@ export async function registerMCPServices(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
+    if (opts.browserReservation) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+    }
     const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
@@ -1863,6 +1856,13 @@ export async function registerMCPServices(
     // the pending-flow authority below instead.
     const localAttemptId = durableOAuthFlows ? undefined : (generateId() as MCPOAuthAttemptID);
 
+    // Metadata discovery and DCR are the first provider-owned side effects in
+    // this helper. Re-check the live socket authority immediately before they
+    // begin; consuming a valid A reservation is not enough if that same socket
+    // has since authenticated as B.
+    if (opts.browserReservation) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+    }
     const context = await startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
       authorizationUrlOverride: effectiveAuthorizationUrlOverride,
       tokenUrlOverride: effectiveTokenUrlOverride,
@@ -1882,6 +1882,9 @@ export async function registerMCPServices(
       dcrMode: effectiveDcrMode,
       allowLocalhostHttp: !durableOAuthFlows,
     });
+    if (opts.browserReservation) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+    }
 
     const resolvedGrantBinding = {
       resourceUri: context.resourceUri,
@@ -1898,6 +1901,9 @@ export async function registerMCPServices(
     let localGrantBinding: NonNullable<SaveTokenInput['grantBinding']> | undefined;
     let localGrantSubjectKey: string | undefined;
     if (savedServerAuthority && !durableOAuthFlows) {
+      if (opts.browserReservation) {
+        assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+      }
       localGrantBinding = await runInOAuthTenantScope(db, opts.tenantId, async () => {
         const currentServer = await new MCPServerRepository(db).findById(
           savedServerAuthority!.mcp_server_id
@@ -1916,6 +1922,9 @@ export async function registerMCPServices(
           throw new Error(
             'The MCP server changed while OAuth metadata was being resolved. Restart OAuth.'
           );
+        }
+        if (opts.browserReservation) {
+          assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
         }
 
         const subjectUserId = effectiveOAuthMode === 'per_user' ? (opts.userId as UserID) : null;
@@ -1960,6 +1969,9 @@ export async function registerMCPServices(
       });
     }
 
+    if (opts.browserReservation) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+    }
     const attemptId = durableBinding
       ? await runInOAuthTenantWriteScope(db, durableBinding.tenantId, async () => {
           await lockMCPOAuthGrantConfiguration(
@@ -1977,6 +1989,9 @@ export async function registerMCPServices(
             throw new Error(
               'The MCP server changed while OAuth metadata was being resolved. Restart OAuth.'
             );
+          }
+          if (opts.browserReservation) {
+            assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
           }
           return durableOAuthFlows!.create({
             context,
@@ -2035,6 +2050,9 @@ export async function registerMCPServices(
       });
     }
 
+    if (opts.browserReservation) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+    }
     if (!durableOAuthFlows) {
       for (const [olderState, older] of pendingOAuthFlows) {
         const sameSubject =
@@ -2072,17 +2090,17 @@ export async function registerMCPServices(
       });
     }
 
-    if (awaitToken && opts.socketId && opts.userId && opts.browserEvent && app.io) {
+    if (awaitToken && opts.browserReservation && app.io) {
+      assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
       // Compatibility hint for blocking discover/test callers, which cannot
       // return the URL before their callback arrives. Target the exact
       // authenticated initiating socket only — never a user/tenant/global
       // room — and keep durable status as the completion authority.
-      app.io.local.to(opts.socketId).emit('oauth:open_browser', {
+      app.io.local.to(opts.browserReservation.socketId).emit('oauth:open_browser', {
         authUrl: context.authorizationUrl,
         attempt_id: attemptId,
-        operation_id: opts.browserEvent.operation_id,
-        auth_generation: opts.browserEvent.auth_generation,
-        caller_user_id: opts.userId,
+        reservation_token: opts.browserReservation.reservationToken,
+        caller_user_id: opts.browserReservation.userId,
       });
     }
 
@@ -2151,6 +2169,149 @@ export async function registerMCPServices(
   const tenantIdFromParams = (params?: AuthenticatedParams): string | undefined =>
     (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
       ?.tenant_id ?? getCurrentTenantId();
+
+  const OAUTH_BROWSER_RESERVATION_TTL_MS = 60_000;
+  const MAX_OAUTH_BROWSER_RESERVATIONS = 1_024;
+  type OAuthBrowserReservationRecord = OAuthBrowserReservationClaim & {
+    expiresAt: number;
+    authorityFingerprint?: string;
+    cleanupTimer: ReturnType<typeof setTimeout>;
+  };
+  const oauthBrowserReservations = new Map<string, OAuthBrowserReservationRecord>();
+
+  const socketIdFromParams = (params?: AuthenticatedParams): string | undefined => {
+    const id = (params?.connection as { id?: unknown } | undefined)?.id;
+    return typeof id === 'string' && id ? id : undefined;
+  };
+  const authorityFingerprintFromParams = (params?: AuthenticatedParams): string | undefined => {
+    const connection = params?.connection as
+      | { authentication?: { accessToken?: unknown } }
+      | undefined;
+    const token =
+      typeof params?.authentication?.accessToken === 'string'
+        ? params.authentication.accessToken
+        : typeof connection?.authentication?.accessToken === 'string'
+          ? connection.authentication.accessToken
+          : undefined;
+    return token ? createHash('sha256').update(token).digest('base64url').slice(0, 22) : undefined;
+  };
+  const liveSocketAuthority = (
+    socketId: string
+  ):
+    | {
+        userId?: string;
+        role?: string;
+        tenantId?: string;
+        authorityFingerprint?: string;
+      }
+    | undefined => {
+    const socket = app.io?.sockets?.sockets?.get(socketId) as
+      | {
+          feathers?: AuthenticatedParams & { id?: string };
+          data?: { tenant?: { tenant_id?: string } };
+        }
+      | undefined;
+    if (!socket) return undefined;
+    const connection = socket.feathers;
+    return {
+      userId: connection?.user?.user_id,
+      role: connection?.user?.role,
+      tenantId:
+        socket.data?.tenant?.tenant_id ??
+        (connection as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)
+          ?.tenant?.tenant_id,
+      authorityFingerprint: authorityFingerprintFromParams({
+        ...(connection ?? {}),
+        connection,
+        authentication: connection?.authentication,
+      } as AuthenticatedParams),
+    };
+  };
+  const assertOAuthBrowserReservationStillCurrent = (
+    reservation: OAuthBrowserReservationClaim
+  ): void => {
+    const authority = liveSocketAuthority(reservation.socketId);
+    if (
+      !authority ||
+      authority.userId !== reservation.userId ||
+      authority.role !== reservation.role ||
+      authority.tenantId !== reservation.tenantId ||
+      (reservation.authorityFingerprint !== undefined &&
+        authority.authorityFingerprint !== reservation.authorityFingerprint)
+    ) {
+      throw new Forbidden('OAuth browser reservation authority is no longer current');
+    }
+  };
+  const deleteOAuthBrowserReservation = (token: string): void => {
+    const current = oauthBrowserReservations.get(token);
+    if (!current) return;
+    clearTimeout(current.cleanupTimer);
+    oauthBrowserReservations.delete(token);
+  };
+  const pruneOAuthBrowserReservations = (now = Date.now()): void => {
+    for (const [token, reservation] of oauthBrowserReservations) {
+      if (reservation.expiresAt <= now) deleteOAuthBrowserReservation(token);
+    }
+  };
+  const readReservationToken = (value: unknown): string | undefined => {
+    // Older/non-browser callers may omit the compatibility hint. Nullish
+    // values are equivalently absent and must never crash the request path.
+    if (value === undefined || value === null) return undefined;
+    if (!value || typeof value !== 'object') {
+      throw new BadRequest('oauth_browser_event must be an object');
+    }
+    const token = (value as Partial<MCPOAuthBrowserEventRequest>).reservation_token;
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+      throw new BadRequest('oauth_browser_event.reservation_token is invalid');
+    }
+    return token;
+  };
+  const consumeOAuthBrowserReservation = (
+    value: unknown,
+    params: AuthenticatedParams | undefined,
+    expected: { operation: MCPOAuthBrowserOperation; mcpServerId?: string }
+  ): OAuthBrowserReservationClaim | undefined => {
+    const token = readReservationToken(value);
+    if (!token) return undefined;
+    pruneOAuthBrowserReservations();
+    const reservation = oauthBrowserReservations.get(token);
+    if (!reservation) {
+      throw new Forbidden('OAuth browser reservation is invalid, expired, or already used');
+    }
+    // Consume before comparing any binding. A guessed or replayed token gets
+    // exactly one attempt and can never be corrected into a valid request.
+    deleteOAuthBrowserReservation(token);
+    const callerUserId = params?.user?.user_id;
+    const socketId = socketIdFromParams(params);
+    const tenantId = tenantIdFromParams(params);
+    const authorityFingerprint = authorityFingerprintFromParams(params);
+    if (
+      !callerUserId ||
+      !socketId ||
+      reservation.userId !== callerUserId ||
+      reservation.role !== params?.user?.role ||
+      reservation.socketId !== socketId ||
+      reservation.tenantId !== tenantId ||
+      reservation.operation !== expected.operation ||
+      reservation.mcpServerId !== expected.mcpServerId ||
+      (reservation.authorityFingerprint !== undefined &&
+        reservation.authorityFingerprint !== authorityFingerprint)
+    ) {
+      throw new Forbidden('OAuth browser reservation does not match this authority or operation');
+    }
+    const claim = {
+      reservationToken: token,
+      operation: reservation.operation,
+      mcpServerId: reservation.mcpServerId,
+      userId: reservation.userId,
+      role: reservation.role,
+      tenantId: reservation.tenantId,
+      socketId: reservation.socketId,
+      authorityFingerprint: reservation.authorityFingerprint,
+    };
+    assertOAuthBrowserReservationStillCurrent(claim);
+    return claim;
+  };
 
   /**
    * The standing of whoever started a flow, re-asked at the moment it completes.
@@ -2631,6 +2792,75 @@ export async function registerMCPServices(
     // instead; browsers then refetch their own `can_configure` answer.
     events: [MCP_MEMBER_POLICY_CHANGED_EVENT],
   });
+  app.use('/mcp-servers/oauth-browser-reservations', {
+    async create(
+      data: MCPOAuthBrowserReservationRequest,
+      params?: AuthenticatedParams
+    ): Promise<MCPOAuthBrowserReservation> {
+      if (
+        !data ||
+        !MCP_OAUTH_BROWSER_OPERATIONS.includes(data.operation as MCPOAuthBrowserOperation)
+      ) {
+        throw new BadRequest('OAuth browser reservation operation is invalid');
+      }
+      if (
+        data.mcp_server_id !== undefined &&
+        (typeof data.mcp_server_id !== 'string' || !data.mcp_server_id)
+      ) {
+        throw new BadRequest('OAuth browser reservation server is invalid');
+      }
+      const userId = params?.user?.user_id;
+      const role = params?.user?.role;
+      const socketId = socketIdFromParams(params);
+      const tenantId = tenantIdFromParams(params);
+      const authorityFingerprint = authorityFingerprintFromParams(params);
+      if (!userId || !role || !socketId || !authorityFingerprint) {
+        throw new BadRequest('OAuth browser reservations require an authenticated live socket');
+      }
+      const currentAuthority = liveSocketAuthority(socketId);
+      if (
+        currentAuthority?.userId !== userId ||
+        currentAuthority.role !== role ||
+        currentAuthority.tenantId !== tenantId ||
+        currentAuthority.authorityFingerprint !== authorityFingerprint
+      ) {
+        throw new Forbidden('OAuth browser reservation authority is not current');
+      }
+      pruneOAuthBrowserReservations();
+      if (oauthBrowserReservations.size >= MAX_OAUTH_BROWSER_RESERVATIONS) {
+        throw new BadRequest('Too many pending OAuth browser reservations');
+      }
+      const reservationToken = randomBytes(32).toString('base64url');
+      const expiresAt = Date.now() + OAUTH_BROWSER_RESERVATION_TTL_MS;
+      const cleanupTimer = setTimeout(
+        () => deleteOAuthBrowserReservation(reservationToken),
+        OAUTH_BROWSER_RESERVATION_TTL_MS
+      );
+      cleanupTimer.unref();
+      oauthBrowserReservations.set(reservationToken, {
+        reservationToken,
+        operation: data.operation,
+        mcpServerId: data.mcp_server_id,
+        userId,
+        role,
+        tenantId,
+        socketId,
+        expiresAt,
+        authorityFingerprint,
+        cleanupTimer,
+      });
+      return { reservation_token: reservationToken, expires_at: expiresAt };
+    },
+  });
+  app.service('mcp-servers/oauth-browser-reservations').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
+  // The returned token is a caller-private, one-shot capability. Feathers'
+  // default `created` publication would otherwise put it on the tenant
+  // realtime channel before the browser can use it.
+  // `registerMCPServices` is also exercised without a realtime transport in
+  // service-only harnesses; there is nothing to publish in that shape.
+  app.service('mcp-servers/oauth-browser-reservations').publish?.(() => []);
   const invalidateOAuthGrantsAfterServerChange = async (
     context: HookContext,
     next: () => Promise<void>
@@ -2773,7 +3003,15 @@ export async function registerMCPServices(
       params?: AuthenticatedParams & { connection?: { id?: string } }
     ) {
       try {
-        const browserEvent = readOAuthBrowserEventRequest(data.oauth_browser_event);
+        const browserReservation = data.start_browser_flow
+          ? consumeOAuthBrowserReservation(data.oauth_browser_event, params, {
+              operation: 'test-oauth',
+              mcpServerId: data.mcp_server_id,
+            })
+          : undefined;
+        if (data.start_browser_flow && !browserReservation) {
+          throw new BadRequest('A valid OAuth browser reservation is required');
+        }
         assertPublicMCPOAuthCompatibilityMode({
           oauth_compatibility_mode: data.compatibility_mode,
         });
@@ -2886,6 +3124,9 @@ export async function registerMCPServices(
           | null = null;
         let discoverySource: string | null = null;
         if (probeResponse.status === 401) {
+          if (browserReservation) {
+            assertOAuthBrowserReservationStillCurrent(browserReservation);
+          }
           const { resolveMCPOAuthDiscovery } = await import(
             '@agor/core/tools/mcp/oauth-mcp-transport'
           );
@@ -2940,7 +3181,7 @@ export async function registerMCPServices(
                   clientId: effectiveClientId,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
-                  browserEvent,
+                  browserReservation,
                   clientSecret: effectiveClientSecret,
                   scope: effectiveScope,
                   compatibilityMode,
@@ -4109,7 +4350,14 @@ export async function registerMCPServices(
       params?: AuthenticatedParams
     ) {
       try {
-        const browserEvent = readOAuthBrowserEventRequest(data.oauth_browser_event);
+        const browserReservation = consumeOAuthBrowserReservation(
+          data.oauth_browser_event,
+          params,
+          {
+            operation: 'discover',
+            mcpServerId: data.mcp_server_id,
+          }
+        );
         assertPublicMCPOAuthCompatibilityMode(data.auth);
         const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
         const { StreamableHTTPClientTransport } = await import(
@@ -4281,11 +4529,17 @@ export async function registerMCPServices(
 
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
 
+        if (browserReservation) {
+          assertOAuthBrowserReservationStillCurrent(browserReservation);
+        }
         let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
           allowLocalhostHttp: !durableOAuthFlows,
           cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
           disableProcessTokenCache: !!durableOAuthFlows,
         });
+        if (browserReservation) {
+          assertOAuthBrowserReservationStillCurrent(browserReservation);
+        }
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
@@ -4298,6 +4552,12 @@ export async function registerMCPServices(
             });
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
             if (probeResponse.status !== 401) return undefined;
+            // Provider discovery and dynamic client registration can create
+            // durable state outside Agor. Never begin either unless this
+            // exact socket/caller/operation already consumed a server-issued
+            // one-shot reservation.
+            if (!browserReservation) return undefined;
+            assertOAuthBrowserReservationStillCurrent(browserReservation);
             const { resolveMCPOAuthDiscovery } = await import(
               '@agor/core/tools/mcp/oauth-mcp-transport'
             );
@@ -4349,7 +4609,7 @@ export async function registerMCPServices(
               dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
-              browserEvent,
+              browserReservation,
             });
 
             const tokenResponse = await started.awaitToken();
@@ -4363,6 +4623,7 @@ export async function registerMCPServices(
             // surface it to the caller instead of silently falling through to
             // an unauthenticated MCP probe.
             if (error instanceof PublicBaseUrlNotConfiguredError) throw error;
+            if (error instanceof Forbidden) throw error;
             console.error(
               `[MCP Discovery] OAuth token acquisition failed category=${
                 error instanceof Error ? error.name : 'unknown'

@@ -23,10 +23,15 @@ interface ApiKeyEntry {
 
 interface PersonalApiKeysTabProps {
   client: AgorClient | null;
-  authorityKey: string | null;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
-export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client, authorityKey }) => {
+export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
+  client,
+  identityKey,
+  operationScope,
+}) => {
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -37,7 +42,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client, 
   const [searchTerm, setSearchTerm] = useState('');
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
-  const operationGuard = useAuthorityOperationGuard(authorityKey ? [authorityKey, client] : null);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // A full key is caller-private and is intentionally erased in layout, rather
   // than waiting for passive cleanup, when Settings changes identity in place.
@@ -48,7 +53,14 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client, 
     setShowCreateModal(false);
     setNewlyCreatedKey(null);
     setDeletingId(null);
-  }, [authorityKey]);
+  }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+    setCreating(false);
+    setDeletingId(null);
+  }, [operationScope]);
 
   const fetchKeys = useCallback(
     async (operation?: AuthorityOperation) => {

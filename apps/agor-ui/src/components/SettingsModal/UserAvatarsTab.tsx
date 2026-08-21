@@ -16,7 +16,8 @@ import { useThemedMessage } from '../../utils/message';
 interface UserAvatarsTabProps {
   client: AgorClient | null;
   gatewayChannelById: Map<string, GatewayChannel>;
-  authorityKey: string | null;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
 type UsersAvatarClient = {
@@ -41,7 +42,8 @@ const DEFAULT_SETTINGS: UserAvatarSettings = {
 export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
   client,
   gatewayChannelById,
-  authorityKey,
+  identityKey,
+  operationScope,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [settings, setSettings] = useState<UserAvatarSettings>(DEFAULT_SETTINGS);
@@ -50,7 +52,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastResult, setLastResult] = useState<UserAvatarSyncResult | null>(null);
-  const operationGuard = useAuthorityOperationGuard(authorityKey ? [authorityKey, client] : null);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases caller-specific status
   useLayoutEffect(() => {
@@ -60,7 +62,13 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     setLoading(false);
     setSyncing(false);
     setLastResult(null);
-  }, [authorityKey]);
+  }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+    setSyncing(false);
+  }, [operationScope]);
 
   const slackGateways = useMemo(
     () =>

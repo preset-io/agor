@@ -1,8 +1,9 @@
 import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
@@ -929,6 +930,73 @@ describe('GatewayChannelsTable Slack edit mode', () => {
   });
 });
 
+describe('GatewayChannelsTable socket authority generations', () => {
+  it('preserves a same-admin edit secret but does not close from the obsolete save', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onUpdate = vi.fn(() => pending);
+    const branch = makeBranch();
+    const user = makeUser();
+    const channel = {
+      ...makeSlackChannel(),
+      channel_type: 'teams',
+      name: 'Team Teams',
+      config: {
+        app_id: 'azure-app',
+        tenant_id: 'azure-tenant',
+      },
+    } as GatewayChannel;
+    const table = (
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map([[channel.id, channel]])}
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+        onUpdate={onUpdate}
+      />
+    );
+    const view = (generation: number) => (
+      <MemoryRouter>
+        <AntdApp>
+          <ConnectionProvider
+            value={{
+              connected: true,
+              connecting: false,
+              authGeneration: generation,
+              outOfSync: false,
+              capturedSha: null,
+              currentSha: null,
+            }}
+          >
+            {table}
+          </ConnectionProvider>
+        </AntdApp>
+      </MemoryRouter>
+    );
+    const rendered = render(view(20));
+    fireEvent.click(screen.getByTitle('Edit'));
+    expandPanel('Azure Bot Credentials');
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'same-admin-azure-secret' },
+    });
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+
+    rendered.rerender(view(21));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+
+    expect(screen.getByText('Edit Gateway Channel')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('••••••••')).toHaveValue('same-admin-azure-secret');
+  });
+});
+
 describe('GatewayChannelsTable GitHub create wizard', () => {
   it('walks Channel → Create app → Credentials → Configure and builds a github payload', async () => {
     const { client, channelCreate } = makeClient();
@@ -947,7 +1015,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     await flush();
 
     // Step 1 (Create app): no required fields — Continue straight through.
-    expect(screen.getByText(/Create GitHub App on GitHub/)).toBeInTheDocument();
+    expect(await screen.findByText(/Create GitHub App on GitHub/)).toBeInTheDocument();
     clickButton(/^Continue$/);
     await flush();
 

@@ -33,6 +33,7 @@ import {
 import type { MenuProps } from 'antd';
 import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
+import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -79,10 +80,13 @@ export interface SettingsModalProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => unknown;
-  onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
+  onCreateRepo?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
+  onCreateLocalRepo?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
+  onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
@@ -102,14 +106,25 @@ export interface SettingsModalProps {
   ) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
-  onCreateUser?: (data: CreateUserInput) => Promise<void>;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onDeleteUser?: (userId: string) => void;
-  onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onDeleteMCPServer?: (serverId: string) => void;
+  onCreateUser?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdateUser?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
+  onCreateMCPServer?: (
+    data: CreateMCPServerInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteMCPServer?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
-  onUpdateGatewayChannel?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDeleteGatewayChannel?: (channelId: string) => void;
+  onUpdateGatewayChannel?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void;
+  onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onCreateTeammate?: () => void;
@@ -167,6 +182,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
   const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
+  const settingsAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
 
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
@@ -429,7 +448,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <ReposTable
             repoById={repoById}
-            authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
             onCreate={onCreateRepo}
             onCreateLocal={onCreateLocalRepo}
             onUpdate={onUpdateRepo}
@@ -504,7 +524,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <AgenticToolsSection
             client={client}
-            authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
           />
         );
       case 'gateway':

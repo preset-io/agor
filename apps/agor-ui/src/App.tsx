@@ -68,6 +68,7 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
@@ -385,8 +386,10 @@ function AppContent() {
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
     login,
+    loginForAuthorityCycle,
     logout,
-    reAuthenticate,
+    logoutForAuthorityCycle,
+    refreshCurrentUserForAuthorityCycle,
   } = useAuth();
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
@@ -404,6 +407,11 @@ function AppContent() {
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
   });
+  const appAuthorityGuard = useAuthorityOperationGuard(
+    user?.user_id && user.role && client && connected && !connecting
+      ? [user.user_id, user.role, client, authGeneration]
+      : null
+  );
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
 
   useEffect(() => {
@@ -662,6 +670,7 @@ function AppContent() {
   // that could race the hook's one-shot clone effect.
   const handleCreateRepo = useCallback(
     async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
+      if (options.shouldApply && !options.shouldApply()) return;
       if (!client) {
         showError('Not connected to daemon — cannot clone repository');
         return;
@@ -689,6 +698,11 @@ function AppContent() {
       };
       const handleCreated = (repo: Repo) => {
         if (settled || repo.slug !== data.slug) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         // Skip the `'cloning'` placeholder — `handlePatched` will declare the
         // outcome once the executor finishes. `undefined` covers legacy rows
         // and any direct executor-path that bypasses the placeholder.
@@ -699,6 +713,11 @@ function AppContent() {
       };
       const handlePatched = (repo: Repo) => {
         if (settled || repo.slug !== data.slug) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (repo.clone_status === 'ready') {
           settled = true;
           if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
@@ -725,6 +744,11 @@ function AppContent() {
         clone_error?: Repo['clone_error'];
       }) => {
         if (settled) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (payload.slug !== data.slug && payload.url !== data.url) return;
         settled = true;
         const hint = cloneErrorHint(payload.clone_error);
@@ -738,6 +762,11 @@ function AppContent() {
       };
       const timeoutHandle = setTimeout(() => {
         if (settled) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         settled = true;
         if (!options.silent || options.showErrors) {
           showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
@@ -757,6 +786,11 @@ function AppContent() {
           slug: data.slug,
           default_branch: data.default_branch,
         });
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
 
         // Daemon short-circuits with `status: 'exists'` when a repo with this
         // slug is already registered — no `repos.created` event will fire, so
@@ -770,6 +804,11 @@ function AppContent() {
         }
         return result;
       } catch (error) {
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (!settled) {
           settled = true;
           if (!options.silent || options.showErrors) {
@@ -1323,12 +1362,14 @@ function AppContent() {
   };
 
   // Handle create user
-  const handleCreateUser = async (data: CreateUserInput) => {
-    if (!client) return;
+  const handleCreateUser = async (data: CreateUserInput, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('users').create(data);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('User created successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(`Failed to create user: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
@@ -1337,9 +1378,9 @@ function AppContent() {
   const handleUpdateUser = async (
     userId: string,
     updates: UpdateUserInput,
-    options: { silent?: boolean } = {}
+    options: { silent?: boolean; shouldApply?: () => boolean } = {}
   ) => {
-    if (!client) return;
+    if (!client || (options.shouldApply && !options.shouldApply())) return;
     try {
       const newPassword =
         typeof updates.password === 'string' && updates.password.length > 0
@@ -1360,7 +1401,9 @@ function AppContent() {
       } else {
         // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
         await client.service('users').patch(userId, updates as Partial<User>);
+        if (options.shouldApply && !options.shouldApply()) return;
       }
+
       if (updates.agentic_tools || updates.env_vars) {
         setCredentialVersion((v) => v + 1);
       }
@@ -1372,6 +1415,7 @@ function AppContent() {
         );
       }
     } catch (error) {
+      if (options.shouldApply && !options.shouldApply()) return;
       if (!options.silent) {
         showError(
           `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
@@ -1381,55 +1425,79 @@ function AppContent() {
     }
   };
 
-  const handleRestartOnboarding = async () => {
+  const handleRestartOnboarding = async (childShouldApply?: () => boolean) => {
+    const operation = appAuthorityGuard.begin();
     if (!currentUser || !canRunOnboarding) return;
     const operationUserId = currentUser.user_id;
     const operationAuthenticationGeneration = authenticationGeneration;
+    const shouldApply = () =>
+      operation.isCurrent() &&
+      isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration) &&
+      (childShouldApply ? childShouldApply() : true);
+    if (!shouldApply()) return;
+
 
     const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
     delete preferences.onboarding;
 
     try {
-      await handleUpdateUser(currentUser.user_id, { preferences }, { silent: true });
+      await handleUpdateUser(
+        currentUser.user_id,
+        { preferences },
+        {
+          silent: true,
+          shouldApply,
+        }
+      );
     } catch (error) {
+      if (!shouldApply()) return;
       showError(
         `Failed to restart onboarding: ${error instanceof Error ? error.message : String(error)}`
       );
       return;
     }
 
-    if (!isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration)) {
-      return;
-    }
+    if (!shouldApply()) return;
 
     setOpenUserSettings(false);
     activateOnboardingWizard(operationUserId, operationAuthenticationGeneration, true);
   };
 
   // Handle delete user
-  const handleDeleteUser = async (userId: string) => {
-    if (!client) return;
+  const handleDeleteUser = async (userId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('users').remove(userId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('User deleted successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(`Failed to delete user: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   // Handle forced password change (from ForcePasswordChangeModal)
-  const handleForcePasswordChange = async (userId: string, newPassword: string) => {
+  const handleForcePasswordChange = async (
+    userId: string,
+    newPassword: string,
+    shouldApply: () => boolean,
+    isSameIdentity: () => boolean
+  ) => {
     if (!client) throw new Error('Not connected');
     if (!currentUser?.email) throw new Error('Current user is unavailable');
+    if (currentUser.user_id !== userId || !shouldApply()) return;
 
     const signedIn = await completeForcedPasswordChange({
       client,
       userId,
       email: currentUser.email,
       newPassword,
-      login,
-      logout,
+      shouldApply,
+      reauthenticate: loginForAuthorityCycle,
+      logout: logoutForAuthorityCycle,
     });
+
+    if (signedIn === null || !isSameIdentity()) return;
 
     showSuccess(
       signedIn
@@ -1482,7 +1550,11 @@ function AppContent() {
     }
   };
 
-  const handleCreateLocalRepo = async (data: CreateLocalRepoRequest) => {
+  const handleCreateLocalRepo = async (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => {
+    if (shouldApply && !shouldApply()) return;
     if (!client) {
       showError('Not connected to daemon — cannot add local repository');
       return;
@@ -1495,8 +1567,11 @@ function AppContent() {
         slug: data.slug,
       });
 
+      if (shouldApply && !shouldApply()) return;
+
       showSuccess('Local repository added successfully!', { key: 'add-local-repo' });
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to add local repository: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'add-local-repo' }
@@ -1505,30 +1580,42 @@ function AppContent() {
     }
   };
 
-  const handleUpdateRepo = async (repoId: string, updates: Partial<Repo>) => {
-    if (!client) return;
+  const handleUpdateRepo = async (
+    repoId: string,
+    updates: Partial<Repo>,
+    shouldApply?: () => boolean
+  ) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('repos').patch(repoId, updates);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Repository updated successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to update repository: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteRepo = async (repoId: string, cleanup: boolean) => {
-    if (!client) return;
+  const handleDeleteRepo = async (
+    repoId: string,
+    cleanup: boolean,
+    shouldApply?: () => boolean
+  ) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('repos').remove(repoId, {
         query: { cleanup },
       });
+      if (shouldApply && !shouldApply()) return;
       if (cleanup) {
         showSuccess('Repository and files deleted successfully!');
       } else {
         showSuccess('Repository removed from Agor (files preserved)');
       }
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Check for partial deletion (some files deleted, some failed)
@@ -1741,24 +1828,28 @@ function AppContent() {
   };
 
   // Handle MCP server CRUD
-  const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
-    if (!client) return;
+  const handleCreateMCPServer = async (data: CreateMCPServerInput, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('mcp-servers').create(data);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('MCP server added successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteMCPServer = async (serverId: string) => {
-    if (!client) return;
+  const handleDeleteMCPServer = async (serverId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('mcp-servers').remove(serverId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('MCP server deleted successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1780,25 +1871,30 @@ function AppContent() {
 
   const handleUpdateGatewayChannel = async (
     channelId: string,
-    updates: GatewayChannelPatchData
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
   ) => {
-    if (!client) return;
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('gateway-channels').patch(channelId, updates);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Gateway channel updated!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteGatewayChannel = async (channelId: string) => {
-    if (!client) return;
+  const handleDeleteGatewayChannel = async (channelId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('gateway-channels').remove(channelId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Gateway channel deleted!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to delete gateway channel: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -2039,7 +2135,9 @@ function AppContent() {
       onNukeEnvironment={handleNukeEnvironment}
       onExecuteScheduleNow={handleExecuteScheduleNow}
       onCreateUser={handleCreateUser}
-      onUpdateUser={handleUpdateUser}
+      onUpdateUser={(userId, updates, shouldApply) =>
+        handleUpdateUser(userId, updates, { shouldApply })
+      }
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
@@ -2089,8 +2187,10 @@ function AppContent() {
           }}
           user={currentUser}
           client={client}
-          onUpdateUser={handleUpdateUser}
-          onRefreshCurrentUser={reAuthenticate}
+          onUpdateUser={(userId, updates, shouldApply) =>
+            handleUpdateUser(userId, updates, { shouldApply })
+          }
+          onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
           onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
           initialTab={userSettingsInitialTab}
         />

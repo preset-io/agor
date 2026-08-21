@@ -17,6 +17,7 @@ export interface CodexImportAuthJsonProps {
   onImported: (result: CodexAuthImportResult) => void;
   /** Label for the submit action; surfaces frame it differently. */
   submitLabel?: string;
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -29,6 +30,7 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   client,
   onImported,
   submitLabel = 'Import login',
+  operationScope,
 }: CodexImportAuthJsonProps) {
   const { token } = useToken();
   const [authJson, setAuthJson] = useState('');
@@ -40,14 +42,17 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   // the replacement. The guard invalidates any in-flight submit synchronously on
   // client change; the on-change reset drops the pasted secret and releases the
   // submit lock so the new identity can import right away.
-  const { run } = useIdentityGuardedAsync([client], () => {
+  const effectiveOperationScope =
+    operationScope === undefined ? ([client] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
+  const { run } = useIdentityGuardedAsync([client, ...(effectiveOperationScope ?? [null])], () => {
     setAuthJson('');
     setError(null);
     setSubmitting(false);
   });
 
   const handleImport = useCallback(async () => {
-    if (!client || !authJson.trim() || submitting) return;
+    if (!client || !authJson.trim() || submitting || !operationAvailable) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -68,7 +73,7 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
     } finally {
       setSubmitting(false);
     }
-  }, [authJson, client, onImported, submitting, run]);
+  }, [authJson, client, onImported, operationAvailable, submitting, run]);
 
   return (
     <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -101,7 +106,7 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
       <Button
         type="primary"
         loading={submitting}
-        disabled={!client || !authJson.trim()}
+        disabled={!client || !authJson.trim() || !operationAvailable}
         onClick={handleImport}
       >
         {submitLabel}

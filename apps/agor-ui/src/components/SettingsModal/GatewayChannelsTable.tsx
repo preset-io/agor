@@ -95,6 +95,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { getDaemonUrl } from '@/config/daemon';
 import {
   type AuthorityOperationGuard,
+  useAuthenticatedAuthorityScope,
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
@@ -125,8 +126,12 @@ interface GatewayChannelsTableProps {
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
   onCreate?: (data: GatewayChannelCreateData) => void;
-  onUpdate?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDelete?: (channelId: string) => void;
+  onUpdate?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (channelId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
 
 const CHANNEL_TYPE_OPTIONS: {
@@ -3629,11 +3634,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const { token } = theme.useToken();
-  const operationGuard = useAuthorityOperationGuard(
-    currentUser?.user_id && currentUser.role
-      ? [currentUser.user_id, currentUser.role, client]
-      : null
+  const callerAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
   );
+  const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
@@ -3799,6 +3804,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     loadingReferencedBranchIds.current.clear();
     resetCreateFlow();
   }, [createForm, currentUser?.role, currentUser?.user_id, editForm, resetCreateFlow]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setCreating(false);
+    setGithubLoading(false);
+    setConnectionTestLoading(false);
+    setConnectionTestResult(null);
+  }, [callerAuthority.operationScope]);
 
   const invalidateConnectionTest = useCallback(() => {
     setConnectionTestResult(null);
@@ -4429,7 +4442,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setEditModalOpen(true);
   };
 
-  const handleUpdate = () => {
+  const handleUpdate = async () => {
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     if (!editingChannel) return;
@@ -4437,51 +4450,55 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       showError('Choose a supported agentic tool before saving this historical channel');
       return;
     }
-    editForm
-      .validateFields()
-      .then(() => {
-        if (!operation.isCurrent()) return;
-        // Use getFieldsValue(true) to include values from collapsed (unmounted)
-        // panels that validateFields() may omit.
-        const values = editForm.getFieldsValue(true);
-        if (values.channel_type === 'discord' && values.enabled !== false) {
-          const validation = validateDiscordConfig(discordConfigFromFormValues(values), {
-            requireBotToken: false,
-          });
-          if (!validation.ok) {
-            throw new Error(`Invalid Discord configuration: ${validation.errors.join('; ')}`);
-          }
+    try {
+      await editForm.validateFields();
+      if (!operation.isCurrent()) return;
+      // Use getFieldsValue(true) to include values from collapsed (unmounted)
+      // panels that validateFields() may omit.
+      const values = editForm.getFieldsValue(true);
+      if (values.channel_type === 'discord' && values.enabled !== false) {
+        const validation = validateDiscordConfig(discordConfigFromFormValues(values), {
+          requireBotToken: false,
+        });
+        if (!validation.ok) {
+          throw new Error(`Invalid Discord configuration: ${validation.errors.join('; ')}`);
         }
-        const updates = extractFormData(
-          values,
-          editingChannel.config as Record<string, unknown>,
-          selectedAgent
-        );
-        if (!operation.isCurrent()) return;
-        onUpdate?.(editingChannel.id, updates);
-        editForm.resetFields();
-        setEditModalOpen(false);
-        setEditingChannel(null);
-        setChannelType('slack');
-        setRequiresSupportedToolSelection(false);
-      })
-      .catch((error) => {
-        if (!operation.isCurrent()) return;
-        console.error('Form validation failed:', error);
-        if (error.errorFields?.length > 0) {
-          showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
-        } else {
-          showError(error instanceof Error ? error.message : String(error));
-        }
-      });
+      }
+      const updates = extractFormData(
+        values,
+        editingChannel.config as Record<string, unknown>,
+        selectedAgent
+      );
+      if (!operation.isCurrent()) return;
+      await onUpdate?.(editingChannel.id, updates, operation.isCurrent);
+      if (!operation.isCurrent()) return;
+      editForm.resetFields();
+      setEditModalOpen(false);
+      setEditingChannel(null);
+      setChannelType('slack');
+      setRequiresSupportedToolSelection(false);
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      console.error('Form validation failed:', error);
+      const validation = error as { errorFields?: { errors?: string[] }[] };
+      if (validation.errorFields?.length) {
+        showError(validation.errorFields[0]?.errors?.[0] || 'Please fill in required fields');
+      } else {
+        showError(error instanceof Error ? error.message : String(error));
+      }
+    }
   };
 
   const handleToggleEnabled = (channel: GatewayChannel) => {
-    onUpdate?.(channel.id, { enabled: !channel.enabled });
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onUpdate?.(channel.id, { enabled: !channel.enabled }, operation.isCurrent);
   };
 
   const handleDelete = (channelId: string) => {
-    onDelete?.(channelId);
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onDelete?.(channelId, operation.isCurrent);
   };
 
   const columns = [

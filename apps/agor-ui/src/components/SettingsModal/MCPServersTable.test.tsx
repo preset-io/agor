@@ -444,6 +444,10 @@ function renderTransitionTable(initial: {
   currentUser: User;
   policy: MCPMemberPolicy;
   servers?: MCPServer[];
+  onCreate?: (
+    data: Parameters<NonNullable<React.ComponentProps<typeof MCPServersTable>['onCreate']>>[0],
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
 }) {
   let policy = initial.policy;
   let role = initial.currentUser.role;
@@ -470,7 +474,7 @@ function renderTransitionTable(initial: {
       return { create: vi.fn() };
     },
   } as unknown as AgorClient;
-  const onCreate = vi.fn();
+  const onCreate = vi.fn(initial.onCreate ?? (() => undefined));
   let servers = new Map((initial.servers ?? []).map((server) => [server.mcp_server_id, server]));
 
   const view = (currentUser: User, connected: boolean, connecting: boolean, generation: number) => (
@@ -592,6 +596,36 @@ describe('MCPServersTable open-dialog authority transitions', () => {
     expect(await screen.findByLabelText('Token')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
   }, 60_000);
+
+  it('does not close or continue an A create after its parent save crosses auth generation', async () => {
+    let resolveSave!: () => void;
+    const save = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    let parentGuard: (() => boolean) | undefined;
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      onCreate: async (_data, shouldApply) => {
+        parentGuard = shouldApply;
+        await save;
+      },
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(seam.onCreate).toHaveBeenCalledOnce());
+    expect(parentGuard?.()).toBe(true);
+
+    seam.replaceRole(ADMIN, 2);
+    expect(parentGuard?.()).toBe(false);
+    await act(async () => {
+      resolveSave();
+      await save;
+    });
+    expect(screen.getByRole('dialog', { name: 'Add MCP Server' })).toBeInTheDocument();
+  });
 
   it('closes an admin-A view and erases its unredacted environment on admin B', async () => {
     const privateServer = makeServer({

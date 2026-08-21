@@ -394,10 +394,16 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         })
     );
     const listeners = new Set<(event: Record<string, unknown>) => void>();
+    const reserve = vi.fn().mockResolvedValue({
+      reservation_token: 'server-reservation-admin-a-00000001',
+      expires_at: Date.now() + 60_000,
+    });
     const client = {
-      service: vi.fn((path: string) =>
-        path === 'mcp-servers/discover' ? { create: discover } : { patch: vi.fn() }
-      ),
+      service: vi.fn((path: string) => {
+        if (path === 'mcp-servers/discover') return { create: discover };
+        if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
+        return { patch: vi.fn() };
+      }),
       io: {
         on: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>
           listeners.add(listener)
@@ -434,9 +440,12 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }));
     await waitFor(() => expect(discover).toHaveBeenCalledOnce());
     const request = discover.mock.calls[0]?.[0] as {
-      oauth_browser_event: { operation_id: string; auth_generation: number };
+      oauth_browser_event: { reservation_token: string };
     };
-    expect(request.oauth_browser_event.auth_generation).toBe(31);
+    expect(reserve).toHaveBeenCalledWith({
+      operation: 'discover',
+      mcp_server_id: server.mcp_server_id,
+    });
     expect(listeners.size).toBe(1);
     // Socket.IO may already have snapshotted a callback for dispatch when the
     // identity commit removes it. Exercise that queued callback directly.
@@ -448,8 +457,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
       listener({
         authUrl: 'https://provider.example/admin-a',
         attempt_id: 'attempt-admin-a',
-        operation_id: request.oauth_browser_event.operation_id,
-        auth_generation: 31,
+        reservation_token: request.oauth_browser_event.reservation_token,
         caller_user_id: 'admin-a',
       });
     }

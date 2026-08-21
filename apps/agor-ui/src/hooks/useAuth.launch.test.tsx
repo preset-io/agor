@@ -8,6 +8,16 @@ const authenticate = vi.fn();
 const launchCreate = vi.fn();
 const refreshCreate = vi.fn();
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock('@agor-live/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor-live/client')>();
   return {
@@ -236,6 +246,125 @@ describe('useAuth launch-code fallback', () => {
 
     expect(result.current.authenticated).toBe(true);
     expect(result.current.authenticationGeneration).toBeGreaterThan(invalidatedGeneration);
+  });
+
+
+  it.each(['success', 'failure'] as const)(
+    'does not let a delayed A local-login %s overwrite B tokens or auth state',
+    async (outcome) => {
+      window.history.replaceState({}, '', '/ui/');
+      const pendingAuth = deferred<{
+        accessToken: string;
+        refreshToken: string;
+        user: { user_id: string; email: string };
+      }>();
+      authenticate.mockImplementationOnce(() => pendingAuth.promise);
+      const refreshed = vi.fn();
+      window.addEventListener(TOKENS_REFRESHED_EVENT, refreshed);
+
+      try {
+        const { result } = renderHook(() => useAuth());
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        let authorityA = true;
+        let login!: Promise<'signed-in' | 'failed' | 'obsolete'>;
+        act(() => {
+          login = result.current.loginForAuthorityCycle(
+            'admin-a@example.test',
+            'new-password',
+            () => authorityA
+          );
+        });
+
+        authorityA = false;
+        localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-b-access');
+        localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-b-refresh');
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent(TOKENS_REFRESHED_EVENT, {
+              detail: {
+                accessToken: 'admin-b-access',
+                refreshToken: 'admin-b-refresh',
+                user: { user_id: 'admin-b', email: 'admin-b@example.test' },
+              },
+            })
+          );
+        });
+
+        if (outcome === 'success') {
+          pendingAuth.resolve({
+            accessToken: 'stale-admin-a-access',
+            refreshToken: 'stale-admin-a-refresh',
+            user: { user_id: 'admin-a', email: 'admin-a@example.test' },
+          });
+        } else {
+          pendingAuth.reject(new Error('stale A credentials failed'));
+        }
+        await act(async () => {
+          await expect(login).resolves.toBe('obsolete');
+        });
+
+        expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-b-access');
+        expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('admin-b-refresh');
+        expect(result.current.user?.user_id).toBe('admin-b');
+        expect(result.current.loading).toBe(false);
+        expect(result.current.error).toBeNull();
+        // Only B's explicit authority establishment was announced. A's stale
+        // disposable REST result never dispatches a second replacement event.
+        expect(refreshed).toHaveBeenCalledOnce();
+      } finally {
+        window.removeEventListener(TOKENS_REFRESHED_EVENT, refreshed);
+      }
+    }
+  );
+
+  it('does not let a delayed guarded current-user refresh install an obsolete row', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-a-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-a-refresh');
+    authenticate.mockResolvedValueOnce({
+      accessToken: 'admin-a-access',
+      user: { user_id: 'admin-a', email: 'admin-a@example.test' },
+    });
+
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.user?.user_id).toBe('admin-a'));
+
+    const pendingRefresh = deferred<{
+      accessToken: string;
+      user: { user_id: string; email: string };
+    }>();
+    authenticate.mockImplementationOnce(() => pendingRefresh.promise);
+    let authorityA = true;
+    let refresh!: Promise<boolean>;
+    act(() => {
+      refresh = result.current.refreshCurrentUserForAuthorityCycle(() => authorityA);
+    });
+
+    authorityA = false;
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-b-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-b-refresh');
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'admin-b-access',
+            refreshToken: 'admin-b-refresh',
+            user: { user_id: 'admin-b', email: 'admin-b@example.test' },
+          },
+        })
+      );
+    });
+    pendingRefresh.resolve({
+      accessToken: 'admin-a-access',
+      user: { user_id: 'admin-a', email: 'stale-admin-a@example.test' },
+    });
+
+    await act(async () => {
+      await expect(refresh).resolves.toBe(false);
+    });
+    expect(result.current.user?.user_id).toBe('admin-b');
+    expect(result.current.user?.email).toBe('admin-b@example.test');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-b-access');
   });
 
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {

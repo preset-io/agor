@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
@@ -281,17 +282,21 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('user-1', {
-        default_agentic_config: {
-          'claude-code': { permissionMode: 'acceptEdits' },
-          codex: { permissionMode: 'allow-all' },
+      expect(onUpdate).toHaveBeenCalledWith(
+        'user-1',
+        {
+          default_agentic_config: {
+            'claude-code': { permissionMode: 'acceptEdits' },
+            codex: { permissionMode: 'allow-all' },
+          },
+          default_agentic_selection: {
+            'claude-code': { source: 'inline' },
+            codex: { source: 'inline' },
+          },
+          default_mcp_server_ids: [],
         },
-        default_agentic_selection: {
-          'claude-code': { source: 'inline' },
-          codex: { source: 'inline' },
-        },
-        default_mcp_server_ids: [],
-      });
+        expect.any(Function)
+      );
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -357,18 +362,22 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('user-1', {
-        default_agentic_config: {
-          'claude-code': {
-            permissionMode: 'default',
-            modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
+      expect(onUpdate).toHaveBeenCalledWith(
+        'user-1',
+        {
+          default_agentic_config: {
+            'claude-code': {
+              permissionMode: 'default',
+              modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
+            },
           },
+          default_agentic_selection: {
+            'claude-code': { source: 'inline' },
+          },
+          default_mcp_server_ids: [],
         },
-        default_agentic_selection: {
-          'claude-code': { source: 'inline' },
-        },
-        default_mcp_server_ids: [],
-      });
+        expect.any(Function)
+      );
     }, ASYNC);
 
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -400,7 +409,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
-        expect.objectContaining({ password: 'new-secure-password' })
+        expect.objectContaining({ password: 'new-secure-password' }),
+        expect.any(Function)
       );
     }, ASYNC);
 
@@ -1543,5 +1553,58 @@ describe('UserSettingsModal — administrative fields in save payloads', () => {
 
     const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
     expect(updates).toHaveProperty('role', 'member');
+  });
+});
+
+describe('UserSettingsModal — socket authority generations', () => {
+  it('preserves a same-user password draft but never closes from an obsolete save', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onUpdate = vi.fn(() => pending);
+    const onClose = vi.fn();
+    const user = makeUser({ user_id: 'same-user', role: 'member' });
+    const view = (generation: number) => (
+      <ConfigProvider theme={{ hashed: false }}>
+        <AntApp>
+          <ConnectionProvider
+            value={{
+              connected: true,
+              connecting: false,
+              authGeneration: generation,
+              outOfSync: false,
+              capturedSha: null,
+              currentSha: null,
+            }}
+          >
+            <UserSettingsModal
+              open
+              onClose={onClose}
+              user={user}
+              currentUser={user}
+              client={null}
+              onUpdate={onUpdate}
+            />
+          </ConnectionProvider>
+        </AntApp>
+      </ConfigProvider>
+    );
+    const rendered = render(view(10));
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    const password = await screen.findByPlaceholderText('••••••••');
+    fireEvent.change(password, { target: { value: 'same-user-password-draft' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+
+    rendered.rerender(view(11));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText('••••••••')).toHaveValue('same-user-password-draft');
+    expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled();
   });
 });

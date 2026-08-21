@@ -78,10 +78,12 @@ type TestProvider = {
   }>;
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
+  mcpRequested: Deferred<void>;
   releaseToken: () => void;
   releaseTokenRequest: (requestNumber: number) => void;
   waitForTokenRequest: (requestNumber: number) => Promise<void>;
   releaseRefresh: () => void;
+  releaseMcp: () => void;
   close: () => Promise<void>;
 };
 
@@ -94,6 +96,7 @@ async function createTestProvider(
     invalidRefresh?: boolean;
     rejectDynamicRegistration?: boolean;
     resourceScopes?: string[];
+    holdMcpChallenge?: boolean;
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
@@ -116,6 +119,8 @@ async function createTestProvider(
   const tokenRequested = tokenRequestMilestone(1);
   const refreshRequested = deferred<void>();
   const releaseRefresh = deferred<void>();
+  const mcpRequested = deferred<void>();
+  const releaseMcp = deferred<void>();
   let tokenRequestCount = 0;
   let baseUrl = '';
 
@@ -219,6 +224,8 @@ async function createTestProvider(
       return;
     }
     if (url.pathname === '/saved/mcp') {
+      mcpRequested.resolve();
+      if (options.holdMcpChallenge) await releaseMcp.promise;
       if (request.headers.authorization !== 'Bearer sqlite-access-token') {
         response.writeHead(401, {
           'www-authenticate': `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`,
@@ -271,15 +278,18 @@ async function createTestProvider(
     requests,
     tokenRequested,
     refreshRequested,
+    mcpRequested,
     releaseToken: () => {
       for (const gate of tokenReleaseGates.values()) gate.resolve();
     },
     releaseTokenRequest: (requestNumber: number) => tokenReleaseGate(requestNumber).resolve(),
     waitForTokenRequest: (requestNumber: number) => tokenRequestMilestone(requestNumber).promise,
     releaseRefresh: () => releaseRefresh.resolve(),
+    releaseMcp: () => releaseMcp.resolve(),
     close: () => {
       for (const gate of tokenReleaseGates.values()) gate.resolve();
       releaseRefresh.resolve();
+      releaseMcp.resolve();
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
@@ -297,6 +307,11 @@ type SQLiteHarness = {
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
+  liveSocket: {
+    id: string;
+    feathers: AuthenticatedParams & { id: string };
+    data: { tenant: { tenant_id: string; source: string } };
+  };
 };
 
 async function createHarness(
@@ -330,6 +345,18 @@ async function createHarness(
 
   let nextUrl = deferred<string>();
   const emittedBrowserEvents: Array<Record<string, unknown>> = [];
+  const liveSocket = {
+    id: 'sqlite-test-socket',
+    feathers: {
+      id: 'sqlite-test-socket',
+      user,
+      authentication: {
+        strategy: 'jwt',
+        accessToken: 'sqlite-initial-authority-token',
+      },
+    } as AuthenticatedParams & { id: string },
+    data: { tenant: { tenant_id: 'default', source: 'static' } },
+  };
   const io = {
     local: {
       to: () => ({
@@ -342,6 +369,7 @@ async function createHarness(
       }),
     },
     to: () => ({ emit: vi.fn() }),
+    sockets: { sockets: new Map([[liveSocket.id, liveSocket]]) },
   };
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
@@ -398,15 +426,29 @@ async function createHarness(
     callback: (state: string) =>
       invokeCallback({ code: 'authorization-code', state, iss: provider.baseUrl }),
     deny: (state: string) => invokeCallback({ error: 'access_denied', state }),
+    liveSocket,
   } satisfies SQLiteHarness;
 }
 
 function paramsFor(harness: SQLiteHarness): AuthenticatedParams & { connection: { id: string } } {
   return {
-    user: harness.user,
+    user: harness.liveSocket.feathers.user,
     tenant: { tenant_id: 'default', source: 'static' },
-    connection: { id: 'sqlite-test-socket' },
+    connection: harness.liveSocket.feathers,
+    authentication: harness.liveSocket.feathers.authentication,
   } as AuthenticatedParams & { connection: { id: string } };
+}
+
+async function reserveBrowserEvent(
+  harness: SQLiteHarness,
+  operation: 'discover' | 'test-oauth'
+): Promise<{ reservation_token: string }> {
+  const reservation = (await harness.app
+    .service('mcp-servers/oauth-browser-reservations')
+    .create({ operation, mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+    reservation_token: string;
+  };
+  return { reservation_token: reservation.reservation_token };
 }
 
 async function authorizeSavedServer(harness: SQLiteHarness): Promise<void> {
@@ -570,6 +612,7 @@ describe('SQLite saved-row OAuth authority', () => {
     const harness = await createHarness(provider);
     databases.push(harness.rawDb);
 
+    const browserReservation = await reserveBrowserEvent(harness, 'discover');
     const discover = harness.app.service('mcp-servers/discover').create(
       {
         mcp_server_id: harness.server.mcp_server_id,
@@ -581,10 +624,7 @@ describe('SQLite saved-row OAuth authority', () => {
           oauth_client_id: 'transient-client-id',
           oauth_compatibility_mode: 'legacy',
         },
-        oauth_browser_event: {
-          operation_id: 'settings-discover-admin-a-0001',
-          auth_generation: 41,
-        },
+        oauth_browser_event: browserReservation,
       },
       paramsFor(harness)
     );
@@ -602,8 +642,7 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(harness.emittedBrowserEvents).toEqual([
       expect.objectContaining({
         authUrl: authorizationUrl.toString(),
-        operation_id: 'settings-discover-admin-a-0001',
-        auth_generation: 41,
+        reservation_token: browserReservation.reservation_token,
         caller_user_id: harness.user.user_id,
         attempt_id: expect.any(String),
       }),
@@ -627,6 +666,262 @@ describe('SQLite saved-row OAuth authority', () => {
         harness.server.mcp_server_id as MCPServerID
       )
     ).toBeNull();
+  });
+
+  it('consumes reservations once and rejects caller/socket/tenant replacement before provider work', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const request = await reserveBrowserEvent(harness, 'discover');
+    const before = provider.requests.length;
+    const replacementParams = {
+      ...paramsFor(harness),
+      user: { ...harness.user, user_id: '01900000-0000-7000-8000-00000000beef' },
+    } as AuthenticatedParams & { connection: { id: string } };
+
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: request,
+        },
+        replacementParams
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: { reservation_token: 'malformed' },
+        },
+        paramsFor(harness)
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/invalid/i) });
+    const unrelatedOperation = await reserveBrowserEvent(harness, 'test-oauth');
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: unrelatedOperation,
+        },
+        paramsFor(harness)
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/operation/i) });
+    expect(provider.requests).toHaveLength(before);
+
+    // Mismatch consumed the nonce. Neither the original caller nor a replay on
+    // another socket can correct and reuse it.
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: request,
+        },
+        paramsFor(harness)
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+
+    const socketBound = await reserveBrowserEvent(harness, 'discover');
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: socketBound,
+        },
+        {
+          ...paramsFor(harness),
+          connection: { id: 'replacement-socket' },
+        } as AuthenticatedParams & {
+          connection: { id: string };
+        }
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+
+    const tokenReservation = await reserveBrowserEvent(harness, 'discover');
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: { reservation_token: tokenReservation.reservation_token },
+        },
+        {
+          ...paramsFor(harness),
+          authentication: { strategy: 'jwt', accessToken: 'replacement-authority-token' },
+        } as AuthenticatedParams & { connection: { id: string } }
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+
+    const tenantBound = await reserveBrowserEvent(harness, 'discover');
+    await expect(
+      harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: tenantBound,
+        },
+        {
+          ...paramsFor(harness),
+          tenant: { tenant_id: 'other-tenant', source: 'auth' },
+        } as AuthenticatedParams & { connection: { id: string } }
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+  });
+
+  it('abandons a delayed A discovery before provider metadata, DCR, or browser emission after the live socket becomes B', async () => {
+    const provider = await createTestProvider({ holdMcpChallenge: true });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const request = await reserveBrowserEvent(harness, 'discover');
+
+    const discover = harness.app.service('mcp-servers/discover').create(
+      {
+        mcp_server_id: harness.server.mcp_server_id,
+        oauth_browser_event: request,
+      },
+      paramsFor(harness)
+    );
+    await provider.mcpRequested.promise;
+
+    // Feathers launch/JWT reauthentication updates the surviving socket's
+    // live connection object in place. The original service params still name
+    // A, so only a server-side current-socket check can catch this ordering.
+    harness.liveSocket.feathers.user = {
+      ...harness.user,
+      user_id: '01900000-0000-7000-8000-00000000b00b' as UserID,
+      email: 'admin-b@example.test',
+    };
+    provider.releaseMcp();
+
+    await expect(discover).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/authority|reservation/i),
+    });
+    expect(harness.emittedBrowserEvents).toEqual([]);
+    expect(
+      provider.requests.filter(
+        (request) =>
+          request.path.includes('.well-known') ||
+          request.path === '/register' ||
+          request.path === '/authorize'
+      )
+    ).toEqual([]);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+  });
+
+  it.each(['role', 'token'] as const)(
+    'abandons delayed discovery before provider work when the live socket %s authority changes',
+    async (transition) => {
+      const provider = await createTestProvider({ holdMcpChallenge: true });
+      providers.push(provider);
+      const harness = await createHarness(provider);
+      databases.push(harness.rawDb);
+      const request = await reserveBrowserEvent(harness, 'discover');
+
+      const discover = harness.app.service('mcp-servers/discover').create(
+        {
+          mcp_server_id: harness.server.mcp_server_id,
+          oauth_browser_event: request,
+        },
+        paramsFor(harness)
+      );
+      await provider.mcpRequested.promise;
+
+      if (transition === 'role') {
+        harness.liveSocket.feathers.user = {
+          ...harness.user,
+          role: 'viewer',
+        };
+      } else {
+        harness.liveSocket.feathers.authentication = {
+          strategy: 'jwt',
+          accessToken: 'replacement-authority-token',
+        };
+      }
+      provider.releaseMcp();
+
+      await expect(discover).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/authority|reservation/i),
+      });
+      expect(harness.emittedBrowserEvents).toEqual([]);
+      expect(
+        provider.requests.filter(
+          (request) =>
+            request.path.includes('.well-known') ||
+            request.path === '/register' ||
+            request.path === '/authorize'
+        )
+      ).toEqual([]);
+    }
+  );
+
+  it('ignores nullish hints and requires a reservation before browser provider effects', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const before = provider.requests.length;
+
+    await expect(
+      harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_url: provider.savedMcpUrl,
+          mcp_server_id: harness.server.mcp_server_id,
+          start_browser_flow: true,
+          oauth_browser_event: null,
+        } as never,
+        paramsFor(harness)
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    await expect(
+      harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_url: provider.savedMcpUrl,
+          mcp_server_id: harness.server.mcp_server_id,
+          start_browser_flow: true,
+        },
+        paramsFor(harness)
+      )
+    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/reservation/i) });
+    expect(provider.requests).toHaveLength(before);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('expires and cleans an unused one-shot reservation at its bounded TTL', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const issuedAt = Date.now();
+    const request = await reserveBrowserEvent(harness, 'discover');
+    const before = provider.requests.length;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 60_001);
+    try {
+      await expect(
+        harness.app.service('mcp-servers/discover').create(
+          {
+            mcp_server_id: harness.server.mcp_server_id,
+            oauth_browser_event: request,
+          },
+          paramsFor(harness)
+        )
+      ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/expired/i) });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(provider.requests).toHaveLength(before);
   });
 
   it('refuses catalog reuse after a current versioned SQLite grant binding drifts', async () => {
@@ -741,15 +1036,13 @@ describe('SQLite saved-row OAuth authority', () => {
     const harness = await createHarness(provider);
     databases.push(harness.rawDb);
 
+    const browserReservation = await reserveBrowserEvent(harness, 'test-oauth');
     const testRequest = harness.app.service('mcp-servers/test-oauth').create(
       {
         mcp_url: provider.savedMcpUrl,
         mcp_server_id: harness.server.mcp_server_id,
         start_browser_flow: true,
-        oauth_browser_event: {
-          operation_id: 'test-oauth-admin-a-0001',
-          auth_generation: 43,
-        },
+        oauth_browser_event: browserReservation,
       },
       paramsFor(harness)
     );

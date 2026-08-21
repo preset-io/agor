@@ -200,15 +200,29 @@ export const MCP_MEMBER_POLICIES = [
 
 export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 
+export const MCP_OAUTH_BROWSER_OPERATIONS = ['discover', 'test-oauth'] as const;
+export type MCPOAuthBrowserOperation = (typeof MCP_OAUTH_BROWSER_OPERATIONS)[number];
+
 /**
- * Caller-generated correlation for the compatibility browser hint emitted by
- * blocking MCP discovery. The daemon derives `caller_user_id` from auth; the
- * generation is an opaque browser authority epoch echoed only to the exact
- * initiating socket.
+ * Request/response contract for a short-lived browser-event reservation.
+ *
+ * The request names only what the caller intends to do. The opaque token in
+ * the response is minted by the daemon and bound there to the authenticated
+ * tenant, caller, socket, operation and saved server (when present).
  */
+export interface MCPOAuthBrowserReservationRequest {
+  operation: MCPOAuthBrowserOperation;
+  mcp_server_id?: MCPServerID;
+}
+
+export interface MCPOAuthBrowserReservation {
+  reservation_token: string;
+  expires_at: number;
+}
+
+/** One-shot reservation presented to blocking discovery/test. */
 export interface MCPOAuthBrowserEventRequest {
-  operation_id: string;
-  auth_generation: number;
+  reservation_token: string;
 }
 
 export interface MCPOAuthOpenBrowserEvent extends MCPOAuthBrowserEventRequest {

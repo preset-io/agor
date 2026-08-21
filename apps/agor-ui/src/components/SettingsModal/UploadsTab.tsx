@@ -35,17 +35,28 @@ async function fetchContent(upload: UploadRow): Promise<Blob> {
   return response.blob();
 }
 
-export function UploadsTab({ authorityKey }: { authorityKey: string | null }) {
+export function UploadsTab({
+  identityKey,
+  operationScope,
+}: {
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
+}) {
   const { showError } = useThemedMessage();
   const [uploads, setUploads] = useState<UploadRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const operationGuard = useAuthorityOperationGuard(authorityKey ? [authorityKey] : null);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the caller-private list
   useLayoutEffect(() => {
     setUploads([]);
     setLoading(false);
-  }, [authorityKey]);
+  }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+  }, [operationScope]);
 
   const refresh = useCallback(async () => {
     const operation = operationGuard.begin();

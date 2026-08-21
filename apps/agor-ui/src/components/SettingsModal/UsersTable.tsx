@@ -39,7 +39,10 @@ import {
 } from '@/utils/passwordPolicy';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
-import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
@@ -54,9 +57,14 @@ interface UsersTableProps {
   gatewayChannelById?: Map<string, GatewayChannel>;
   client: AgorClient | null;
   currentUser?: User | null;
-  onCreate?: (data: CreateUserInput) => Promise<void>;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onDelete?: (userId: string) => void;
+  onCreate?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdate?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
+
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({
@@ -77,9 +85,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
-  const operationGuard = useAuthorityOperationGuard(
-    currentUser ? [currentUser.user_id, currentUser.role, client] : null
+  const callerAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
   );
+  const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authenticated identity and role intentionally erase password-bearing forms
   useLayoutEffect(() => {
@@ -171,7 +181,9 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   }, [userById, searchTerm, groupsByUser, groupById]);
 
   const handleDelete = (userId: string) => {
-    onDelete?.(userId);
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onDelete?.(userId, operation.isCurrent);
   };
 
   const handleCreate = async () => {
@@ -180,14 +192,17 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     try {
       const values = await form.validateFields();
       if (!operation.isCurrent()) return;
-      await onCreate?.({
-        email: values.email,
-        password: values.password,
-        name: values.name,
-        role: values.role || ROLES.MEMBER,
-        unix_username: values.unix_username,
-        must_change_password: values.must_change_password || false,
-      });
+      await onCreate?.(
+        {
+          email: values.email,
+          password: values.password,
+          name: values.name,
+          role: values.role || ROLES.MEMBER,
+          unix_username: values.unix_username,
+          must_change_password: values.must_change_password || false,
+        },
+        operation.isCurrent
+      );
       if (!operation.isCurrent()) return;
       form.resetFields();
       setCreateModalOpen(false);
@@ -465,7 +480,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                   <UserAvatarsTab
                     client={client}
                     gatewayChannelById={gatewayChannelById}
-                    authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+                    identityKey={callerAuthority.identityKey}
+                    operationScope={callerAuthority.operationScope}
                   />
                 ),
               },

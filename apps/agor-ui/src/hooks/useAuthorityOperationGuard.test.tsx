@@ -1,7 +1,12 @@
-import { act, renderHook } from '@testing-library/react';
+import type { AgorClient } from '@agor-live/client';
+import { act, render, renderHook } from '@testing-library/react';
 import { type PropsWithChildren, StrictMode } from 'react';
 import { describe, expect, it } from 'vitest';
-import { useAuthorityOperationGuard } from './useAuthorityOperationGuard';
+import { ConnectionProvider } from '@/contexts/ConnectionContext';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from './useAuthorityOperationGuard';
 
 describe('useAuthorityOperationGuard', () => {
   it('invalidates an old operation synchronously on an in-place authority render', () => {
@@ -50,5 +55,53 @@ describe('useAuthorityOperationGuard', () => {
 
     expect(result.current.isCurrent()).toBe(true);
     expect(result.current.begin().isCurrent()).toBe(true);
+  });
+
+  it('preserves identity scope but cancels operations across disconnect and auth generation', () => {
+    const client = {} as AgorClient;
+    let current:
+      | {
+          authority: ReturnType<typeof useAuthenticatedAuthorityScope>;
+          guard: ReturnType<typeof useAuthorityOperationGuard>;
+        }
+      | undefined;
+    const Inner = () => {
+      const authority = useAuthenticatedAuthorityScope(client, 'admin-a:admin');
+      current = { authority, guard: useAuthorityOperationGuard(authority.operationScope) };
+      return null;
+    };
+    const Harness = ({
+      connected,
+      connecting,
+      generation,
+    }: {
+      connected: boolean;
+      connecting: boolean;
+      generation: number;
+    }) => (
+      <ConnectionProvider
+        value={{
+          connected,
+          connecting,
+          authGeneration: generation,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <Inner />
+      </ConnectionProvider>
+    );
+    const rendered = render(<Harness connected connecting={false} generation={7} />);
+    const old = current!.guard.begin();
+
+    rendered.rerender(<Harness connected connecting generation={7} />);
+    expect(old.isCurrent()).toBe(false);
+    expect(current!.authority.identityKey).toBe('admin-a:admin');
+    expect(current!.authority.operationScope).toBeNull();
+
+    rendered.rerender(<Harness connected connecting={false} generation={8} />);
+    expect(current!.authority.identityKey).toBe('admin-a:admin');
+    expect(current!.guard.begin().isCurrent()).toBe(true);
   });
 });

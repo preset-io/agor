@@ -50,8 +50,15 @@ interface UseAuthReturn extends AuthState {
    */
   isAuthenticationOwnerCurrent: (userId: UserID, generation: number) => boolean;
   login: (email: string, password: string) => Promise<boolean>;
+  loginForAuthorityCycle: (
+    email: string,
+    password: string,
+    shouldApply: () => boolean
+  ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
   logout: () => Promise<void>;
+  logoutForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
   reAuthenticate: () => Promise<void>;
+  refreshCurrentUserForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
 }
 
 const UNEXPECTED_LOGIN_RESPONSE_MESSAGE =
@@ -478,6 +485,8 @@ export function useAuth(): UseAuthReturn {
         accessToken: detail.accessToken,
         user: detail.user,
         authenticated: true,
+        loading: false,
+        error: null,
       }));
     };
 
@@ -511,6 +520,46 @@ export function useAuth(): UseAuthReturn {
   /**
    * Login with email and password
    */
+  const loginForAuthorityCycle = async (
+    email: string,
+    password: string,
+    shouldApply: () => boolean
+  ): Promise<'signed-in' | 'failed' | 'obsolete'> => {
+    if (!shouldApply()) return 'obsolete';
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+
+    try {
+      const client = await createRestClient(getDaemonUrl());
+      const result = await client.authenticate({ strategy: 'local', email, password });
+      if (!shouldApply()) return 'obsolete';
+
+      // This is an explicit authority replacement, even when the user id is
+      // unchanged. Retire work owned by the revoked credential before exposing
+      // the new one.
+      invalidateAuthentication();
+      storeTokens(result.accessToken, result.refreshToken);
+      resetRefreshFailureState();
+      noteAuthenticatedUser(result.user);
+      setState({
+        user: result.user,
+        accessToken: result.accessToken,
+        authenticated: true,
+        loading: false,
+        error: null,
+      });
+      dispatchTokensRefreshed(result);
+      return 'signed-in';
+    } catch (error) {
+      if (!shouldApply()) return 'obsolete';
+      console.error('❌ Login failed:', error);
+      const userFacingMessage = loginErrorMessage(error);
+      const rawMessage = error instanceof Error ? error.message : 'Login failed';
+      console.error('❌ Error message:', rawMessage);
+      setState((prev) => ({ ...prev, loading: false, error: userFacingMessage }));
+      return 'failed';
+    }
+  };
+
   const login = async (email: string, password: string): Promise<boolean> => {
     // Invalidate caller-owned work synchronously, including a same-user
     // logout/login or explicit re-login.
@@ -580,13 +629,78 @@ export function useAuth(): UseAuthReturn {
     });
   };
 
+  const logoutForAuthorityCycle = async (shouldApply: () => boolean): Promise<boolean> => {
+    if (!shouldApply()) return false;
+    invalidateAuthentication();
+    // Token clearing and the React authority update are synchronous together;
+    // no await boundary exists where a replacement identity can slip between
+    // the guard and the mutation.
+    clearTokens();
+    setState({
+      user: null,
+      accessToken: null,
+      authenticated: false,
+      loading: false,
+      error: null,
+    });
+    return true;
+  };
+
+  /**
+   * Refresh the authenticated directory row without replacing credentials.
+   *
+   * Settings uses this after a self-update so role/name changes returned by
+   * the authentication strategy become the current identity authority. Keep
+   * it separate from `reAuthenticate`: a settings continuation belongs to one
+   * exact socket authority generation and must never start a refresh/login
+   * cycle whose tokens could be installed after that generation was replaced.
+   */
+  const refreshCurrentUserForAuthorityCycle = async (
+    shouldApply: () => boolean
+  ): Promise<boolean> => {
+    if (!shouldApply()) return false;
+
+    const accessToken = getStoredAccessToken();
+    if (!accessToken) return false;
+
+    const client = await createRestClient(getDaemonUrl());
+    if (!shouldApply() || getStoredAccessToken() !== accessToken) return false;
+
+    const result = await client.authenticate({
+      strategy: 'jwt',
+      accessToken,
+    });
+
+    // Check both the render/layout-invalidated authority operation and the
+    // exact credential snapshot. The latter closes the microtask window where
+    // another auth path has replaced storage but React has not committed the
+    // matching identity/authGeneration render yet.
+    if (!shouldApply() || getStoredAccessToken() !== accessToken) return false;
+
+    setState((previous) => {
+      if (!shouldApply() || getStoredAccessToken() !== accessToken) return previous;
+      noteAuthenticatedUser(result.user);
+      return {
+        user: result.user,
+        accessToken,
+        authenticated: true,
+        loading: false,
+        error: null,
+      };
+    });
+    return true;
+  };
+
   return {
     ...state,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
     login,
+    loginForAuthorityCycle,
     logout,
+    logoutForAuthorityCycle,
     reAuthenticate,
+    refreshCurrentUserForAuthorityCycle,
   };
 }

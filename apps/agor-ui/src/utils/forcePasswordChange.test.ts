@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { completeForcedPasswordChange, completeLocalPasswordChange } from './forcePasswordChange';
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
+}
+
 function makeClient(patch = vi.fn().mockResolvedValue({})) {
   return {
     service: vi.fn((name: string) => {
@@ -10,42 +16,99 @@ function makeClient(patch = vi.fn().mockResolvedValue({})) {
   } as unknown as Parameters<typeof completeForcedPasswordChange>[0]['client'];
 }
 
+function options(overrides: Partial<Parameters<typeof completeForcedPasswordChange>[0]> = {}) {
+  return {
+    client: makeClient(),
+    userId: 'user-a',
+    email: 'a@example.test',
+    newPassword: 'new-password-1234',
+    shouldApply: () => true,
+    reauthenticate: vi.fn().mockResolvedValue('signed-in' as const),
+    logout: vi.fn().mockResolvedValue(true),
+    ...overrides,
+  };
+}
+
 describe('completeForcedPasswordChange', () => {
-  it('patches the password then signs in with the new password', async () => {
+  it('patches then establishes the same exact authority cycle', async () => {
     const patch = vi.fn().mockResolvedValue({});
-    const login = vi.fn().mockResolvedValue(true);
-    const logout = vi.fn().mockResolvedValue(undefined);
-
-    const result = await completeForcedPasswordChange({
-      client: makeClient(patch),
-      userId: 'user-1',
-      email: 'person@example.test',
-      newPassword: 'new-password-1234',
-      login,
-      logout,
-    });
-
-    expect(result).toBe(true);
-    expect(patch).toHaveBeenCalledWith('user-1', { password: 'new-password-1234' });
-    expect(login).toHaveBeenCalledWith('person@example.test', 'new-password-1234');
+    const reauthenticate = vi.fn().mockResolvedValue('signed-in');
+    const logout = vi.fn().mockResolvedValue(true);
+    await expect(
+      completeForcedPasswordChange(options({ client: makeClient(patch), reauthenticate, logout }))
+    ).resolves.toBe(true);
+    expect(patch).toHaveBeenCalledWith('user-a', { password: 'new-password-1234' });
+    expect(reauthenticate).toHaveBeenCalledWith(
+      'a@example.test',
+      'new-password-1234',
+      expect.any(Function)
+    );
     expect(logout).not.toHaveBeenCalled();
   });
 
-  it('clears stale local state when the fresh sign-in fails', async () => {
-    const login = vi.fn().mockResolvedValue(false);
-    const logout = vi.fn().mockResolvedValue(undefined);
+  it('does not reauthenticate A when authority changes during the password patch', async () => {
+    const pendingPatch = deferred<Record<string, never>>();
+    let current = true;
+    const reauthenticate = vi.fn();
+    const logout = vi.fn();
+    const result = completeForcedPasswordChange(
+      options({
+        client: makeClient(vi.fn(() => pendingPatch.promise)),
+        shouldApply: () => current,
+        reauthenticate,
+        logout,
+      })
+    );
+    current = false;
+    pendingPatch.resolve({});
+    await expect(result).resolves.toBeNull();
+    expect(reauthenticate).not.toHaveBeenCalled();
+    expect(logout).not.toHaveBeenCalled();
+  });
 
-    const result = await completeForcedPasswordChange({
-      client: makeClient(),
-      userId: 'user-1',
-      email: 'person@example.test',
-      newPassword: 'new-password-1234',
-      login,
-      logout,
+  it('does not apply a delayed A relogin failure continuation or log out B', async () => {
+    const pendingLogin = deferred<'signed-in' | 'failed' | 'obsolete'>();
+    let current = true;
+    const logout = vi.fn().mockResolvedValue(true);
+    const result = completeForcedPasswordChange(
+      options({
+        shouldApply: () => current,
+        reauthenticate: vi.fn(() => pendingLogin.promise),
+        logout,
+      })
+    );
+    await Promise.resolve();
+    current = false;
+    pendingLogin.resolve('failed');
+    await expect(result).resolves.toBeNull();
+    expect(logout).not.toHaveBeenCalled();
+  });
+
+  it('accepts the guarded signed-in receipt when that exact install advances generation', async () => {
+    let current = true;
+    const logout = vi.fn();
+    const reauthenticate = vi.fn(async () => {
+      expect(current).toBe(true);
+      // Installing A's new tokens is the operation's intended terminal
+      // authority transition, so the old generation becomes stale here.
+      current = false;
+      return 'signed-in' as const;
     });
+    await expect(
+      completeForcedPasswordChange(options({ shouldApply: () => current, reauthenticate, logout }))
+    ).resolves.toBe(true);
+    expect(logout).not.toHaveBeenCalled();
+  });
 
-    expect(result).toBe(false);
-    expect(logout).toHaveBeenCalledTimes(1);
+  it('logs out only when relogin fails while the captured authority is still exact', async () => {
+    const logout = vi.fn().mockResolvedValue(true);
+    await expect(
+      completeForcedPasswordChange(
+        options({ reauthenticate: vi.fn().mockResolvedValue('failed'), logout })
+      )
+    ).resolves.toBe(false);
+    expect(logout).toHaveBeenCalledOnce();
+    expect(logout).toHaveBeenCalledWith(expect.any(Function));
   });
 });
 

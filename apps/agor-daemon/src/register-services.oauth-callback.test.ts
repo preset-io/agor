@@ -132,15 +132,13 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
-    expect(codeOnly).toMatch(/operation_id:\s*opts\.browserEvent\.operation_id/);
-    expect(codeOnly).toMatch(/auth_generation:\s*opts\.browserEvent\.auth_generation/);
-    expect(codeOnly).toMatch(/caller_user_id:\s*opts\.userId/);
+    expect(codeOnly).toMatch(/reservation_token:\s*opts\.browserReservation\.reservationToken/);
+    expect(codeOnly).toMatch(/caller_user_id:\s*opts\.browserReservation\.userId/);
+    expect(codeOnly).toMatch(/awaitToken\s*&&\s*opts\.browserReservation\s*&&\s*app\.io/);
     expect(codeOnly).toMatch(
-      /opts\.socketId\s*&&\s*opts\.userId\s*&&\s*opts\.browserEvent\s*&&\s*app\.io/
+      /app\.io\.local\.to\s*\(\s*opts\.browserReservation\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
     );
-    expect(codeOnly).toMatch(
-      /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
-    );
+    expect(codeOnly).toMatch(/assertOAuthBrowserReservationStillCurrent/);
     expect(codeOnly).not.toMatch(/app\.io\.emit\s*\(\s*['"]oauth:open_browser['"]/);
     expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
   });

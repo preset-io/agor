@@ -4,18 +4,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useOAuthBrowserEventAttempt } from './useOAuthBrowserEventAttempt';
 
-type BrowserListener = (event: Record<string, unknown>) => void;
+type BrowserListener = (event: Record<string, unknown> | null | undefined) => void;
 
 function createSocketClient() {
   const listeners = new Set<BrowserListener>();
+  let nextToken = 0;
+  const reserve = vi.fn(async () => ({
+    reservation_token: `server-reservation-${String(++nextToken).padStart(16, '0')}`,
+    expires_at: Date.now() + 60_000,
+  }));
   const io = {
     on: vi.fn((_event: string, listener: BrowserListener) => listeners.add(listener)),
     off: vi.fn((_event: string, listener: BrowserListener) => listeners.delete(listener)),
   };
   return {
-    client: { io } as unknown as AgorClient,
+    client: {
+      io,
+      service: (path: string) => {
+        if (path !== 'mcp-servers/oauth-browser-reservations') throw new Error(path);
+        return { create: reserve };
+      },
+    } as unknown as AgorClient,
     io,
-    emit: (event: Record<string, unknown>) => {
+    reserve,
+    emit: (event: Record<string, unknown> | null | undefined) => {
       for (const listener of [...listeners]) listener(event);
     },
     listenerCount: () => listeners.size,
@@ -35,44 +47,41 @@ function useHarness(client: AgorClient, userId: string, authGeneration: number, 
 describe('useOAuthBrowserEventAttempt', () => {
   const open = vi.fn();
 
-  beforeEach(() => {
-    vi.stubGlobal('open', open);
-  });
-
+  beforeEach(() => vi.stubGlobal('open', open));
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
-  it('opens only the exact caller/generation/operation once and removes the listener first', () => {
+  it('reserves server correlation and opens only the exact token/caller once', async () => {
     const socket = createSocketClient();
     const { result } = renderHook(() => useHarness(socket.client, 'admin-a', 7));
-    const attempt = result.current.begin();
+    const attempt = await act(() =>
+      result.current.begin({ operation: 'discover', mcpServerId: 'saved-server' })
+    );
+    expect(socket.reserve).toHaveBeenCalledWith({
+      operation: 'discover',
+      mcp_server_id: 'saved-server',
+    });
     expect(attempt).not.toBeNull();
     expect(socket.listenerCount()).toBe(1);
 
     act(() => {
+      socket.emit(null);
+      socket.emit(undefined);
       socket.emit({
         authUrl: 'https://provider.example/unrelated',
         attempt_id: 'attempt-wrong-operation',
-        operation_id: 'not-this-operation',
-        auth_generation: 7,
+        reservation_token: 'server-reservation-unrelated-0000',
         caller_user_id: 'admin-a',
       });
       socket.emit({
         authUrl: 'https://provider.example/wrong-user',
         attempt_id: 'attempt-wrong-user',
-        operation_id: attempt?.request.operation_id,
-        auth_generation: 7,
+        reservation_token: attempt?.request.reservation_token,
         caller_user_id: 'admin-b',
       });
-      socket.emit({
-        authUrl: 'https://provider.example/wrong-generation',
-        attempt_id: 'attempt-wrong-generation',
-        operation_id: attempt?.request.operation_id,
-        auth_generation: 8,
-        caller_user_id: 'admin-a',
-      });
+      socket.emit({ reservation_token: attempt?.request.reservation_token });
     });
     expect(open).not.toHaveBeenCalled();
     expect(socket.listenerCount()).toBe(1);
@@ -80,8 +89,7 @@ describe('useOAuthBrowserEventAttempt', () => {
     const matching = {
       authUrl: 'https://provider.example/authorize',
       attempt_id: 'attempt-a',
-      operation_id: attempt?.request.operation_id,
-      auth_generation: 7,
+      reservation_token: attempt?.request.reservation_token,
       caller_user_id: 'admin-a',
     };
     act(() => socket.emit(matching));
@@ -93,69 +101,63 @@ describe('useOAuthBrowserEventAttempt', () => {
       '_blank',
       'noopener,noreferrer'
     );
-
     act(() => socket.emit(matching));
     expect(open).toHaveBeenCalledOnce();
   });
 
-  it('discards a delayed A event after an in-place same-role A to B replacement', () => {
+  it('drops a reservation that resolves after A is replaced by same-role B', async () => {
     const socket = createSocketClient();
+    let release!: (value: { reservation_token: string; expires_at: number }) => void;
+    socket.reserve.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
     const rendered = renderHook(
       ({ userId, generation }) => useHarness(socket.client, userId, generation),
       { initialProps: { userId: 'admin-a', generation: 12 } }
     );
-    const attemptA = rendered.result.current.begin();
-    expect(socket.listenerCount()).toBe(1);
-
+    const pending = rendered.result.current.begin({ operation: 'discover' });
     rendered.rerender({ userId: 'admin-b', generation: 13 });
+    release({ reservation_token: 'server-reservation-delayed-000000', expires_at: Date.now() });
+    await expect(pending).resolves.toBeNull();
     expect(socket.listenerCount()).toBe(0);
-
-    act(() => {
-      socket.emit({
-        authUrl: 'https://provider.example/a-authorize',
-        attempt_id: 'attempt-a',
-        operation_id: attemptA?.request.operation_id,
-        auth_generation: 12,
-        caller_user_id: 'admin-a',
-      });
-    });
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('removes the listener in layout when the same identity loses authority', () => {
+  it('tears down delayed A events on identity, generation, and authority changes', async () => {
     const socket = createSocketClient();
     const rendered = renderHook(
-      ({ allowed }) => useHarness(socket.client, 'admin-a', 12, allowed),
-      { initialProps: { allowed: true } }
+      ({ userId, generation, allowed }) => useHarness(socket.client, userId, generation, allowed),
+      { initialProps: { userId: 'admin-a', generation: 12, allowed: true } }
     );
-    const attempt = rendered.result.current.begin();
+    const attemptA = await rendered.result.current.begin({ operation: 'discover' });
     expect(socket.listenerCount()).toBe(1);
-
-    rendered.rerender({ allowed: false });
+    rendered.rerender({ userId: 'admin-a', generation: 13, allowed: true });
     expect(socket.listenerCount()).toBe(0);
-    act(() => {
+    act(() =>
       socket.emit({
         authUrl: 'https://provider.example/a-authorize',
         attempt_id: 'attempt-a',
-        operation_id: attempt?.request.operation_id,
-        auth_generation: 12,
+        reservation_token: attemptA?.request.reservation_token,
         caller_user_id: 'admin-a',
-      });
-    });
+      })
+    );
     expect(open).not.toHaveBeenCalled();
+
+    const attemptB = await rendered.result.current.begin({ operation: 'discover' });
+    rendered.rerender({ userId: 'admin-b', generation: 14, allowed: true });
+    expect(socket.listenerCount()).toBe(0);
+    expect(attemptB).not.toBeNull();
+    rendered.rerender({ userId: 'admin-b', generation: 14, allowed: false });
+    expect(socket.listenerCount()).toBe(0);
   });
 
-  it('cleans up an abandoned request and all outstanding requests on unmount', () => {
+  it('cleans abandoned and outstanding reservations exactly once', async () => {
     const socket = createSocketClient();
     const rendered = renderHook(() => useHarness(socket.client, 'admin-a', 2));
-    const first = rendered.result.current.begin();
-    rendered.result.current.begin();
+    const first = await rendered.result.current.begin({ operation: 'discover' });
+    await rendered.result.current.begin({ operation: 'discover' });
     expect(socket.listenerCount()).toBe(2);
-
     first?.cleanup();
     first?.cleanup();
     expect(socket.listenerCount()).toBe(1);
-
     rendered.unmount();
     expect(socket.listenerCount()).toBe(0);
     expect(open).not.toHaveBeenCalled();

@@ -1,4 +1,6 @@
+import type { AgorClient } from '@agor-live/client';
 import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useOptionalConnectionState } from '@/contexts/ConnectionContext';
 
 interface AuthorityEpoch {
   parts: readonly unknown[] | null;
@@ -17,6 +19,41 @@ export interface AuthorityOperationGuard {
   begin: () => AuthorityOperation;
   /** Whether this rendered authority epoch may start an action at all. */
   isCurrent: () => boolean;
+}
+
+export interface AuthenticatedAuthorityScope {
+  /** Identity-stable key for erasing caller-private drafts only on identity/role change. */
+  identityKey: string | null;
+  /** Ready, generation-bound scope for async operations. Null fails closed. */
+  operationScope: readonly unknown[] | null;
+  connectionReady: boolean;
+  authGeneration: number;
+}
+
+/**
+ * Split caller identity lifecycle from socket authority lifecycle.
+ *
+ * Components erase drafts on `identityKey`, while guards consume
+ * `operationScope`; a same-user reconnect therefore preserves input but
+ * synchronously invalidates every older continuation. Independently mounted
+ * leaf surfaces have no ConnectionProvider, so their supplied identity is the
+ * explicit readiness contract and generation zero is used.
+ */
+export function useAuthenticatedAuthorityScope(
+  client: AgorClient | null,
+  identityKey: string | null
+): AuthenticatedAuthorityScope {
+  const connection = useOptionalConnectionState();
+  const connectionReady = connection
+    ? connection.connected && !connection.connecting
+    : identityKey !== null;
+  const authGeneration = connection?.authGeneration ?? 0;
+  const operationScope = useMemo(
+    () =>
+      identityKey && connectionReady ? ([identityKey, client, authGeneration] as const) : null,
+    [authGeneration, client, connectionReady, identityKey]
+  );
+  return { identityKey, operationScope, connectionReady, authGeneration };
 }
 
 function sameScope(left: readonly unknown[] | null, right: readonly unknown[] | null): boolean {

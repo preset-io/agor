@@ -237,6 +237,9 @@ export { canConfigureMCPServers as canConfigureMcpServers } from '@agor/core/mcp
  * - `oauth-status`, `oauth-attempt-status` — reads of the caller's own state.
  */
 export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
+  // Reserves the one-shot socket/caller binding required before a blocking
+  // flow may create provider/DCR side effects.
+  'mcp-servers/oauth-browser-reservations',
   // Mints an authorization URL and a pending flow against a saved server.
   'mcp-servers/oauth-start',
   // Exchanges the authorization code and persists the resulting token.

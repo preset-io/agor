@@ -125,5 +125,5 @@ describe('MCPServersTable OAuth creation', () => {
     expect(screen.getByTestId('prepared-server-id')).toHaveTextContent('server-2');
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showError).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 });

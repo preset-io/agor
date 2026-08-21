@@ -62,9 +62,12 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
-import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
@@ -252,8 +255,12 @@ export interface UserSettingsModalProps {
   user: User | null;
   client: AgorClient | null;
   currentUser?: User | null;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onRestartOnboarding?: () => void | Promise<void>;
+  onUpdate?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
   initialTab?: string;
 }
 
@@ -325,11 +332,18 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
   const canEditTarget =
     !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
-  const operationGuard = useAuthorityOperationGuard(
-    open && currentUser?.user_id && currentUser.role && user?.user_id
-      ? [currentUser.user_id, currentUser.role, user.user_id, client, canEditTarget]
-      : null
+  const callerIdentityKey = currentUser
+    ? `${currentUser.user_id}:${currentUser.role}:${user?.user_id ?? '__no-target__'}`
+    : null;
+  const callerAuthority = useAuthenticatedAuthorityScope(client, callerIdentityKey);
+  const operationScope = useMemo(
+    () =>
+      open && user?.user_id && callerAuthority.operationScope
+        ? [...callerAuthority.operationScope, user.user_id, canEditTarget]
+        : null,
+    [callerAuthority.operationScope, canEditTarget, open, user?.user_id]
   );
+  const operationGuard = useAuthorityOperationGuard(operationScope);
   const canAdministerTarget = isAdmin && canEditTarget;
   const canWriteIdentity = canEditTarget && identityWriteAvailable;
   const canWriteRole = canAdministerTarget && !isSelf && roleWriteAvailable;
@@ -442,6 +456,18 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   // Track which of those panels the user has edited so Save flushes ALL of them
   // — otherwise editing one panel and saving from another would drop the edit.
   const [dirtyMainPanels, setDirtyMainPanels] = useState<Set<string>>(() => new Set());
+
+  // Socket reauthentication preserves this same user's form drafts, but any
+  // spinner/result ownership belongs to the old authority generation. Release
+  // those locks synchronously so a stale finally block cannot wedge Settings.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setSavingModal(false);
+    setSavingToolField({});
+    setSavingEnvVars({});
+    setLoadingGroups(false);
+  }, [operationScope]);
+
   const markMainPanelDirty = useCallback((panel: string) => {
     setDirtyMainPanels((prev) => (prev.has(panel) ? prev : new Set(prev).add(panel)));
   }, []);
@@ -707,11 +733,15 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
           agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds')) as string[] | undefined)
       : user.default_mcp_server_ids;
     if (!operation.isCurrent()) return;
-    await onUpdate?.(user.user_id, {
-      default_agentic_config: nextConfig,
-      default_agentic_selection: nextSelections,
-      default_mcp_server_ids: defaultMcpServerIds ?? [],
-    });
+    await onUpdate?.(
+      user.user_id,
+      {
+        default_agentic_config: nextConfig,
+        default_agentic_selection: nextSelections,
+        default_mcp_server_ids: defaultMcpServerIds ?? [],
+      },
+      operation.isCurrent
+    );
     if (!operation.isCurrent()) return;
 
     setDirtyAgenticConfigTools((prev) => {
@@ -811,7 +841,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       if (preferencesTouched) updates.preferences = nextPreferences;
 
       if (!operation.isCurrent()) return false;
-      if (Object.keys(updates).length > 0) await onUpdate?.(user.user_id, updates);
+      if (Object.keys(updates).length > 0) {
+        await onUpdate?.(user.user_id, updates, operation.isCurrent);
+      }
       if (!operation.isCurrent()) return false;
       if (panels.has('security')) form.setFieldValue('password', '');
       if (panels.has('access')) {
@@ -841,7 +873,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
       const patch = buildAgenticToolCredentialPatch(tool, field, value);
-      await onUpdate?.(user.user_id, patch);
+      await onUpdate?.(user.user_id, patch, operation.isCurrent);
       if (!operation.isCurrent()) return;
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
@@ -872,7 +904,11 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
+      await onUpdate?.(
+        user.user_id,
+        buildAgenticToolCredentialPatch(tool, field, null),
+        operation.isCurrent
+      );
       if (!operation.isCurrent()) return;
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
@@ -899,7 +935,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     const next = { ...agenticAuthMethods, [tool]: method };
     setAgenticAuthMethods(next);
     try {
-      await onUpdate?.(user.user_id, { agentic_auth_methods: next });
+      await onUpdate?.(user.user_id, { agentic_auth_methods: next }, operation.isCurrent);
     } catch (error) {
       if (!operation.isCurrent()) return;
       setAgenticAuthMethods(user.agentic_auth_methods ?? {});
@@ -914,10 +950,14 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_vars: { [key]: value },
-        env_var_scopes: { [key]: scope },
-      });
+      await onUpdate?.(
+        user.user_id,
+        {
+          env_vars: { [key]: value },
+          env_var_scopes: { [key]: scope },
+        },
+        operation.isCurrent
+      );
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
         ...prev,
@@ -938,9 +978,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     if (!user || !operation.isCurrent()) return;
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_var_scopes: { [key]: scope },
-      });
+      await onUpdate?.(user.user_id, { env_var_scopes: { [key]: scope } }, operation.isCurrent);
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
         ...prev,
@@ -962,9 +1000,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_vars: { [key]: null },
-      });
+      await onUpdate?.(user.user_id, { env_vars: { [key]: null } }, operation.isCurrent);
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => {
         const updated = { ...prev };
@@ -1607,6 +1643,15 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     }
   };
 
+  const handleRestartOnboarding = async () => {
+    const operation = operationGuard.begin();
+    if (!onRestartOnboarding || !operation.isCurrent()) return;
+    await onRestartOnboarding(operation.isCurrent);
+    // The owner callback may close Settings/open another surface only while
+    // this exact authority cycle is still current; stale children do nothing.
+    if (!operation.isCurrent()) return;
+  };
+
   const renderProfilePanel = () => (
     <>
       <PanelHeader title={PANEL_META.profile.title} />
@@ -1691,7 +1736,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
             description="This clears saved wizard progress and opens onboarding again."
             okText="Restart"
             cancelText="Cancel"
-            onConfirm={onRestartOnboarding}
+            onConfirm={handleRestartOnboarding}
           >
             <Button>Restart onboarding</Button>
           </Popconfirm>
@@ -1846,6 +1891,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         }
       />
       <EnvVarEditor
+        identityKey={callerIdentityKey}
+        operationScope={operationScope}
         envVars={userEnvVars}
         onSave={handleEnvVarSave}
         onScopeChange={handleEnvVarScopeChange}
@@ -2078,6 +2125,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         ) : tool === 'codex' ? (
           <CodexAuthSettings
             client={client}
+            identityKey={callerIdentityKey}
+            operationScope={operationScope}
             authMethod={authMethod ?? 'api_key'}
             allowChatgptLogin={isSelf}
             apiKeyFields={allToolFields}
@@ -2114,6 +2163,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
               </FieldRow>
             )}
             <ApiKeyFields
+              identityKey={callerIdentityKey}
+              operationScope={operationScope}
               tool={tool}
               fields={toolFields}
               fieldStatus={fieldStatus}
@@ -2178,7 +2229,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
             </Typography.Paragraph>
             <PersonalApiKeysTab
               client={client}
-              authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+              identityKey={callerIdentityKey}
+              operationScope={operationScope}
             />
           </>
         );
@@ -2186,9 +2238,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         return (
           <>
             <PanelHeader title={PANEL_META.uploads.title} />
-            <UploadsTab
-              authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
-            />
+            <UploadsTab identityKey={callerIdentityKey} operationScope={operationScope} />
           </>
         );
       case 'access':
@@ -2441,7 +2491,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
  */
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = (props) => (
   <UserSettingsModalForIdentity
-    key={`${props.currentUser?.user_id ?? '__no-authenticated-user__'}:${props.user?.user_id ?? '__no-target-user__'}`}
+    key={`${props.currentUser?.user_id ?? '__no-authenticated-user__'}:${props.currentUser?.role ?? '__no-authenticated-role__'}:${props.user?.user_id ?? '__no-target-user__'}:${props.user?.role ?? '__no-target-role__'}`}
     {...props}
   />
 );
