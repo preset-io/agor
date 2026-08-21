@@ -154,6 +154,8 @@ const UrlStateBridge: React.FC<{
 export interface AppProps {
   client: AgorClient | null;
   user?: User | null;
+  authenticationGeneration?: number;
+  isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   connected?: boolean;
   connecting?: boolean;
   availableAgents: AgenticToolOption[];
@@ -293,6 +295,8 @@ const clampPercent = (value: number, min: number, max: number) =>
 export const App: React.FC<AppProps> = ({
   client,
   user,
+  authenticationGeneration = 0,
+  isAuthenticationGenerationCurrent,
   connected = false,
   connecting = false,
   availableAgents,
@@ -1432,6 +1436,8 @@ export const App: React.FC<AppProps> = ({
       <Layout style={{ height: '100vh' }}>
         <AppHeader
           user={user}
+          authenticationGeneration={authenticationGeneration}
+          isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
           presenceClient={client}
           currentUserId={user?.user_id}
           connected={connected}

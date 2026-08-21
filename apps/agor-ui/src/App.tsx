@@ -50,7 +50,11 @@ import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
-import type { NewSessionConfig, SessionCreationResult } from './domain/sessionCreation';
+import {
+  type NewSessionConfig,
+  runSessionCreationStages,
+  type SessionCreationResult,
+} from './domain/sessionCreation';
 import {
   IdentityContractState,
   useAgorClient,
@@ -335,34 +339,12 @@ function AppContent() {
     loading: authLoading,
     error: authError,
     accessToken,
+    authenticationGeneration,
+    isAuthenticationGenerationCurrent,
     login,
     logout,
     reAuthenticate,
   } = useAuth();
-
-  // A caller ID is not enough to fence work across logout/login: the same
-  // person can establish a new authenticated session while an operation from
-  // the old one is still pending. Explicit auth boundaries increment this ref
-  // synchronously; render-time principal changes cover launch/impersonation.
-  // Routine token refreshes retain both the principal and generation.
-  const authenticationGenerationRef = useRef(0);
-  const renderedAuthUserIdRef = useRef(user?.user_id ?? null);
-  const renderedAuthUserId = user?.user_id ?? null;
-  if (renderedAuthUserIdRef.current !== renderedAuthUserId) {
-    renderedAuthUserIdRef.current = renderedAuthUserId;
-    authenticationGenerationRef.current += 1;
-  }
-  const handleLogin = useCallback(
-    (email: string, password: string) => {
-      authenticationGenerationRef.current += 1;
-      return login(email, password);
-    },
-    [login]
-  );
-  const handleLogout = useCallback(() => {
-    authenticationGenerationRef.current += 1;
-    return logout();
-  }, [logout]);
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
@@ -568,7 +550,7 @@ function AppContent() {
   const onboardingWizardOpen =
     !!currentUser &&
     onboardingWizardOwner?.userId === currentUser.user_id &&
-    onboardingWizardOwner.authenticationGeneration === authenticationGenerationRef.current;
+    onboardingWizardOwner.authenticationGeneration === authenticationGeneration;
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
@@ -756,7 +738,7 @@ function AppContent() {
     ) {
       setOnboardingWizardOwner({
         userId: currentUser.user_id,
-        authenticationGeneration: authenticationGenerationRef.current,
+        authenticationGeneration,
       });
     }
   }, [
@@ -766,6 +748,7 @@ function AppContent() {
     workspaceSurfaceShouldRun,
     currentSurface.startsWorkspaceRuntime,
     loading,
+    authenticationGeneration,
   ]);
 
   // Handle wizard completion
@@ -780,10 +763,10 @@ function AppContent() {
     }
     if (!client) throw new Error('Not connected - try again when Agor reconnects.');
     const operationUserId = currentUser.user_id;
-    const operationAuthenticationGeneration = authenticationGenerationRef.current;
+    const operationAuthenticationGeneration = authenticationGeneration;
     const isCurrentUser = () =>
       currentUserIdRef.current === operationUserId &&
-      authenticationGenerationRef.current === operationAuthenticationGeneration;
+      isAuthenticationGenerationCurrent(operationAuthenticationGeneration);
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
@@ -847,7 +830,7 @@ function AppContent() {
       isCurrentUser: (expectedUserId) =>
         expectedUserId === operationUserId &&
         currentUserIdRef.current === expectedUserId &&
-        authenticationGenerationRef.current === operationAuthenticationGeneration,
+        isAuthenticationGenerationCurrent(operationAuthenticationGeneration),
       client,
       repoById: agorStore.getState().repoById,
       branchById: agorStore.getState().branchById,
@@ -997,7 +980,7 @@ function AppContent() {
   if (!authLoading && !authenticated && !hasTokens) {
     return (
       <LoginPage
-        onLogin={handleLogin}
+        onLogin={login}
         error={authError}
         externalLaunchLoginRedirectUrl={
           authConfig?.externalLaunch?.enabled
@@ -1097,47 +1080,53 @@ function AppContent() {
     }
 
     const operationUserId = currentUser.user_id;
+    const operationAuthenticationGeneration = authenticationGeneration;
     const operationAccessToken = accessToken;
+    const shouldContinue = () =>
+      currentUserIdRef.current === operationUserId &&
+      isAuthenticationGenerationCurrent(operationAuthenticationGeneration);
     const { attachmentFiles, ...sessionConfig } = config;
-    let session: Session;
-    try {
-      session = await createSession({ ...sessionConfig, branch_id });
-    } catch (error) {
+    const outcome = await runSessionCreationStages({
+      createSession: () => createSession({ ...sessionConfig, branch_id }),
+      onSessionCreated: (session) => {
+        sessionCreated(session);
+        showSuccess('Session created!');
+      },
+      initialPrompt: config.initialPrompt ?? '',
+      preparePrompt: attachmentFiles?.length
+        ? async (session, prompt) => {
+            const uploaded = await uploadFilesToSession({
+              sessionId: session.session_id,
+              daemonUrl: getDaemonUrl(),
+              files: attachmentFiles,
+              notifyAgent: false,
+              accessToken: operationAccessToken,
+            });
+            return buildPromptWithAttachments(prompt, uploaded.files);
+          }
+        : undefined,
+      initializeSession: (session, prompt) =>
+        client.sessions.initialize(session.session_id, {
+          expectedUserId: operationUserId,
+          mcpServerIds: config.mcpServerIds,
+          envVarNames: config.envVarNames,
+          prompt,
+          permissionMode: config.permissionMode,
+        }),
+      shouldContinue,
+    });
+
+    if (outcome.status === 'cancelled') return null;
+    if (outcome.status === 'create-failed') {
+      if (!shouldContinue()) return null;
       showError(
-        `Failed to create session: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to create session: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
       );
       return null;
     }
 
-    sessionCreated(session);
-    showSuccess('Session created!');
-
-    let prompt = config.initialPrompt ?? '';
-    try {
-      if (attachmentFiles?.length) {
-        const uploaded = await uploadFilesToSession({
-          sessionId: session.session_id,
-          daemonUrl: getDaemonUrl(),
-          files: attachmentFiles,
-          notifyAgent: false,
-          accessToken: operationAccessToken,
-        });
-        prompt = buildPromptWithAttachments(prompt, uploaded.files);
-      }
-
-      // The Feathers client can survive a logout/login. Never let a delayed
-      // operation continue under the newly authenticated caller.
-      if (currentUserIdRef.current !== operationUserId) return null;
-
-      await client.sessions.initialize(session.session_id, {
-        expectedUserId: operationUserId,
-        mcpServerIds: config.mcpServerIds,
-        envVarNames: config.envVarNames,
-        prompt,
-        permissionMode: config.permissionMode,
-      });
-
-      if (currentUserIdRef.current !== operationUserId) return null;
+    if (outcome.status === 'complete') {
+      if (!shouldContinue()) return null;
       if (isAgenticToolName(config.agent)) {
         void setPrimaryAgenticToolIfUnset(client, currentUser, config.agent).catch((error) => {
           console.warn(
@@ -1146,17 +1135,17 @@ function AppContent() {
           );
         });
       }
-      return { sessionId: session.session_id };
-    } catch (error) {
-      if (currentUserIdRef.current !== operationUserId) return null;
-      savePromptDraft(operationUserId, session.session_id, prompt);
-      showError(
-        `Session created, but it did not start: ${
-          error instanceof Error ? error.message : String(error)
-        }. Open the session to review its setup and retry the prompt.`
-      );
-      return { sessionId: session.session_id };
+      return { sessionId: outcome.session.session_id };
     }
+
+    if (!shouldContinue()) return null;
+    savePromptDraft(operationUserId, outcome.session.session_id, outcome.prompt);
+    showError(
+      `Session created, but it did not start: ${
+        outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+      }. Open the session to review its setup and retry the prompt.`
+    );
+    return { sessionId: outcome.session.session_id };
   };
 
   // Handle fork session
@@ -1282,7 +1271,7 @@ function AppContent() {
   const handleRestartOnboarding = async () => {
     if (!currentUser || !canRunOnboarding) return;
     const operationUserId = currentUser.user_id;
-    const operationAuthenticationGeneration = authenticationGenerationRef.current;
+    const operationAuthenticationGeneration = authenticationGeneration;
 
     const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
     delete preferences.onboarding;
@@ -1298,7 +1287,7 @@ function AppContent() {
 
     if (
       currentUserIdRef.current !== operationUserId ||
-      authenticationGenerationRef.current !== operationAuthenticationGeneration
+      !isAuthenticationGenerationCurrent(operationAuthenticationGeneration)
     ) {
       return;
     }
@@ -1332,8 +1321,8 @@ function AppContent() {
       userId,
       email: currentUser.email,
       newPassword,
-      login: handleLogin,
-      logout: handleLogout,
+      login,
+      logout,
     });
 
     showSuccess(
@@ -1856,7 +1845,7 @@ function AppContent() {
       client={client}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={handleLogout}
+      onLogout={logout}
     />
   );
 
@@ -1866,7 +1855,7 @@ function AppContent() {
       connected={connected}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={handleLogout}
+      onLogout={logout}
     />
   );
 
@@ -1875,7 +1864,7 @@ function AppContent() {
       client={client}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={handleLogout}
+      onLogout={logout}
     />
   );
 
@@ -1888,6 +1877,8 @@ function AppContent() {
     <AgorApp
       client={client}
       user={currentUser}
+      authenticationGeneration={authenticationGeneration}
+      isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
       connected={connected}
       connecting={connecting}
       availableAgents={AVAILABLE_AGENTS}
@@ -1956,7 +1947,7 @@ function AppContent() {
       onResolveComment={handleResolveComment}
       onToggleReaction={handleToggleReaction}
       onDeleteComment={handleDeleteComment}
-      onLogout={handleLogout}
+      onLogout={logout}
       onRetryConnection={retryConnection}
       instanceLabel={instanceConfig?.label}
       instanceDescription={instanceConfig?.description}
@@ -1975,7 +1966,7 @@ function AppContent() {
         open={!!currentUser?.must_change_password}
         user={currentUser}
         onChangePassword={handleForcePasswordChange}
-        onLogout={handleLogout}
+        onLogout={logout}
       />
 
       {/* Shared/current-user settings for lightweight surfaces. The full
@@ -2003,7 +1994,7 @@ function AppContent() {
             invalidate the old wizard and any pending completion work. */}
       <ConfigProvider theme={ONBOARDING_DARK_THEME}>
         <OnboardingWizard
-          key={`${currentUser?.user_id ?? '__anon__'}:${authenticationGenerationRef.current}:${onboardingWizardInstance}`}
+          key={`${currentUser?.user_id ?? '__anon__'}:${authenticationGeneration}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           user={currentUser}
@@ -2052,7 +2043,7 @@ function AppContent() {
                 onResolveComment={handleResolveComment}
                 onToggleReaction={handleToggleReaction}
                 onDeleteComment={handleDeleteComment}
-                onLogout={handleLogout}
+                onLogout={logout}
               />
             }
           />

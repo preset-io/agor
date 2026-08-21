@@ -203,6 +203,8 @@ function renderCompose(opts: {
   currentBoardId?: string;
   pathname?: string;
   currentUser?: User | null;
+  authenticationGeneration?: number;
+  isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   disabled?: boolean;
   onCreateSession?: (config: unknown, boardId: string) => Promise<SessionCreationResult | null>;
 }) {
@@ -211,20 +213,29 @@ function renderCompose(opts: {
     vi.fn().mockResolvedValue({
       sessionId: 'session-new',
     });
-  const result = render(
-    <MemoryRouter initialEntries={[opts.pathname ?? '/b/x/']}>
+  const client = makeClient(opts.primary);
+  const renderElement = (renderOpts: typeof opts) => (
+    <MemoryRouter initialEntries={[renderOpts.pathname ?? '/b/x/']}>
       <AntApp>
         <NavbarComposeButton
-          client={makeClient(opts.primary)}
-          currentUser={opts.currentUser ?? null}
-          currentBoardId={opts.currentBoardId ?? 'board-current'}
+          client={client}
+          currentUser={renderOpts.currentUser ?? null}
+          authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
+          isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
+          currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
           onCreateSession={onCreateSession as never}
-          disabled={opts.disabled}
+          disabled={renderOpts.disabled}
         />
       </AntApp>
     </MemoryRouter>
   );
-  return { onCreateSession, ...result };
+  const result = render(renderElement(opts));
+  return {
+    onCreateSession,
+    ...result,
+    rerenderCompose: (updates: Partial<typeof opts>) =>
+      result.rerender(renderElement({ ...opts, ...updates })),
+  };
 }
 
 function openPopover() {
@@ -455,6 +466,45 @@ describe('NavbarComposeButton', () => {
     });
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
   });
+
+  it.each([
+    ['a different caller', { user_id: 'user-b' }, 2],
+    ['the same caller in a new auth session', { user_id: 'user-a' }, 2],
+  ])(
+    'does not navigate when creation settles after %s takes ownership',
+    async (_case, nextUser, nextGeneration) => {
+      let liveAuthenticationGeneration = 1;
+      let resolveCreation: ((result: SessionCreationResult) => void) | undefined;
+      const onCreateSession = vi.fn(
+        () =>
+          new Promise<SessionCreationResult>((resolve) => {
+            resolveCreation = resolve;
+          })
+      );
+      const { rerenderCompose } = renderCompose({
+        primary: primaryBranch,
+        currentUser: { user_id: 'user-a' } as User,
+        authenticationGeneration: 1,
+        isAuthenticationGenerationCurrent: (generation) =>
+          generation === liveAuthenticationGeneration,
+        onCreateSession,
+      });
+      openPopover();
+      fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'slow' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+      await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+
+      liveAuthenticationGeneration = nextGeneration;
+      rerenderCompose({
+        currentUser: nextUser as User,
+        authenticationGeneration: nextGeneration,
+      });
+      resolveCreation?.({ sessionId: 'session-stale' });
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(goToSession).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ['home', '/'],

@@ -196,4 +196,42 @@ describe('PrimaryTeammatePicker', () => {
     expect(onPicked).not.toHaveBeenCalled();
     expect(screen.queryByText(/Primary assistant set to/)).not.toBeInTheDocument();
   });
+
+  it('discards a delayed pick completion when the picker unmounts', async () => {
+    const grace = teammate('branch-2', 'Grace');
+    seedStore([grace]);
+    let resolvePick!: (branch: Branch) => void;
+    const setPrimaryTeammate = vi.fn(
+      () =>
+        new Promise<Branch>((resolve) => {
+          resolvePick = resolve;
+        })
+    );
+    const client = {
+      service: () => ({
+        getPrimaryTeammate: vi.fn().mockResolvedValue(null),
+        getPrimaryTeammateCandidates: vi.fn().mockResolvedValue([grace]),
+        setPrimaryTeammate,
+      }),
+    } as unknown as AgorClient;
+    const onPicked = vi.fn();
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} onPicked={onPicked} />
+      </AntApp>
+    );
+
+    await screen.findByText(/No primary assistant set/);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByText('Grace'));
+    await waitFor(() => expect(setPrimaryTeammate).toHaveBeenCalledTimes(1));
+
+    view.unmount();
+    await act(async () => {
+      resolvePick(grace);
+      await Promise.resolve();
+    });
+
+    expect(onPicked).not.toHaveBeenCalled();
+  });
 });

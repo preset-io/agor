@@ -32,6 +32,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
@@ -56,6 +57,8 @@ type SendMode = 'open' | 'background';
 export interface NavbarComposeButtonProps {
   client: AgorClient | null;
   currentUser?: User | null;
+  authenticationGeneration?: number;
+  isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   /** The board currently in view, or '' on a non-board surface (home/knowledge). */
   currentBoardId?: string;
   onCreateSession?: (
@@ -88,6 +91,8 @@ function teammateEmoji(branch: Branch): string | undefined {
 export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   client,
   currentUser,
+  authenticationGeneration = 0,
+  isAuthenticationGenerationCurrent,
   currentBoardId,
   onCreateSession,
   disabled = false,
@@ -97,6 +102,10 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [form] = Form.useForm();
   const navigation = useAppNavigation();
   const location = useLocation();
+  const sessionCreationGuard = useIdentityGuardedAsync([
+    currentUser?.user_id,
+    authenticationGeneration,
+  ]);
 
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
@@ -178,7 +187,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, client, currentUser?.user_id]);
+  }, [open, client, currentUser?.user_id, authenticationGeneration]);
 
   // Seed the chip-row form from the user's default on open. Only keyed on `open`
   // so a live user refresh can't wipe edits made while the popover is up.
@@ -293,13 +302,19 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const doSend = async (mode: SendMode, branch: Branch) => {
     if (!onCreateSession) return;
+    const operationAuthenticationGeneration = authenticationGeneration;
     setSubmitting(mode);
     try {
-      const outcome = await onCreateSession(
-        buildConfig(branch),
-        branch.board_id ?? currentBoardId ?? ''
+      const outcome = await sessionCreationGuard.run(() =>
+        onCreateSession(buildConfig(branch), branch.board_id ?? currentBoardId ?? '')
       );
       if (!outcome) return; // onCreateSession already surfaced the failure
+      if (
+        isAuthenticationGenerationCurrent &&
+        !isAuthenticationGenerationCurrent(operationAuthenticationGeneration)
+      ) {
+        return;
+      }
       const { sessionId } = outcome;
       finishSuccessfulSend(mode, branch, sessionId);
     } finally {
@@ -438,9 +453,10 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                 </Typography.Text>
               </div>
               <PrimaryTeammatePicker
-                key={currentUser?.user_id ?? 'anonymous'}
+                key={`${currentUser?.user_id ?? 'anonymous'}:${authenticationGeneration}`}
                 client={client}
                 currentUserId={currentUser?.user_id}
+                authenticationGeneration={authenticationGeneration}
                 compact
                 disabled={disabled}
                 onPicked={handlePicked}

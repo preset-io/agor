@@ -3,7 +3,8 @@ import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
 
@@ -11,6 +12,8 @@ interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
   /** Caller identity; changing it invalidates all caller-scoped cached data. */
   currentUserId?: UserID;
+  /** Distinguishes logout/login as the same caller. */
+  authenticationGeneration?: number;
   /** Drop the heading/description chrome for embedding in a tight surface (e.g. a popover). */
   compact?: boolean;
   disabled?: boolean;
@@ -49,6 +52,7 @@ function teammateContext(
 export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   client,
   currentUserId,
+  authenticationGeneration = 0,
   compact = false,
   disabled = false,
   onPicked,
@@ -62,18 +66,9 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const mutationGenerationRef = useRef(0);
-  const activeUserIdRef = useRef(currentUserId);
-  if (activeUserIdRef.current !== currentUserId) {
-    activeUserIdRef.current = currentUserId;
-    mutationGenerationRef.current += 1;
-  }
-
-  useEffect(
-    () => () => {
-      mutationGenerationRef.current += 1;
-    },
-    []
+  const mutationGuard = useIdentityGuardedAsync(
+    [client, currentUserId, authenticationGeneration],
+    () => setSaving(false)
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: caller identity invalidates caller-scoped RPC results even when the client instance is reused
@@ -135,29 +130,23 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
 
   const handleChange = async (branchId: string) => {
     if (!client || !currentUserId) return;
-    const operationGeneration = mutationGenerationRef.current;
     const operationUserId = currentUserId;
-    const isCurrentOperation = () =>
-      mutationGenerationRef.current === operationGeneration &&
-      activeUserIdRef.current === operationUserId;
     setSaving(true);
     try {
-      const branch = await client
-        .service('users')
-        .setPrimaryTeammate({ branchId, expectedUserId: operationUserId });
-      if (!isCurrentOperation()) return;
+      const branch = await mutationGuard.run(() =>
+        client.service('users').setPrimaryTeammate({ branchId, expectedUserId: operationUserId })
+      );
       setCurrent(branch);
       if (branch) {
         message.success(`Primary assistant set to ${teammateLabel(branch)}`);
         onPicked?.(branch);
       }
     } catch (error) {
-      if (!isCurrentOperation()) return;
       message.error(
         `Failed to update primary assistant: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      if (isCurrentOperation()) setSaving(false);
+      setSaving(false);
     }
   };
 

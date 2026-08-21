@@ -29,6 +29,8 @@ const { Header } = Layout;
 
 export interface AppHeaderProps {
   user?: User | null;
+  authenticationGeneration?: number;
+  isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   presenceClient?: AgorClient | null;
   currentUserId?: string;
   /** Demo/screenshot-only fixture: render static presence while keeping AppHeader chrome. */
@@ -119,6 +121,8 @@ function isPlainLeftClick(event: React.MouseEvent): boolean {
 
 const AppHeaderInner: React.FC<AppHeaderProps> = ({
   user,
+  authenticationGeneration = 0,
+  isAuthenticationGenerationCurrent,
   presenceClient = null,
   currentUserId,
   staticActiveUsers,
@@ -300,9 +304,11 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         />
         {onCreateSession && hasMinimumRole(user?.role, ROLES.MEMBER) && (
           <NavbarComposeButton
-            key={user?.user_id ?? 'anonymous'}
+            key={`${user?.user_id ?? 'anonymous'}:${authenticationGeneration}`}
             client={presenceClient}
             currentUser={user}
+            authenticationGeneration={authenticationGeneration}
+            isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
             disabled={mutationDisabled}

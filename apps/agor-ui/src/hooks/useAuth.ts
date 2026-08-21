@@ -7,7 +7,7 @@
 
 import type { User } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
@@ -41,6 +41,9 @@ interface AuthState {
 }
 
 interface UseAuthReturn extends AuthState {
+  /** Monotonic owner for caller-scoped async work. Token refresh does not advance it. */
+  authenticationGeneration: number;
+  isAuthenticationGenerationCurrent: (generation: number) => boolean;
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   reAuthenticate: () => Promise<void>;
@@ -79,11 +82,47 @@ export function useAuth(): UseAuthReturn {
     loading: true,
     error: null,
   });
+  const authenticationGenerationRef = useRef(0);
+  const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
+  const activeUserIdRef = useRef<string | null>(null);
+
+  const advanceAuthenticationGeneration = useCallback(() => {
+    authenticationGenerationRef.current += 1;
+    setAuthenticationGeneration(authenticationGenerationRef.current);
+  }, []);
+
+  const invalidateAuthentication = useCallback(() => {
+    activeUserIdRef.current = null;
+    advanceAuthenticationGeneration();
+  }, [advanceAuthenticationGeneration]);
+
+  const noteAuthenticatedUser = useCallback(
+    (user: User) => {
+      const nextUserId = user.user_id;
+      if (activeUserIdRef.current && activeUserIdRef.current !== nextUserId) {
+        advanceAuthenticationGeneration();
+      }
+      activeUserIdRef.current = nextUserId;
+    },
+    [advanceAuthenticationGeneration]
+  );
+
+  const noteUnauthenticated = useCallback(() => {
+    if (activeUserIdRef.current) {
+      invalidateAuthentication();
+    }
+  }, [invalidateAuthentication]);
+
+  const isAuthenticationGenerationCurrent = useCallback(
+    (generation: number) => authenticationGenerationRef.current === generation,
+    []
+  );
 
   /**
    * Re-authenticate using stored token (with automatic refresh)
    * Retries up to 3 times to handle daemon restarts gracefully
    */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
     setState((prev) => ({ ...prev, loading: true, error: null }));
@@ -110,6 +149,8 @@ export function useAuth(): UseAuthReturn {
             accessToken: storedAccessToken,
           });
 
+          noteAuthenticatedUser(result.user);
+
           setState({
             user: result.user,
             accessToken: result.accessToken,
@@ -129,6 +170,8 @@ export function useAuth(): UseAuthReturn {
       if (storedRefreshToken) {
         try {
           const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
+
+          noteAuthenticatedUser(refreshResult.user);
 
           setState({
             user: refreshResult.user,
@@ -165,6 +208,7 @@ export function useAuth(): UseAuthReturn {
         try {
           const result = await exchangeLaunchCode(client, activeLaunchCode);
           resetRefreshFailureState();
+          noteAuthenticatedUser(result.user);
 
           setState({
             user: result.user,
@@ -194,6 +238,7 @@ export function useAuth(): UseAuthReturn {
       }
 
       if (!hasStoredTokens) {
+        noteUnauthenticated();
         setState({
           user: null,
           accessToken: null,
@@ -210,6 +255,7 @@ export function useAuth(): UseAuthReturn {
 
       // Both tokens invalid or expired — expected when refresh token hits its TTL.
       clearTokens();
+      noteUnauthenticated();
       setState({
         user: null,
         accessToken: null,
@@ -256,6 +302,7 @@ export function useAuth(): UseAuthReturn {
         }
       }
 
+      noteUnauthenticated();
       setState({
         user: null,
         accessToken: null,
@@ -387,6 +434,7 @@ export function useAuth(): UseAuthReturn {
         } else {
           // Definite refresh/auth failure: token refresh failed, user must login again.
           clearTokens();
+          noteUnauthenticated();
           setState({
             user: null,
             accessToken: null,
@@ -399,7 +447,7 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken]);
+  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
 
   // When the single-flight refresh helper completes from a non-React path
   // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
@@ -409,6 +457,7 @@ export function useAuth(): UseAuthReturn {
     const handleRefreshed = (event: Event) => {
       const detail = (event as CustomEvent<RefreshResult>).detail;
       if (!detail) return;
+      noteAuthenticatedUser(detail.user);
       setState((prev) => ({
         ...prev,
         accessToken: detail.accessToken,
@@ -419,7 +468,7 @@ export function useAuth(): UseAuthReturn {
 
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
     return () => window.removeEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
-  }, []);
+  }, [noteAuthenticatedUser]);
 
   // When the single-flight refresh helper determines the refresh token is
   // permanently dead (e.g. the server returned 401 / NotAuthenticated from
@@ -430,6 +479,7 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     const handleUnrecoverable = () => {
       clearTokens();
+      noteUnauthenticated();
       setState({
         user: null,
         accessToken: null,
@@ -442,12 +492,15 @@ export function useAuth(): UseAuthReturn {
     window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
     return () =>
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
-  }, []);
+  }, [noteUnauthenticated]);
 
   /**
    * Login with email and password
    */
   const login = async (email: string, password: string): Promise<boolean> => {
+    // Invalidate caller-owned work synchronously, including a same-user
+    // logout/login or explicit re-login.
+    invalidateAuthentication();
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     try {
@@ -467,6 +520,7 @@ export function useAuth(): UseAuthReturn {
       // previous login so the new refresh token isn't rejected before it
       // ever gets tried.
       resetRefreshFailureState();
+      noteAuthenticatedUser(result.user);
 
       setState({
         user: result.user,
@@ -493,6 +547,7 @@ export function useAuth(): UseAuthReturn {
   };
 
   const logout = async () => {
+    invalidateAuthentication();
     clearTokens();
     setState({
       user: null,
@@ -505,6 +560,8 @@ export function useAuth(): UseAuthReturn {
 
   return {
     ...state,
+    authenticationGeneration,
+    isAuthenticationGenerationCurrent,
     login,
     logout,
     reAuthenticate,

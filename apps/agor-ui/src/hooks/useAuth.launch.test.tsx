@@ -152,6 +152,41 @@ describe('useAuth launch-code fallback', () => {
     }
   });
 
+  it('advances auth generation for explicit login/logout but not same-user token refresh', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const user = { user_id: 'u1', email: 'person@example.test' };
+    authenticate.mockResolvedValue({
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      user,
+    });
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const initialGeneration = result.current.authenticationGeneration;
+
+    await act(async () => {
+      await result.current.login('person@example.test', 'password-123');
+    });
+    const loggedInGeneration = result.current.authenticationGeneration;
+    expect(loggedInGeneration).toBeGreaterThan(initialGeneration);
+    expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: { accessToken: 'refreshed-access', refreshToken: 'new-refresh', user },
+        })
+      );
+    });
+    expect(result.current.authenticationGeneration).toBe(loggedInGeneration);
+
+    await act(async () => {
+      await result.current.logout();
+    });
+    expect(result.current.authenticationGeneration).toBeGreaterThan(loggedInGeneration);
+    expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(false);
+  });
+
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {
     window.history.replaceState({}, '', '/ui/');
     localStorage.setItem(ACCESS_TOKEN_KEY, 'stored-access');
