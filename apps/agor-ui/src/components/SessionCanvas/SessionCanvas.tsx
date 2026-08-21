@@ -52,7 +52,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
-import { shortId } from '@agor-live/client';
+import { boardCommentZoneParentObjectKey, shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
@@ -1284,7 +1284,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           if (rel.parent_type === 'zone') {
             // Parent is a zone - validate zone exists
             // Note: rel.parent_id is stored without 'zone-' prefix, but board.objects keys have it
-            const zoneKey = `zone-${rel.parent_id}`;
+            const zoneKey = boardCommentZoneParentObjectKey(rel.parent_id);
             const zone = board?.objects?.[zoneKey];
             if (zone?.type === 'zone') {
               const info = getZoneParentInfo(rel.parent_id, board ?? undefined);
@@ -2113,7 +2113,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             for (const { comment, position, parentId, parentType } of commentUpdates) {
               const reactFlowParentId =
                 parentId && parentType === 'zone'
-                  ? `zone-${parentId}`
+                  ? boardCommentZoneParentObjectKey(parentId)
                   : parentId && parentType === 'branch'
                     ? parentId
                     : undefined;
