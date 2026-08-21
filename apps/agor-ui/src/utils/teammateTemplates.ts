@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { AVATAR_PALETTE } from './avatarPalette';
+import type { OnboardingGoalId } from './onboardingGoals';
 
 /**
  * Canonical teammate starter templates.
@@ -58,11 +59,11 @@ export interface TeammateTemplate {
  * specific entry of the shared avatar palette (AVATAR_PALETTE) — reused, never
  * invented — so categories read in the same muted family as user avatars.
  */
-export const TEMPLATE_CATEGORIES: TeammateCategory[] = [
+export const TEMPLATE_CATEGORIES = [
   { id: 'grow', label: 'Grow', color: AVATAR_PALETTE[2] }, // sage
   { id: 'build', label: 'Build', color: AVATAR_PALETTE[6] }, // dusty blue
   { id: 'operate', label: 'Operate', color: AVATAR_PALETTE[5] }, // warm sand
-];
+] as const satisfies readonly TeammateCategory[];
 
 /** The full category record (id, label, color) for an id, or undefined. */
 export function getCategory(id?: TeammateCategoryId): TeammateCategory | undefined {
@@ -77,7 +78,7 @@ export function getCategoryColor(id?: TeammateCategoryId): string | undefined {
 /** The blank starter's id — selecting it means "no template" (repo default branch). */
 export const BLANK_TEMPLATE_ID = 'blank';
 
-export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
+export const TEAMMATE_TEMPLATES = [
   {
     id: 'competitive-analyst',
     title: 'Competitive Analyst',
@@ -156,7 +157,10 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
     emoji: '🛠️',
     sourceBranch: 'template/builder',
   },
-];
+] as const satisfies readonly TeammateTemplate[];
+
+/** Stable source-template identifiers derived from the canonical definitions. */
+export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
  * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
@@ -164,7 +168,7 @@ export const TEAMMATE_TEMPLATES: TeammateTemplate[] = [
  * `sourceBranch` is the framework repo default; the wiring resolves it to the
  * repo's own default branch rather than forcing a literal.
  */
-export const BLANK_TEMPLATE: TeammateTemplate = {
+export const BLANK_TEMPLATE = {
   id: BLANK_TEMPLATE_ID,
   title: 'Start blank',
   description:
@@ -172,12 +176,15 @@ export const BLANK_TEMPLATE: TeammateTemplate = {
   icon: PlusOutlined,
   emoji: '',
   sourceBranch: 'main',
-};
+} as const satisfies TeammateTemplate;
+
+export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_ID;
 
 /** Every card shown in the gallery: all templates plus the blank starter. */
-export const TEAMMATE_GALLERY_CARDS: TeammateTemplate[] = [...TEAMMATE_TEMPLATES, BLANK_TEMPLATE];
+export const TEAMMATE_GALLERY_CARDS = [...TEAMMATE_TEMPLATES, BLANK_TEMPLATE] as const;
+export type TeammateGalleryCard = (typeof TEAMMATE_GALLERY_CARDS)[number];
 
-export function getTeammateTemplate(id?: string | null): TeammateTemplate | undefined {
+export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | undefined {
   return id ? TEAMMATE_GALLERY_CARDS.find((template) => template.id === id) : undefined;
 }
 
@@ -190,7 +197,11 @@ export function getTeammateTemplate(id?: string | null): TeammateTemplate | unde
  */
 export function resolveTemplateSourceBranch(id?: string | null): string | undefined {
   if (!id || id === BLANK_TEMPLATE_ID) return undefined;
-  return getTeammateTemplate(id)?.sourceBranch;
+  const template = getTeammateTemplate(id);
+  if (!template) {
+    throw new Error(`Unknown teammate template id: ${id}`);
+  }
+  return template.sourceBranch;
 }
 
 /**
@@ -198,14 +209,18 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
  * ids come from ONBOARDING_GOALS (onboardingGoals.ts). A goal that maps to no
  * template lists []. This is the single source of truth for recommendations.
  */
-export const GOAL_TEMPLATE_RECS: Record<string, string[]> = {
+export const GOAL_TEMPLATE_RECS = {
   'personal-teammate': ['chief-of-staff'],
   'status-updates': ['product-manager'],
   'ship-without-busywork': ['product-manager'],
   'team-teammate': ['product-manager'],
   'hand-off-build': ['builder'],
   'dig-into-anything': ['competitive-analyst', 'financial-analyst'],
-};
+} as const satisfies Record<OnboardingGoalId, readonly TeammateTemplateId[]>;
+
+function isOnboardingGoalId(id: string): id is OnboardingGoalId {
+  return Object.hasOwn(GOAL_TEMPLATE_RECS, id);
+}
 
 /**
  * Templates to badge "Recommended" for the selected goals (max 2).
@@ -217,12 +232,10 @@ export const GOAL_TEMPLATE_RECS: Record<string, string[]> = {
  *   deduped and capped at 2.
  * Unknown goal ids and templates that don't exist are dropped.
  */
-export function recommendedTemplateIds(goals: string[]): string[] {
-  const recLists = goals
-    .map((id) => GOAL_TEMPLATE_RECS[id])
-    .filter((recs): recs is string[] => Array.isArray(recs));
+export function recommendedTemplateIds(goals: readonly string[]): TeammateTemplateId[] {
+  const recLists = goals.filter(isOnboardingGoalId).map((id) => GOAL_TEMPLATE_RECS[id]);
 
-  let candidateIds: string[];
+  let candidateIds: readonly TeammateTemplateId[];
   if (recLists.length === 0) {
     candidateIds = [];
   } else if (recLists.length === 1) {
@@ -232,7 +245,7 @@ export function recommendedTemplateIds(goals: string[]): string[] {
   }
 
   const seen = new Set<string>();
-  const result: string[] = [];
+  const result: TeammateTemplateId[] = [];
   for (const id of candidateIds) {
     if (result.length >= 2 || !id || seen.has(id) || !getTeammateTemplate(id)) continue;
     seen.add(id);
@@ -252,7 +265,10 @@ export type GalleryFilter = 'all' | TeammateCategoryId;
  *
  * Ordering lives here (not in the component) so it's a single, unit-tested rule.
  */
-export function galleryCardsForFilter(goals: string[], filter: GalleryFilter): TeammateTemplate[] {
+export function galleryCardsForFilter(
+  goals: readonly string[],
+  filter: GalleryFilter
+): readonly TeammateGalleryCard[] {
   if (filter !== 'all') {
     // A specific category: default order, blank starter excluded.
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
@@ -261,7 +277,7 @@ export function galleryCardsForFilter(goals: string[], filter: GalleryFilter): T
   // All: recommended first, then the remaining templates in default order, then blank.
   const recommendedCards = recommendedTemplateIds(goals)
     .map((id) => getTeammateTemplate(id))
-    .filter((template): template is TeammateTemplate => Boolean(template));
+    .filter((template): template is TeammateGalleryCard => Boolean(template));
   const recommendedIds = new Set(recommendedCards.map((template) => template.id));
   const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
   return [...recommendedCards, ...rest, BLANK_TEMPLATE];

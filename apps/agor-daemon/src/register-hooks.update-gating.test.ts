@@ -255,6 +255,15 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
       });
     });
 
+    it('retains SQL board visibility scoping for viewer board-object reads', async () => {
+      for (const method of ['find', 'get']) {
+        const context = await runCapturedHooks(captured, 'board-objects', method, 'viewer');
+        expect(context.params).toMatchObject({
+          _agorSqlBoardAccessUserId: '00000000-0000-7000-8000-0000000000ff',
+        });
+      }
+    });
+
     it('retains SQL session visibility scoping for viewer MCP assignment finds', async () => {
       const context = await runCapturedHooks(captured, 'session-mcp-servers', 'find', 'viewer');
       expect(context.params).toMatchObject({

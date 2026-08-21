@@ -1,2 +1,10 @@
-export type { TeammateGalleryProps } from './TeammateGallery';
-export { TeammateGallery } from './TeammateGallery';
+export type {
+  TeammateGalleryCardsProps,
+  TeammateGalleryFiltersProps,
+  TeammateGalleryProps,
+} from './TeammateGallery';
+export {
+  TeammateGallery,
+  TeammateGalleryCards,
+  TeammateGalleryFilters,
+} from './TeammateGallery';

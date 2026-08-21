@@ -16,7 +16,10 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     conditions: ['source'],
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: { '@': path.resolve(import.meta.dirname, './src') },
+  },
+  optimizeDeps: {
+    include: ['antd/es/color-picker/color'],
   },
   test: {
     globals: true,

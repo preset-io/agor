@@ -35,14 +35,14 @@ export interface OnboardingIntegrationRecommendation {
   featured?: boolean;
 }
 
-export interface OnboardingGoal {
+interface OnboardingGoalDefinition {
   id: string;
   title: string;
   description: string;
   /** antd icon rendered as the goal card's subtle accent tile (no category color). */
   icon: React.ComponentType<Partial<AntdIconProps>>;
   /** Recommended tool/connection ids, in priority order. */
-  integrationRecs: string[];
+  integrationRecs: readonly string[];
   /** One line telling the first teammate session what this user wants and how to open. */
   bootstrapLine: string;
 }
@@ -146,7 +146,7 @@ export const DEFAULT_INTEGRATION_REC_IDS = ['slack', 'github', 'linear', 'notion
  * Descriptions must only promise capabilities supported by today's connector
  * set; future inbox/news support is intentionally not advertised here.
  */
-export const ONBOARDING_GOALS: OnboardingGoal[] = [
+export const ONBOARDING_GOALS = [
   {
     id: 'personal-teammate',
     title: 'Get a personal teammate',
@@ -201,7 +201,11 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     bootstrapLine:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
   },
-];
+] as const satisfies readonly OnboardingGoalDefinition[];
+
+/** Stable persisted identifiers derived from the canonical goal definitions. */
+export type OnboardingGoalId = (typeof ONBOARDING_GOALS)[number]['id'];
+export type OnboardingGoal = (typeof ONBOARDING_GOALS)[number];
 
 /** Max goals a user may select in onboarding. */
 export const MAX_ONBOARDING_GOALS = 2;
@@ -253,7 +257,7 @@ export function findOnboardingGoal(id?: string | null): OnboardingGoal | undefin
   return id ? ONBOARDING_GOALS.find((goal) => goal.id === id) : undefined;
 }
 
-function resolveRecs(ids: string[]): OnboardingIntegrationRecommendation[] {
+function resolveRecs(ids: readonly string[]): OnboardingIntegrationRecommendation[] {
   return ids
     .map((id) => ONBOARDING_INTEGRATION_RECOMMENDATIONS[id])
     .filter((rec): rec is OnboardingIntegrationRecommendation => !!rec);
@@ -279,7 +283,7 @@ export function mergeGoalIntegrationRecs(goalIds: string[]): OnboardingIntegrati
   if (goals.length === 0) {
     mergedIds = DEFAULT_INTEGRATION_REC_IDS;
   } else if (goals.length === 1) {
-    mergedIds = goals[0].integrationRecs;
+    mergedIds = [...goals[0].integrationRecs];
   } else {
     const [primary, secondary] = goals;
     const seen = new Set<string>();

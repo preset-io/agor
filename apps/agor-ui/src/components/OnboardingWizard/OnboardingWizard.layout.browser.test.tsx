@@ -11,7 +11,7 @@
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
 import type { User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -70,29 +70,29 @@ function renderWizardAt(initialStep: WizardStep) {
     onUpdateUser: vi.fn(async () => undefined),
   } as unknown as ComponentProps<typeof OnboardingWizard>;
   return render(
-    <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm }}>
+    <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { motion: false } }}>
       <OnboardingWizard {...props} />
     </ConfigProvider>
   );
 }
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 afterEach(() => {
-  document.body.innerHTML = '';
+  cleanup();
+  agorStore.setState({ ...EMPTY_MAPS });
 });
 
 describe('OnboardingWizard layout (real browser)', () => {
   it('lays the step-2 teammate gallery out in exactly three columns at the widened modal', async () => {
     renderWizardAt('workspace');
-    // Let the antd Modal portal + fonts/layout settle.
-    await wait(300);
-
-    const grid = document.querySelector(
-      'fieldset[aria-label="Teammate template"]'
-    ) as HTMLElement | null;
-    expect(grid, 'the card grid should exist').toBeTruthy();
-    if (!grid) return;
+    const grid = await waitFor(() => {
+      const element = document.querySelector(
+        'fieldset[aria-label="Teammate template"]'
+      ) as HTMLElement | null;
+      expect(element, 'the card grid should exist').toBeTruthy();
+      return element as HTMLElement;
+    });
 
     // Chromium can preserve `repeat(auto-fit, minmax(...))` in computed style
     // at narrow viewports. Count the cards sharing the first rendered row
@@ -109,7 +109,7 @@ describe('OnboardingWizard layout (real browser)', () => {
 
   it('renders every step-1 goal card title on a single line', async () => {
     renderWizardAt('goals');
-    await wait(300);
+    await screen.findByText('Get a personal teammate');
 
     const cards = Array.from(document.querySelectorAll('button.onb-card')) as HTMLElement[];
     expect(cards.length, 'the six goal cards should render').toBe(6);
@@ -133,7 +133,7 @@ describe('OnboardingWizard layout (real browser)', () => {
   it('fits all six step-1 goal cards without internal scroll, clear of the footer', async () => {
     if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('goals');
-    await wait(300);
+    await screen.findByText('Get a personal teammate');
 
     // The step-1 content region (.onb-step) must not need to scroll: all six
     // cards + the title/intro fit inside its fixed height. scrollHeight beyond
@@ -167,7 +167,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     // get the available height. The collapse animation is a desktop contract.
     if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('workspace');
-    await wait(300);
+    await screen.findByText('Build your teammate');
 
     const collapsible = document.querySelector('[data-collapsible-header]') as HTMLElement | null;
     expect(collapsible, 'the collapsible title+intro block should exist').toBeTruthy();
@@ -189,30 +189,29 @@ describe('OnboardingWizard layout (real browser)', () => {
     expect(collapsible.getBoundingClientRect().height).toBeGreaterThan(0);
 
     // Scroll the card region past the threshold → title + intro collapse away.
-    scroller.scrollTop = 120;
-    fireEvent.scroll(scroller);
-    await wait(350); // let the max-height/opacity transition finish
-
-    expect(getComputedStyle(collapsible).opacity).toBe('0');
-    expect(
-      collapsible.getBoundingClientRect().height,
-      'the collapsed title/intro block should have zero rendered height'
-    ).toBe(0);
+    fireEvent.scroll(scroller, { target: { scrollTop: 120 } });
+    await waitFor(() => {
+      expect(getComputedStyle(collapsible).opacity).toBe('0');
+      expect(
+        collapsible.getBoundingClientRect().height,
+        'the collapsed title/intro block should have zero rendered height'
+      ).toBe(0);
+    });
 
     // Scroll back to the top → title + intro reappear.
-    scroller.scrollTop = 0;
-    fireEvent.scroll(scroller);
-    await wait(350);
-    expect(getComputedStyle(collapsible).opacity).toBe('1');
-    expect(collapsible.getBoundingClientRect().height).toBeGreaterThan(0);
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+    await waitFor(() => {
+      expect(getComputedStyle(collapsible).opacity).toBe('1');
+      expect(collapsible.getBoundingClientRect().height).toBeGreaterThan(0);
+    });
   });
 
   it('never lets a card overlap the pinned name field / chips at any scroll offset', async () => {
     renderWizardAt('workspace');
-    await wait(300);
+    await screen.findByText('Build your teammate');
 
     const chipGroup = document.querySelector(
-      '[role="group"][aria-label="Filter templates by category"]'
+      '[role="radiogroup"][aria-label="Filter templates by category"]'
     ) as HTMLElement | null;
     const nameField = document.querySelector(
       'input[aria-label="Teammate name"]'
@@ -241,9 +240,11 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     const overlaps: string[] = [];
     for (const top of offsets) {
-      scroller.scrollTop = top;
-      scroller.dispatchEvent(new Event('scroll'));
-      await wait(60);
+      await act(async () => {
+        scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event('scroll'));
+        await nextFrame();
+      });
 
       for (const region of [nameField, chipGroup]) {
         const rect = region.getBoundingClientRect();
@@ -273,7 +274,7 @@ describe('OnboardingWizard layout (real browser)', () => {
   it('renders the success screen vertically centered, with no recap line and a celebratory hero', async () => {
     if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('goals');
-    await wait(300);
+    await screen.findByText('Get a personal teammate');
 
     // goals → pick one → continue
     fireEvent.click(screen.getByText('Ship without the busywork').closest('button') as HTMLElement);
@@ -294,7 +295,6 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     // done — teammate-centric success screen.
     await screen.findByText('Rusty is ready.');
-    await wait(300); // let entry animations settle
 
     // (1) Recap line is gone: neither the provider nor the goal is echoed here.
     expect(screen.queryByText('Claude')).toBeNull();
@@ -322,7 +322,7 @@ describe('OnboardingWizard layout (real browser)', () => {
 
   it('keeps the modal and primary action inside every configured viewport', async () => {
     renderWizardAt('goals');
-    await wait(300);
+    await screen.findByText('Get a personal teammate');
 
     const modal = document.querySelector('.ant-modal') as HTMLElement | null;
     const primary = Array.from(document.querySelectorAll('button')).find((button) =>

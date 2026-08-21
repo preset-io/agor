@@ -39,12 +39,12 @@ import {
   BLANK_TEMPLATE_ID,
   getTeammateTemplate,
   resolveTemplateSourceBranch,
+  type TeammateGalleryCardId,
 } from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
-import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
-import { TeammateGallery } from '../TeammateGallery';
 import { ToolIcon } from '../ToolIcon';
+import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -460,7 +460,8 @@ export function OnboardingWizard({
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   // Chosen gallery template id (null = nothing picked yet). Sets the default
   // avatar and the teammate's framework source branch — never the name.
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
+  const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
   // The teammate's board is created ONLY at completion (the `done` handler) — a
   // fresh board named after the teammate, never before, so an abandoned run
   // leaves no orphan board. Errors from that final creation surface on step 4.
@@ -489,6 +490,7 @@ export function OnboardingWizard({
     setTeammateName('');
     setTeammateEmoji('🤖');
     setSelectedTemplateId(null);
+    setInvalidSavedTemplateId(null);
     setBoardError(null);
     setCreatedBoardId(null);
     setCompleting(false);
@@ -538,7 +540,15 @@ export function OnboardingWizard({
       setSelectedGoals(savedOnboarding?.goals ?? []);
       setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
       setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard.icon ?? '🤖');
-      setSelectedTemplateId(savedOnboarding?.teammateTemplateId ?? null);
+      const savedTemplateId = savedOnboarding?.teammateTemplateId;
+      const savedTemplate = getTeammateTemplate(savedTemplateId);
+      setSelectedTemplateId(savedTemplate?.id ?? null);
+      setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
+      if (savedTemplateId && !savedTemplate) {
+        setBoardError(
+          `Saved teammate template "${savedTemplateId}" is no longer available. Go back and choose another template.`
+        );
+      }
       setCreatedBoardId(savedBoard.board_id);
       if (!initialStep) setCurrentStep('done');
     } else {
@@ -909,6 +919,12 @@ export function OnboardingWizard({
         break;
       }
       case 'done': {
+        if (invalidSavedTemplateId) {
+          setBoardError(
+            `Saved teammate template "${invalidSavedTemplateId}" is no longer available. Go back and choose another template.`
+          );
+          return;
+        }
         const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
@@ -986,6 +1002,7 @@ export function OnboardingWizard({
     teammateName,
     teammateEmoji,
     selectedTemplateId,
+    invalidSavedTemplateId,
     createdBoardId,
     saveOnboardingProgress,
     onComplete,
@@ -1587,79 +1604,23 @@ export function OnboardingWizard({
   // Selecting a template sets the default avatar (and later the source branch),
   // but never the name — the name stays personal and user-chosen. Passing null
   // clears the pick (deselect) and restores the default avatar.
-  const applyTemplate = (templateId: string | null) => {
+  const applyTemplate = (templateId: TeammateGalleryCardId | null) => {
     setSelectedTemplateId(templateId);
+    setInvalidSavedTemplateId(null);
     setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
   };
 
   const renderWorkspace = () => (
-    // Fills the (non-scrolling) step container as a flex column so the gallery's
-    // card region is the ONLY thing that scrolls. The step title + intro live in
-    // the gallery's fixed header now, so they no longer scroll away — the
-    // intended tradeoff for a header the cards can never overlap.
-    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
-      <TeammateGallery
-        goals={selectedGoals}
-        value={selectedTemplateId}
-        onChange={applyTemplate}
-        collapsibleHeader={
-          // Title + intro: renderStepBadge (marginBottom 12) + a zero-margin
-          // Paragraph gives the SAME title→intro gap as the other steps. This
-          // block collapses away once the card region is scrolled.
-          <>
-            {renderStepBadge('Build your teammate')}
-            <Paragraph
-              className="onb-workspace-intro-copy"
-              style={{ color: TEXT_SECONDARY, margin: 0 }}
-            >
-              Name your teammate and pick a starter template to shape what they do, or start blank.
-              Change anything later.
-            </Paragraph>
-          </>
-        }
-        header={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <Text
-                style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
-              >
-                Teammate name
-              </Text>
-              <div style={{ display: 'flex', gap: 0 }}>
-                <EmojiPickerInput
-                  value={teammateEmoji}
-                  onChange={setTeammateEmoji}
-                  defaultEmoji="🤖"
-                />
-                <Input
-                  aria-label="Teammate name"
-                  placeholder="e.g. Rusty, Ada, Scout…"
-                  value={teammateName}
-                  onChange={(e) => setTeammateName(e.target.value)}
-                  style={{
-                    background: 'rgba(0,0,0,0.3)',
-                    borderColor: 'rgba(255,255,255,0.12)',
-                    borderTopLeftRadius: 0,
-                    borderBottomLeftRadius: 0,
-                    flex: 1,
-                  }}
-                />
-              </div>
-              <Text
-                className="onb-workspace-helper"
-                style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}
-              >
-                We'll set them up as the primary teammate on a new board when you finish.
-              </Text>
-            </div>
-
-            <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block' }}>
-              Start from a template
-            </Text>
-          </div>
-        }
-      />
-    </div>
+    <OnboardingTeammateGalleryStep
+      goals={selectedGoals}
+      selectedTemplateId={selectedTemplateId}
+      onTemplateChange={applyTemplate}
+      teammateName={teammateName}
+      onTeammateNameChange={setTeammateName}
+      teammateEmoji={teammateEmoji}
+      onTeammateEmojiChange={setTeammateEmoji}
+      headingRef={stepHeadingRef}
+    />
   );
 
   const renderDone = () => {

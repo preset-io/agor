@@ -5,7 +5,12 @@
  */
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { getCategoryColor } from '../../utils/teammateTemplates';
+import { AggregationColor } from 'antd/es/color-picker/color';
+import {
+  getCategoryColor,
+  TEAMMATE_TEMPLATES,
+  TEMPLATE_CATEGORIES,
+} from '../../utils/teammateTemplates';
 import { TeammateGallery } from './TeammateGallery';
 
 function cardFor(title: string): HTMLElement {
@@ -22,9 +27,9 @@ function cardOrder(): string[] {
   );
 }
 
-/** The filter-chip row (role=group), used to scope chip queries away from badges. */
+/** The exclusive category control, used to scope queries away from badges. */
 function chipRow(): HTMLElement {
-  return screen.getByRole('group', { name: 'Filter templates by category' });
+  return screen.getByRole('radiogroup', { name: 'Filter templates by category' });
 }
 
 /** jsdom serializes inline colors as rgb(...); convert a palette hex to match. */
@@ -32,6 +37,20 @@ function rgbOf(hex: string): string {
   const n = Number.parseInt(hex.replace('#', ''), 16);
   // biome-ignore lint/plugin/noHardcodedColorLiteral: builds an rgb() string from a palette hex to assert against jsdom's serialized color — not a UI color literal
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const luminance = (color: string) => {
+    const { r, g, b } = new AggregationColor(color).toRgb();
+    const linearize = (channel: number) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+  };
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
 describe('TeammateGallery', () => {
@@ -138,66 +157,6 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it('puts header content + chips in a non-scrolling header, and the card grid in a separate overflow scroll region', () => {
-    render(<TeammateGallery value={null} onChange={vi.fn()} header={<div>NAME FIELD</div>} />);
-    // Host header content renders inside the gallery.
-    expect(screen.getByText('NAME FIELD')).toBeInTheDocument();
-
-    // The card grid lives inside its OWN overflow-y:auto scroll container — the
-    // structural guarantee that cards are clipped to it and can never paint over
-    // the header (replacing the old, engine-dependent position:sticky approach).
-    const grid = screen.getByRole('group', { name: 'Teammate template' });
-    const scrollRegion = grid.parentElement as HTMLElement;
-    expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
-
-    // The name field + chips live OUTSIDE the scroll region, in the fixed header.
-    expect(scrollRegion.contains(screen.getByText('NAME FIELD'))).toBe(false);
-    expect(scrollRegion.contains(chipRow())).toBe(false);
-
-    // The fixed header block and the scroll region are SEPARATE SIBLINGS under the
-    // gallery root; the header holds the name field + chips but never the grid, so
-    // overlap is impossible by construction.
-    const headerContainer = scrollRegion.previousElementSibling as HTMLElement;
-    expect(headerContainer.contains(chipRow())).toBe(true);
-    expect(headerContainer.contains(screen.getByText('NAME FIELD'))).toBe(true);
-    expect(headerContainer.contains(grid)).toBe(false);
-  });
-
-  it('collapses the collapsibleHeader once the card region is scrolled and restores it at the top', () => {
-    render(
-      <TeammateGallery
-        value={null}
-        onChange={vi.fn()}
-        collapsibleHeader={<div>TITLE BLOCK</div>}
-        header={<div>NAME FIELD</div>}
-      />
-    );
-    const wrapper = screen
-      .getByText('TITLE BLOCK')
-      .closest('[data-collapsible-header]') as HTMLElement;
-    const grid = screen.getByRole('group', { name: 'Teammate template' });
-    const scrollRegion = grid.parentElement as HTMLElement;
-
-    // At the top: title/intro expanded (opaque, not aria-hidden, non-zero cap).
-    expect(wrapper.style.opacity).toBe('1');
-    expect(wrapper.getAttribute('aria-hidden')).toBeNull();
-    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBeGreaterThan(0);
-
-    // Scroll past the threshold → collapse away (transparent, aria-hidden, capped 0).
-    scrollRegion.scrollTop = 40;
-    fireEvent.scroll(scrollRegion);
-    expect(wrapper.style.opacity).toBe('0');
-    expect(wrapper.getAttribute('aria-hidden')).toBe('true');
-    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBe(0);
-
-    // Back to the top → restore.
-    scrollRegion.scrollTop = 0;
-    fireEvent.scroll(scrollRegion);
-    expect(wrapper.style.opacity).toBe('1');
-    expect(wrapper.getAttribute('aria-hidden')).toBeNull();
-    expect(Number.parseInt(wrapper.style.maxHeight, 10)).toBeGreaterThan(0);
-  });
-
   it('badges up to two goal-recommended templates and never the blank card', () => {
     render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
 
@@ -231,6 +190,17 @@ describe('TeammateGallery', () => {
     // The redundant Recommended filter chip is gone, even when goals produce recs
     // (recommended templates still sort first and keep their badge in the grid).
     expect(within(chips).queryByText('Recommended')).not.toBeInTheDocument();
+  });
+
+  it('models category filtering as one exclusive radio control with arrow-key navigation', () => {
+    render(<TeammateGallery value={null} onChange={vi.fn()} />);
+    const radios = within(chipRow()).getAllByRole('radio');
+    expect(radios).toHaveLength(4);
+    expect(radios[0]).toBeChecked();
+
+    fireEvent.keyDown(radios[0], { key: 'ArrowRight' });
+    expect(within(chipRow()).getByRole('radio', { name: 'Grow' })).toBeChecked();
+    expect(cardOrder()).toEqual(['Competitive Analyst', 'Deal Desk Analyst', 'Outbound Analyst']);
   });
 
   it('filters the grid to a category and hides the blank starter', () => {
@@ -286,6 +256,18 @@ describe('TeammateGallery', () => {
     expect(selectedStyle).not.toContain('border-width: 2px');
   });
 
+  it.each(TEMPLATE_CATEGORIES)(
+    'keeps selected $label category text above normal-text contrast',
+    (category) => {
+      const template = TEAMMATE_TEMPLATES.find((candidate) => candidate.category === category.id);
+      if (!template) throw new Error(`Missing template for ${category.id}`);
+      render(<TeammateGallery value={template.id} onChange={vi.fn()} />);
+
+      const pill = within(cardFor(template.title)).getByText(category.label);
+      expect(contrastRatio(pill.style.color, category.color)).toBeGreaterThanOrEqual(4.5);
+    }
+  );
+
   it('renders Start blank as a full-width dashed footer card, last in the All view', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
@@ -309,17 +291,17 @@ describe('TeammateGallery', () => {
   it('shows the ghost Clear filters button only when filtered, and it resets to All', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     // All is the default → no Clear filters button.
-    expect(within(chipRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
+    expect(screen.queryByText('Clear filters')).toBeNull();
 
     fireEvent.click(within(chipRow()).getByText('Operate'));
-    const clear = within(chipRow()).getByRole('button', { name: 'Clear filters' });
+    const clear = screen.getByText('Clear filters').closest('button');
     expect(clear).toBeInTheDocument();
     // Filtered: blank hidden.
     expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
 
-    fireEvent.click(clear);
+    fireEvent.click(clear as HTMLButtonElement);
     // Reset to All: every card back (blank last) and the button is gone.
     expect(screen.getByText('Start blank')).toBeInTheDocument();
-    expect(within(chipRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
+    expect(screen.queryByText('Clear filters')).toBeNull();
   });
 });

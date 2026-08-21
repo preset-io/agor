@@ -235,6 +235,31 @@ export class BoardObjectRepository {
   }
 
   /**
+   * Find a board object by object ID only when it is visible to the user under
+   * the same branch/board RBAC predicate used by list queries.
+   */
+  async findVisibleByObjectId(userId: UUID, objectId: string): Promise<BoardEntityObject | null> {
+    try {
+      const row = await select(this.db, getTableColumns(boardObjects))
+        .from(boardObjects)
+        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(eq(boardObjects.object_id, objectId), this.buildVisibleToUserCondition(userId)))
+        .one();
+
+      return row ? this.rowToEntity(row) : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find visible board object by object_id: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find board object by branch ID
    */
   async findByBranchId(branchId: BranchID): Promise<BoardEntityObject | null> {

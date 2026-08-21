@@ -565,7 +565,7 @@ describe('OnboardingWizard', () => {
     // none of them live inside the scrolling card region.
     expect(scrollRegion.contains(screen.getByText('Build your teammate'))).toBe(false);
     expect(scrollRegion.contains(screen.getByLabelText('Teammate name'))).toBe(false);
-    const chipGroup = screen.getByRole('group', { name: 'Filter templates by category' });
+    const chipGroup = screen.getByRole('radiogroup', { name: 'Filter templates by category' });
     expect(scrollRegion.contains(chipGroup)).toBe(false);
 
     // The step container itself does not scroll — step 2 delegates all scrolling
@@ -880,6 +880,36 @@ describe('OnboardingWizard', () => {
     );
   });
 
+  it('blocks a resumed setup with a stale template instead of silently using the default branch', async () => {
+    const onComplete = vi.fn();
+    const resumedBoard = makeBoard({ board_id: 'board-resume', name: 'Rusty', icon: '⚖️' });
+    const user = makeUser({
+      preferences: {
+        onboarding: {
+          boardId: 'board-resume',
+          teammateDisplayName: 'Rusty',
+          teammateTemplateId: 'removed-template',
+        },
+      },
+    });
+    const { boardsService } = renderWizard({
+      onComplete,
+      user,
+      boardById: new Map([[resumedBoard.board_id, resumedBoard]]),
+    });
+
+    expect(
+      await screen.findByText(
+        'Saved teammate template "removed-template" is no longer available. Go back and choose another template.'
+      )
+    ).toBeInTheDocument();
+    clickButton(/^try again →$/i);
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(screen.getByText(/removed-template.*no longer available/i)).toBeInTheDocument();
+  });
+
   it('exposes progress semantics and moves focus to the new step heading', async () => {
     renderWizard({ initialStep: 'goals' });
 
@@ -891,6 +921,12 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     const heading = await screen.findByText('Build your teammate');
     await waitFor(() => expect(heading).toHaveFocus());
+
+    const scroller = screen.getByRole('group', { name: 'Teammate template' })
+      .parentElement as HTMLElement;
+    scroller.scrollTop = 40;
+    fireEvent.scroll(scroller);
+    expect(document.activeElement?.closest('[aria-hidden="true"]')).toBeNull();
   });
 
   it('Back navigates to the previous step and preserves prior selections', async () => {

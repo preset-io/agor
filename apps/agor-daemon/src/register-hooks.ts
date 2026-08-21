@@ -158,6 +158,7 @@ import {
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessionsSql,
+  scopeReadToAccessibleBoardsSql,
   scopeScheduleQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
@@ -1206,7 +1207,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // predicate: branch-bound rows require branch access; loose rows require
       // board visibility.
       find: [
-        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeReadToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
+      get: [
+        ...(executionMode.appRbacEnabled ? [scopeReadToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       create: [requireMinimumRole(ROLES.MEMBER, 'create board objects')],
       update: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],

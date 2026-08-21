@@ -128,11 +128,11 @@ describe('getTeammateTemplate', () => {
 });
 
 describe('resolveTemplateSourceBranch', () => {
-  it('forces a real template branch and defers blank/none to the repo default', () => {
+  it('forces a real template branch, defers blank/none, and rejects stale ids', () => {
     expect(resolveTemplateSourceBranch('deal-desk')).toBe('template/deal-desk-revops-analyst');
     expect(resolveTemplateSourceBranch(BLANK_TEMPLATE_ID)).toBeUndefined();
     expect(resolveTemplateSourceBranch(null)).toBeUndefined();
-    expect(resolveTemplateSourceBranch('nope')).toBeUndefined();
+    expect(() => resolveTemplateSourceBranch('nope')).toThrow('Unknown teammate template id: nope');
   });
 });
 

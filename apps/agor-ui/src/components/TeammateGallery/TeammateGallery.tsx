@@ -1,4 +1,4 @@
-import { Tag as AntTag, Button, Card, Flex, Typography, theme } from 'antd';
+import { Button, Card, Flex, Segmented, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import {
   BLANK_TEMPLATE_ID,
@@ -7,36 +7,25 @@ import {
   getCategory,
   recommendedTemplateIds,
   TEMPLATE_CATEGORIES,
+  type TeammateGalleryCardId,
   type TeammateTemplate,
 } from '../../utils/teammateTemplates';
+import { getContrastingTextColor } from '../../utils/theme';
 import { Tag } from '../Tag';
 
 const { Text, Paragraph } = Typography;
 
 export interface TeammateGalleryProps {
   /** Selected goal ids (onboarding). Drives which cards get a Recommended badge. */
-  goals?: string[];
+  goals?: readonly string[];
   /** Currently selected template id, or null when nothing is chosen yet. */
-  value: string | null;
+  value: TeammateGalleryCardId | null;
   /**
    * Fires with the clicked card's id (the blank starter included), or `null`
    * when the current pick is cleared (clicking the selected card, or keyboard
    * toggle-off).
    */
-  onChange: (templateId: string | null) => void;
-  /**
-   * Optional content placed above the filter chips inside the non-scrolling
-   * header region (e.g. a name field + section label). It stays pinned at all
-   * times while only the card grid scrolls, in its own region below.
-   */
-  header?: React.ReactNode;
-  /**
-   * Optional content (e.g. a step title + intro) placed ABOVE `header`, which
-   * smoothly collapses/hides once the card region is scrolled past a small
-   * threshold and restores when scrolled back to the top. The card grid keeps
-   * its own overflow clip, so collapsing this can never cause card overlap.
-   */
-  collapsibleHeader?: React.ReactNode;
+  onChange: (templateId: TeammateGalleryCardId | null) => void;
 }
 
 /**
@@ -123,7 +112,7 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
               style={{
                 margin: 0,
                 fontSize: token.fontSizeSM,
-                color: selected ? token.colorTextLightSolid : accent,
+                color: selected ? getContrastingTextColor(accent, token) : accent,
                 background: selected ? accent : `${accent}22`,
                 borderColor: selected ? accent : `${accent}55`,
               }}
@@ -225,196 +214,120 @@ const BlankCard: React.FC<{
   );
 };
 
-/**
- * Responsive 3-column grid of teammate starter templates plus a blank card,
- * with category filter chips above it.
- *
- * Optional single-select via pressed buttons (like the step-1 goal cards): clicking
- * an unselected card selects it and reports its id (blank included); clicking the
- * already-selected card — or pressing Enter/Space on it — clears the pick
- * (`onChange(null)`), since selecting a template is optional. Cards matching
- * the goal-derived recommendations get a "Recommended" badge (up to two; never
- * the blank card) and, in the default "All" view, sort to the front in
- * recommendation order. Filter chips (All · Grow · Build · Operate) narrow the
- * grid to one category; a ghost "Clear filters" button (shown only when a
- * non-All chip is active) resets to All. The blank starter shows only under All
- * and stays last.
- *
- * Each card carries a category pill in a shared avatar-palette hue (no icon
- * tile); selecting a card gives it a quiet same-hue border + background wash (no
- * loud blue outline). The grid holds three columns at the modal width, stepping
- * down to two (then one) only as the container narrows, shows full untruncated
- * descriptions, and keeps row-mates equal height.
- *
- * Layout is TWO PHYSICAL REGIONS in a flex column that fills its parent's
- * height: a non-scrolling header block (`flex: 0 0 auto`) holding any `header`
- * content plus the filter chips, and a separate scroll region
- * (`flex: 1 1 auto; min-height: 0; overflow-y: auto`) holding ONLY the card
- * grid. Because the grid lives in its own `overflow` container, the browser
- * clips the cards to it — they can never paint over the header in any engine (a
- * structural guarantee that replaces the earlier, engine-dependent
- * `position: sticky` + z-index approach).
- *
- * Standalone and theme-token driven so it renders correctly both on the
- * onboarding wizard's dark-glass surface and on the standard create-teammate
- * form.
- */
-export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
+const FILTER_OPTIONS = [
+  { value: 'all', label: 'All' },
+  ...TEMPLATE_CATEGORIES.map((category) => ({
+    value: category.id,
+    label: category.label,
+  })),
+] satisfies { value: GalleryFilter; label: string }[];
+
+export interface TeammateGalleryFiltersProps {
+  value: GalleryFilter;
+  onChange: (filter: GalleryFilter) => void;
+}
+
+/** Exclusive category control shared by every gallery host. */
+export const TeammateGalleryFilters: React.FC<TeammateGalleryFiltersProps> = ({
+  value,
+  onChange,
+}) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Flex align="center" gap={token.marginXS} wrap="wrap">
+      <Segmented<GalleryFilter>
+        aria-label="Filter templates by category"
+        options={FILTER_OPTIONS}
+        value={value}
+        onChange={onChange}
+        shape="round"
+        size="small"
+        styles={{
+          item: { fontSize: token.fontSize, paddingInline: token.paddingSM },
+        }}
+      />
+      {value !== 'all' && (
+        <Button
+          type="text"
+          size="small"
+          onClick={() => onChange('all')}
+          style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
+        >
+          Clear filters
+        </Button>
+      )}
+    </Flex>
+  );
+};
+
+export interface TeammateGalleryCardsProps extends TeammateGalleryProps {
+  filter: GalleryFilter;
+}
+
+/** Card grid and recommendation ordering, independent of host-specific chrome. */
+export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
   goals,
   value,
   onChange,
-  header,
-  collapsibleHeader,
+  filter,
 }) => {
   const { token } = theme.useToken();
   const goalList = useMemo(() => goals ?? [], [goals]);
   const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
-
-  const [filter, setFilter] = useState<GalleryFilter>('all');
-  // Collapse the `collapsibleHeader` (step title + intro) once the card region is
-  // scrolled a little; restore it at the top. Threshold avoids flicker on tiny
-  // scrolls. The grid stays in its own overflow clip regardless, so this cannot
-  // reintroduce the card-over-header overlap the two-region layout fixed.
-  const [scrolled, setScrolled] = useState(false);
-
   const cards = useMemo(() => galleryCardsForFilter(goalList, filter), [goalList, filter]);
 
-  const chips: { key: GalleryFilter; label: string }[] = [
-    { key: 'all', label: 'All' },
-    ...TEMPLATE_CATEGORIES.map((category) => ({
-      key: category.id as GalleryFilter,
-      label: category.label,
-    })),
-  ];
+  return (
+    <fieldset
+      aria-label="Teammate template"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        gap: token.marginXS,
+        padding: token.paddingXXS,
+        border: 0,
+        margin: 0,
+        minWidth: 0,
+      }}
+    >
+      {cards.map((template) =>
+        template.id === BLANK_TEMPLATE_ID ? (
+          <BlankCard
+            key={template.id}
+            template={template}
+            selected={value === template.id}
+            onSelect={() => onChange(template.id)}
+            onClear={() => onChange(null)}
+          />
+        ) : (
+          <GalleryCard
+            key={template.id}
+            template={template}
+            selected={value === template.id}
+            recommended={recommendedIds.has(template.id)}
+            onSelect={() => onChange(template.id)}
+            onClear={() => onChange(null)}
+          />
+        )
+      )}
+    </fieldset>
+  );
+};
+
+/**
+ * Reusable teammate-template picker. It owns filtering, recommendation order,
+ * and optional single-selection, while hosts own navigation chrome and scroll
+ * behavior. Onboarding composes the same filter and card regions in its own
+ * step wrapper so wizard focus/layout concerns do not leak into this API.
+ */
+export const TeammateGallery: React.FC<TeammateGalleryProps> = (props) => {
+  const { token } = theme.useToken();
+  const [filter, setFilter] = useState<GalleryFilter>('all');
 
   return (
-    // Two physical regions in a flex column that fills the parent's height (the
-    // host mounts it inside a flex column). The header block never scrolls; the
-    // grid lives in its own overflow container below, so cards are clipped to it
-    // and can never paint over the header.
-    <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
-      {/* Non-scrolling header. The collapsible block (title/intro) hides on
-          scroll; the pinned block (name field + label) and the filter chips
-          stay fixed above the card region at all times. */}
-      <div style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}>
-        {collapsibleHeader && (
-          <div
-            data-collapsible-header=""
-            aria-hidden={scrolled || undefined}
-            style={{
-              overflow: 'hidden',
-              // Collapse to nothing on scroll; a generous cap covers the title +
-              // intro at any wrap without clipping when expanded.
-              maxHeight: scrolled ? 0 : 200,
-              opacity: scrolled ? 0 : 1,
-              marginBottom: scrolled ? 0 : token.marginSM,
-              transition: 'max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.25s ease',
-            }}
-          >
-            {collapsibleHeader}
-          </div>
-        )}
-        <Flex vertical gap={token.marginSM}>
-          {header}
-          <Flex
-            role="group"
-            aria-label="Filter templates by category"
-            align="center"
-            gap={token.marginXS}
-            wrap="wrap"
-          >
-            {chips.map((chip) => {
-              const active = filter === chip.key;
-              return (
-                <AntTag.CheckableTag
-                  key={chip.key}
-                  checked={active}
-                  onChange={() => setFilter(chip.key)}
-                  // Explicit, deterministic styling in both states so inactive chips
-                  // always look identical: a bordered transparent pill, with only the
-                  // active chip filled. Inline styles also override antd's hover-fill,
-                  // so no chip is left with a stuck grey box.
-                  style={{
-                    cursor: 'pointer',
-                    fontSize: token.fontSize,
-                    padding: '2px 12px',
-                    borderRadius: token.borderRadius,
-                    border: `1px solid ${active ? token.colorPrimary : token.colorBorderSecondary}`,
-                    background: active ? token.colorPrimary : 'transparent',
-                    color: active ? token.colorTextLightSolid : token.colorText,
-                  }}
-                >
-                  {chip.label}
-                </AntTag.CheckableTag>
-              );
-            })}
-            {filter !== 'all' && (
-              // Ghost, understated, trailing the chips — clears back to All.
-              <Button
-                type="text"
-                size="small"
-                onClick={() => setFilter('all')}
-                style={{ marginInlineStart: 'auto', color: token.colorTextSecondary }}
-              >
-                Clear filters
-              </Button>
-            )}
-          </Flex>
-        </Flex>
-      </div>
-
-      {/* Scroll region: its OWN overflow container, so the browser clips the
-          cards to it. This is what makes overlap impossible by construction —
-          a card can never render above the sibling header block. The scroll
-          position also drives the collapsible header (title/intro) above. */}
-      <div
-        onScroll={(event) => {
-          const next = event.currentTarget.scrollTop > 8;
-          setScrolled((prev) => (prev === next ? prev : next));
-        }}
-        style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
-      >
-        <fieldset
-          aria-label="Teammate template"
-          style={{
-            display: 'grid',
-            // Three columns at the ~730px modal width; each column floors at 190px
-            // so the row steps down to 2 (then 1) only on a narrower container.
-            // 190px is the widest floor that still packs 3 columns into the step-2
-            // content width without ever admitting a 4th.
-            gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-            // Tighter inter-card gap (marginXS) so more cards fit before the
-            // region needs to scroll; matches the step-1 goal grid's density.
-            gap: token.marginXS,
-            // Room for card focus rings at the grid edges.
-            padding: token.paddingXXS,
-            border: 0,
-            margin: 0,
-            minWidth: 0,
-          }}
-        >
-          {cards.map((template) =>
-            template.id === BLANK_TEMPLATE_ID ? (
-              <BlankCard
-                key={template.id}
-                template={template}
-                selected={value === template.id}
-                onSelect={() => onChange(template.id)}
-                onClear={() => onChange(null)}
-              />
-            ) : (
-              <GalleryCard
-                key={template.id}
-                template={template}
-                selected={value === template.id}
-                recommended={recommendedIds.has(template.id)}
-                onSelect={() => onChange(template.id)}
-                onClear={() => onChange(null)}
-              />
-            )
-          )}
-        </fieldset>
-      </div>
+    <Flex vertical gap={token.marginSM}>
+      <TeammateGalleryFilters value={filter} onChange={setFilter} />
+      <TeammateGalleryCards {...props} filter={filter} />
     </Flex>
   );
 };
