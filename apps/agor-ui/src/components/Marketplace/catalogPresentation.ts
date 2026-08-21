@@ -99,7 +99,7 @@ export function capabilityLabel(capability: string): string {
  * the default and is labelled for what it actually is.
  */
 export const SORT_OPTIONS: Array<{ label: string; value: MCPCatalogSort }> = [
-  { label: 'Sort: Recommended', value: 'popularity' },
+  { label: 'Sort: Curated', value: 'popularity' },
   { label: 'Sort: A–Z', value: 'name' },
 ];
 

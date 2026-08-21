@@ -63,6 +63,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { takeMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
@@ -426,6 +427,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
+
+  // Marketplace OAuth seeds its starter prompt only after the durable grant
+  // has been observed by the same authoritative store this panel uses. The
+  // handoff is consumed whether or not it can be inserted: text the user has
+  // already typed always wins and is never overwritten later.
+  React.useEffect(() => {
+    if (!session) return;
+    const prompt = takeMarketplaceOAuthPrompt(
+      session.session_id,
+      userAuthenticatedMcpServerIds,
+      promptRef.current?.getValue() ?? inputValueRef.current
+    );
+    if (!prompt) return;
+    savePromptDraft(session.session_id, prompt);
+    promptRef.current?.insertText(prompt);
+  }, [session, userAuthenticatedMcpServerIds]);
 
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local

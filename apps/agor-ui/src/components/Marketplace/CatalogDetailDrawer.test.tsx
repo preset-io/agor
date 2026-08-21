@@ -44,6 +44,8 @@ const LINEAR = {
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
 } as unknown as MCPCatalogEntry;
 
+const OAUTH_LINEAR = { ...LINEAR, auth_type: 'oauth' } as MCPCatalogEntry;
+
 const BRANCHES = [{ branch_id: 'branch-1', name: 'mkt-slice' }] as unknown as Branch[];
 
 function renderDrawer(
@@ -91,10 +93,13 @@ function renderDrawer(
   return { show };
 }
 
-const connectButton = () =>
-  screen
-    .getByText(/^(Connect, then sign in|Verify token & connect|Check & connect|Connect & try it)$/i)
-    .closest('button')!;
+const connectButton = () => {
+  const match = screen
+    .getAllByText(/^(Connect with .+|Verify key & connect|Check & connect|Connect & try it)$/i)
+    .find((node) => node.closest('button'));
+  if (!match) throw new Error('Connect button not found');
+  return match.closest('button')!;
+};
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {
@@ -136,6 +141,54 @@ describe('CatalogDetailDrawer consent', () => {
     expect(screen.getByText('Now also writes to your repositories.')).toBeVisible();
     expect(screen.getByRole('checkbox')).not.toBeChecked();
     expect(connectButton()).toBeDisabled();
+  });
+});
+
+describe('CatalogDetailDrawer OAuth activation', () => {
+  const renderOAuth = (onConnect = vi.fn()) =>
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={OAUTH_LINEAR}
+        open
+        onClose={vi.fn()}
+        branches={BRANCHES}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId="branch-1"
+        connecting={false}
+        connectError={null}
+        readiness={{ catalog_key: OAUTH_LINEAR.name, state: 'oauth_required' }}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        onConnect={onConnect}
+      />
+    );
+
+  it('pre-opens a blank window in the click before handing control to Connect', () => {
+    const popup = { opener: window } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(open).toHaveBeenCalledWith('about:blank', 'agor-mcp-oauth');
+    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ oauthWindow: popup }));
+    open.mockRestore();
+  });
+
+  it('does not call Connect when the browser blocks the popup', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('Nothing was connected because the sign-in window could not be opened.')
+    ).toBeVisible();
+    open.mockRestore();
   });
 });
 

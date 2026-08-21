@@ -3,7 +3,7 @@ import type { AgorClient, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
@@ -46,6 +46,7 @@ const LINEAR = {
   name: 'app.linear/linear',
   title: 'Linear',
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
+  auth_type: 'oauth',
 };
 
 /**
@@ -59,6 +60,8 @@ let catalogReads: Array<Record<string, unknown> | undefined>;
 let catalogRows: (typeof DEEPWIKI)[];
 let connectCalls: Array<Record<string, unknown>>;
 let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
+let oauthStartCalls: Array<Record<string, unknown>>;
+let oauthStartImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let catalogFindError: Error | null;
 let memberPolicyAnswer: {
   policy: 'use_existing_only' | 'allow_private_only' | 'allow_crud';
@@ -97,15 +100,34 @@ function makeClient(): AgorClient {
         },
       };
     }
+    if (path === 'mcp-catalog/readiness') {
+      return {
+        get: async (catalogKey: string) => ({
+          catalog_key: catalogKey,
+          state:
+            catalogRows.find((entry) => entry.name === catalogKey)?.auth_type === 'oauth'
+              ? 'oauth_required'
+              : 'no_auth',
+        }),
+      };
+    }
     if (path === 'mcp-member-policy') {
       return { find: async () => memberPolicyAnswer };
     }
+    if (path === 'mcp-servers/oauth-start') {
+      return {
+        create: async (data: Record<string, unknown>) => {
+          oauthStartCalls.push(data);
+          return oauthStartImpl(data);
+        },
+      };
+    }
     if (path === 'mcp-servers') {
-      return { on: vi.fn(), removeListener: vi.fn() };
+      return { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() };
     }
     throw new Error(`unexpected service: ${path}`);
   };
-  return { service } as unknown as AgorClient;
+  return { service, io: { on: vi.fn(), off: vi.fn() } } as unknown as AgorClient;
 }
 
 function renderTab({
@@ -164,6 +186,7 @@ beforeEach(() => {
   catalogRows = [DEEPWIKI, LINEAR];
   catalogFindError = null;
   connectCalls = [];
+  oauthStartCalls = [];
   memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
@@ -171,9 +194,16 @@ beforeEach(() => {
     starter_prompt: DEEPWIKI.starter_prompt,
     reused_existing_server: false,
   });
+  oauthStartImpl = async () => ({
+    success: true,
+    authorizationUrl: 'https://accounts.example.test/authorize',
+    attempt_id: 'attempt-1',
+  });
   mockNavigate.mockClear();
   localStorage.clear();
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('catalog browsing', () => {
   it('renders a card per entry', async () => {

@@ -29,6 +29,8 @@ import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
 import { DEFAULT_SORT } from './catalogPresentation';
+import { launchMarketplaceOAuth } from './marketplaceOAuthLaunch';
+import { useCatalogReadiness } from './useCatalogReadiness';
 import {
   CATALOG_PAGE_SIZE,
   type CatalogFilterState,
@@ -181,6 +183,13 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ]
       : null
   );
+  const readiness = useCatalogReadiness({
+    client,
+    entryKey: selected?.name,
+    ready: connectionReady,
+    authGeneration,
+    userId: currentUser?.user_id,
+  });
 
   // Any narrowing invalidates the current offset — page 4 of an unfiltered
   // catalog is usually past the end of a filtered one.
@@ -232,11 +241,13 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       agenticTool,
       acknowledgedDisclosure,
       bearerToken,
+      oauthWindow,
     }: {
       branchId: string;
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
       bearerToken?: string;
+      oauthWindow?: Window;
     }) => {
       const operation = operationGuard.begin();
       if (!selected || !client || !operation.isCurrent()) return;
@@ -254,7 +265,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           // empty arrived.
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
-        if (!operation.isCurrent()) return;
+        if (!operation.isCurrent()) {
+          oauthWindow?.close();
+          return;
+        }
         rememberConnectBranchId(currentUser?.user_id, branchId);
         // A starter prompt is written to exercise the server it ships with, so
         // it is only worth arming the composer with once that server can answer
@@ -270,9 +284,33 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ) {
           savePromptDraft(currentUser?.user_id, result.session.session_id, result.starter_prompt);
         }
+
+        if (mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)) {
+          if (oauthWindow && result.mcp_server.auth?.type === 'oauth') {
+            try {
+              await launchMarketplaceOAuth(client, result, oauthWindow);
+              if (!operation.isCurrent()) {
+                oauthWindow.close();
+                return;
+              }
+            } catch {
+              // The server and session now exist. Land in the recoverable
+              // session rather than pretending the whole Connect failed.
+              oauthWindow.close();
+            }
+          } else {
+            // Readiness is advisory. If a formerly-open endpoint raced to
+            // OAuth after a no-popup click, the session notice is the safe
+            // recovery surface; never open a popup after user activation.
+            oauthWindow?.close();
+          }
+        } else {
+          oauthWindow?.close();
+        }
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
+        oauthWindow?.close();
         if (!operation.isCurrent()) return;
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
         // The catalog file is presentational; the endpoint decides. When those
@@ -387,6 +425,9 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         connectCapability={connectCapability}
         policyPending={policyPending}
         policyPendingHint={policyPendingHint}
+        readiness={readiness.readiness}
+        readinessLoading={readiness.loading}
+        readinessError={readiness.error}
         onConnect={handleConnect}
       />
     </Flex>

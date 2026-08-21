@@ -70,7 +70,13 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
-export const MARKETPLACE_ROUTE_PATHS = ['/marketplace'] as const;
+export const MARKETPLACE_ROUTE_PATHS = [
+  '/marketplace',
+  '/marketplace/catalog',
+  '/marketplace/servers',
+  '/marketplace/sessions',
+  '/marketplace/credentials',
+] as const;
 
 export const MARKETPLACE_SURFACE = defineSurface({
   id: 'marketplace',
