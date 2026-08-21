@@ -38,8 +38,6 @@ interface MobileAppProps {
   onLogout?: () => void;
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
-  promptDrafts: Map<string, string>;
-  onUpdateDraft: (sessionId: string, draft: string) => void;
   // The branch bottom sheet offers the same edit/archive controls as the
   // desktop modal, so it needs the same handlers behind them — without these
   // the controls render enabled and then do nothing when tapped.
@@ -61,8 +59,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onLogout,
   onOpenWorkspaceSettings,
   onOpenUserSettings,
-  promptDrafts,
-  onUpdateDraft,
   onUpdateBranch,
   onUpdateRepo,
   onArchiveOrDeleteBranch,

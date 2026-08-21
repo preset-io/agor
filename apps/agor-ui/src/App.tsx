@@ -2163,8 +2163,6 @@ function AppContent() {
                 onToggleReaction={handleToggleReaction}
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
-                promptDrafts={promptDrafts}
-                onUpdateDraft={handleUpdateDraft}
                 onOpenWorkspaceSettings={setSettingsTabToOpen}
                 onOpenUserSettings={() => setOpenUserSettings(true)}
                 onUpdateBranch={handleUpdateBranch}

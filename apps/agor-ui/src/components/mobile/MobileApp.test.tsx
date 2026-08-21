@@ -36,8 +36,6 @@ describe('MobileApp branch actions', () => {
           onSendComment={vi.fn()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
-          promptDrafts={new Map()}
-          onUpdateDraft={vi.fn()}
         />
       </MemoryRouter>
     );
@@ -61,8 +59,6 @@ describe('MobileApp branch actions', () => {
           onSendComment={vi.fn()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
-          promptDrafts={new Map()}
-          onUpdateDraft={vi.fn()}
           {...handlers}
         />
       </MemoryRouter>
@@ -85,8 +81,6 @@ describe('MobileApp branch actions', () => {
           onSendComment={vi.fn()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
-          promptDrafts={new Map()}
-          onUpdateDraft={vi.fn()}
         />
       </MemoryRouter>
     );

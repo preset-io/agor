@@ -1,4 +1,5 @@
-import { AgorUserLifecycleAuthority, EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
+import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
+import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
   CreateUserInput,
