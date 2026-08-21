@@ -142,6 +142,29 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     expect(result.current.authGeneration).toBe(1);
   });
 
+  it('runs the authority cleanup boundary before publishing a new generation', async () => {
+    const { client } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    let renderedGeneration = 0;
+    const beforeGenerationChange = vi.fn((previous: number, next: number) => {
+      expect([previous, next]).toEqual([0, 1]);
+      expect(renderedGeneration).toBe(0);
+    });
+
+    const { result } = renderHook(() => {
+      const connection = useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'access-token',
+        authorityGeneration: 1,
+        onBeforeAuthGenerationChange: beforeGenerationChange,
+      });
+      renderedGeneration = connection.authGeneration;
+      return connection;
+    });
+    await waitFor(() => expect(result.current.authGeneration).toBe(1));
+    expect(beforeGenerationChange).toHaveBeenCalledTimes(1);
+  });
+
   it('re-announces socket-scoped capability after a normal transport reconnect', async () => {
     const { client, create, fireIo, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);

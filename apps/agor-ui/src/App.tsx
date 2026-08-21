@@ -72,6 +72,7 @@ import {
 import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
+import { useMarketplaceOAuthAuthorityOwner } from './hooks/useMarketplaceOAuthAuthorityOwner';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
@@ -390,6 +391,7 @@ function AppContent() {
     logoutForAuthorityCycle,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
+  const marketplaceOAuthAuthorityOwner = useMarketplaceOAuthAuthorityOwner(user);
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
@@ -405,7 +407,11 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
+    onBeforeAuthGenerationChange: marketplaceOAuthAuthorityOwner.beforeAuthGenerationChange,
   });
+  // Ref-only observation keeps the central owner aligned across identity and
+  // role renders without performing cleanup during React render.
+  marketplaceOAuthAuthorityOwner.observeRenderedGeneration(authGeneration);
   const appAuthorityGuard = useAuthorityOperationGuard(
     user?.user_id && user.role && client && connected && !connecting
       ? [user.user_id, user.role, client, authGeneration]

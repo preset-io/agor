@@ -201,7 +201,7 @@ describe('Marketplace OAuth prompt handoff', () => {
     unsubscribe();
   });
 
-  it('fails a typed in-memory suggestion closed when tab storage cannot install its fence', () => {
+  it('keeps a fully typed suggestion behind its memory fence when storage is unavailable', () => {
     const brokenStorage = storageContext();
     vi.spyOn(brokenStorage, 'setItem').mockImplementation(() => {
       throw new DOMException('storage unavailable', 'SecurityError');
@@ -225,7 +225,7 @@ describe('Marketplace OAuth prompt handoff', () => {
         createdAt: expect.any(Number),
       })
     );
-    expect(isMarketplacePromptSuggestionCurrent(suggestion!, brokenStorage)).toBe(false);
+    expect(isMarketplacePromptSuggestionCurrent(suggestion!, brokenStorage)).toBe(true);
     const unavailableStorage = {
       get length(): number {
         throw new DOMException('storage unavailable', 'SecurityError');
@@ -239,6 +239,145 @@ describe('Marketplace OAuth prompt handoff', () => {
     expect(() =>
       discardMarketplaceOAuthStateForAuthority(authority, unavailableStorage)
     ).not.toThrow();
+  });
+
+  it.each(['quota', 'read-only'] as const)(
+    'fences readable old storage before a newer %s marker write can fail',
+    (failureMode) => {
+      const storage = storageContext();
+      const old = {
+        sessionId: 'session-quota',
+        attemptId: 'attempt-old',
+        prompt: 'Old suggestion',
+        createdAt: Date.now(),
+        ...authority,
+      };
+      const otherSession = {
+        ...old,
+        sessionId: 'session-isolated',
+        attemptId: 'attempt-isolated',
+        prompt: 'Other suggestion',
+      };
+      // Seed as if this module realm was loaded after a page reload: there is
+      // readable durable state but no memory marker yet.
+      storage.setItem(`agor-marketplace-prompt-attempt:${old.sessionId}`, JSON.stringify(old));
+      storage.setItem(`agor-marketplace-prompt-suggestion:${old.sessionId}`, JSON.stringify(old));
+      storage.setItem(
+        `agor-marketplace-prompt-attempt:${otherSession.sessionId}`,
+        JSON.stringify(otherSession)
+      );
+      storage.setItem(
+        `agor-marketplace-prompt-suggestion:${otherSession.sessionId}`,
+        JSON.stringify(otherSession)
+      );
+      expect(isMarketplacePromptSuggestionCurrent(old, storage)).toBe(true);
+      expect(isMarketplacePromptSuggestionCurrent(otherSession, storage)).toBe(true);
+
+      const setItem = vi.spyOn(storage, 'setItem').mockImplementation(() => {
+        throw new DOMException('quota exceeded', 'QuotaExceededError');
+      });
+      const removeItem =
+        failureMode === 'read-only'
+          ? vi.spyOn(storage, 'removeItem').mockImplementation(() => {
+              throw new DOMException('storage is read-only', 'SecurityError');
+            })
+          : null;
+      markMarketplacePromptAttempt(
+        {
+          sessionId: old.sessionId,
+          attemptId: 'attempt-new-failed-write',
+          createdAt: Date.now(),
+          ...authority,
+        },
+        storage
+      );
+
+      // The old marker was readable immediately before the failed write. The
+      // memory authority still closes both render and action gates synchronously.
+      expect(isMarketplacePromptSuggestionCurrent(old, storage)).toBe(false);
+      expect(isMarketplacePromptSuggestionCurrent(otherSession, storage)).toBe(true);
+
+      setItem.mockRestore();
+      removeItem?.mockRestore();
+      markMarketplacePromptAttempt(
+        {
+          sessionId: old.sessionId,
+          attemptId: 'attempt-new-persisted',
+          createdAt: Date.now(),
+          ...authority,
+        },
+        storage
+      );
+      const current = saveMarketplacePromptSuggestion(
+        {
+          sessionId: old.sessionId,
+          attemptId: 'attempt-new-persisted',
+          prompt: 'Current suggestion',
+          authority,
+        },
+        storage
+      )!;
+      expect(isMarketplacePromptSuggestionCurrent(old, storage)).toBe(false);
+      expect(isMarketplacePromptSuggestionCurrent(current, storage)).toBe(true);
+      expect(isMarketplacePromptSuggestionCurrent(otherSession, storage)).toBe(true);
+    }
+  );
+
+  it('keeps memory fences and held claims authoritative across module replacement', async () => {
+    const storage = storageContext();
+    const pending = {
+      ...value(),
+      sessionId: 'session-hmr',
+      attemptId: 'attempt-hmr-old',
+    };
+    const oldSuggestion = saveMarketplacePromptSuggestion(
+      {
+        sessionId: pending.sessionId,
+        attemptId: pending.attemptId,
+        prompt: pending.prompt,
+        authority,
+      },
+      storage
+    )!;
+    savePendingMarketplaceOAuthPrompt(pending, storage);
+    let rejectAttempt!: (error: Error) => void;
+    const held = new Promise<never>((_, reject) => {
+      rejectAttempt = reject;
+    });
+    const oldClaim = claimMarketplaceOAuthPrompt({
+      client: { service: () => ({ get: () => held }) } as unknown as AgorClient,
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set(),
+      authority,
+      isCurrent: () => true,
+      storage,
+    });
+
+    vi.resetModules();
+    const replacement = await import('./marketplaceOAuthPrompt');
+    const setItem = vi.spyOn(storage, 'setItem').mockImplementation(() => {
+      throw new DOMException('read-only after HMR', 'SecurityError');
+    });
+    const removeItem = vi.spyOn(storage, 'removeItem').mockImplementation(() => {
+      throw new DOMException('read-only after HMR', 'SecurityError');
+    });
+    replacement.markMarketplacePromptAttempt(
+      {
+        sessionId: pending.sessionId,
+        attemptId: 'attempt-hmr-new',
+        createdAt: Date.now(),
+        ...authority,
+      },
+      storage
+    );
+    expect(isMarketplacePromptSuggestionCurrent(oldSuggestion, storage)).toBe(false);
+    setItem.mockRestore();
+    removeItem.mockRestore();
+
+    replacement.discardMarketplaceOAuthStateForAuthority(authority, storage);
+    rejectAttempt(new Error('transient result from replaced module'));
+    await expect(oldClaim).resolves.toBeNull();
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId, storage)).toBeNull();
   });
 
   it('expires an in-memory suggestion through its exact attempt marker', () => {

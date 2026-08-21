@@ -6,7 +6,6 @@ const SUGGESTION_KEY_PREFIX = 'agor-marketplace-prompt-suggestion:';
 const ATTEMPT_KEY_PREFIX = 'agor-marketplace-prompt-attempt:';
 const PROMPT_STATE_EVENT = 'agor:marketplace-prompt-state-changed';
 const MAX_AGE_MS = 60 * 60 * 1000;
-let promptStateRevision = 0;
 
 export interface MarketplaceOAuthHandoffAuthority {
   userId: string;
@@ -57,23 +56,62 @@ interface PromptClaimFlight {
   finalized: boolean;
 }
 
-// A browser tab has one sessionStorage object and one module realm. Key claim
-// flights by that object so replacement effects in the same tab can adopt a
-// held validation, while distinct tabs (and test storage contexts) can never
-// observe or consume each other's operation.
-const claimFlightsByStorage = new WeakMap<PromptStorage, Map<string, PromptClaimFlight>>();
+interface MemoryAttemptMarker {
+  marker: MarketplacePromptAttemptMarker;
+  /** Whether this exact marker was durably mirrored to sessionStorage. */
+  persisted: boolean;
+}
 
+interface MarketplacePromptTabMemory {
+  attemptMarkersByStorage: WeakMap<PromptStorage, Map<string, MemoryAttemptMarker>>;
+  claimFlightsByStorage: WeakMap<PromptStorage, Map<string, PromptClaimFlight>>;
+  revision: number;
+}
+
+// Keep the security fence across Vite HMR module replacement. A full page
+// reload reconstructs it from sessionStorage; entries whose write failed are
+// intentionally memory-only for the remainder of this tab realm.
+const TAB_MEMORY_KEY = Symbol.for('agor.marketplace-prompt-tab-memory.v2');
+const tabMemoryGlobal = globalThis as typeof globalThis & {
+  [TAB_MEMORY_KEY]?: MarketplacePromptTabMemory;
+};
+function getPromptTabMemory(): MarketplacePromptTabMemory {
+  const existing = tabMemoryGlobal[TAB_MEMORY_KEY];
+  if (existing) return existing;
+  const created: MarketplacePromptTabMemory = {
+    attemptMarkersByStorage: new WeakMap(),
+    claimFlightsByStorage: new WeakMap(),
+    revision: 0,
+  };
+  tabMemoryGlobal[TAB_MEMORY_KEY] = created;
+  return created;
+}
+const promptTabMemory = getPromptTabMemory();
+
+// A browser tab has one sessionStorage object. Key claim flights by that
+// object so replacement effects (including across HMR) can adopt or cancel a
+// held validation, while distinct tabs and test storage contexts can never
+// observe or consume each other's operation.
 function tabStorage(storage?: PromptStorage): PromptStorage {
   return storage ?? sessionStorage;
 }
 
 function claimFlights(storage: PromptStorage): Map<string, PromptClaimFlight> {
-  let flights = claimFlightsByStorage.get(storage);
+  let flights = promptTabMemory.claimFlightsByStorage.get(storage);
   if (!flights) {
     flights = new Map();
-    claimFlightsByStorage.set(storage, flights);
+    promptTabMemory.claimFlightsByStorage.set(storage, flights);
   }
   return flights;
+}
+
+function memoryAttemptMarkers(storage: PromptStorage): Map<string, MemoryAttemptMarker> {
+  let markers = promptTabMemory.attemptMarkersByStorage.get(storage);
+  if (!markers) {
+    markers = new Map();
+    promptTabMemory.attemptMarkersByStorage.set(storage, markers);
+  }
+  return markers;
 }
 
 function notifyPromptStateChanged(storage: PromptStorage): void {
@@ -86,7 +124,7 @@ function notifyPromptStateChanged(storage: PromptStorage): void {
     return;
   }
   try {
-    promptStateRevision += 1;
+    promptTabMemory.revision += 1;
     window.dispatchEvent(new Event(PROMPT_STATE_EVENT));
   } catch {
     // Presentation invalidation must never break Connect/logout.
@@ -101,7 +139,7 @@ export function subscribeMarketplacePromptState(listener: () => void): () => voi
 }
 
 export function getMarketplacePromptStateRevision(): number {
-  return promptStateRevision;
+  return promptTabMemory.revision;
 }
 
 function remove(sessionId: string, storage?: PromptStorage): void {
@@ -174,6 +212,21 @@ function installMarketplacePromptAttempt(
   value: MarketplacePromptAttemptMarker,
   promptStorage: PromptStorage
 ): void {
+  const marker: MarketplacePromptAttemptMarker = {
+    sessionId: value.sessionId,
+    attemptId: value.attemptId,
+    userId: value.userId,
+    role: value.role,
+    authGeneration: value.authGeneration,
+    createdAt: value.createdAt,
+  };
+  const memoryMarkers = memoryAttemptMarkers(promptStorage);
+  // This assignment is the authoritative synchronous fence. It must happen
+  // before *any* storage read/write that can throw, otherwise a quota or
+  // read-only failure could leave an earlier suggestion actionable.
+  const memoryEntry: MemoryAttemptMarker = { marker, persisted: false };
+  memoryMarkers.set(value.sessionId, memoryEntry);
+
   const existingFlight = claimFlights(promptStorage).get(value.sessionId);
   if (
     existingFlight &&
@@ -184,22 +237,51 @@ function installMarketplacePromptAttempt(
     existingFlight.finalized = true;
     claimFlights(promptStorage).delete(value.sessionId);
   }
-  const existingPending = readPendingMarketplaceOAuthPrompt(value.sessionId, promptStorage);
-  if (
-    existingPending &&
-    authorityMatches(existingPending, value) &&
-    existingPending.attemptId !== value.attemptId
-  ) {
-    promptStorage.removeItem(key(value.sessionId));
+
+  // Clear stale durable presentation best-effort. These operations are kept
+  // independent so one failing storage method cannot prevent the others.
+  try {
+    const existingPending = readPendingMarketplaceOAuthPrompt(value.sessionId, promptStorage);
+    if (
+      existingPending &&
+      authorityMatches(existingPending, value) &&
+      existingPending.attemptId !== value.attemptId
+    ) {
+      promptStorage.removeItem(key(value.sessionId));
+    }
+  } catch {
+    // memoryEntry remains authoritative
   }
-  promptStorage.setItem(attemptKey(value.sessionId), JSON.stringify(value));
-  const suggestion = readMarketplacePromptSuggestion(value.sessionId, promptStorage);
-  if (
-    suggestion &&
-    authorityMatches(suggestion, value) &&
-    suggestion.attemptId !== value.attemptId
-  ) {
-    promptStorage.removeItem(suggestionKey(value.sessionId));
+  try {
+    const suggestion = readMarketplacePromptSuggestion(value.sessionId, promptStorage);
+    if (
+      suggestion &&
+      authorityMatches(suggestion, value) &&
+      suggestion.attemptId !== value.attemptId
+    ) {
+      promptStorage.removeItem(suggestionKey(value.sessionId));
+    }
+  } catch {
+    // memoryEntry remains authoritative
+  }
+  try {
+    promptStorage.setItem(attemptKey(value.sessionId), JSON.stringify(marker));
+    // Do not let a re-entrant/newer marker write downgrade its memory fence.
+    if (memoryMarkers.get(value.sessionId) === memoryEntry) memoryEntry.persisted = true;
+  } catch {
+    // Invalidate a readable older marker/suggestion where removal is still
+    // allowed (for example quota failure). The memory marker remains the
+    // authority even when a read-only storage implementation rejects these.
+    try {
+      promptStorage.removeItem(attemptKey(value.sessionId));
+    } catch {
+      // memoryEntry remains authoritative
+    }
+    try {
+      promptStorage.removeItem(suggestionKey(value.sessionId));
+    } catch {
+      // memoryEntry remains authoritative
+    }
   }
 }
 
@@ -491,19 +573,11 @@ export function saveMarketplacePromptSuggestion(
   let promptStorage: PromptStorage | undefined;
   try {
     promptStorage = tabStorage(storage);
-    promptStorage.setItem(
-      attemptKey(input.sessionId),
-      JSON.stringify({
-        sessionId: input.sessionId,
-        attemptId,
-        ...input.authority,
-        createdAt: suggestion.createdAt,
-      })
-    );
+    installMarketplacePromptAttempt(suggestion, promptStorage);
     promptStorage.setItem(suggestionKey(input.sessionId), JSON.stringify(suggestion));
   } catch {
-    // Return fully authority-scoped in-memory state. Its storage-backed
-    // attempt fence remains absent, so render/action guards fail closed.
+    // Return fully authority-scoped in-memory state. The tab-memory attempt
+    // fence remains authoritative even when durable suggestion storage fails.
   }
   if (promptStorage) notifyPromptStateChanged(promptStorage);
   return suggestion;
@@ -571,23 +645,48 @@ export function isMarketplacePromptSuggestionCurrent(
   storage?: PromptStorage
 ): boolean {
   try {
-    const raw = tabStorage(storage).getItem(attemptKey(suggestion.sessionId));
+    const promptStorage = tabStorage(storage);
+    const memoryMarkers = memoryAttemptMarkers(promptStorage);
+    const memoryEntry = memoryMarkers.get(suggestion.sessionId);
+    if (memoryEntry) {
+      const current = markerMatchesSuggestion(memoryEntry.marker, suggestion);
+      if (!memoryEntry.persisted) return current;
+
+      // External sessionStorage.clear() is common during logout and test
+      // isolation. A persisted memory cache cannot resurrect a marker that no
+      // longer exists durably; discard it and fail closed.
+      const stored = promptStorage.getItem(attemptKey(suggestion.sessionId));
+      if (!stored) {
+        memoryMarkers.delete(suggestion.sessionId);
+        return false;
+      }
+      return current;
+    }
+
+    const raw = promptStorage.getItem(attemptKey(suggestion.sessionId));
     if (!raw) return false;
     const marker = JSON.parse(raw) as Partial<MarketplacePromptSuggestionState> & {
       createdAt?: number;
     };
-    return (
-      marker.sessionId === suggestion.sessionId &&
-      marker.attemptId === suggestion.attemptId &&
-      marker.userId === suggestion.userId &&
-      marker.role === suggestion.role &&
-      marker.authGeneration === suggestion.authGeneration &&
-      typeof marker.createdAt === 'number' &&
-      Date.now() - marker.createdAt <= MAX_AGE_MS
-    );
+    return markerMatchesSuggestion(marker, suggestion);
   } catch {
     return false;
   }
+}
+
+function markerMatchesSuggestion(
+  marker: Partial<MarketplacePromptAttemptMarker>,
+  suggestion: MarketplacePromptSuggestionState
+): boolean {
+  return (
+    marker.sessionId === suggestion.sessionId &&
+    marker.attemptId === suggestion.attemptId &&
+    marker.userId === suggestion.userId &&
+    marker.role === suggestion.role &&
+    marker.authGeneration === suggestion.authGeneration &&
+    typeof marker.createdAt === 'number' &&
+    Date.now() - marker.createdAt <= MAX_AGE_MS
+  );
 }
 
 export function discardMarketplacePromptSuggestion(
@@ -628,6 +727,7 @@ export function discardMarketplaceOAuthAuthorityState(
   remove(sessionId, promptStorage);
   discardMarketplacePromptSuggestion(sessionId, promptStorage);
   try {
+    memoryAttemptMarkers(promptStorage).delete(sessionId);
     promptStorage.removeItem(attemptKey(sessionId));
     notifyPromptStateChanged(promptStorage);
   } catch {
@@ -637,7 +737,8 @@ export function discardMarketplaceOAuthAuthorityState(
 
 /** Clear only the identity being logged out, even when no SessionPanel exists. */
 export function discardMarketplaceOAuthStateForAuthority(
-  authority: Pick<MarketplaceOAuthHandoffAuthority, 'userId' | 'role'>,
+  authority: Pick<MarketplaceOAuthHandoffAuthority, 'userId' | 'role'> &
+    Partial<Pick<MarketplaceOAuthHandoffAuthority, 'authGeneration'>>,
   storage?: Storage
 ): void {
   let promptStorage: Storage | undefined;
@@ -648,12 +749,22 @@ export function discardMarketplaceOAuthStateForAuthority(
   }
   if (!promptStorage) return;
   const flights = claimFlights(promptStorage);
+  const belongsToAuthority = (value: MarketplaceOAuthHandoffAuthority) =>
+    value.userId === authority.userId &&
+    value.role === authority.role &&
+    (authority.authGeneration === undefined || value.authGeneration === authority.authGeneration);
   let changed = false;
   for (const [sessionId, flight] of flights) {
-    if (flight.pending.userId === authority.userId && flight.pending.role === authority.role) {
+    if (belongsToAuthority(flight.pending)) {
       flight.cancelled = true;
       flight.finalized = true;
       flights.delete(sessionId);
+      changed = true;
+    }
+  }
+  for (const [sessionId, entry] of memoryAttemptMarkers(promptStorage)) {
+    if (belongsToAuthority(entry.marker)) {
+      memoryAttemptMarkers(promptStorage).delete(sessionId);
       changed = true;
     }
   }
@@ -671,7 +782,14 @@ export function discardMarketplaceOAuthStateForAuthority(
         const value = JSON.parse(
           promptStorage.getItem(storageKey) ?? '{}'
         ) as Partial<MarketplacePromptSuggestionState>;
-        if (value.userId === authority.userId && value.role === authority.role) {
+        if (
+          typeof value.userId !== 'string' ||
+          typeof value.role !== 'string' ||
+          typeof value.authGeneration !== 'number'
+        ) {
+          promptStorage.removeItem(storageKey);
+          changed = true;
+        } else if (belongsToAuthority(value as MarketplaceOAuthHandoffAuthority)) {
           promptStorage.removeItem(storageKey);
           changed = true;
         }
