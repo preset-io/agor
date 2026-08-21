@@ -1,8 +1,4 @@
-import type {
-  MCPMarketplaceOverview,
-  MCPMarketplaceServer,
-  ToolPermission,
-} from '@agor/core/types';
+import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
@@ -24,20 +20,6 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 
 const { Text, Title } = Typography;
 
-export function nextToolPermissions(
-  server: MCPMarketplaceServer,
-  toolName: string,
-  enabled: boolean
-): Record<string, ToolPermission> {
-  const next: Record<string, ToolPermission> = {};
-  for (const tool of server.tools) {
-    if (tool.permission !== 'default') next[tool.name] = tool.permission;
-  }
-  if (enabled) delete next[toolName];
-  else next[toolName] = 'deny';
-  return next;
-}
-
 export const MyServersTab: React.FC<{
   client: AgorClient | null;
   authorityKey: readonly unknown[] | null;
@@ -47,7 +29,10 @@ export const MyServersTab: React.FC<{
   refresh: () => Promise<void>;
 }> = ({ client, authorityKey, overview, loading, error, refresh }) => {
   const guard = useAuthorityOperationGuard(authorityKey);
-  const [busy, setBusy] = useState<string | null>(null);
+  // Per-operation tracking permits safe concurrent A/B tool toggles while
+  // preventing a second click on the same control. The daemon mutation itself
+  // is an atomic one-tool merge, so no whole-policy lost update is possible.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const cursorServerIds = useMemo(
     () =>
       new Set(
@@ -61,7 +46,7 @@ export const MyServersTab: React.FC<{
   const mutate = async (key: string, work: () => Promise<unknown>, success: string) => {
     const operation = guard.begin();
     if (!client || !operation.isCurrent()) return;
-    setBusy(key);
+    setBusy((current) => new Set(current).add(key));
     try {
       await work();
       if (!operation.isCurrent()) return;
@@ -71,7 +56,12 @@ export const MyServersTab: React.FC<{
       if (operation.isCurrent())
         message.error(cause instanceof Error ? cause.message : 'Action failed');
     } finally {
-      if (operation.isCurrent()) setBusy(null);
+      if (operation.isCurrent())
+        setBusy((current) => {
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
     }
   };
 
@@ -123,7 +113,7 @@ export const MyServersTab: React.FC<{
                 <Space>
                   <Button
                     icon={<ReloadOutlined />}
-                    loading={busy === `discover:${server.mcp_server_id}`}
+                    loading={busy.has(`discover:${server.mcp_server_id}`)}
                     onClick={() =>
                       void mutate(
                         `discover:${server.mcp_server_id}`,
@@ -138,13 +128,16 @@ export const MyServersTab: React.FC<{
                     Refresh tools
                   </Button>
                   <Popconfirm
-                    title="Remove this server?"
-                    description="Only unattached servers can be removed here."
+                    title="Remove this unattached server?"
+                    description="Agor checks attachments again when you confirm. If a session attaches it first, nothing is removed and you can detach it before retrying."
                     disabled={server.session_count > 0}
                     onConfirm={() =>
                       void mutate(
                         `remove:${server.mcp_server_id}`,
-                        () => client!.service('mcp-servers').remove(server.mcp_server_id),
+                        () =>
+                          client!.service('mcp-marketplace/remove-unattached').create({
+                            mcp_server_id: server.mcp_server_id,
+                          }),
                         'Server removed'
                       )
                     }
@@ -153,7 +146,7 @@ export const MyServersTab: React.FC<{
                       danger
                       icon={<DeleteOutlined />}
                       disabled={server.session_count > 0}
-                      loading={busy === `remove:${server.mcp_server_id}`}
+                      loading={busy.has(`remove:${server.mcp_server_id}`)}
                     >
                       Remove
                     </Button>
@@ -180,15 +173,17 @@ export const MyServersTab: React.FC<{
                       <Space key="control">
                         {tool.permission === 'ask' && <Tag color="gold">Ask</Tag>}
                         <Switch
-                          aria-label={`${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
+                          aria-label={`${server.display_name ?? server.name}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
                           checked={tool.permission !== 'deny'}
-                          loading={busy === `tool:${server.mcp_server_id}:${tool.name}`}
+                          loading={busy.has(`tool:${server.mcp_server_id}:${tool.name}`)}
                           onChange={(checked) =>
                             void mutate(
                               `tool:${server.mcp_server_id}:${tool.name}`,
                               () =>
-                                client!.service('mcp-servers').patch(server.mcp_server_id, {
-                                  tool_permissions: nextToolPermissions(server, tool.name, checked),
+                                client!.service('mcp-marketplace/tool-permission').create({
+                                  mcp_server_id: server.mcp_server_id,
+                                  tool_name: tool.name,
+                                  enabled: checked,
                                 }),
                               checked ? `${tool.name} uses the default` : `${tool.name} is off`
                             )

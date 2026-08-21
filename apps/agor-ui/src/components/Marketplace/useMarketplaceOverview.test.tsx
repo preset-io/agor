@@ -44,6 +44,7 @@ describe('useMarketplaceOverview live recovery', () => {
         connecting: false,
         authGeneration: 1,
         userId: 'alice',
+        role: 'member',
       })
     );
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
@@ -54,5 +55,130 @@ describe('useMarketplaceOverview live recovery', () => {
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(3));
     expect(result.current.error).toBeNull();
+  });
+
+  it('synchronously clears Alice data while Bob is held, clears on failure, and discards Alice', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    let resolveAlice!: (value: MCPMarketplaceOverview) => void;
+    let rejectBob!: (reason: Error) => void;
+    const alice = new Promise<MCPMarketplaceOverview>((resolve) => (resolveAlice = resolve));
+    const bob = new Promise<MCPMarketplaceOverview>((_resolve, reject) => (rejectBob = reject));
+    let identity = 'alice';
+    const find = vi.fn(() => (identity === 'alice' ? alice : bob));
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const view = (userId: string) => ({
+      client,
+      connected: true,
+      connecting: false,
+      authGeneration: userId === 'alice' ? 1 : 2,
+      userId,
+      role: 'member',
+    });
+    const { result, rerender } = renderHook(({ userId }) => useMarketplaceOverview(view(userId)), {
+      initialProps: { userId: 'alice' },
+    });
+    resolveAlice({
+      servers: [
+        {
+          mcp_server_id: 'server-alice',
+          name: 'alice-private',
+          source: 'user',
+          enabled: true,
+          tools: [],
+          session_count: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+      attachments: [],
+      credentials: [],
+      generated_at: new Date().toISOString(),
+    } as MCPMarketplaceOverview);
+    await waitFor(() => expect(result.current.overview.servers).toHaveLength(1));
+
+    identity = 'bob';
+    rerender({ userId: 'bob' });
+    expect(result.current.overview.servers).toHaveLength(0);
+    rejectBob(new Error('Bob load failed'));
+    await waitFor(() => expect(result.current.error).toBe('Bob load failed'));
+    expect(result.current.overview.servers).toHaveLength(0);
+  });
+
+  it('does not render an earlier caller error while the next caller is held', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    let identity = 'alice';
+    let rejectAlice!: (reason: Error) => void;
+    const alice = new Promise<MCPMarketplaceOverview>((_resolve, reject) => (rejectAlice = reject));
+    const bob = new Promise<MCPMarketplaceOverview>(() => undefined);
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace'
+          ? { find: () => (identity === 'alice' ? alice : bob) }
+          : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const { result, rerender } = renderHook(
+      ({ userId }) =>
+        useMarketplaceOverview({
+          client,
+          connected: true,
+          connecting: false,
+          authGeneration: userId === 'alice' ? 1 : 2,
+          userId,
+          role: 'member',
+        }),
+      { initialProps: { userId: 'alice' } }
+    );
+    rejectAlice(new Error('Alice private load failure'));
+    await waitFor(() => expect(result.current.error).toBe('Alice private load failure'));
+
+    identity = 'bob';
+    rerender({ userId: 'bob' });
+    expect(result.current.error).toBeNull();
+    expect(result.current.overview.servers).toHaveLength(0);
+    expect(result.current.overview.attachments).toHaveLength(0);
+    expect(result.current.overview.credentials).toHaveLength(0);
+  });
+
+  it('discards an older same-authority response after a newer refresh wins', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    let resolveFirst!: (value: MCPMarketplaceOverview) => void;
+    const first = new Promise<MCPMarketplaceOverview>((resolve) => (resolveFirst = resolve));
+    const newer: MCPMarketplaceOverview = {
+      servers: [],
+      attachments: [],
+      credentials: [],
+      generated_at: new Date(2).toISOString(),
+    };
+    const older = { ...newer, generated_at: new Date(1).toISOString() };
+    const find = vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce(newer);
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client,
+        connected: true,
+        connecting: false,
+        authGeneration: 1,
+        userId: 'alice',
+        role: 'member',
+      })
+    );
+    await waitFor(() => expect(find).toHaveBeenCalledOnce());
+    await act(async () => result.current.refresh());
+    await waitFor(() => expect(result.current.overview.generated_at).toBe(newer.generated_at));
+    resolveFirst(older);
+    await act(async () => first);
+    expect(result.current.overview.generated_at).toBe(newer.generated_at);
   });
 });

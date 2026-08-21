@@ -52,7 +52,8 @@ import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
-import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -63,7 +64,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
-import { takeMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
+import { claimMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
@@ -309,6 +310,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const { connected, connecting, authGeneration } = useConnectionState();
   const recenterMap = useRecenterMap();
 
   // Subscribe only to the entity families this panel needs via narrow store
@@ -319,6 +321,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+  const currentRole = currentUserId ? userById.get(currentUserId)?.role : undefined;
+  const marketplaceHandoffGuard = useAuthorityOperationGuard(
+    client && connected && !connecting && currentUserId && currentRole
+      ? [client, currentUserId, currentRole, authGeneration]
+      : null
+  );
 
   // Get actions from context
   const {
@@ -433,16 +441,32 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // handoff is consumed whether or not it can be inserted: text the user has
   // already typed always wins and is never overwritten later.
   React.useEffect(() => {
-    if (!session) return;
-    const prompt = takeMarketplaceOAuthPrompt(
-      session.session_id,
-      userAuthenticatedMcpServerIds,
-      promptRef.current?.getValue() ?? inputValueRef.current
-    );
-    if (!prompt) return;
-    savePromptDraft(session.session_id, prompt);
-    promptRef.current?.insertText(prompt);
-  }, [session, userAuthenticatedMcpServerIds]);
+    const operation = marketplaceHandoffGuard.begin();
+    if (!session || !client || !currentUserId || !currentRole || !operation.isCurrent()) return;
+    void claimMarketplaceOAuthPrompt({
+      client,
+      sessionId: session.session_id,
+      authenticatedServerIds: userAuthenticatedMcpServerIds,
+      authority: { userId: currentUserId, role: currentRole, authGeneration },
+      isCurrent: operation.isCurrent,
+    }).then((prompt) => {
+      if (!prompt || !operation.isCurrent()) return;
+      // The user may type while the durable attempt read is in flight. Their
+      // text wins even though the handoff has now been consumed exactly once.
+      if ((promptRef.current?.getValue() ?? inputValueRef.current).trim()) return;
+      savePromptDraft(session.session_id, prompt);
+      promptRef.current?.insertText(prompt);
+    });
+    return operation.cancel;
+  }, [
+    authGeneration,
+    client,
+    currentRole,
+    currentUserId,
+    marketplaceHandoffGuard,
+    session,
+    userAuthenticatedMcpServerIds,
+  ]);
 
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local

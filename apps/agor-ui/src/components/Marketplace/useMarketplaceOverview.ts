@@ -1,6 +1,6 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 
 const EMPTY: MCPMarketplaceOverview = {
@@ -16,36 +16,64 @@ export function useMarketplaceOverview(input: {
   connecting: boolean;
   authGeneration: number;
   userId?: string;
+  role?: string;
 }) {
-  const { client, connected, connecting, authGeneration, userId } = input;
-  const ready = Boolean(client && connected && !connecting && userId);
-  const guard = useAuthorityOperationGuard(ready ? [userId!, authGeneration, client] : null);
-  const [overview, setOverview] = useState<MCPMarketplaceOverview>(EMPTY);
+  const { client, connected, connecting, authGeneration, userId, role } = input;
+  const ready = Boolean(client && connected && !connecting && userId && role);
+  const authority = useMemo(
+    () => (ready ? { userId: userId!, role: role!, authGeneration, client } : null),
+    [authGeneration, client, ready, role, userId]
+  );
+  const guard = useAuthorityOperationGuard(
+    authority
+      ? [authority.userId, authority.role, authority.authGeneration, authority.client]
+      : null
+  );
+  const [loaded, setLoaded] = useState<{
+    authority: typeof authority;
+    value: MCPMarketplaceOverview;
+  }>({ authority: null, value: EMPTY });
   const [loading, setLoading] = useState(ready);
-  const [error, setError] = useState<string | null>(null);
+  const [loadedError, setLoadedError] = useState<{
+    authority: typeof authority;
+    value: string | null;
+  }>({ authority: null, value: null });
+  const requestSequence = useRef(0);
+
+  // Never render data captured under another identity/role/auth generation,
+  // even for the render before effects run. This is the caller-private data
+  // boundary; effects only perform I/O and cleanup.
+  const overview = loaded.authority === authority ? loaded.value : EMPTY;
+  const error = loadedError.authority === authority ? loadedError.value : null;
 
   const refresh = useCallback(async () => {
     const operation = guard.begin();
     if (!client || !ready || !operation.isCurrent()) return;
+    const request = ++requestSequence.current;
+    const isCurrent = () => operation.isCurrent() && requestSequence.current === request;
     setLoading(true);
+    setLoadedError({ authority, value: null });
     try {
       const result = await client.service('mcp-marketplace').find();
-      if (!operation.isCurrent()) return;
-      setOverview(result);
-      setError(null);
+      if (!isCurrent()) return;
+      setLoaded({ authority, value: result });
     } catch (cause) {
-      if (!operation.isCurrent()) return;
-      setError(cause instanceof Error ? cause.message : 'Could not load Marketplace data');
+      if (!isCurrent()) return;
+      setLoaded({ authority, value: EMPTY });
+      setLoadedError({
+        authority,
+        value: cause instanceof Error ? cause.message : 'Could not load Marketplace data',
+      });
     } finally {
-      if (operation.isCurrent()) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [client, guard, ready]);
+  }, [authority, client, guard, ready]);
 
   useEffect(() => {
     if (!ready) {
-      setOverview(EMPTY);
+      setLoaded({ authority: null, value: EMPTY });
       setLoading(false);
-      setError(null);
+      setLoadedError({ authority: null, value: null });
       return;
     }
     void refresh();
@@ -56,17 +84,33 @@ export function useMarketplaceOverview(input: {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => void refresh(), 40);
+      requestSequence.current++;
+      // Visibility can only narrow while this read is in flight. Fail closed
+      // immediately, then coalesce event bursts into one authoritative read.
+      setLoaded({ authority, value: EMPTY });
+      setLoadedError({ authority, value: null });
+      timer = setTimeout(() => void refresh(), 100);
     };
-    const services = ['mcp-servers', 'session-mcp-servers', 'sessions', 'branches'] as const;
+    const services = [
+      'mcp-servers',
+      'session-mcp-servers',
+      'sessions',
+      'branches',
+      'branches/:id/owners',
+      'branches/:id/group-grants',
+      'groups',
+      'group-memberships',
+      'users',
+      'mcp-member-policy',
+    ] as const;
     const events = ['created', 'patched', 'updated', 'removed'] as const;
     for (const path of services) {
       for (const event of events) client.service(path).on(event, schedule);
     }
     client.io.on('oauth:completed', schedule);
     client.io.on('oauth:disconnected', schedule);
-    const onFocus = () => void refresh();
-    const onVisibility = () => document.visibilityState === 'visible' && void refresh();
+    const onFocus = schedule;
+    const onVisibility = () => document.visibilityState === 'visible' && schedule();
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -79,7 +123,7 @@ export function useMarketplaceOverview(input: {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [client, ready, refresh]);
+  }, [authority, client, ready, refresh]);
 
   return { overview, loading, error, refresh };
 }

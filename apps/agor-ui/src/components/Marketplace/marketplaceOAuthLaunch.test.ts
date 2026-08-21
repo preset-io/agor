@@ -28,8 +28,20 @@ describe('Marketplace OAuth launch', () => {
     });
     const replace = vi.fn();
     const close = vi.fn();
-    const popup = { location: { replace }, close } as unknown as Window;
-    await expect(launchMarketplaceOAuth(client, result, popup)).resolves.toBe(true);
+    const popup = {
+      operationId: 'popup-1',
+      navigate: (url: string) => {
+        replace(url);
+        return true;
+      },
+      close,
+    };
+    await expect(
+      launchMarketplaceOAuth(client, result, popup, {
+        authority: { userId: 'alice', role: 'member', authGeneration: 3 },
+        isCurrent: () => true,
+      })
+    ).resolves.toBe(true);
     expect(create).toHaveBeenCalledWith({ mcp_server_id: 'server-oauth' });
     expect(replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(close).not.toHaveBeenCalled();
@@ -40,15 +52,45 @@ describe('Marketplace OAuth launch', () => {
       serverId: 'server-oauth',
       attemptId: 'attempt-1',
       prompt: 'Show my work',
+      userId: 'alice',
+      authGeneration: 3,
+      popupOperationId: 'popup-1',
     });
   });
 
   it('closes the pre-opened window when OAuth start is refused', async () => {
     const { client } = clientWith({ success: false, error: 'not available' });
     const close = vi.fn();
-    const popup = { location: { replace: vi.fn() }, close } as unknown as Window;
-    await expect(launchMarketplaceOAuth(client, result, popup)).resolves.toBe(false);
+    const popup = { operationId: 'popup-2', navigate: vi.fn(), close };
+    await expect(
+      launchMarketplaceOAuth(client, result, popup, {
+        authority: { userId: 'alice', role: 'member', authGeneration: 3 },
+        isCurrent: () => true,
+      })
+    ).resolves.toBe(false);
     expect(close).toHaveBeenCalledOnce();
     expect(localStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
+  });
+
+  it('closes without handoff or navigation when authority changes during oauth-start', async () => {
+    let release!: (value: unknown) => void;
+    const held = new Promise((resolve) => (release = resolve));
+    const { client } = clientWith(held);
+    let current = true;
+    const popup = { operationId: 'popup-stale', navigate: vi.fn(), close: vi.fn() };
+    const launched = launchMarketplaceOAuth(client, result, popup, {
+      authority: { userId: 'alice', role: 'member', authGeneration: 3 },
+      isCurrent: () => current,
+    });
+    current = false;
+    release({
+      success: true,
+      authorizationUrl: 'https://accounts.example.test/authorize',
+      attempt_id: 'attempt-stale',
+    });
+    await expect(launched).resolves.toBe(false);
+    expect(popup.close).toHaveBeenCalledOnce();
+    expect(popup.navigate).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
   });
 });

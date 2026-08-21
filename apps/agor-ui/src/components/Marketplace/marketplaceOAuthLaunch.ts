@@ -1,16 +1,29 @@
 import type { MCPCatalogConnectResult, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { savePendingMarketplaceOAuthPrompt } from '../../utils/marketplaceOAuthPrompt';
+import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 /** Start OAuth only for the authoritative saved server returned by Connect. */
 export async function launchMarketplaceOAuth(
   client: AgorClient,
   result: MCPCatalogConnectResult,
-  popup: Window
+  popup: MarketplaceOAuthPopup,
+  options: {
+    authority: { userId: string; role: string; authGeneration: number };
+    isCurrent: () => boolean;
+  }
 ): Promise<boolean> {
+  if (!options.isCurrent()) {
+    popup.close();
+    return false;
+  }
   const started = (await client.service('mcp-servers/oauth-start').create({
     mcp_server_id: result.mcp_server.mcp_server_id,
   })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
+  if (!options.isCurrent()) {
+    popup.close();
+    return false;
+  }
   if (!started.success || !started.authorizationUrl || !started.attempt_id) {
     popup.close();
     return false;
@@ -22,8 +35,13 @@ export async function launchMarketplaceOAuth(
       attemptId: started.attempt_id,
       prompt: result.starter_prompt,
       createdAt: Date.now(),
+      userId: options.authority.userId,
+      role: options.authority.role,
+      authGeneration: options.authority.authGeneration,
+      popupOperationId: popup.operationId,
     });
   }
-  popup.location.replace(started.authorizationUrl);
-  return true;
+  // Guard once more inside the launch helper immediately before handing the
+  // third-party URL to the pre-opened window.
+  return popup.navigate(started.authorizationUrl, options.isCurrent);
 }

@@ -1,5 +1,5 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
-import { Empty, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Flex, Table, Tag, Typography } from 'antd';
 
 const formatTime = (value?: string) => (value ? new Date(value).toLocaleString() : '—');
 
@@ -7,11 +7,21 @@ export const CredentialsTab: React.FC<{
   overview: MCPMarketplaceOverview;
   loading: boolean;
   error: string | null;
-}> = ({ overview, loading, error }) => {
-  if (!loading && overview.credentials.length === 0)
-    return <Empty description={error ?? 'No credential metadata'} />;
+  refresh: () => Promise<void>;
+}> = ({ overview, loading, error, refresh }) => {
+  if (!loading && overview.credentials.length === 0 && !error)
+    return <Empty description="No credential metadata" />;
   return (
-    <>
+    <Flex vertical gap={16}>
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          message="Could not load credential metadata"
+          description={error}
+          action={<Button onClick={() => void refresh()}>Retry</Button>}
+        />
+      )}
       <Typography.Paragraph type="secondary">
         Read-only connection metadata. Marketplace never displays credential values, identifiers,
         bindings, endpoints, or token fragments.
@@ -45,6 +55,6 @@ export const CredentialsTab: React.FC<{
           { title: 'Updated', render: (_, row) => formatTime(row.updated_at) },
         ]}
       />
-    </>
+    </Flex>
   );
 };

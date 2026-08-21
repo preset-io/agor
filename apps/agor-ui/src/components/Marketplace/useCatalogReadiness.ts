@@ -40,12 +40,20 @@ export function useCatalogReadiness(input: {
   useEffect(() => {
     setValue(null);
     setError(null);
-    if (enabled) void refresh();
+    if (!enabled) return;
+    // Drawer switches and rapid open/close gestures should not issue a request
+    // for every intermediate entry.
+    const timer = window.setTimeout(() => void refresh(), 100);
+    return () => window.clearTimeout(timer);
   }, [enabled, refresh]);
 
   useEffect(() => {
     if (!client || !enabled) return;
-    const schedule = () => void refresh();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), 100);
+    };
     const service = client.service('mcp-servers');
     for (const event of ['created', 'patched', 'updated', 'removed'] as const) {
       service.on(event, schedule);
@@ -54,6 +62,7 @@ export function useCatalogReadiness(input: {
     client.io.on('oauth:disconnected', schedule);
     window.addEventListener('focus', schedule);
     return () => {
+      clearTimeout(timer);
       for (const event of ['created', 'patched', 'updated', 'removed'] as const) {
         service.off(event, schedule);
       }

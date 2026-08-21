@@ -39,6 +39,7 @@ import {
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
+import { type MarketplaceOAuthPopup, openMarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 const { Title, Paragraph, Text, Link } = Typography;
 
@@ -102,7 +103,7 @@ export interface CatalogDetailDrawerProps {
     agenticTool: AgenticToolName;
     acknowledgedDisclosure: string;
     bearerToken?: string;
-    oauthWindow?: Window;
+    oauthPopup?: MarketplaceOAuthPopup;
   }) => void;
 }
 
@@ -152,69 +153,75 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
 
   const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
-  const advisoryStatus =
-    connect?.readiness === 'blocked'
-      ? connect
-      : readiness?.state === 'no_auth'
-        ? {
-            readiness: 'ready',
-            label: 'No account needed',
-            detail: 'Connect in one step and try the starter prompt.',
-          }
-        : readiness?.state === 'bearer_required'
-          ? {
-              readiness: 'api-key',
-              label: 'Use your API key',
-              detail: 'Verify a key from your own account before a session is created.',
-            }
-          : readiness?.state === 'oauth_required'
-            ? {
-                readiness: 'sign-in',
-                label: `Connect with ${title || 'provider'}`,
-                detail: 'Sign in with your own account in a separate secure window.',
-              }
-            : readiness?.state === 'installed_ready'
-              ? {
-                  readiness: 'ready',
-                  label: 'Ready to use',
-                  detail: 'Your existing connection can be used in a new session.',
-                }
-              : readiness?.state === 'reusable_oauth'
-                ? {
-                    readiness: 'ready',
-                    label: 'Existing sign-in available',
-                    detail:
-                      'Reuse your existing connection in a new session without signing in again.',
-                  }
-                : connect;
-  const runtimeStatus =
-    credentialRequirement === 'required'
-      ? {
+  const readinessPresentation = (() => {
+    switch (readiness?.state) {
+      case 'no_auth':
+        return {
+          readiness: 'ready' as const,
+          label: 'No account needed',
+          detail: 'Connect in one step and try the starter prompt.',
+        };
+      case 'bearer_required':
+        return {
+          readiness: 'api-key' as const,
+          label: 'Use your API key',
+          detail: 'Verify a key from your own account before a session is created.',
+        };
+      case 'oauth_required':
+        return {
+          readiness: 'sign-in' as const,
+          label: `Connect with ${title || 'provider'}`,
+          detail: 'Sign in with your own account in a separate secure window.',
+        };
+      case 'installed_ready':
+        return {
+          readiness: 'ready' as const,
+          label: 'Ready to use',
+          detail: 'Your existing connection can be used in a new session.',
+        };
+      case 'reusable_oauth':
+        return {
+          readiness: 'ready' as const,
+          label: 'Existing sign-in available',
+          detail: 'Reuse your existing connection in a new session without signing in again.',
+        };
+      default:
+        return connect;
+    }
+  })();
+  const advisoryStatus = connect?.readiness === 'blocked' ? connect : readinessPresentation;
+  const runtimeStatus = (() => {
+    switch (credentialRequirement) {
+      case 'required':
+        return {
           readiness: 'api-key',
           label: 'Needs a bearer access token',
           detail: 'This endpoint requires the reviewed bearer-token scheme.',
-        }
-      : credentialRequirement === 'oauth'
-        ? {
-            readiness: 'sign-in',
-            label: 'Sign in after connecting',
-            detail:
-              'The endpoint now requires OAuth. Connecting sets it up, then you sign in from the session.',
-          }
-        : credentialRequirement === 'not_accepted'
-          ? {
-              readiness: 'ready',
-              label: 'No account needed',
-              detail: 'The endpoint is currently open and will not accept a pasted token.',
-            }
-          : credentialRequirement === 'unsupported'
-            ? {
-                readiness: 'blocked',
-                label: 'Credential scheme not supported',
-                detail:
-                  'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
-              }
-            : advisoryStatus;
+        } as const;
+      case 'oauth':
+        return {
+          readiness: 'sign-in',
+          label: 'Sign in after connecting',
+          detail:
+            'The endpoint now requires OAuth. Connecting sets it up, then you sign in from the session.',
+        } as const;
+      case 'not_accepted':
+        return {
+          readiness: 'ready',
+          label: 'No account needed',
+          detail: 'The endpoint is currently open and will not accept a pasted token.',
+        } as const;
+      case 'unsupported':
+        return {
+          readiness: 'blocked',
+          label: 'Credential scheme not supported',
+          detail:
+            'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
+        } as const;
+      default:
+        return advisoryStatus;
+    }
+  })();
   const blockedReason = runtimeStatus?.readiness === 'blocked' ? runtimeStatus.detail : undefined;
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
@@ -479,20 +486,19 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 disabled={!canConnect}
                 onClick={() => {
                   if (!branchId) return;
-                  let oauthWindow: Window | undefined;
+                  let oauthPopup: MarketplaceOAuthPopup | undefined;
                   const needsOAuthWindow =
                     entry.auth_type === 'oauth' ||
                     credentialRequirement === 'oauth' ||
                     readiness?.state === 'oauth_required' ||
                     readiness?.state === 'reusable_oauth';
                   if (needsOAuthWindow) {
-                    const opened = window.open('about:blank', 'agor-mcp-oauth');
+                    const opened = openMarketplaceOAuthPopup();
                     if (!opened) {
                       setPopupBlocked(true);
                       return;
                     }
-                    opened.opener = null;
-                    oauthWindow = opened;
+                    oauthPopup = opened;
                   }
                   setPopupBlocked(false);
                   onConnect({
@@ -503,7 +509,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
-                    ...(oauthWindow ? { oauthWindow } : {}),
+                    ...(oauthPopup ? { oauthPopup } : {}),
                   });
                 }}
               >

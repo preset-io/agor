@@ -76,6 +76,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     connecting,
     authGeneration,
     userId: currentUser?.user_id,
+    role: currentUser?.role,
   });
   const authorityKey =
     client && connected && !connecting && currentUser?.user_id

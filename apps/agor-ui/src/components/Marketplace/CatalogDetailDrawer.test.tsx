@@ -167,14 +167,28 @@ describe('CatalogDetailDrawer OAuth activation', () => {
     );
 
   it('pre-opens a blank window in the click before handing control to Connect', () => {
-    const popup = { opener: window } as unknown as Window;
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
     const open = vi.spyOn(window, 'open').mockReturnValue(popup);
     const onConnect = vi.fn();
     renderOAuth(onConnect);
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(connectButton());
-    expect(open).toHaveBeenCalledWith('about:blank', 'agor-mcp-oauth');
-    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ oauthWindow: popup }));
+    expect(open).toHaveBeenCalledWith(
+      'about:blank',
+      expect.stringMatching(/^agor-mcp-oauth-/),
+      'popup=yes,width=720,height=760'
+    );
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ close: expect.any(Function) }),
+      })
+    );
     open.mockRestore();
   });
 

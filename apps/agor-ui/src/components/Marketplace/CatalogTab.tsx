@@ -30,6 +30,7 @@ import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
 import { DEFAULT_SORT } from './catalogPresentation';
 import { launchMarketplaceOAuth } from './marketplaceOAuthLaunch';
+import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 import { useCatalogReadiness } from './useCatalogReadiness';
 import {
   CATALOG_PAGE_SIZE,
@@ -241,16 +242,19 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       agenticTool,
       acknowledgedDisclosure,
       bearerToken,
-      oauthWindow,
+      oauthPopup,
     }: {
       branchId: string;
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
       bearerToken?: string;
-      oauthWindow?: Window;
+      oauthPopup?: MarketplaceOAuthPopup;
     }) => {
       const operation = operationGuard.begin();
-      if (!selected || !client || !operation.isCurrent()) return;
+      if (!selected || !client || !operation.isCurrent()) {
+        oauthPopup?.close();
+        return;
+      }
       setConnecting(true);
       setConnectError(null);
       try {
@@ -266,7 +270,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
         if (!operation.isCurrent()) {
-          oauthWindow?.close();
+          oauthPopup?.close();
           return;
         }
         rememberConnectBranchId(currentUser?.user_id, branchId);
@@ -286,31 +290,38 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         }
 
         if (mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)) {
-          if (oauthWindow && result.mcp_server.auth?.type === 'oauth') {
+          if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
-              await launchMarketplaceOAuth(client, result, oauthWindow);
+              await launchMarketplaceOAuth(client, result, oauthPopup, {
+                authority: {
+                  userId: currentUser!.user_id,
+                  role: currentUser!.role,
+                  authGeneration,
+                },
+                isCurrent: operation.isCurrent,
+              });
               if (!operation.isCurrent()) {
-                oauthWindow.close();
+                oauthPopup.close();
                 return;
               }
             } catch {
               // The server and session now exist. Land in the recoverable
               // session rather than pretending the whole Connect failed.
-              oauthWindow.close();
+              oauthPopup.close();
             }
           } else {
             // Readiness is advisory. If a formerly-open endpoint raced to
             // OAuth after a no-popup click, the session notice is the safe
             // recovery surface; never open a popup after user activation.
-            oauthWindow?.close();
+            oauthPopup?.close();
           }
         } else {
-          oauthWindow?.close();
+          oauthPopup?.close();
         }
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
-        oauthWindow?.close();
+        oauthPopup?.close();
         if (!operation.isCurrent()) return;
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
         // The catalog file is presentational; the endpoint decides. When those
@@ -327,6 +338,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     },
     [
       client,
+      authGeneration,
+      currentUser,
       currentUser?.user_id,
       navigate,
       operationGuard,
