@@ -962,6 +962,55 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(provider.requests).toHaveLength(before);
   });
 
+  it('aborts test-oauth when its consumed reservation expires during saved-row DB prep', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const issuedAt = Date.now();
+    const request = await reserveBrowserEvent(harness, 'test-oauth');
+    const before = provider.requests.length;
+    const lookupStarted = deferred<void>();
+    const releaseLookup = deferred<void>();
+    const originalFindById = MCPServerRepository.prototype.findById;
+    let holdTargetLookup = true;
+    const lookupSpy = vi
+      .spyOn(MCPServerRepository.prototype, 'findById')
+      .mockImplementation(async function (id: string) {
+        if (holdTargetLookup && id === harness.server.mcp_server_id) {
+          holdTargetLookup = false;
+          lookupStarted.resolve();
+          await releaseLookup.promise;
+        }
+        return originalFindById.call(this, id);
+      });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    try {
+      const test = harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_url: provider.savedMcpUrl,
+          mcp_server_id: harness.server.mcp_server_id,
+          start_browser_flow: true,
+          oauth_browser_event: request,
+        },
+        paramsFor(harness)
+      );
+      await lookupStarted.promise;
+      clock.mockReturnValue(issuedAt + 60_001);
+      releaseLookup.resolve();
+
+      await expect(test).resolves.toMatchObject({
+        success: false,
+        error: expect.stringMatching(/expired/i),
+      });
+    } finally {
+      lookupSpy.mockRestore();
+      clock.mockRestore();
+    }
+    expect(provider.requests).toHaveLength(before);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
   it('retains the immutable deadline after consumption and aborts held discovery before DCR or browser emit', async () => {
     const provider = await createTestProvider({
       holdMcpChallenge: true,

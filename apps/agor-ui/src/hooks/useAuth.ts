@@ -31,6 +31,7 @@ import {
   type RefreshResult,
   storeTokens,
 } from '../utils/tokenRefresh';
+import type { AuthorityOperation } from './useAuthorityOperationGuard';
 
 interface AuthState {
   user: User | null;
@@ -55,7 +56,21 @@ export interface CapturedAuthAuthorityCycle {
   role: string;
   accessToken: string;
   isCurrent: () => boolean;
+  onInvalidate: AuthorityOperation['onInvalidate'];
 }
+
+export interface EstablishedAuthAuthorityReceipt {
+  userId: string;
+  role: string;
+  accessToken: string;
+  /** Exact freshly-installed authority, independent of the initiating modal/generation. */
+  isCurrent: () => boolean;
+}
+
+export type AuthorityCycleLoginResult =
+  | { status: 'signed-in'; authority: EstablishedAuthAuthorityReceipt }
+  | { status: 'failed' }
+  | { status: 'obsolete' };
 
 interface UseAuthReturn extends AuthState {
   /** Monotonic owner for caller-scoped async work. Routine token refresh does not advance it. */
@@ -63,12 +78,14 @@ interface UseAuthReturn extends AuthState {
   isAuthenticationGenerationCurrent: (generation: number) => boolean;
   isAuthenticationOwnerCurrent: (userId: UserID, generation: number) => boolean;
   login: (email: string, password: string) => Promise<boolean>;
-  captureAuthorityCycle: (shouldApply: () => boolean) => CapturedAuthAuthorityCycle | null;
+  captureAuthorityCycle: (
+    authorityOperation: Pick<AuthorityOperation, 'isCurrent' | 'onInvalidate'>
+  ) => CapturedAuthAuthorityCycle | null;
   loginForAuthorityCycle: (
     email: string,
     password: string,
     authorityCycle: CapturedAuthAuthorityCycle
-  ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
+  ) => Promise<AuthorityCycleLoginResult>;
   logout: () => Promise<void>;
   logoutForAuthorityCycle: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
   reAuthenticate: () => Promise<void>;
@@ -491,14 +508,19 @@ export function useAuth(): UseAuthReturn {
       const detail = (event as CustomEvent<RefreshResult>).detail;
       if (!detail) return;
       localLoginAttemptRef.current = null;
-      setState((prev) => ({
-        ...prev,
+      const nextState: AuthState = {
+        ...authStateRef.current,
         accessToken: detail.accessToken,
         user: detail.user,
         authenticated: true,
         loading: false,
         error: null,
-      }));
+      };
+      // Update the authority ref synchronously with the token event. A stale
+      // local-auth continuation can otherwise run in the microtask before
+      // React commits the replacement identity.
+      authStateRef.current = nextState;
+      setState(nextState);
     };
 
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
@@ -534,13 +556,15 @@ export function useAuth(): UseAuthReturn {
    * Login with email and password
    */
   const captureAuthorityCycle = useCallback(
-    (shouldApply: () => boolean): CapturedAuthAuthorityCycle | null => {
+    (
+      authorityOperation: Pick<AuthorityOperation, 'isCurrent' | 'onInvalidate'>
+    ): CapturedAuthAuthorityCycle | null => {
       const captured = authStateRef.current;
       const userId = captured.user?.user_id;
       const role = captured.user?.role;
       const accessToken = captured.accessToken;
       if (
-        !shouldApply() ||
+        !authorityOperation.isCurrent() ||
         !captured.authenticated ||
         !userId ||
         !role ||
@@ -554,10 +578,11 @@ export function useAuth(): UseAuthReturn {
         userId,
         role,
         accessToken,
+        onInvalidate: authorityOperation.onInvalidate,
         isCurrent: () => {
           const current = authStateRef.current;
           return (
-            shouldApply() &&
+            authorityOperation.isCurrent() &&
             current.authenticated &&
             current.user?.user_id === userId &&
             current.user?.role === role &&
@@ -574,29 +599,44 @@ export function useAuth(): UseAuthReturn {
     email: string,
     password: string,
     authorityCycle: CapturedAuthAuthorityCycle
-  ): Promise<'signed-in' | 'failed' | 'obsolete'> => {
-    if (!authorityCycle.isCurrent()) return 'obsolete';
+  ): Promise<AuthorityCycleLoginResult> => {
+    if (!authorityCycle.isCurrent()) return { status: 'obsolete' };
     const attempt = {};
     localLoginAttemptRef.current = attempt;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
-    const finishObsolete = (): 'obsolete' => {
+    const finishObsolete = (): AuthorityCycleLoginResult => {
       if (localLoginAttemptRef.current === attempt) {
         localLoginAttemptRef.current = null;
         setState((prev) => ({ ...prev, loading: false }));
       }
-      return 'obsolete';
+      return { status: 'obsolete' };
     };
 
     try {
-      const client = await createRestClient(getDaemonUrl());
-
-      // Authenticate
-      const result = await client.authenticate({
-        strategy: 'local',
-        email,
-        password,
+      const authentication = (async () => {
+        const client = await createRestClient(getDaemonUrl());
+        return client.authenticate({ strategy: 'local', email, password });
+      })();
+      let unsubscribeCancellation = () => {};
+      const cancellation = new Promise<{ kind: 'cancelled' }>((resolve) => {
+        unsubscribeCancellation = authorityCycle.onInvalidate(() => {
+          resolve({ kind: 'cancelled' });
+        });
       });
+      // Convert rejection to a value before racing so an authentication
+      // promise held past cancellation can never later reject unhandled.
+      const outcome = await Promise.race([
+        authentication.then(
+          (result) => ({ kind: 'authenticated' as const, result }),
+          (error: unknown) => ({ kind: 'failed' as const, error })
+        ),
+        cancellation,
+      ]);
+      unsubscribeCancellation();
+      if (outcome.kind === 'cancelled') return finishObsolete();
+      if (outcome.kind === 'failed') throw outcome.error;
+      const result = outcome.result;
 
       // Local authentication is deliberately performed on a disposable REST
       // client. Do not install its tokens or identity into the long-lived app
@@ -615,7 +655,7 @@ export function useAuth(): UseAuthReturn {
           error:
             'Your account authority changed while the password was being updated. Sign in again.',
         }));
-        return 'failed';
+        return { status: 'failed' };
       }
 
       // Store both access and refresh tokens. This is an explicit credential
@@ -630,16 +670,38 @@ export function useAuth(): UseAuthReturn {
       // ever gets tried.
       resetRefreshFailureState();
 
-      setState({
+      const nextState: AuthState = {
         user: result.user,
         accessToken: result.accessToken,
         authenticated: true,
         loading: false,
         error: null,
-      });
+      };
+      authStateRef.current = nextState;
+      setState(nextState);
       dispatchTokensRefreshed(result);
 
-      return 'signed-in';
+      const establishedUserId = result.user.user_id;
+      const establishedRole = result.user.role;
+      const establishedAccessToken = result.accessToken;
+      return {
+        status: 'signed-in',
+        authority: {
+          userId: establishedUserId,
+          role: establishedRole,
+          accessToken: establishedAccessToken,
+          isCurrent: () => {
+            const current = authStateRef.current;
+            return (
+              current.authenticated &&
+              current.user?.user_id === establishedUserId &&
+              current.user?.role === establishedRole &&
+              current.accessToken === establishedAccessToken &&
+              getStoredAccessToken() === establishedAccessToken
+            );
+          },
+        },
+      };
     } catch (error) {
       if (localLoginAttemptRef.current !== attempt || !authorityCycle.isCurrent()) {
         return finishObsolete();
@@ -654,7 +716,7 @@ export function useAuth(): UseAuthReturn {
         loading: false,
         error: userFacingMessage,
       }));
-      return 'failed';
+      return { status: 'failed' };
     }
   };
 
@@ -699,13 +761,15 @@ export function useAuth(): UseAuthReturn {
     localLoginAttemptRef.current = null;
     invalidateAuthentication();
     clearTokens();
-    setState({
+    const nextState: AuthState = {
       user: null,
       accessToken: null,
       authenticated: false,
       loading: false,
       error: null,
-    });
+    };
+    authStateRef.current = nextState;
+    setState(nextState);
   };
 
   const logoutForAuthorityCycle = async (
@@ -718,13 +782,15 @@ export function useAuth(): UseAuthReturn {
     // the guard and the mutation.
     localLoginAttemptRef.current = null;
     clearTokens();
-    setState({
+    const nextState: AuthState = {
       user: null,
       accessToken: null,
       authenticated: false,
       loading: false,
       error: null,
-    });
+    };
+    authStateRef.current = nextState;
+    setState(nextState);
     return true;
   };
 

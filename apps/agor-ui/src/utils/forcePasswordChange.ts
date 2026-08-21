@@ -1,5 +1,13 @@
 import type { AgorClient, UpdateUserInput, User } from '@agor-live/client';
-import type { CapturedAuthAuthorityCycle } from '../hooks/useAuth';
+import type {
+  AuthorityCycleLoginResult,
+  CapturedAuthAuthorityCycle,
+  EstablishedAuthAuthorityReceipt,
+} from '../hooks/useAuth';
+
+export type ForcedPasswordCompletion =
+  | { status: 'signed-in'; authority: EstablishedAuthAuthorityReceipt }
+  | { status: 'signed-out' };
 
 interface CompleteLocalPasswordChangeOptions {
   client: AgorClient;
@@ -22,7 +30,7 @@ interface CompleteForcedPasswordChangeOptions {
     email: string,
     password: string,
     authorityCycle: CapturedAuthAuthorityCycle
-  ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
+  ) => Promise<AuthorityCycleLoginResult>;
   logout: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
 }
 
@@ -68,7 +76,7 @@ export async function completeForcedPasswordChange({
   shouldApply,
   reauthenticate,
   logout,
-}: CompleteForcedPasswordChangeOptions): Promise<boolean | null> {
+}: CompleteForcedPasswordChangeOptions): Promise<ForcedPasswordCompletion | null> {
   if (!shouldApply() || !authorityCycle.isCurrent()) return null;
   await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
   if (!shouldApply() || !authorityCycle.isCurrent()) return null;
@@ -79,17 +87,19 @@ export async function completeForcedPasswordChange({
   // only if the App-owned captured authority is still exact at the point of
   // application. The initiating modal may unmount while auth loading is shown.
   const result = await reauthenticate(email, newPassword, authorityCycle);
-  if (result === 'obsolete') return null;
+  if (result.status === 'obsolete') return null;
   // `signed-in` is a guarded authority-establishment receipt: useAuth checks
   // shouldApply immediately before synchronously installing the new tokens and
   // identity. That installation is expected to advance authGeneration, so the
   // old generation must not invalidate its own successful terminal result.
-  if (result === 'signed-in') return true;
-  if (result === 'failed') {
+  if (result.status === 'signed-in') {
+    return { status: 'signed-in', authority: result.authority };
+  }
+  if (result.status === 'failed') {
     if (!authorityCycle.isCurrent()) return null;
-    await logout(authorityCycle);
-    return false;
+    if (!(await logout(authorityCycle))) return null;
+    return { status: 'signed-out' };
   }
 
-  return false;
+  return null;
 }

@@ -18,6 +18,21 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function authorityOperation(isCurrent: () => boolean) {
+  const listeners = new Set<() => void>();
+  return {
+    isCurrent,
+    onInvalidate(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    invalidate() {
+      for (const listener of [...listeners]) listener();
+      listeners.clear();
+    },
+  };
+}
+
 vi.mock('@agor-live/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor-live/client')>();
   return {
@@ -282,10 +297,11 @@ describe('useAuth launch-code fallback', () => {
             })
           );
         });
-        const authorityCycle = result.current.captureAuthorityCycle(() => authorityA);
+        const operation = authorityOperation(() => authorityA);
+        const authorityCycle = result.current.captureAuthorityCycle(operation);
         expect(authorityCycle).not.toBeNull();
         authenticate.mockImplementationOnce(() => pendingAuth.promise);
-        let login!: Promise<'signed-in' | 'failed' | 'obsolete'>;
+        let login!: ReturnType<typeof result.current.loginForAuthorityCycle>;
         act(() => {
           login = result.current.loginForAuthorityCycle(
             'admin-a@example.test',
@@ -295,6 +311,7 @@ describe('useAuth launch-code fallback', () => {
         });
 
         authorityA = false;
+        operation.invalidate();
         localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-b-access');
         localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-b-refresh');
         act(() => {
@@ -319,7 +336,7 @@ describe('useAuth launch-code fallback', () => {
           pendingAuth.reject(new Error('stale A credentials failed'));
         }
         await act(async () => {
-          await expect(login).resolves.toBe('obsolete');
+          await expect(login).resolves.toEqual({ status: 'obsolete' });
         });
 
         expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-b-access');
@@ -355,7 +372,8 @@ describe('useAuth launch-code fallback', () => {
       );
     });
     let connectionReady = true;
-    const authorityCycle = result.current.captureAuthorityCycle(() => connectionReady);
+    const operation = authorityOperation(() => connectionReady);
+    const authorityCycle = result.current.captureAuthorityCycle(operation);
     expect(authorityCycle).not.toBeNull();
     const pendingAuth = deferred<{
       accessToken: string;
@@ -364,7 +382,7 @@ describe('useAuth launch-code fallback', () => {
     }>();
     authenticate.mockImplementationOnce(() => pendingAuth.promise);
 
-    let login!: Promise<'signed-in' | 'failed' | 'obsolete'>;
+    let login!: ReturnType<typeof result.current.loginForAuthorityCycle>;
     act(() => {
       login = result.current.loginForAuthorityCycle(
         'admin-a@example.test',
@@ -374,17 +392,25 @@ describe('useAuth launch-code fallback', () => {
     });
     await waitFor(() => expect(result.current.loading).toBe(true));
     connectionReady = false;
+    act(() => {
+      operation.invalidate();
+    });
+
+    await act(async () => {
+      await expect(login).resolves.toEqual({ status: 'obsolete' });
+    });
+    // The held REST authentication has not resolved. Cancellation itself owns
+    // and releases the global loading gate.
+    expect(result.current.loading).toBe(false);
+    expect(result.current.user?.user_id).toBe('admin-a');
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-access');
+
     pendingAuth.resolve({
       accessToken: 'obsolete-access',
       refreshToken: 'obsolete-refresh',
       user: { user_id: 'admin-a', email: 'admin-a@example.test', role: 'admin' },
     });
-
-    await act(async () => {
-      await expect(login).resolves.toBe('obsolete');
-    });
-    expect(result.current.loading).toBe(false);
-    expect(result.current.user?.user_id).toBe('admin-a');
+    await act(() => pendingAuth.promise);
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-access');
   });
 

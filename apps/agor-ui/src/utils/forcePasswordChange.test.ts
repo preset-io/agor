@@ -22,6 +22,19 @@ function authorityCycle(isCurrent: () => boolean = () => true) {
     role: 'admin',
     accessToken: 'user-a-access',
     isCurrent,
+    onInvalidate: () => () => {},
+  };
+}
+
+function signedInReceipt(isCurrent: () => boolean = () => true) {
+  return {
+    status: 'signed-in' as const,
+    authority: {
+      userId: 'user-a',
+      role: 'admin',
+      accessToken: 'user-a-new-access',
+      isCurrent,
+    },
   };
 }
 
@@ -33,7 +46,7 @@ function options(overrides: Partial<Parameters<typeof completeForcedPasswordChan
     newPassword: 'new-password-1234',
     authorityCycle: authorityCycle(),
     shouldApply: () => true,
-    reauthenticate: vi.fn().mockResolvedValue('signed-in' as const),
+    reauthenticate: vi.fn().mockResolvedValue(signedInReceipt()),
     logout: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
@@ -42,11 +55,11 @@ function options(overrides: Partial<Parameters<typeof completeForcedPasswordChan
 describe('completeForcedPasswordChange', () => {
   it('patches then establishes the same exact authority cycle', async () => {
     const patch = vi.fn().mockResolvedValue({});
-    const reauthenticate = vi.fn().mockResolvedValue('signed-in');
+    const reauthenticate = vi.fn().mockResolvedValue(signedInReceipt());
     const logout = vi.fn().mockResolvedValue(true);
     await expect(
       completeForcedPasswordChange(options({ client: makeClient(patch), reauthenticate, logout }))
-    ).resolves.toBe(true);
+    ).resolves.toMatchObject({ status: 'signed-in' });
     expect(patch).toHaveBeenCalledWith('user-a', { password: 'new-password-1234' });
     expect(reauthenticate).toHaveBeenCalledWith(
       'a@example.test',
@@ -78,7 +91,7 @@ describe('completeForcedPasswordChange', () => {
   });
 
   it('does not apply a delayed A relogin failure continuation or log out B', async () => {
-    const pendingLogin = deferred<'signed-in' | 'failed' | 'obsolete'>();
+    const pendingLogin = deferred<{ status: 'failed' }>();
     let current = true;
     const logout = vi.fn().mockResolvedValue(true);
     const result = completeForcedPasswordChange(
@@ -91,7 +104,7 @@ describe('completeForcedPasswordChange', () => {
     );
     await Promise.resolve();
     current = false;
-    pendingLogin.resolve('failed');
+    pendingLogin.resolve({ status: 'failed' });
     await expect(result).resolves.toBeNull();
     expect(logout).not.toHaveBeenCalled();
   });
@@ -104,11 +117,11 @@ describe('completeForcedPasswordChange', () => {
       // Installing A's new tokens is the operation's intended terminal
       // authority transition, so the old generation becomes stale here.
       current = false;
-      return 'signed-in' as const;
+      return signedInReceipt();
     });
     await expect(
       completeForcedPasswordChange(options({ shouldApply: () => current, reauthenticate, logout }))
-    ).resolves.toBe(true);
+    ).resolves.toMatchObject({ status: 'signed-in' });
     expect(logout).not.toHaveBeenCalled();
   });
 
@@ -116,9 +129,9 @@ describe('completeForcedPasswordChange', () => {
     const logout = vi.fn().mockResolvedValue(true);
     await expect(
       completeForcedPasswordChange(
-        options({ reauthenticate: vi.fn().mockResolvedValue('failed'), logout })
+        options({ reauthenticate: vi.fn().mockResolvedValue({ status: 'failed' }), logout })
       )
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ status: 'signed-out' });
     expect(logout).toHaveBeenCalledOnce();
     expect(logout).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-a', role: 'admin' })

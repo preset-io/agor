@@ -1,7 +1,7 @@
 import type { AgorClient } from '@agor-live/client';
 import { act, render, renderHook } from '@testing-library/react';
 import { type PropsWithChildren, StrictMode } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '@/contexts/ConnectionContext';
 import {
   useAuthenticatedAuthorityScope,
@@ -21,6 +21,21 @@ describe('useAuthorityOperationGuard', () => {
 
     expect(operation.isCurrent()).toBe(false);
     expect(result.current.isCurrent()).toBe(true);
+  });
+
+  it('notifies an in-flight owner when its generation is invalidated', async () => {
+    const { result, rerender } = renderHook(
+      ({ generation }) => useAuthorityOperationGuard(['admin-a', generation]),
+      { initialProps: { generation: 1 } }
+    );
+    const operation = result.current.begin();
+    const invalidated = vi.fn();
+    operation.onInvalidate(invalidated);
+
+    rerender({ generation: 2 });
+    expect(operation.isCurrent()).toBe(false);
+    await Promise.resolve();
+    expect(invalidated).toHaveBeenCalledOnce();
   });
 
   it('invalidates in layout cleanup for keyed replacement and explicit cancellation', () => {

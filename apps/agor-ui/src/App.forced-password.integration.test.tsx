@@ -44,11 +44,19 @@ function authUser(id: string, mustChangePassword: boolean): User {
  * reauthentication unmounts the modal that initiated it. The durable ticket is
  * App-owned and therefore outlives that loading-gate unmount.
  */
-function ForcedPasswordAppComposition({ client }: { client: AgorClient }) {
+function ForcedPasswordAppComposition({
+  client,
+  authGeneration = 4,
+  onCompleted,
+}: {
+  client: AgorClient;
+  authGeneration?: number;
+  onCompleted?: (signedIn: boolean) => void;
+}) {
   const auth = useAuth();
   const appGuard = useAuthorityOperationGuard(
     auth.user?.user_id && auth.user.role && auth.authenticated
-      ? [auth.user.user_id, auth.user.role, client, 4]
+      ? [auth.user.user_id, auth.user.role, client, authGeneration]
       : null
   );
 
@@ -59,6 +67,7 @@ function ForcedPasswordAppComposition({ client }: { client: AgorClient }) {
     captureAuthorityCycle: auth.captureAuthorityCycle,
     reauthenticate: auth.loginForAuthorityCycle,
     logout: auth.logoutForAuthorityCycle,
+    onCompleted,
   });
 
   // This is the real App ordering: loading wins and unmounts the modal.
@@ -71,7 +80,7 @@ function ForcedPasswordAppComposition({ client }: { client: AgorClient }) {
       value={{
         connected: true,
         connecting: false,
-        authGeneration: 4,
+        authGeneration,
         outOfSync: false,
         capturedSha: null,
         currentSha: null,
@@ -133,7 +142,8 @@ describe('App forced-password authority composition', () => {
       user: User;
     }>();
     authenticate.mockImplementationOnce(() => login.promise);
-    render(<ForcedPasswordAppComposition client={client} />);
+    const onCompleted = vi.fn();
+    render(<ForcedPasswordAppComposition client={client} onCompleted={onCompleted} />);
 
     await submitPassword();
     expect(await screen.findByText('Authenticating…')).toBeInTheDocument();
@@ -148,12 +158,15 @@ describe('App forced-password authority composition', () => {
     expect(await screen.findByText('Ready: admin-a')).toBeInTheDocument();
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-new-access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('admin-a-new-refresh');
+    expect(onCompleted).toHaveBeenCalledOnce();
+    expect(onCompleted).toHaveBeenCalledWith(true);
   });
 
   it('clears loading and logs out stale credentials after relogin failure', async () => {
     const login = deferred<never>();
     authenticate.mockImplementationOnce(() => login.promise);
-    render(<ForcedPasswordAppComposition client={client} />);
+    const onCompleted = vi.fn();
+    render(<ForcedPasswordAppComposition client={client} onCompleted={onCompleted} />);
 
     await submitPassword();
     expect(await screen.findByText('Authenticating…')).toBeInTheDocument();
@@ -162,6 +175,8 @@ describe('App forced-password authority composition', () => {
     expect(await screen.findByText('Signed out')).toBeInTheDocument();
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
+    expect(onCompleted).toHaveBeenCalledOnce();
+    expect(onCompleted).toHaveBeenCalledWith(false);
   });
 
   it('cannot install or log out A after an in-place replacement by admin B', async () => {
@@ -171,7 +186,8 @@ describe('App forced-password authority composition', () => {
       user: User;
     }>();
     authenticate.mockImplementationOnce(() => login.promise);
-    render(<ForcedPasswordAppComposition client={client} />);
+    const onCompleted = vi.fn();
+    render(<ForcedPasswordAppComposition client={client} onCompleted={onCompleted} />);
 
     await submitPassword();
     expect(await screen.findByText('Authenticating…')).toBeInTheDocument();
@@ -201,5 +217,42 @@ describe('App forced-password authority composition', () => {
     expect(screen.getByText('Ready: admin-b')).toBeInTheDocument();
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-b-access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('admin-b-refresh');
+    expect(onCompleted).not.toHaveBeenCalled();
+  });
+
+  it('releases global loading on same-user generation cancellation before held REST auth settles', async () => {
+    const login = deferred<{
+      accessToken: string;
+      refreshToken: string;
+      user: User;
+    }>();
+    authenticate.mockImplementationOnce(() => login.promise);
+    const onCompleted = vi.fn();
+    const rendered = render(
+      <ForcedPasswordAppComposition client={client} authGeneration={4} onCompleted={onCompleted} />
+    );
+
+    await submitPassword();
+    expect(await screen.findByText('Authenticating…')).toBeInTheDocument();
+
+    rendered.rerender(
+      <ForcedPasswordAppComposition client={client} authGeneration={5} onCompleted={onCompleted} />
+    );
+
+    // Cancellation, not the held REST response, must release the App loading
+    // gate. The same caller's required-password modal becomes usable again.
+    expect(await screen.findByRole('button', { name: 'Change Password' })).toBeInTheDocument();
+    expect(screen.queryByText('Authenticating…')).not.toBeInTheDocument();
+
+    login.resolve({
+      accessToken: 'obsolete-admin-a-access',
+      refreshToken: 'obsolete-admin-a-refresh',
+      user: authUser('admin-a', false),
+    });
+    await act(() => login.promise);
+
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-old-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('admin-a-old-refresh');
+    expect(onCompleted).not.toHaveBeenCalled();
   });
 });

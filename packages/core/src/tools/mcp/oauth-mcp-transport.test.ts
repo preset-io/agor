@@ -809,6 +809,32 @@ describe('resolveMCPOAuthDiscovery', () => {
     expect(result).toBeNull();
   });
 
+  it('stops between well-known candidates when the authority deadline expires', async () => {
+    let current = true;
+    const fetchMock = vi.fn(async () => {
+      // The first path-aware candidate began while current, but its held
+      // response crossed the reservation deadline. The post-await assertion
+      // must abort rather than issuing the root fallback request.
+      current = false;
+      return { ok: false, status: 404 };
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      resolveMCPOAuthDiscovery(null, 'https://example.com/mcp', {
+        compatibilityMode: 'legacy',
+        assertCurrent: () => {
+          if (!current) throw new Error('reservation expired');
+        },
+      })
+    ).rejects.toThrow('reservation expired');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com/.well-known/oauth-protected-resource/mcp',
+      expect.anything()
+    );
+  });
+
   it('prefers RFC 9728 well-known over AS-direct when both succeed', async () => {
     // If a server publishes both RFC 9728 *and* serves AS metadata at its
     // origin, RFC 9728 should win — it's the spec-compliant indirection that

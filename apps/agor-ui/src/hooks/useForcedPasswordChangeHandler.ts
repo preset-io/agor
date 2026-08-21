@@ -1,7 +1,7 @@
 import type { AgorClient, User } from '@agor-live/client';
 import { useCallback } from 'react';
 import { completeForcedPasswordChange } from '../utils/forcePasswordChange';
-import type { CapturedAuthAuthorityCycle } from './useAuth';
+import type { AuthorityCycleLoginResult, CapturedAuthAuthorityCycle } from './useAuth';
 import type { AuthorityOperationGuard } from './useAuthorityOperationGuard';
 
 export type ForcedPasswordChangeHandler = (
@@ -15,12 +15,14 @@ interface UseForcedPasswordChangeHandlerOptions {
   client: AgorClient | null;
   user: User | null;
   appAuthorityGuard: AuthorityOperationGuard;
-  captureAuthorityCycle: (shouldApply: () => boolean) => CapturedAuthAuthorityCycle | null;
+  captureAuthorityCycle: (
+    authorityOperation: ReturnType<AuthorityOperationGuard['begin']>
+  ) => CapturedAuthAuthorityCycle | null;
   reauthenticate: (
     email: string,
     password: string,
     authorityCycle: CapturedAuthAuthorityCycle
-  ) => Promise<'signed-in' | 'failed' | 'obsolete'>;
+  ) => Promise<AuthorityCycleLoginResult>;
   logout: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
   onCompleted?: (signedIn: boolean) => void;
 }
@@ -44,16 +46,16 @@ export function useForcedPasswordChangeHandler({
   onCompleted,
 }: UseForcedPasswordChangeHandlerOptions): ForcedPasswordChangeHandler {
   return useCallback(
-    async (userId, newPassword, shouldApply, isSameIdentity) => {
+    async (userId, newPassword, shouldApply, _isSameIdentity) => {
       if (!client) throw new Error('Not connected');
       if (!user?.email) throw new Error('Current user is unavailable');
       if (user.user_id !== userId || !shouldApply()) return;
 
       const appOperation = appAuthorityGuard.begin();
-      const authorityCycle = captureAuthorityCycle(appOperation.isCurrent);
+      const authorityCycle = captureAuthorityCycle(appOperation);
       if (!authorityCycle || authorityCycle.userId !== userId || !shouldApply()) return;
 
-      const signedIn = await completeForcedPasswordChange({
+      const completion = await completeForcedPasswordChange({
         client,
         userId,
         email: user.email,
@@ -64,8 +66,18 @@ export function useForcedPasswordChangeHandler({
         logout,
       });
 
-      if (signedIn === null || !isSameIdentity()) return;
-      onCompleted?.(signedIn);
+      if (!completion) return;
+      if (completion.status === 'signed-in') {
+        // Success establishes a new auth generation and intentionally unmounts
+        // the modal. Its exact installed-authority receipt—not modal lifetime
+        // or the now-obsolete initiating generation—owns notification.
+        if (completion.authority.isCurrent()) onCompleted?.(true);
+        return;
+      }
+      // A guarded logout is the terminal result for a relogin failure. The
+      // initiating modal has also unmounted here, so do not couple the notice
+      // to its identity guard.
+      onCompleted?.(false);
     },
     [appAuthorityGuard, captureAuthorityCycle, client, logout, onCompleted, reauthenticate, user]
   );
