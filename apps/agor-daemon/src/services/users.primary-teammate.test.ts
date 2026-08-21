@@ -1,5 +1,4 @@
 import {
-  BoardRepository,
   BranchRepository,
   type Database,
   generateId,
@@ -110,51 +109,6 @@ describe('UsersService primary teammate', () => {
     setSpy.mockRestore();
   });
 
-  dbTest(
-    'explicit initializer rolls out the board default while the getter remains pure',
-    async ({ db }) => {
-      const board = await new BoardRepository(db).create({
-        board_id: generateId(),
-        name: 'Caller board',
-        created_by: CALLER,
-        access_mode: 'shared',
-      });
-      const caller = await new UsersRepository(db).create({
-        email: 'caller@example.com',
-        role: 'member',
-        preferences: { mainBoardId: board.board_id },
-      });
-      const callerParams = { user: { user_id: caller.user_id, role: 'member' } } as never;
-      const branchId = await createBranch(db, {
-        board_id: board.board_id as UUID,
-        permission_source: 'override',
-        created_by: caller.user_id as UUID,
-      });
-      await new BoardRepository(db).setPrimaryTeammate(board.board_id, branchId);
-
-      expect(
-        (await new UsersRepository(db).findById(caller.user_id))?.preferences?.mainBoardId
-      ).toBe(board.board_id);
-      expect((await new BoardRepository(db).findById(board.board_id))?.primary_teammate_id).toBe(
-        branchId
-      );
-      await expect(
-        new UserPrimaryTeammateRepository(db).findEligiblePrimaryTeammate(branchId, caller.user_id)
-      ).resolves.toMatchObject({ branch_id: branchId });
-
-      const service = createUsersService(db);
-      await expect(service.getPrimaryTeammate(undefined, callerParams)).resolves.toBeNull();
-      expect(await new UserPrimaryTeammateRepository(db).getBranchId(caller.user_id)).toBeNull();
-
-      await expect(
-        service.ensurePrimaryTeammateDefault(undefined, callerParams)
-      ).resolves.toMatchObject({ branch_id: branchId });
-      expect(await new UserPrimaryTeammateRepository(db).getBranchId(caller.user_id)).toBe(
-        branchId
-      );
-    }
-  );
-
   dbTest('setPrimaryTeammate rejects a branch the caller cannot access', async ({ db }) => {
     await ensureCaller(db);
     const inaccessible = await createBranch(db, {
@@ -202,9 +156,6 @@ describe('UsersService primary teammate', () => {
     const service = createUsersService(db);
 
     await expect(service.getPrimaryTeammateCandidates(undefined, viewerParams)).rejects.toThrow(
-      /Member role/
-    );
-    await expect(service.ensurePrimaryTeammateDefault(undefined, viewerParams)).rejects.toThrow(
       /Member role/
     );
     await expect(service.setPrimaryTeammate({ branchId }, viewerParams)).rejects.toThrow(
@@ -255,7 +206,6 @@ describe('UsersService primary teammate', () => {
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();
-    await expect(service.ensurePrimaryTeammateDefault(undefined, {} as never)).rejects.toThrow();
     await expect(service.getPrimaryTeammateCandidates(undefined, {} as never)).rejects.toThrow();
     await expect(
       service.setPrimaryTeammate({ branchId: generateId() }, {} as never)

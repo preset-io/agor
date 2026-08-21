@@ -10,6 +10,7 @@ import {
   isPostgresDatabase,
   MCPServerRepository,
   RepoRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
@@ -136,28 +137,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const admitAfterFailure = vi.fn();
 
       await expect(
-        runSessionInitializationStages({
-          db,
-          tenantId,
-          mcpServerIds: [seeded.replacementServer.mcp_server_id],
-          envVarNames: ['REPLACEMENT_ENV'],
-          setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
-          setEnvVarNames: async (names) => {
-            await envService.setAll(seeded.session.session_id, names);
-            throw new Error('forced environment failure');
-          },
-          publishMcpServersChanged: () => {
-            expect(enqueueAfterTenantDatabaseCommit(() => rolledBackEvents.push('mcp-event'))).toBe(
-              true
-            );
-          },
-          publishEnvVarNamesChanged: () => {
-            expect(enqueueAfterTenantDatabaseCommit(() => rolledBackEvents.push('env-event'))).toBe(
-              true
-            );
-          },
-          admitPrompt: admitAfterFailure,
-        })
+        runWithTenantContext(tenantId, () =>
+          runSessionInitializationStages({
+            db,
+            mcpServerIds: [seeded.replacementServer.mcp_server_id],
+            envVarNames: ['REPLACEMENT_ENV'],
+            setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
+            setEnvVarNames: async (names) => {
+              await envService.setAll(seeded.session.session_id, names);
+              throw new Error('forced environment failure');
+            },
+            publishMcpServersChanged: () => {
+              expect(
+                enqueueAfterTenantDatabaseCommit(() => rolledBackEvents.push('mcp-event'))
+              ).toBe(true);
+            },
+            publishEnvVarNamesChanged: () => {
+              expect(
+                enqueueAfterTenantDatabaseCommit(() => rolledBackEvents.push('env-event'))
+              ).toBe(true);
+            },
+            admitPrompt: admitAfterFailure,
+          })
+        )
       ).rejects.toThrow('forced environment failure');
 
       expect(await readState()).toEqual({
@@ -169,28 +171,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const stages: string[] = [];
       const admittedTask = { task_id: generateId(), status: TaskStatus.PENDING } as Task;
-      const result = await runSessionInitializationStages({
-        db,
-        tenantId,
-        mcpServerIds: [seeded.replacementServer.mcp_server_id],
-        envVarNames: ['REPLACEMENT_ENV'],
-        setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
-        setEnvVarNames: (names) => envService.setAll(seeded.session.session_id, names),
-        publishMcpServersChanged: () => {
-          expect(enqueueAfterTenantDatabaseCommit(() => stages.push('mcp-event'))).toBe(true);
-        },
-        publishEnvVarNamesChanged: () => {
-          expect(enqueueAfterTenantDatabaseCommit(() => stages.push('env-event'))).toBe(true);
-        },
-        admitPrompt: async () => {
-          expect(await readState()).toEqual({
-            serverIds: [seeded.replacementServer.mcp_server_id],
-            envVarNames: ['REPLACEMENT_ENV'],
-          });
-          stages.push('prompt');
-          return admittedTask;
-        },
-      });
+      const result = await runWithTenantContext(tenantId, () =>
+        runSessionInitializationStages({
+          db,
+          mcpServerIds: [seeded.replacementServer.mcp_server_id],
+          envVarNames: ['REPLACEMENT_ENV'],
+          setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
+          setEnvVarNames: (names) => envService.setAll(seeded.session.session_id, names),
+          publishMcpServersChanged: () => {
+            expect(enqueueAfterTenantDatabaseCommit(() => stages.push('mcp-event'))).toBe(true);
+          },
+          publishEnvVarNamesChanged: () => {
+            expect(enqueueAfterTenantDatabaseCommit(() => stages.push('env-event'))).toBe(true);
+          },
+          admitPrompt: async () => {
+            expect(await readState()).toEqual({
+              serverIds: [seeded.replacementServer.mcp_server_id],
+              envVarNames: ['REPLACEMENT_ENV'],
+            });
+            stages.push('prompt');
+            return admittedTask;
+          },
+        })
+      );
 
       expect(result).toBe(admittedTask);
       expect(stages).toEqual(['mcp-event', 'env-event', 'prompt']);

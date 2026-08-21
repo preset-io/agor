@@ -194,7 +194,7 @@ const pickedBranch = makeBranch({
 
 function makeClient(primary: Branch | null): AgorClient {
   return {
-    service: () => ({ ensurePrimaryTeammateDefault: () => Promise.resolve(primary) }),
+    service: () => ({ getPrimaryTeammate: () => Promise.resolve(primary) }),
   } as unknown as AgorClient;
 }
 

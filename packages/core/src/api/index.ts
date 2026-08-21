@@ -592,8 +592,6 @@ export interface UsersService extends AgorService<User> {
    * no longer accessible.
    */
   getPrimaryTeammate(data?: unknown, params?: Params): Promise<Branch | null>;
-  /** Persist the caller's eligible board default when their preference is unset. */
-  ensurePrimaryTeammateDefault(data?: unknown, params?: Params): Promise<Branch | null>;
   /** List active teammate branches the caller can start sessions on. */
   getPrimaryTeammateCandidates(data?: unknown, params?: Params): Promise<Branch[]>;
   /**
@@ -1192,7 +1190,6 @@ function extendUsersService(client: AgorClient): void {
       'updateAvatarSettings',
       'syncAvatars',
       'getPrimaryTeammate',
-      'ensurePrimaryTeammateDefault',
       'getPrimaryTeammateCandidates',
       'setPrimaryTeammate',
       'setPrimaryTeammateIfUnset',

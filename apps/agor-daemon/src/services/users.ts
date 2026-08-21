@@ -29,7 +29,6 @@ import {
 } from '@agor/core/config';
 import {
   and,
-  backfillUserPrimaryTeammate,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -142,7 +141,6 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'updateAvatarSettings',
   'syncAvatars',
   'getPrimaryTeammate',
-  'ensurePrimaryTeammateDefault',
   'getPrimaryTeammateCandidates',
   'setPrimaryTeammate',
   'setPrimaryTeammateIfUnset',
@@ -1321,23 +1319,6 @@ export class UsersService {
     return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId, {
       enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
     });
-  }
-
-  /**
-   * Explicit, member-gated rollout mutator for a caller whose preference is
-   * still unset. Its method name is classified as a write by the shared tenant
-   * gate, unlike the pure getter above.
-   */
-  async ensurePrimaryTeammateDefault(_data: unknown, params?: Params): Promise<Branch | null> {
-    const userId = this.requirePrimaryTeammateMember(params);
-    const options = { enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params) };
-    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
-    const existing = await primaryTeammates.resolvePrimaryTeammate(userId, options);
-    if (existing || (await primaryTeammates.getBranchId(userId))) return existing;
-
-    const outcome = await backfillUserPrimaryTeammate(this.db, userId, options);
-    if (outcome === 'assigned') await this.emitUserPreferencePatched(userId, params);
-    return primaryTeammates.resolvePrimaryTeammate(userId, options);
   }
 
   private async emitUserPreferencePatched(userId: UserID, params?: Params): Promise<void> {

@@ -4507,9 +4507,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!callerId || data?.expectedUserId !== callerId) {
           throw new Forbidden('Session initialization caller changed');
         }
-        const tenantId = getCurrentTenantId();
-        if (!tenantId) throw new Error('Missing active tenant context for session initialization');
-
         const session = await inCurrentTenantDatabaseScope(() =>
           authorizeAndLoadSessionForMcpConfig(id, params)
         );
@@ -4533,7 +4530,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const prompt = data.prompt?.trim();
         const task = await runSessionInitializationStages({
           db,
-          tenantId,
           mcpServerIds: configuredMcpServerIds,
           envVarNames: configuredEnvVarNames,
           setMcpServers: async (serverIds) => {

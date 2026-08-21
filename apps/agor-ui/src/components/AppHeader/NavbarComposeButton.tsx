@@ -158,8 +158,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   // Resolve eagerly once the client exists (so the collapsed trigger shows the
   // teammate's emoji before first open) and re-resolve on open to catch changes
-  // made elsewhere. Null is the "needs picking" signal.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `open` re-resolves on reopen
+  // made elsewhere. The preference is optional; null asks for a target only
+  // when the caller actually uses quick compose.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reopen and caller changes deliberately invalidate the caller-scoped preference
   useEffect(() => {
     if (!client) return;
     let cancelled = false;
@@ -167,7 +168,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setResolveFailed(false);
     client
       .service('users')
-      .ensurePrimaryTeammateDefault()
+      .getPrimaryTeammate()
       .then((branch) => {
         if (!cancelled) {
           setPrimaryBranch(branch);
@@ -183,7 +184,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, client]);
+  }, [open, client, currentUser?.user_id]);
 
   // Seed the chip-row form from the user's default on open. Only keyed on `open`
   // so a live user refresh can't wipe edits made while the popover is up.

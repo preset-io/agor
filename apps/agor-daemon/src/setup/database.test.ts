@@ -7,7 +7,6 @@ const fsMocks = vi.hoisted(() => ({
 }));
 
 const dbMocks = vi.hoisted(() => ({
-  backfillUserPrimaryTeammates: vi.fn(),
   checkMigrationStatus: vi.fn(),
   createDatabaseAsync: vi.fn(),
   createTenantScopedDatabaseProxy: vi.fn(),
@@ -42,11 +41,6 @@ describe('initializeDatabase logging', () => {
       async (_db, _operation, run: () => Promise<void>) => run()
     );
     dbMocks.seedInitialData.mockResolvedValue(undefined);
-    dbMocks.backfillUserPrimaryTeammates.mockResolvedValue({
-      assigned: 0,
-      alreadySet: 0,
-      skipped: 0,
-    });
   });
 
   afterEach(() => {
@@ -88,11 +82,6 @@ describe('initializeDatabase logging', () => {
       expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
       expect(dbMocks.checkMigrationStatus).toHaveBeenCalledTimes(1);
       expect(dbMocks.seedInitialData).toHaveBeenCalledTimes(1);
-      if (backend === 'sqlite') {
-        expect(dbMocks.backfillUserPrimaryTeammates).toHaveBeenCalledTimes(1);
-      } else {
-        expect(dbMocks.backfillUserPrimaryTeammates).not.toHaveBeenCalled();
-      }
     }
   );
 

@@ -1,13 +1,13 @@
 import {
   assertTenantWritable,
+  requireCurrentTenantId,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { MCPServerID, Task, TenantID } from '@agor/core/types';
+import type { MCPServerID, Task } from '@agor/core/types';
 
 export interface SessionInitializationStageOptions {
   db: TenantScopeAwareDatabase;
-  tenantId: TenantID | string;
   mcpServerIds?: MCPServerID[];
   envVarNames?: string[];
   setMcpServers: (serverIds: MCPServerID[]) => Promise<void>;
@@ -26,7 +26,6 @@ export interface SessionInitializationStageOptions {
  */
 export async function runSessionInitializationStages({
   db,
-  tenantId,
   mcpServerIds,
   envVarNames,
   setMcpServers,
@@ -35,7 +34,8 @@ export async function runSessionInitializationStages({
   publishEnvVarNamesChanged,
   admitPrompt,
 }: SessionInitializationStageOptions): Promise<Task | undefined> {
-  await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
+  const tenantId = requireCurrentTenantId('Missing tenant context for session initialization');
+  await runWithTenantDatabaseTransaction(db, undefined, async (tenantDb) => {
     await assertTenantWritable(tenantDb, tenantId);
     if (mcpServerIds) await setMcpServers(mcpServerIds);
     if (envVarNames) await setEnvVarNames(envVarNames);

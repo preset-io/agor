@@ -100,7 +100,6 @@ describe('isTenantWriteMethodName', () => {
       'setPrimaryAgenticToolIfUnset',
       'setPrimaryTeammate',
       'setPrimaryTeammateIfUnset',
-      'ensurePrimaryTeammateDefault',
       'updateLastMessage',
       'clearZoneReferences',
       'revoke',
