@@ -607,6 +607,96 @@ describe('tenant-owned service registration', () => {
   });
 });
 
+describe('registered tenant write-gate classification', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredAroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
+  type RegisteredHooks = {
+    around?: { all?: RegisteredAroundHook[] };
+    before?: { all?: RegisteredHook[] };
+  };
+
+  const runInstalledTenantGate = async (method: string) => {
+    const registrations: RegisteredHooks[] = [];
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([
+          {
+            value_text: JSON.stringify({
+              generation: 'held-generation',
+              acquiredAt: '2026-08-21T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'users') registrations.push(hooks);
+          },
+          emit: vi.fn(),
+        };
+      },
+      use() {},
+      publish() {},
+      emit: vi.fn(),
+    };
+
+    registerHooks({
+      db: db as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: false },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    const tenantHooks = registrations.find((hooks) => hooks.around?.all?.length);
+    expect(tenantHooks).toBeDefined();
+    const context = {
+      path: 'users',
+      method,
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const operation = vi.fn(async () => undefined);
+    await tenantHooks?.around?.all?.[0](context, async () => {
+      for (const hook of tenantHooks.before?.all ?? []) await hook(context);
+      await operation();
+    });
+    return { context, operation, tx };
+  };
+
+  it('rejects a custom mutator while the tenant write gate is held', async () => {
+    await expect(runInstalledTenantGate('setPrimaryTeammate')).rejects.toThrow(/write-gated/);
+  });
+
+  it('allows a custom read without consulting the held tenant write gate', async () => {
+    const { context, operation, tx } = await runInstalledTenantGate('getPrimaryTeammate');
+    expect(operation).toHaveBeenCalledOnce();
+    expect(context.params.tenant).toEqual({
+      tenant_id: 'registration-test',
+      source: 'static',
+    });
+    expect(tx.execute).toHaveBeenCalledOnce();
+  });
+});
+
 describe('registered external board-comment mutation boundary', () => {
   type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
   type RegisteredHooks = {

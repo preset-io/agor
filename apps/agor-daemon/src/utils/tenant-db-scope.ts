@@ -10,6 +10,7 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  isTenantWriteMethodName,
   runWithoutTenantDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -47,8 +48,6 @@ type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefi
 
 export type TenantDatabaseRunner = <T>(work: () => Promise<T>) => Promise<T>;
 
-const TENANT_WRITE_METHODS = new Set(['create', 'update', 'patch', 'remove']);
-
 /**
  * Enforce the tenant freeze gate inside an already-open tenant transaction.
  * Shared by ordinary Feathers services and custom authenticated routes so a
@@ -58,7 +57,7 @@ export async function enforceTenantWriteGateForHook(
   db: TenantScopeAwareDatabase,
   context: HookContext
 ): Promise<HookContext> {
-  if (!TENANT_WRITE_METHODS.has(context.method)) return context;
+  if (!isTenantWriteMethodName(context.method)) return context;
   const tenantId = context.params.tenant?.tenant_id;
   if (!tenantId || !getCurrentTenantDatabaseScope()) return context;
   try {
