@@ -115,6 +115,19 @@ export class ServiceJWTStrategy extends JWTStrategy {
     return super.getEntity(id, params);
   }
 
+  /** The reserved subject is not authority unless the verified type is service. */
+  // biome-ignore lint/suspicious/noExplicitAny: Feathers auth result compatibility
+  async getEntityId(authResult: any, params: Params): Promise<string> {
+    const payload = authResult?.authentication?.payload as UserAuthTokenPayload | undefined;
+    if (payload?.sub === 'executor-service' && payload.type !== 'service') {
+      // getEntityId runs after signature verification and before getEntity.
+      // Reject here so an access token using the reserved subject can never be
+      // materialized as the synthetic RBAC-bypassing service user.
+      throw new Error('Reserved service subject requires a service token');
+    }
+    return super.getEntityId(authResult, params);
+  }
+
   /**
    * Override authenticate to handle service tokens in the payload
    *

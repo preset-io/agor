@@ -28,8 +28,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   boardPresenceRoomName,
+  HA_AUTHORIZATION_INVALIDATION_EVENT,
+  sessionStreamRoomName,
   tenantChannelName,
   tenantUserChannelName,
+  terminalChannelName,
 } from '../realtime/routing';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
@@ -63,6 +66,7 @@ interface FakeSocket {
   emit(event: string, data: unknown): void;
   join(channel: string): void | Promise<void>;
   leave(channel: string): void | Promise<void>;
+  disconnect(close?: boolean): void;
   broadcast: {
     emit: (event: string, data: unknown) => void;
     to: (channel: string) => { emit: (event: string, data: unknown) => void };
@@ -82,12 +86,15 @@ interface FakeIO {
   excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
   middlewares: Array<(socket: FakeSocket, next: (err?: Error) => void) => void>;
+  serverHandlers: Map<string, (...args: any[]) => void>;
+  serverSideEmitted: Array<{ event: string; data: unknown }>;
   engine: {
     closeHandler?: () => void;
     once(event: string, fn: () => void): void;
   };
   on(event: string, fn: any): void;
   use(fn: any): void;
+  serverSideEmit(event: string, data: unknown): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
   readonly local: Pick<FakeIO, 'to'>;
 }
@@ -118,6 +125,11 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
     leave(channel) {
       this.left.add(channel);
       this.joined.delete(channel);
+    },
+    disconnect() {
+      this.connected = false;
+      this.joined.clear();
+      this.handlers.get('disconnect')?.('server namespace disconnect');
     },
     broadcast: {
       emit: (event: string, data: unknown) => {
@@ -173,6 +185,8 @@ function makeIO(): FakeIO {
     excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
+    serverHandlers: new Map(),
+    serverSideEmitted: [],
     engine: {
       once(event, fn) {
         if (event === 'close') this.closeHandler = fn;
@@ -181,10 +195,15 @@ function makeIO(): FakeIO {
     on(event, fn) {
       if (event === 'connection') {
         this.connectionHandler = fn;
+      } else {
+        this.serverHandlers.set(event, fn);
       }
     },
     use(fn) {
       this.middlewares.push(fn);
+    },
+    serverSideEmit(event, data) {
+      this.serverSideEmitted.push({ event, data });
     },
     get local() {
       return this;
@@ -291,6 +310,32 @@ it('does not bind a terminal subscription capability to an anonymous socket', ()
   expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
 });
 
+it('evicts stale tenant sockets locally and propagates the eviction across HA replicas', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const tenantA = makeSocket('tenant-a-socket', io);
+  const tenantB = makeSocket('tenant-b-socket', io);
+  asUser(tenantA, ALICE);
+  asUser(tenantB, BOB);
+  tenantA.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  tenantB.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+  connect(io, tenantA);
+  connect(io, tenantB);
+
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.({
+    tenantId: 'tenant-a',
+  });
+
+  expect(tenantA.connected).toBe(false);
+  expect(tenantB.connected).toBe(true);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: { tenantId: 'tenant-a' },
+  });
+
+  io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({ tenantId: 'tenant-b' });
+  expect(tenantB.connected).toBe(false);
+});
+
 it('revokes a captured terminal subscription capability on logout', async () => {
   const { app, io } = buildHarness();
   const socket = makeSocket('logout-terminal-requester', io);
@@ -325,7 +370,7 @@ it('revokes the previous user and tenant capability on authentication replacemen
 
   connection!.user = { user_id: BOB };
   (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: BOB } },
+    { user: { user_id: BOB }, authentication: { payload: { tenant_id: 'tenant-b' } } },
     {
       connection,
       params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
@@ -392,7 +437,7 @@ it('removes a terminal room when authentication changes while its join is pendin
   await joinStarted;
   connection!.user = { user_id: BOB };
   (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: BOB } },
+    { user: { user_id: BOB }, authentication: { payload: { tenant_id: 'tenant-b' } } },
     {
       connection,
       params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
@@ -446,7 +491,7 @@ it('does not let a stale join remove the replacement generation from the same ro
   const staleResult = staleJoin?.(channel, allocation);
   await staleJoinStarted;
   (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: ALICE } },
+    { user: { user_id: ALICE }, authentication: { payload: { tenant_id: 'tenant-a' } } },
     {
       connection,
       params: { authentication: { payload: { tenant_id: 'tenant-a' } } },
@@ -539,7 +584,7 @@ const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
 const BRANCH = '44444444-dddd-dddd-dddd-444444444444' as BranchID;
 
 function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
-  return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
+  return terminalChannelName(tenantId, userId, terminalId);
 }
 
 function asUser(socket: FakeSocket, userId: string) {
@@ -1161,6 +1206,156 @@ describe('socket handshake tenant propagation', () => {
     expect(socket.feathers?.user).toMatchObject({ user_id: ALICE, tenant_id: 'tenant-a' });
     expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
+
+  it('ignores a caller-supplied trusted tenant header on the Socket.IO handshake', async () => {
+    const usersGet = vi.fn(async () => ({ user_id: ALICE }));
+    const app = { service: () => ({ get: usersGet }), on: () => {} } as unknown as Application;
+    const io = makeIO();
+    createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        trusted_header: 'x-agor-tenant-id',
+      },
+    } as SocketIOOptions).callback(io as never);
+    const socket = makeSocket('header-tenant-socket', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken(
+        { sub: ALICE, type: 'access', tenant_id: 'tenant-from-signature' },
+        'test-secret',
+        '5m'
+      ),
+    };
+    socket.handshake.headers = { 'x-agor-tenant-id': 'attacker-selected-tenant' };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toBeUndefined();
+    expect(socket.data.tenant?.tenant_id).toBe('tenant-from-signature');
+    expect(usersGet).toHaveBeenCalledWith(
+      ALICE,
+      expect.objectContaining({
+        tenant: expect.objectContaining({ tenant_id: 'tenant-from-signature' }),
+      })
+    );
+  });
+
+  it('rejects conflicting signed tenant aliases instead of selecting one', async () => {
+    const { io } = buildHarness({
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'workspace_id',
+      },
+    });
+    const socket = makeSocket('conflicting-claims', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken(
+        {
+          sub: ALICE,
+          type: 'access',
+          tenant_id: 'tenant-a',
+          workspace_id: 'tenant-b',
+        },
+        'test-secret',
+        '5m'
+      ),
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error?.message).toBe('Invalid or expired authentication token');
+    expect(socket.data.tenant).toBeUndefined();
+  });
+
+  it('rejects conflicting auth-object and Authorization-header credentials', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('conflicting-credentials', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
+    };
+    socket.handshake.headers = {
+      authorization: `Bearer ${issueRuntimeToken({ sub: BOB, type: 'access' }, 'test-secret', '5m')}`,
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error?.message).toBe('Conflicting authentication credentials');
+    expect(socket.feathers).toBeUndefined();
+  });
+
+  it('rejects user tokens invalidated after issuance', async () => {
+    const usersGet = vi.fn(async () => ({
+      user_id: ALICE,
+      tokens_valid_after: new Date(Date.now() + 60_000).toISOString(),
+    }));
+    const app = { service: () => ({ get: usersGet }), on: () => {} } as unknown as Application;
+    const io = makeIO();
+    createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+    } as SocketIOOptions).callback(io as never);
+    const socket = makeSocket('invalidated-token', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error?.message).toBe('Invalid or expired authentication token');
+    expect(socket.feathers).toBeUndefined();
+  });
+
+  it('rejects a service-typed JWT without the executor-service subject', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('forged-service-shape', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken({ sub: ALICE, type: 'service' }, 'test-secret', '5m'),
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error?.message).toBe('Invalid service token scope');
+    expect(socket.data.isService).toBeUndefined();
+  });
+
+  it('disconnects an authenticated socket when its JWT expires', async () => {
+    vi.useFakeTimers();
+    try {
+      const { io } = buildHarness();
+      const socket = makeSocket('expiring-socket', io);
+      socket.handshake.auth = {
+        token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '1s'),
+      };
+      const error = await new Promise<Error | undefined>((resolve) =>
+        io.middlewares[0]?.(socket, resolve)
+      );
+      expect(error).toBeUndefined();
+      connect(io, socket);
+      expect(socket.connected).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_100);
+
+      expect(socket.connected).toBe(false);
+      expect(socket.joined.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1707,16 +1902,15 @@ describe('terminal:* handler authorization', () => {
       expect(s.left.size).toBe(0);
     });
 
-    it('still allows leaving non-terminal channels (no auth check applied)', () => {
-      // The hardening is scoped to terminal channels; non-terminal channels
-      // (e.g. board-foo) keep the prior behavior so we don't regress
-      // unrelated WS features.
+    it('rejects arbitrary adapter-room leaves outside the terminal protocol', () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('leave')?.('board:abc');
-      expect(s.left.has('board:abc')).toBe(true);
+      const foreignTenantRoom = tenantChannelName('tenant-b');
+      s.handlers.get('leave')?.(foreignTenantRoom);
+      expect(s.left.has(foreignTenantRoom)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid terminal channel'));
     });
   });
 
@@ -1792,7 +1986,6 @@ describe('terminal:* handler authorization', () => {
         event: 'presence-updated',
         data: {
           userId: ALICE,
-          boardId: 'board-1',
           timestamp: 1_000,
         },
       });
@@ -1978,7 +2171,7 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.has(tenantChannelName('tenant-b'))).toBe(false);
   });
 
-  it('joins tenant channel from login params when auth result has no tenant claim yet', () => {
+  it('ignores caller-controlled login params and joins only from the signed tenant claim', () => {
     const { app, handlers, joins } = makeChannelHarness();
     configureChannels(app, {
       multiTenancy: {
@@ -1992,7 +2185,7 @@ describe('configureChannels tenant isolation', () => {
     handlers.get('login')?.(
       {
         user: { user_id: ALICE, email: 'alice@example.test' },
-        authentication: { payload: {} },
+        authentication: { payload: { tenant_id: 'tenant-from-signed-claim' } },
       },
       {
         connection,
@@ -2000,14 +2193,45 @@ describe('configureChannels tenant isolation', () => {
       }
     );
 
-    expect(connection.tenant).toEqual({ tenant_id: 'tenant-from-params', source: 'auth_claim' });
+    expect(connection.tenant).toEqual({
+      tenant_id: 'tenant-from-signed-claim',
+      source: 'auth_claim',
+    });
     expect(connection.data.tenant).toEqual({
-      tenant_id: 'tenant-from-params',
+      tenant_id: 'tenant-from-signed-claim',
       source: 'auth_claim',
     });
     expect(joins.get('authenticated')).toEqual([connection]);
-    expect(joins.get(tenantChannelName('tenant-from-params'))).toEqual([connection]);
-    expect(joins.get(tenantUserChannelName('tenant-from-params', ALICE))).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-from-signed-claim'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-from-signed-claim', ALICE))).toEqual([
+      connection,
+    ]);
+  });
+
+  it('uses the canonical signed tenant claim when the configured alias is absent', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'workspace_id',
+      },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: ALICE },
+        authentication: { payload: { tenant_id: 'tenant-canonical' } },
+      },
+      { connection }
+    );
+
+    expect(joins.get(tenantChannelName('tenant-canonical'))).toEqual([connection]);
+    expect(connection.tenant).toEqual({
+      tenant_id: 'tenant-canonical',
+      source: 'auth_claim',
+    });
   });
 
   it('does NOT join a terminal-executor identity to any broadcast channel', () => {
@@ -2134,6 +2358,9 @@ describe('configureChannels tenant isolation', () => {
 
     expect(joins.get(executorTaskChannelName('tenant-a', 'task-2'))).toEqual([connection]);
     expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
+    expect(joins.has('authenticated')).toBe(false);
+    expect(joins.has(tenantChannelName('tenant-a'))).toBe(false);
+    expect(joins.has(tenantUserChannelName('tenant-a', ALICE))).toBe(false);
   });
 
   it('revokes prior tenant and session-stream channels before replacing authentication', () => {
@@ -2156,12 +2383,12 @@ describe('configureChannels tenant isolation', () => {
       );
 
     login('tenant-a', ALICE);
-    joins.set('session-stream:session-a', [connection]);
+    joins.set(sessionStreamRoomName('tenant-a', 'session-a'), [connection]);
     login('tenant-b', BOB);
 
     expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
     expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
-    expect(leaves.get('session-stream:session-a')).toEqual([connection]);
+    expect(leaves.get(sessionStreamRoomName('tenant-a', 'session-a'))).toEqual([connection]);
     expect(joins.get(tenantChannelName('tenant-b'))).toEqual([connection]);
     expect(joins.get(tenantUserChannelName('tenant-b', BOB))).toEqual([connection]);
     expect(connection.tenant).toEqual({ tenant_id: 'tenant-b', source: 'auth_claim' });

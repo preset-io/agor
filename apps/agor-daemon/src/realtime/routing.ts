@@ -7,17 +7,94 @@ import type {
   RepoCloneError,
 } from '@agor/core/types';
 
-/** One authoritative naming scheme for Socket.IO rooms and Feathers channels. */
+/**
+ * Socket.IO room components are opaque identifiers, not path fragments.
+ *
+ * Tenant ids can come from an external identity provider and are not restricted
+ * to UUID syntax. Concatenating them with `:` or `/` makes different tuples
+ * collide (for example a tenant id containing `:user:` can collide with
+ * another tenant's per-user room). Base64url is injective for UTF-8 byte
+ * strings and contains none of our room separators.
+ */
+export function encodeRealtimeRoomComponent(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+export function decodeRealtimeRoomComponent(value: string): string | null {
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8');
+    return decoded && encodeRealtimeRoomComponent(decoded) === value ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One authoritative, versioned naming scheme for Socket.IO rooms and Feathers
+ * channels. The version prevents a mixed deployment from accidentally treating
+ * an old unescaped name as a new structured room.
+ */
+const REALTIME_ROOM_PREFIX = 'agor:v2:tenant:';
+
+/** Internal server-to-server eviction signal; never emitted to browser rooms. */
+export const HA_AUTHORIZATION_INVALIDATION_EVENT = 'agor:authorization-invalidated:v1';
+
 export function tenantChannelName(tenantId: string): string {
-  return `tenant:${tenantId}`;
+  return `${REALTIME_ROOM_PREFIX}${encodeRealtimeRoomComponent(tenantId)}`;
 }
 
 export function tenantUserChannelName(tenantId: string, userId: string): string {
-  return `tenant:${tenantId}:user:${userId}`;
+  return `${tenantChannelName(tenantId)}:user:${encodeRealtimeRoomComponent(userId)}`;
 }
 
 export function boardPresenceRoomName(tenantId: string, boardId: string): string {
-  return `tenant:${tenantId}:board:${boardId}:presence`;
+  return `${tenantChannelName(tenantId)}:board:${encodeRealtimeRoomComponent(boardId)}:presence`;
+}
+
+export function sessionStreamRoomName(tenantId: string, sessionId: string): string {
+  return `${tenantChannelName(tenantId)}:session-stream:${encodeRealtimeRoomComponent(sessionId)}`;
+}
+
+export function executorTaskRoomName(tenantId: string, taskId: string): string {
+  return `${tenantChannelName(tenantId)}:executor-task:${encodeRealtimeRoomComponent(taskId)}`;
+}
+
+export function terminalChannelName(tenantId: string, userId: string, terminalId: string): string {
+  return `agor/v2/tenant/${encodeRealtimeRoomComponent(tenantId)}/user/${encodeRealtimeRoomComponent(userId)}/terminal/${encodeRealtimeRoomComponent(terminalId)}`;
+}
+
+export function parseTerminalChannel(
+  channel: string
+): { tenantId: string; userId: string; terminalId: string } | null {
+  if (typeof channel !== 'string') return null;
+  const parts = channel.split('/');
+  if (
+    parts.length !== 8 ||
+    parts[0] !== 'agor' ||
+    parts[1] !== 'v2' ||
+    parts[2] !== 'tenant' ||
+    parts[4] !== 'user' ||
+    parts[6] !== 'terminal'
+  ) {
+    return null;
+  }
+  const tenantId = decodeRealtimeRoomComponent(parts[3]);
+  const userId = decodeRealtimeRoomComponent(parts[5]);
+  const terminalId = decodeRealtimeRoomComponent(parts[7]);
+  return tenantId && userId && terminalId ? { tenantId, userId, terminalId } : null;
+}
+
+export function isTenantRealtimeRoomName(name: string): boolean {
+  return name.startsWith(REALTIME_ROOM_PREFIX);
+}
+
+export function isSessionStreamRoomName(name: string): boolean {
+  return name.startsWith(REALTIME_ROOM_PREFIX) && name.includes(':session-stream:');
+}
+
+export function isExecutorTaskRoomName(name: string): boolean {
+  return name.startsWith(REALTIME_ROOM_PREFIX) && name.includes(':executor-task:');
 }
 
 interface HaNativeSocketPayloads {

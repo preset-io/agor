@@ -327,7 +327,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // events reach only the tabs actively viewing that session. Access is gated
   // by the session read inside the service. The create/remove events are
   // control-plane only and must never broadcast, so publish to no connections.
-  app.use('/session-streams', createSessionStreamsService(app), {
+  app.use('/session-streams', createSessionStreamsService(app, resolveMultiTenancyConfig(config)), {
     methods: ['create', 'remove'],
   });
   app.service('/session-streams').hooks({

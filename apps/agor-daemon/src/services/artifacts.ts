@@ -1627,11 +1627,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * - the artifact has `agor_runtime.enabled === false`,
    * - or no browser tab fulfilled the query within `timeoutMs`.
    *
-   * Scope: the response endpoint requires the responding user to match
-   * `requesterId`. So even though the dispatch event is broadcast, only
-   * the requester's own browser can complete the round-trip with their
-   * own (potentially secret-bearing) DOM. Cross-user introspection of
-   * a third party's render is structurally prevented.
+   * Scope: publication filters `agor-query` to `requesterId`, and the response
+   * endpoint independently requires the responder to match it. Other artifact
+   * viewers therefore receive neither the selector/args nor the response.
    */
   async queryArtifactRuntime(input: {
     artifactId: string;
@@ -1673,8 +1671,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       });
     });
 
-    // Broadcast on the artifacts service. The client filters: only respond
-    // if currently viewing this artifact AND logged in as the requester.
+    // The global realtime publisher treats this custom event as requester-only.
     this.app.service('artifacts').emit('agor-query', {
       request_id: requestId,
       artifact_id: input.artifactId,

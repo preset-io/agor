@@ -95,7 +95,7 @@ const session = await agor.service('sessions').create({
 });
 
 // Real-time WebSocket events with typed payloads
-agor.service('messages').on('created', (msg) => {
+agor.service('messages').on('created', msg => {
   console.log(`${msg.role}: ${msg.content}`);
 });
 ```
@@ -137,21 +137,26 @@ sequenceDiagram
     D->>DB: INSERT session
     DB-->>D: Session created
     D->>U1: 'created' event
-    D->>U2: 'created' event (broadcast)
+    D->>U2: 'created' event (when U2 is authorized)
 
     U2->>D: Update session position
     D->>DB: UPDATE session
-    D->>U1: 'patched' event (broadcast)
-    D->>U2: 'patched' event
+    D->>U1: 'patched' event
+    D->>U2: 'patched' event (when U2 is authorized)
 
-    Note over U1,U2: All connected clients<br/>receive real-time updates
+    Note over U1,U2: Authenticated clients receive only<br/>tenant- and resource-authorized updates
 ```
 
 **Key Features:**
 
-- **Automatic broadcasting** - FeathersJS emits events to all connected clients
+- **Authorized publication** - FeathersJS emits only to authenticated
+  connections in the event's tenant, further filtered by board/branch/resource
+  access where applicable
 - **Service-level events** - `created`, `patched`, `removed`, `updated`
-- **Custom events** - Cursor position, presence updates (100ms throttle)
+- **Custom events** - Board-authorized cursor position and tenant-scoped
+  presence updates (100ms throttle)
+- **Fail-closed routing** - Missing/conflicting tenant context has no global
+  broadcast fallback; clients cannot select tenant rooms
 - **Optimistic UI** - React hooks listen to events and update state immediately
 
 ## Core Services
@@ -164,8 +169,8 @@ The daemon exposes 12 FeathersJS services via REST and WebSocket:
 | **tasks**               | Work units within sessions    | CRUD, completion tracking           |
 | **messages**            | Conversation history          | CRUD, pagination, streaming         |
 | **boards**              | Spatial session organization  | CRUD, session positioning           |
-| **branches**           | Git branch isolation        | Create, list, delete branches      |
-| **repos**               | Git repository management     | Clone, list, branch operations    |
+| **branches**            | Git branch isolation          | Create, list, delete branches       |
+| **repos**               | Git repository management     | Clone, list, branch operations      |
 | **users**               | User accounts & auth          | CRUD, JWT authentication            |
 | **mcp-servers**         | MCP server configs            | CRUD, capability queries            |
 | **session-mcp-servers** | Session MCP links             | Associate MCP servers with sessions |

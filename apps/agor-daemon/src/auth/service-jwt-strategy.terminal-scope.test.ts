@@ -62,4 +62,21 @@ describe('ServiceJWTStrategy terminal-scoped identity', () => {
     expect(result.user._isTerminalExecutor).toBeUndefined();
     expect(result.user.terminal_user_id).toBeUndefined();
   });
+
+  it('does not treat the reserved subject as authority without a service token type', async () => {
+    const strategy = new ServiceJWTStrategy();
+
+    await expect(
+      strategy.getEntityId(
+        { authentication: { payload: { sub: 'executor-service', type: 'access' } } },
+        {} as never
+      )
+    ).rejects.toThrow(/requires a service token/);
+    await expect(
+      strategy.getEntityId(
+        { authentication: { payload: { sub: 'executor-service', type: 'service' } } },
+        {} as never
+      )
+    ).resolves.toBe('executor-service');
+  });
 });

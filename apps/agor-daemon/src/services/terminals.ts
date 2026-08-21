@@ -30,6 +30,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
+import { terminalChannelName } from '../realtime/routing.js';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
@@ -104,9 +105,7 @@ export function buildBranchShellTabName(branch: Pick<Branch, 'branch_id' | 'name
   return `${branch.name} · ${shortId(branch.branch_id)}`;
 }
 
-export function terminalChannelName(tenantId: string, userId: string, terminalId: string): string {
-  return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
-}
+export { terminalChannelName };
 
 function terminalRequestAllocation(terminal: TerminalAttachment): TerminalAllocatedEvent {
   return {

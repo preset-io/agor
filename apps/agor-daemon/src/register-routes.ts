@@ -23,6 +23,8 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  BoardCommentsRepository,
+  BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
@@ -59,6 +61,7 @@ import {
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
+  BoardComment,
   BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
@@ -92,6 +95,7 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { isExecutorSessionTokenPayload } from './auth/executor-session-token.js';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
 import { createRefreshTokenService } from './auth/refresh-token-service.js';
@@ -284,6 +288,15 @@ function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
 }
 
+export function requireStreamingPublisherCapability(params: RouteParams): void {
+  if (
+    !isServiceAccountRoute(params) &&
+    !isExecutorSessionTokenPayload(params.authentication?.payload)
+  ) {
+    throw new Forbidden('Streaming events require an executor-scoped token');
+  }
+}
+
 /**
  * Interface for dependencies needed by route registration.
  */
@@ -370,6 +383,67 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for database operation');
     return runWithTenantDatabaseScope(db, tenantId, work);
+  };
+}
+
+type BoardCommentRouteParams = Pick<AuthenticatedParams, 'provider' | 'user'>;
+
+/**
+ * Authorize one custom board-comment route without trusting its route id as an
+ * access decision. PostgreSQL RLS handles tenant isolation; board RBAC handles
+ * same-tenant private-board access. Missing, foreign-tenant, and inaccessible
+ * comments intentionally produce the same result.
+ */
+export async function authorizeBoardCommentRouteAccess(input: {
+  commentId: string;
+  params: BoardCommentRouteParams;
+  findComment: (commentId: string) => Promise<BoardComment | null>;
+  canViewBoard: (boardId: string, userId: UUID) => Promise<boolean>;
+}): Promise<BoardComment> {
+  const user = input.params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  const comment = await input.findComment(input.commentId);
+  if (!comment) throw new NotFound('Board comment not found');
+  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return comment;
+  let allowed = false;
+  try {
+    allowed = await input.canViewBoard(comment.board_id, user.user_id as UUID);
+  } catch {
+    // Preserve the same non-enumerating denial for missing/foreign boards.
+  }
+  if (!allowed) throw new NotFound('Board comment not found');
+  return comment;
+}
+
+/** Caller-owned reaction identity; a submitted user_id is never authoritative. */
+export function boardCommentReactionInput(
+  data: { emoji?: unknown },
+  params: BoardCommentRouteParams
+): { user_id: string; emoji: string } {
+  const userId = params.user?.user_id;
+  if (!userId) throw new NotAuthenticated('Authentication required');
+  if (typeof data.emoji !== 'string' || !data.emoji) throw new BadRequest('emoji required');
+  return { user_id: userId, emoji: data.emoji };
+}
+
+/**
+ * Replies inherit board/attachment authority from their parent. Project the
+ * request onto the supported fields so callers cannot smuggle ownership,
+ * reactions, resolution state, or a different parent/board reference.
+ */
+export function boardCommentReplyInput(
+  data: Partial<BoardComment>,
+  params: BoardCommentRouteParams
+): Partial<BoardComment> {
+  const userId = params.user?.user_id;
+  if (!userId) throw new NotAuthenticated('Authentication required');
+  if (typeof data.content !== 'string' || !data.content) {
+    throw new BadRequest('content required');
+  }
+  return {
+    content: data.content,
+    created_by: userId as UserID,
+    ...(Array.isArray(data.mentions) ? { mentions: data.mentions } : {}),
   };
 }
 
@@ -908,6 +982,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
+        requireStreamingPublisherCapability(params);
         app.service('messages').emit(data.event, data.data);
         if (isServiceAccountRoute(params)) {
           const gatewayStreamingEvent =
@@ -946,6 +1021,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
+        requireStreamingPublisherCapability(params);
         app.service('tasks').emit(data.event, data.data);
         if (isServiceAccountRoute(params) && data.event === 'tool:start') {
           const sessionId =
@@ -3476,6 +3552,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Board comments custom routes (threading + reactions)
   // ============================================================================
 
+  const boardCommentRouteRepository = new BoardCommentsRepository(db);
+  const boardCommentBoardRepository = new BoardRepository(db);
+  const authorizeBoardCommentRoute = (id: string, params: RouteParams) =>
+    authorizeBoardCommentRouteAccess({
+      commentId: id,
+      params,
+      findComment: (commentId) => boardCommentRouteRepository.findById(commentId),
+      canViewBoard: (boardId, userId) => boardCommentBoardRepository.canView(boardId, userId),
+    });
   const boardCommentsService = safeService('board-comments') as unknown as {
     toggleReaction: (
       id: string,
@@ -3494,17 +3579,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       app,
       '/board-comments/:id/toggle-reaction',
       {
-        async create(data: { emoji: string }, params: RouteParams) {
+        async create(data: { user_id?: string; emoji?: string }, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          if (!data.emoji) throw new Error('emoji required');
-          // Derive the reactor from the authenticated caller; never trust a
-          // client-supplied user_id (previously spoofable: react as any user).
-          const userId = params.user?.user_id as string | undefined;
-          if (!userId) throw new Error('Authentication required');
+          await authorizeBoardCommentRoute(id, params);
           const updated = await boardCommentsService.toggleReaction(
             id,
-            { user_id: userId, emoji: data.emoji },
+            boardCommentReactionInput(data, params),
             params
           );
           emitServiceEvent(app, {
@@ -3531,14 +3612,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         async create(data: Partial<import('@agor/core/types').BoardComment>, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          if (!data.content) throw new Error('content required');
-          // Always attribute the reply to the authenticated caller — never trust
-          // a client-supplied `created_by`. `requireAuth` upstream guarantees
-          // `params.user.user_id`.
-          const callerId = (params as { user?: { user_id?: string } }).user?.user_id;
-          if (!callerId) throw new Error('Authentication required');
-          data.created_by = callerId as import('@agor/core/types').UserID;
-          const reply = await boardCommentsService.createReply(id, data, params);
+          await authorizeBoardCommentRoute(id, params);
+          const reply = await boardCommentsService.createReply(
+            id,
+            boardCommentReplyInput(data, params),
+            params
+          );
           emitServiceEvent(app, {
             path: 'board-comments',
             event: 'created',

@@ -746,7 +746,7 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** User ID (for channel: user/${userId}/terminal) */
+    /** User ID used by the daemon to derive an opaque tenant-qualified terminal channel. */
     userId: z.string().uuid(),
 
     /** Opaque process-local attachment id returned to the browser. */

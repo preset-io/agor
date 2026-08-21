@@ -45,6 +45,8 @@ export type RealtimePublishAudience =
   | 'none'
   /** Every authenticated connection in the event's tenant. */
   | 'tenant'
+  /** Connections whose user can currently view the referenced board. */
+  | 'board'
   /** Branch-scoped; branch id read from the row (`branch_id`), or `context.id`. */
   | 'branch'
   /** Branch-scoped; branch id read from `params.route.id` of a `/branches/:id/…` route. */
@@ -127,11 +129,11 @@ export const REALTIME_PUBLISH_POLICY = {
   // Board-attached resources that may or may not hang off a branch.
   // ---------------------------------------------------------------------------
   'board-objects': {
-    audience: 'branch-optional',
+    audience: 'board',
     why: 'useAgorData and BoardBranchList track card/zone placement live.',
   },
   'board-comments': {
-    audience: 'branch-optional',
+    audience: 'board',
     why: 'useAgorData renders comment threads live.',
   },
   artifacts: {
@@ -144,10 +146,10 @@ export const REALTIME_PUBLISH_POLICY = {
   // member through an unscoped `find`, so the event adds no reach.
   // ---------------------------------------------------------------------------
   boards: {
-    audience: 'tenant',
+    audience: 'board',
     why: 'useAgorData tracks boards and board-object mutations emitted as boards.patched.',
   },
-  cards: { audience: 'tenant', why: 'useAgorData tracks cards.' },
+  cards: { audience: 'board', why: 'useAgorData tracks cards for boards the viewer can access.' },
   'card-types': { audience: 'tenant', why: 'useAgorData tracks card type definitions.' },
   repos: { audience: 'tenant', why: 'useAgorData and App.tsx track repo rows and clone progress.' },
   users: {

@@ -23,8 +23,10 @@ import {
 import {
   ArtifactRepository,
   assertTenantWritable,
+  BoardCommentsRepository,
   BoardRepository,
   type BranchRepository,
+  CardRepository,
   getCurrentTenantDatabaseScope,
   isPostgresDatabaseHandle,
   isTenantWriteMethodName,
@@ -71,6 +73,7 @@ import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
+  BoardID,
   Branch,
   DeepReadonly,
   HookContext,
@@ -82,6 +85,7 @@ import type {
   Task,
   User,
   UserID,
+  UUID,
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
@@ -179,7 +183,10 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './utils/realtime-access-cache.js';
-import { configureRealtimePublish } from './utils/realtime-publish.js';
+import {
+  configureRealtimePublish,
+  setBoardRemovalRealtimeVisibility,
+} from './utils/realtime-publish.js';
 import {
   resolveSandboxProtectedDataRoots,
   validateFilesystemHomeOverride,
@@ -983,6 +990,78 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
     sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
   });
+  const boardRepository = new BoardRepository(db);
+  const boardCommentsRepository = new BoardCommentsRepository(db);
+  const cardRepository = new CardRepository(db);
+
+  const authorizeExternalBoard = async (
+    context: HookContext,
+    boardId: string | undefined,
+    mode: 'view' | 'mutate',
+    action: string
+  ): Promise<HookContext> => {
+    if (!executionMode.appRbacEnabled || !context.params.provider) return context;
+    const user = context.params.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+    let allowed = false;
+    if (boardId) {
+      try {
+        allowed =
+          mode === 'view'
+            ? await boardRepository.canView(boardId, user.user_id as UUID)
+            : await boardRepository.canMutate(boardId, user.user_id as UUID);
+      } catch {
+        // Preserve the same non-enumerating denial for missing, foreign-tenant,
+        // and inaccessible boards.
+      }
+    }
+    if (!allowed) throw new Forbidden(`Board resource is unavailable to ${action}`);
+    return context;
+  };
+
+  const boardCommentAccess =
+    (mode: 'view' | 'author', action: string) =>
+    async (context: HookContext): Promise<HookContext> => {
+      const user = context.params.user;
+      const data = context.data as { board_id?: string } | undefined;
+      const existing =
+        typeof context.id === 'string'
+          ? await boardCommentsRepository.findById(context.id)
+          : undefined;
+      const boardId = existing?.board_id ?? data?.board_id;
+      await authorizeExternalBoard(context, boardId, 'view', action);
+      if (existing?.board_id && data?.board_id && data.board_id !== existing.board_id) {
+        await authorizeExternalBoard(context, data.board_id, 'view', action);
+      }
+      if (
+        mode === 'author' &&
+        executionMode.appRbacEnabled &&
+        context.params.provider &&
+        user &&
+        !user._isServiceAccount &&
+        !hasMinimumRole(user.role, ROLES.ADMIN) &&
+        existing?.created_by !== user.user_id
+      ) {
+        throw new Forbidden(`Only the comment author may ${action}`);
+      }
+      return context;
+    };
+
+  const cardAccess =
+    (mode: 'view' | 'mutate', action: string) =>
+    async (context: HookContext): Promise<HookContext> => {
+      const requestedBoardId = (context.data as { board_id?: string } | undefined)?.board_id;
+      const existingBoardId =
+        typeof context.id === 'string'
+          ? (await cardRepository.findById(context.id))?.board_id
+          : undefined;
+      await authorizeExternalBoard(context, existingBoardId ?? requestedBoardId, mode, action);
+      if (existingBoardId && requestedBoardId && requestedBoardId !== existingBoardId) {
+        await authorizeExternalBoard(context, requestedBoardId, mode, action);
+      }
+      return context;
+    };
 
   const invalidateRealtimeBranchAccess = async (branchId: unknown): Promise<void> => {
     if (typeof branchId !== 'string' || branchId.length === 0) return;
@@ -1022,6 +1101,39 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  const captureBoardRemovalRealtimeVisibility = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    if (typeof context.id !== 'string') throw new BadRequest('Board ID is required');
+    const board = await boardRepository.findBySlugOrId(context.id);
+    if (!board) throw new NotFound(`Board not found: ${String(context.id)}`);
+    if (!executionMode.appRbacEnabled || board.access_mode === 'shared') {
+      setBoardRemovalRealtimeVisibility(context.params, board.board_id as BoardID, {
+        mode: 'allAuthenticated',
+      });
+      return context;
+    }
+
+    const visibleUserIds = new Set<UserID>();
+    const users = await usersRepository.findAll();
+    await Promise.all(
+      users.map(async (user) => {
+        try {
+          if (await boardRepository.canView(board.board_id, user.user_id)) {
+            visibleUserIds.add(user.user_id);
+          }
+        } catch {
+          // Snapshot construction fails narrow for one principal.
+        }
+      })
+    );
+    setBoardRemovalRealtimeVisibility(context.params, board.board_id as BoardID, {
+      mode: 'explicitUsers',
+      userIds: visibleUserIds,
+    });
+    return context;
+  };
+
   safeService('agentic-tool-settings')?.hooks({
     before: {
       patch: [requireMinimumRole(ROLES.ADMIN, 'manage workspace agentic tools')],
@@ -1045,6 +1157,81 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     realtimeAccessCache.clearVisibility();
     return context;
   };
+
+  const shouldEvictRealtimeAuthorization = (context: HookContext): boolean => {
+    if (!['create', 'update', 'patch', 'remove'].includes(context.method)) return false;
+    if (
+      [
+        'branches/:id/owners',
+        'branches/:id/group-grants',
+        'boards/:id/owners',
+        'boards/:id/group-grants',
+        'groups',
+        'group-memberships',
+      ].includes(context.path)
+    ) {
+      return true;
+    }
+    if (context.path === 'board-objects') {
+      return context.method === 'create' || context.method === 'remove';
+    }
+    const data =
+      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+        ? (context.data as Record<string, unknown>)
+        : {};
+    if (context.path === 'branches') {
+      return ['board_id', 'others_can', 'permission_source'].some((field) =>
+        Object.hasOwn(data, field)
+      );
+    }
+    if (context.path === 'boards') {
+      if (context.method === 'remove') return true;
+      return ['access_mode', 'primary_teammate_id', 'default_others_can'].some((field) =>
+        Object.hasOwn(data, field)
+      );
+    }
+    if (context.path === 'users') {
+      if (context.method === 'remove') return true;
+      return ['password', 'role', 'tokens_valid_after'].some((field) => Object.hasOwn(data, field));
+    }
+    return false;
+  };
+
+  const evictStaleRealtimeAuthorization = (context: HookContext): HookContext => {
+    if (!shouldEvictRealtimeAuthorization(context)) return context;
+    deferWithTenantContext(
+      context.params,
+      async () => {
+        app.emit('realtime:authorization-invalidated', {
+          tenantId: requireCurrentTenantId(),
+        });
+      },
+      () => console.warn('[realtime] Failed to schedule authorization eviction')
+    );
+    return context;
+  };
+
+  for (const path of [
+    'branches/:id/owners',
+    'branches/:id/group-grants',
+    'boards/:id/owners',
+    'boards/:id/group-grants',
+    'groups',
+    'group-memberships',
+    'board-objects',
+    'branches',
+    'boards',
+    'users',
+  ]) {
+    safeService(path)?.hooks({
+      after: {
+        create: [evictStaleRealtimeAuthorization],
+        update: [evictStaleRealtimeAuthorization],
+        patch: [evictStaleRealtimeAuthorization],
+        remove: [evictStaleRealtimeAuthorization],
+      },
+    });
+  }
 
   /**
    * Authorization chain shared by the two externally-initiated prompt writes,
@@ -1246,10 +1433,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           ? [scopeFindToAccessibleBoards(new BoardRepository(db), superadminOpts)]
           : []),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create cards'), injectCreatedBy()],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update cards')],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete cards')],
+      get: [cardAccess('view', 'view this card')],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create cards'),
+        cardAccess('mutate', 'create cards'),
+        injectCreatedBy(),
+      ],
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update cards'),
+        cardAccess('mutate', 'update this card'),
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update cards'),
+        cardAccess('mutate', 'update this card'),
+      ],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete cards'),
+        cardAccess('mutate', 'delete this card'),
+      ],
     },
   });
 
@@ -1530,10 +1731,24 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // comments. The service pushes the marker into SQL.
         ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create board comments'), injectCreatedBy()],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update board comments')],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete board comments')],
+      get: [boardCommentAccess('view', 'view this board comment')],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create board comments'),
+        boardCommentAccess('view', 'comment on this board'),
+        injectCreatedBy(),
+      ],
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update board comments'),
+        boardCommentAccess('author', 'update this board comment'),
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update board comments'),
+        boardCommentAccess('author', 'update this board comment'),
+      ],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete board comments'),
+        boardCommentAccess('author', 'delete this board comment'),
+      ],
     },
   });
 
@@ -2466,6 +2681,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     db,
     branchRbacEnabled: executionMode.appRbacEnabled,
     branchRepository,
+    boardRepository,
     sessionsRepository,
     accessCache: realtimeAccessCache,
     allowSuperadmin: superadminOpts.allowSuperadmin,
@@ -2879,7 +3095,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   // BoardRepository for RBAC find-scope hook (single instance reused across
   // requests). Cheap to construct — just wraps the shared db handle.
-  const boardRepository = new BoardRepository(db);
   const ensureBoardAccess = (mode: 'view' | 'mutate', action: string) => {
     return async (context: HookContext) => {
       if (!executionMode.appRbacEnabled || !context.params.provider) return context;
@@ -3088,6 +3303,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete boards'),
         ensureCanMutateBoard('delete this board'),
+        captureBoardRemovalRealtimeVisibility,
       ],
       toBlob: [
         requireMinimumRole(ROLES.MEMBER, 'export boards'),

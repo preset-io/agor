@@ -148,6 +148,8 @@ deployment:
   redis:
     # Prefer REDIS_URL when credentials are present.
     url: rediss://redis.internal:6380/0
+    # Share this only among replicas of one mutually trusted deployment.
+    # Use a distinct prefix for every other Agor deployment using this Redis.
     key_prefix: my-company-production
     connect_timeout_ms: 5000
     startup_timeout_ms: 15000
@@ -197,6 +199,12 @@ daemon:
   # Required for external executors to call/reconnect through the daemon fleet.
   public_url: https://agor-daemon.internal.example
 ```
+
+`key_prefix` is the Socket.IO and internal realtime trust namespace, not a
+cosmetic label. All replicas in one deployment must use the same value, and
+independent deployments must use different values even if their tenant IDs do
+not currently overlap. Reusing it makes those deployments participants in the
+same Redis adapter/control plane.
 
 `daemon.public_url` remains the fleet URL for ordinary executor Feathers and
 Socket.IO calls. It is **not** a safe request-response origin. Set
@@ -307,7 +315,7 @@ database transaction remains open during the HTTP request.
 | Knowledge embedding indexer                                                                       | Supported with PostgreSQL claims/fences; it is a no-op unless semantic indexing is configured.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Gateway listeners                                                                                 | Slack, GitHub, and Shortcut supported on PostgreSQL with leases and occurrence fencing. Teams and unimplemented providers fail closed. The legacy generic inbound channel-key route is not a durable HA ingress. Provider-side acknowledgement/send crash gaps remain documented at-least-once windows.                                                                                                                                                                                                                                |
 | Feathers events and native tenant/user/board rooms                                                | Supported through the audited relay/adapter paths. Auth-resolved multi-tenant operations still need end-to-end certification.                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Web terminal                                                                                      | Supported as an owner-local, ephemeral attachment only in `shared-local` with sticky ingress and declared shared workspace storage. Owner loss requires explicit reconnect; no PTY migration/replay. Safely disabled for `external`.                                                                                                                                                                                                                                                                                                    |
+| Web terminal                                                                                      | Supported as an owner-local, ephemeral attachment only in `shared-local` with sticky ingress and declared shared workspace storage. Owner loss requires explicit reconnect; no PTY migration/replay. Safely disabled for `external`.                                                                                                                                                                                                                                                                                                   |
 | Managed environments                                                                              | Lifecycle control remains webhook-only: this slice does not distribute Start/Stop/Restart/Nuke ownership. Health observation runs on every replica with bounded discovery and one PostgreSQL lease/token per branch. The result write rechecks DB-time lease expiry, opaque token, active status, archive state, tenant, and lifecycle generation. Missing health URLs are recorded as `unknown`; Agor does not infer remote health from another replica's process map. Authenticated health reports `environmentHealthMonitor: true`. |
 | GitHub App installation setup                                                                     | Supported on PostgreSQL through a SHA-256-only, tenant/admin/intent-bound state authority with database-time expiry and atomic one-shot consumption. The display-only callback may land on any replica. Authenticated health reports `githubInstall: true`. SQLite retains process-local standalone behavior.                                                                                                                                                                                                                          |
 | MCP OAuth/callback and OAuth-capable MCP discovery, OpenCode OAuth/native auth                  | Blocked in the constrained profile. MCP OAuth has a durable PostgreSQL prerequisite but remains gated pending separate activation.                                                                                                                                                                                                                                                                                                                                                                                                    |

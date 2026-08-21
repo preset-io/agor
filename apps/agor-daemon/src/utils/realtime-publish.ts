@@ -3,10 +3,16 @@ import {
   resolveTenantContext,
   TenantResolutionError,
 } from '@agor/core/config';
-import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import type {
+  BoardRepository,
+  BranchRepository,
+  SessionRepository,
+  TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  isBoardRemovalRealtimeVisibilitySnapshot,
   isBranchRemovalRealtimeVisibilitySnapshot,
   isRealtimeRelayEnvelope,
   MAX_REALTIME_RELAY_BYTES,
@@ -14,6 +20,8 @@ import {
   type RealtimeRelayEnvelope,
 } from '@agor/core/realtime';
 import {
+  type BoardID,
+  type BoardRemovalRealtimeVisibilitySnapshot,
   type BranchID,
   type BranchRealtimeVisibility,
   BranchRealtimeVisibilityMode,
@@ -25,7 +33,14 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
-import { tenantChannelName } from '../realtime/routing.js';
+import {
+  executorTaskRoomName,
+  isExecutorTaskRoomName,
+  isSessionStreamRoomName,
+  isTenantRealtimeRoomName,
+  sessionStreamRoomName,
+  tenantChannelName,
+} from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   isKnowledgeRealtimeSuppressedEvent,
@@ -43,6 +58,39 @@ import {
 } from './realtime-publish-policy.js';
 
 export const BRANCH_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBranchRemovalVisibility';
+export const BOARD_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBoardRemovalVisibility';
+
+export function setBoardRemovalRealtimeVisibility(
+  params: HookContext['params'],
+  boardId: BoardID,
+  visibility:
+    | { mode: typeof BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    | { mode: typeof BranchRealtimeVisibilityMode.EXPLICIT_USERS; userIds: ReadonlySet<UserID> }
+): void {
+  const snapshot: BoardRemovalRealtimeVisibilitySnapshot =
+    visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { boardId, mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+      : {
+          boardId,
+          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+          userIds: [...visibility.userIds].sort(),
+        };
+  (params as HookContext['params'] & Record<string, unknown>)[BOARD_REMOVAL_VISIBILITY_PARAM] =
+    snapshot;
+}
+
+function boardRemovalVisibilitySnapshot(
+  context: PublishContext,
+  boardId: string
+): BoardRemovalRealtimeVisibilitySnapshot | null {
+  if (context.path !== 'boards' || context.event !== 'removed') return null;
+  const value = (context.params as Record<string, unknown> | undefined)?.[
+    BOARD_REMOVAL_VISIBILITY_PARAM
+  ];
+  return isBoardRemovalRealtimeVisibilitySnapshot(value) && value.boardId === boardId
+    ? value
+    : null;
+}
 
 /** Capture the branch visibility fact while its ACL rows still exist. */
 export function setBranchRemovalRealtimeVisibility(
@@ -88,19 +136,6 @@ function visibilityFromRemovalSnapshot(
 }
 
 /**
- * Per-session channel that carries only the high-frequency streaming events
- * (message text/thinking chunks, tool start/complete). Connections join this
- * room via the `session-streams` service after passing a session-access check,
- * so streaming traffic reaches only the tabs actively viewing a session
- * instead of the whole tenant. Session ids are globally-unique UUIDv7, so the
- * unprefixed name cannot collide across tenants; cross-tenant membership is
- * additionally impossible because the subscribe path gates on a tenant-scoped
- * `sessions.get`.
- */
-const SESSION_STREAM_CHANNEL_PREFIX = 'session-stream:';
-const EXECUTOR_TASK_CHANNEL_PREFIX = 'executor-task:';
-
-/**
  * Private control-plane room for the one executor JWT scoped to a Task.
  *
  * Unlike normal Task events, membership is not derived from branch visibility:
@@ -109,11 +144,11 @@ const EXECUTOR_TASK_CHANNEL_PREFIX = 'executor-task:';
  * no client-callable subscribe method.
  */
 export function executorTaskChannelName(tenantId: string, taskId: string): string {
-  return `${EXECUTOR_TASK_CHANNEL_PREFIX}${tenantId}:${taskId}`;
+  return executorTaskRoomName(tenantId, taskId);
 }
 
-export function sessionStreamChannelName(sessionId: string): string {
-  return `${SESSION_STREAM_CHANNEL_PREFIX}${sessionId}`;
+export function sessionStreamChannelName(tenantId: string, sessionId: string): string {
+  return sessionStreamRoomName(tenantId, sessionId);
 }
 
 /**
@@ -126,7 +161,7 @@ export function sessionStreamChannelName(sessionId: string): string {
  */
 export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
   for (const name of app.channels ?? []) {
-    if (name.startsWith(SESSION_STREAM_CHANNEL_PREFIX)) {
+    if (isSessionStreamRoomName(name)) {
       app.channel(name).leave(connection as never);
     }
   }
@@ -135,7 +170,7 @@ export function leaveAllSessionStreamChannels(app: Application, connection: unkn
 /** Drop task-control capability on logout or before replacing socket auth. */
 export function leaveAllExecutorTaskChannels(app: Application, connection: unknown): void {
   for (const name of app.channels ?? []) {
-    if (name.startsWith(EXECUTOR_TASK_CHANNEL_PREFIX)) {
+    if (isExecutorTaskRoomName(name)) {
       app.channel(name).leave(connection as never);
     }
   }
@@ -144,7 +179,11 @@ export function leaveAllExecutorTaskChannels(app: Application, connection: unkno
 /** Drop every tenant-scoped Feathers channel on logout or live auth replacement. */
 export function leaveAllTenantChannels(app: Application, connection: unknown): void {
   for (const name of app.channels ?? []) {
-    if (name.startsWith('tenant:')) {
+    if (
+      isTenantRealtimeRoomName(name) &&
+      !isSessionStreamRoomName(name) &&
+      !isExecutorTaskRoomName(name)
+    ) {
       app.channel(name).leave(connection as never);
     }
   }
@@ -179,10 +218,11 @@ function existingChannel(app: Application, name: string): PublishChannel | null 
  */
 export function joinSessionStreamChannel(
   app: Application,
+  tenantId: string,
   sessionId: string,
   connection: unknown
 ): void {
-  app.channel(sessionStreamChannelName(sessionId)).join(connection as never);
+  app.channel(sessionStreamChannelName(tenantId, sessionId)).join(connection as never);
 }
 
 /**
@@ -194,10 +234,11 @@ export function joinSessionStreamChannel(
  */
 export function leaveSessionStreamChannel(
   app: Application,
+  tenantId: string,
   sessionId: string,
   connection: unknown
 ): void {
-  existingChannel(app, sessionStreamChannelName(sessionId))?.leave(connection as never);
+  existingChannel(app, sessionStreamChannelName(tenantId, sessionId))?.leave(connection as never);
 }
 
 const DEBUG_REALTIME_PUBLISH =
@@ -222,6 +263,7 @@ type RealtimePublishOptions = {
   db?: TenantScopeAwareDatabase;
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
+  boardRepository?: BoardRepository;
   sessionsRepository: SessionRepository;
   accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
@@ -237,6 +279,7 @@ type PublishChannel = ReturnType<Application['channel']>;
 
 type PublishScope =
   | { kind: 'global' }
+  | { kind: 'board'; boardId: string | null }
   | { kind: 'branch'; branchId: BranchID | null }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
@@ -359,6 +402,14 @@ function extractBranchId(data: unknown, context: PublishContext): string | undef
     );
   }
   return pickString(record, 'branch_id', 'branchId');
+}
+
+function extractBoardId(data: unknown, context: PublishContext): string | undefined {
+  const record = asRecord(data);
+  return (
+    pickString(record, 'board_id', 'boardId') ??
+    (context.path === 'boards' && typeof context.id === 'string' ? context.id : undefined)
+  );
 }
 
 function extractSessionId(data: unknown): string | undefined {
@@ -498,6 +549,9 @@ async function resolvePublishScope(
 ): Promise<PublishScope> {
   const audience = audienceFor(context.path);
   switch (audience) {
+    case 'board': {
+      return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+    }
     case 'branch':
     case 'branch-route': {
       const branchId = extractBranchId(data, context);
@@ -630,6 +684,7 @@ function filterToUserIdsOrServices(
 async function resolveStreamingDelivery(
   app: Application,
   data: unknown,
+  tenantId: string,
   tenantScoped: PublishChannel,
   accessCache: RealtimeAccessCache,
   branchRbacEnabled: boolean,
@@ -650,7 +705,7 @@ async function resolveStreamingDelivery(
   // Never materialize the room on the publish path — a session streaming with
   // zero subscribers would otherwise accumulate an empty, never-cleaned channel
   // per session. Only an actual subscribe (join) creates it.
-  const existingRoom = existingChannel(app, sessionStreamChannelName(sessionId));
+  const existingRoom = existingChannel(app, sessionStreamChannelName(tenantId, sessionId));
   const room = existingRoom
     ? existingRoom.filter((connection: unknown) => tenantConnections.has(connection))
     : null;
@@ -763,11 +818,13 @@ function resolveRealtimeTenantId(
   try {
     return resolveTenantContext(multiTenancy, { params: context.params }).tenant_id;
   } catch (error) {
+    const isMissingTenant =
+      error instanceof TenantResolutionError && error.message.startsWith('Missing tenant context');
     const connectionTenantId = extractConnectionTenantId(context);
-    if (error instanceof TenantResolutionError && connectionTenantId) return connectionTenantId;
+    if (isMissingTenant && connectionTenantId) return connectionTenantId;
 
     const ambientTenantId = getCurrentTenantId();
-    if (error instanceof TenantResolutionError && ambientTenantId) {
+    if (isMissingTenant && ambientTenantId) {
       return ambientTenantId as TenantID;
     }
     throw error;
@@ -795,6 +852,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     db,
     branchRbacEnabled,
     branchRepository,
+    boardRepository,
     sessionsRepository,
     accessCache = new RealtimeAccessCache({
       branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
@@ -833,7 +891,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             event: context.event,
             method: context.method,
           });
-          return { delivery: filterToServiceConnections(authenticated), tenantId: undefined };
+          // Service connections are tenant-owned too. A missing tenant must
+          // not degrade into the old cross-tenant "service-only" broadcast.
+          return { delivery: [] as PublishChannel[], tenantId: undefined };
         }
         throw error;
       }
@@ -854,6 +914,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         return resolveStreamingDelivery(
           app,
           data,
+          tenantId ?? 'standalone',
           tenantScoped,
           accessCache,
           branchRbacEnabled,
@@ -872,6 +933,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         return filterToUserIdsOrServices(tenantScoped, knowledgeUserIds);
       }
 
+      if (context.path === 'artifacts' && context.event === 'agor-query') {
+        const requestedBy = pickString(asRecord(data), 'requested_by_user_id');
+        if (!requestedBy) return [];
+        return tenantScoped.filter(
+          (connection: unknown) => userFromConnection(connection)?.user_id === requestedBy
+        );
+      }
+
       if (!branchRbacEnabled) return tenantScoped;
 
       const scope = await resolvePublishScope(data, context, accessCache);
@@ -879,6 +948,45 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
       if (scope.kind === 'users') {
         return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
+      }
+      if (scope.kind === 'board') {
+        if (!scope.boardId || !boardRepository) {
+          return filterToServiceConnections(tenantScoped);
+        }
+        const removalVisibility = boardRemovalVisibilitySnapshot(context, scope.boardId);
+        if (removalVisibility?.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
+          return tenantScoped;
+        }
+        if (removalVisibility?.mode === BranchRealtimeVisibilityMode.EXPLICIT_USERS) {
+          return filterToUserIdsOrAdmins(
+            tenantScoped,
+            new Set(removalVisibility.userIds),
+            allowSuperadmin
+          );
+        }
+        // Shared boards are visible tenant-wide. For private boards, evaluate
+        // the same repository predicate as boards.get for each connected user
+        // at publication time; a room join or stale client cache is never
+        // treated as authorization.
+        const record = asRecord(data);
+        if (context.path === 'boards' && record?.access_mode === 'shared') return tenantScoped;
+        const visibleUserIds = new Set<string>();
+        await Promise.all(
+          uniqueUserIds(tenantScoped).map(async (userId) => {
+            try {
+              if (await boardRepository.canView(scope.boardId!, userId as UserID)) {
+                visibleUserIds.add(userId);
+              }
+            } catch {
+              // Board may have just been removed. The tombstone is narrowed to
+              // its creator/admins rather than widening to the tenant.
+              if (context.event === 'removed' && extractCreatedBy(data) === userId) {
+                visibleUserIds.add(userId);
+              }
+            }
+          })
+        );
+        return filterToUserIdsOrAdmins(tenantScoped, visibleUserIds, allowSuperadmin);
       }
       if (!scope.branchId) {
         console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
@@ -949,6 +1057,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         const removalVisibility = removedBranchId
           ? branchRemovalVisibilitySnapshot(context, removedBranchId)
           : null;
+        const removedBoardId = extractBoardId(relayData, context);
+        const boardRemovalVisibility = removedBoardId
+          ? boardRemovalVisibilitySnapshot(context, removedBoardId)
+          : null;
         const envelope: RealtimeRelayEnvelope = {
           version: REALTIME_RELAY_VERSION,
           tenantId: resolved.tenantId,
@@ -960,6 +1072,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             : {}),
           data: relayData,
           ...(removalVisibility ? { branchRemovalVisibility: removalVisibility } : {}),
+          ...(boardRemovalVisibility ? { boardRemovalVisibility } : {}),
         };
         try {
           if (!isRealtimeRelayEnvelope(envelope)) {
@@ -989,6 +1102,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     };
     if (envelope.branchRemovalVisibility) {
       params[BRANCH_REMOVAL_VISIBILITY_PARAM] = envelope.branchRemovalVisibility;
+    }
+    if (envelope.boardRemovalVisibility) {
+      params[BOARD_REMOVAL_VISIBILITY_PARAM] = envelope.boardRemovalVisibility;
     }
     const context = {
       app,

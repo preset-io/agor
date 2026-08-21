@@ -89,7 +89,7 @@ vi.mock('../utils/spawn-executor.js', () => ({
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
-import { buildZellijSessionName, TerminalsService } from './terminals';
+import { buildZellijSessionName, TerminalsService, terminalChannelName } from './terminals';
 
 function makeApp() {
   const emit = vi.fn();
@@ -236,7 +236,7 @@ describe('process-affine attachment creation', () => {
       isNew: true,
       ready: false,
     });
-    expect(result.channel).toBe(`tenant/tenant-x/user/user-1/terminal/${result.terminalId}`);
+    expect(result.channel).toBe(terminalChannelName('tenant-x', 'user-1', result.terminalId));
     expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
       expect.anything(),
       {

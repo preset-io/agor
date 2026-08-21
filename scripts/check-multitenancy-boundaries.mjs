@@ -73,6 +73,13 @@ const checks = [
       // cleanup cannot evict another valid subscription; clients cannot supply
       // that room or capability.
       'apps/agor-daemon/src/setup/socketio.ts': 17,
+      // Adversarial integration harnesses intentionally exercise the raw
+      // Socket.IO boundary: the PostgreSQL test probes a guessed foreign room
+      // and inspects passive delivery, while the Redis test emits one cursor
+      // packet across two real adapter-backed replicas. Production room names
+      // and authorization still come from the centralized routing/config code.
+      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 3,
+      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 1,
     },
   },
 

@@ -51,6 +51,23 @@ describe('isRealtimeRelayEnvelope', () => {
     ).toBe(true);
   });
 
+  it('accepts a bounded authorization snapshot only for a board removal', () => {
+    expect(
+      isRealtimeRelayEnvelope({
+        version: REALTIME_RELAY_VERSION,
+        tenantId: 'tenant-a',
+        path: 'boards',
+        event: 'removed',
+        data: { board_id: 'board-a' },
+        boardRemovalVisibility: {
+          boardId: 'board-a',
+          mode: 'explicitUsers',
+          userIds: ['user-a'],
+        },
+      })
+    ).toBe(true);
+  });
+
   it.each([
     null,
     { version: 1, tenantId: 'tenant-a', path: 'boards', event: 'patched', data: {} },
@@ -70,6 +87,13 @@ describe('isRealtimeRelayEnvelope', () => {
       path: 'boards',
       event: 'patched',
       data: 'x'.repeat(512 * 1024 + 1),
+    },
+    {
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'boards',
+      event: 'removed',
+      data: { board_id: 'board-a' },
     },
     {
       version: REALTIME_RELAY_VERSION,

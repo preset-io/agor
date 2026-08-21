@@ -1,0 +1,190 @@
+/**
+ * Real two-replica Socket.IO/Redis tenant-isolation coverage.
+ *
+ * Run with AGOR_TEST_REDIS_URL pointed at a disposable Redis instance. The
+ * normal fast lane skips this suite so unit tests do not depend on Redis.
+ */
+
+import type { Server as HttpServer } from 'node:http';
+import { type AgorClient, createClient } from '@agor/core/api';
+import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
+import type { BoardID, TenantContext, User, UserID } from '@agor/core/types';
+import { createAdapter } from '@socket.io/redis-adapter';
+import Redis from 'ioredis';
+import { afterEach, describe, expect, it } from 'vitest';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import { createSocketIOConfig, type SocketIOOptions } from './socketio.js';
+
+const redisUrl = process.env.AGOR_TEST_REDIS_URL;
+const JWT_SECRET = 'disposable-redis-socket-tenant-test-secret';
+const TENANT_A = 'redis-socket-tenant-a';
+const TENANT_B = 'redis-socket-tenant-b';
+const USER_A = '018f0000-0000-7000-8000-0000000000a1' as UserID;
+const USER_B = '018f0000-0000-7000-8000-0000000000b1' as UserID;
+const BOARD_A = '018f0000-0000-7000-8000-0000000000a2' as BoardID;
+const BOARD_B = '018f0000-0000-7000-8000-0000000000b2' as BoardID;
+
+interface TestParams {
+  tenant?: TenantContext;
+  user?: User & { tenant_id?: string };
+}
+
+interface Replica {
+  app: ReturnType<typeof feathersExpress>;
+  server: HttpServer;
+  url: string;
+  redis: [Redis, Redis];
+}
+
+function tenantFrom(params?: TestParams): string | undefined {
+  return params?.tenant?.tenant_id ?? params?.user?.tenant_id;
+}
+
+function waitForConnect(client: AgorClient): Promise<void> {
+  if (client.io.connected) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Socket.IO client did not connect')), 3_000);
+    client.io.once('connect', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    client.io.once('connect_error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function watchBoard(client: AgorClient, boardId: BoardID): Promise<{ ok: boolean }> {
+  return client.io.timeout(2_000).emitWithAck('presence:watch-board', boardId);
+}
+
+function delay(ms = 80): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function startReplica(adapterKey: string, instanceId: string): Promise<Replica> {
+  const pub = new Redis(redisUrl!, { lazyConnect: true });
+  const sub = new Redis(redisUrl!, { lazyConnect: true });
+  await Promise.all([pub.connect(), sub.connect()]);
+  const app = feathersExpress(feathers());
+  app.use('users', {
+    async get(id: UserID, params?: TestParams): Promise<User> {
+      const tenantId = tenantFrom(params);
+      if (id === USER_A && tenantId === TENANT_A) {
+        return { user_id: USER_A, email: 'a@example.test', role: 'member' } as User;
+      }
+      if (id === USER_B && tenantId === TENANT_B) {
+        return { user_id: USER_B, email: 'b@example.test', role: 'member' } as User;
+      }
+      throw new Error('User unavailable');
+    },
+  });
+  app.use('boards', {
+    async get(id: BoardID, params?: TestParams) {
+      const tenantId = tenantFrom(params);
+      if (id === BOARD_A && tenantId === TENANT_A) return { board_id: id };
+      if (id === BOARD_B && tenantId === TENANT_B) return { board_id: id };
+      throw new Error('Board unavailable');
+    },
+  });
+  app.use('terminals', {
+    async find(): Promise<never[]> {
+      return [];
+    },
+    matchesOwnedAttachment(): boolean {
+      return false;
+    },
+  });
+
+  const options: SocketIOOptions = {
+    corsOrigin: '*',
+    jwtSecret: JWT_SECRET,
+    credentialsAllowed: false,
+    adapter: createAdapter(pub, sub, { key: adapterKey }),
+    workIdentity: { instanceId, bootId: `${instanceId}-boot` },
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'unused' as never,
+      auth_claim: 'tenant_id',
+    },
+  };
+  const config = createSocketIOConfig(app as never, options);
+  app.configure(socketio(config.serverOptions, config.callback));
+  const server = await new Promise<HttpServer>((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+  return { app, server, url: `http://127.0.0.1:${address.port}`, redis: [pub, sub] };
+}
+
+describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', () => {
+  const replicas: Replica[] = [];
+  const clients: AgorClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients) client.io.close();
+    clients.length = 0;
+    for (const replica of replicas) {
+      await new Promise<void>((resolve) => replica.server.close(() => resolve()));
+      await Promise.all(replica.redis.map((client) => client.quit().catch(() => undefined)));
+    }
+    replicas.length = 0;
+  });
+
+  it('delivers an authorized event across replicas once and evicts stale tenant rooms on every replica', async () => {
+    const adapterKey = `agor-socket-isolation-${Date.now()}-${Math.random()}`;
+    const [replicaA, replicaB] = await Promise.all([
+      startReplica(adapterKey, 'replica-a'),
+      startReplica(adapterKey, 'replica-b'),
+    ]);
+    replicas.push(replicaA, replicaB);
+
+    const tokenA = issueRuntimeToken(
+      { sub: USER_A, type: 'access', tenant_id: TENANT_A },
+      JWT_SECRET,
+      '5m'
+    );
+    const tokenB = issueRuntimeToken(
+      { sub: USER_B, type: 'access', tenant_id: TENANT_B },
+      JWT_SECRET,
+      '5m'
+    );
+    const senderA = createClient(replicaA.url, false, { reconnectionAttempts: 0 });
+    const peerA = createClient(replicaB.url, false, { reconnectionAttempts: 0 });
+    const observerB = createClient(replicaB.url, false, { reconnectionAttempts: 0 });
+    clients.push(senderA, peerA, observerB);
+    senderA.io.auth = { token: tokenA };
+    peerA.io.auth = { token: tokenA };
+    observerB.io.auth = { token: tokenB };
+    for (const client of clients) client.io.connect();
+    await Promise.all(clients.map(waitForConnect));
+
+    await expect(watchBoard(senderA, BOARD_A)).resolves.toEqual({ ok: true });
+    await expect(watchBoard(peerA, BOARD_A)).resolves.toEqual({ ok: true });
+    await expect(watchBoard(observerB, BOARD_B)).resolves.toEqual({ ok: true });
+    await expect(watchBoard(senderA, BOARD_B)).resolves.toEqual({ ok: false });
+
+    const peerEvents: unknown[] = [];
+    const foreignEvents: unknown[] = [];
+    peerA.io.on('cursor-moved', (event) => peerEvents.push(event));
+    observerB.io.on('cursor-moved', (event) => foreignEvents.push(event));
+    senderA.io.emit('cursor-move', {
+      boardId: BOARD_A,
+      x: 10,
+      y: 20,
+      timestamp: Date.now(),
+    });
+    await delay(200);
+
+    expect(peerEvents).toHaveLength(1);
+    expect(foreignEvents).toEqual([]);
+
+    replicaA.app.emit('realtime:authorization-invalidated', { tenantId: TENANT_A });
+    await delay(200);
+    expect(senderA.io.connected).toBe(false);
+    expect(peerA.io.connected).toBe(false);
+    expect(observerB.io.connected).toBe(true);
+  });
+});

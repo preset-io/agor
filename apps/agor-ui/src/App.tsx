@@ -1896,7 +1896,6 @@ function AppContent() {
       // Use the custom route for creating replies
       await client.service(`board-comments/${parentId}/reply`).create({
         content,
-        created_by: user?.user_id || 'unknown',
       });
     } catch (error) {
       showError(`Failed to send reply: ${error instanceof Error ? error.message : String(error)}`);

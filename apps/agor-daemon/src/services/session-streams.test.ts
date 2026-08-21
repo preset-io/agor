@@ -1,5 +1,6 @@
 import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
+import { sessionStreamRoomName } from '../realtime/routing.js';
 import { SESSION_STREAMS_AWARE_FLAG } from '../utils/realtime-publish.js';
 import { createSessionStreamsService } from './session-streams.js';
 
@@ -33,6 +34,25 @@ function makeApp(
 const connection = { id: 'socket-1' };
 
 describe('session-streams service', () => {
+  it('rejects task-executor tokens instead of granting transcript rooms', async () => {
+    const { app, channel } = makeApp(async () => ({ session_id: 's1' }));
+    const service = createSessionStreamsService(app);
+
+    await expect(
+      service.create({ session_id: 's1' }, {
+        connection,
+        authentication: {
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            task_id: 'task-1',
+          },
+        },
+      } as never)
+    ).rejects.toThrow('Task executor tokens cannot subscribe');
+    expect(channel).not.toHaveBeenCalled();
+  });
+
   it('joins the per-session channel after an access check passes', async () => {
     const { app, join, channel, get } = makeApp(async () => ({ session_id: 's1' }));
     const service = createSessionStreamsService(app);
@@ -43,7 +63,7 @@ describe('session-streams service', () => {
     } as never);
 
     expect(get).toHaveBeenCalledWith('s1', expect.objectContaining({ query: {} }));
-    expect(channel).toHaveBeenCalledWith('session-stream:s1');
+    expect(channel).toHaveBeenCalledWith(sessionStreamRoomName('standalone', 's1'));
     expect(join).toHaveBeenCalledWith(connection);
     expect(result).toEqual({ session_id: 's1', subscribed: true });
   });
@@ -102,7 +122,9 @@ describe('session-streams service', () => {
     } as never);
 
     expect(get).toHaveBeenCalledWith('ffffffff', expect.objectContaining({ query: {} }));
-    expect(channel).toHaveBeenCalledWith('session-stream:ffffffff-1111-2222-3333-444444444444');
+    expect(channel).toHaveBeenCalledWith(
+      sessionStreamRoomName('standalone', 'ffffffff-1111-2222-3333-444444444444')
+    );
     expect(join).toHaveBeenCalledWith(connection);
     expect(result).toEqual({
       session_id: 'ffffffff-1111-2222-3333-444444444444',
@@ -120,6 +142,20 @@ describe('session-streams service', () => {
       service.create({ session_id: 's1' }, { connection, provider: 'socketio' } as never)
     ).rejects.toThrow('Forbidden');
     expect(get).toHaveBeenCalled();
+    expect(join).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the access gate returns no canonical session row', async () => {
+    const { app, join, channel } = makeApp(async () => null);
+    const service = createSessionStreamsService(app);
+
+    await expect(
+      service.create({ session_id: 'caller-selected' }, {
+        connection,
+        provider: 'socketio',
+      } as never)
+    ).rejects.toThrow('Session stream is unavailable');
+    expect(channel).not.toHaveBeenCalled();
     expect(join).not.toHaveBeenCalled();
   });
 
@@ -145,13 +181,13 @@ describe('session-streams service', () => {
   it('leaves the per-session channel on unsubscribe', async () => {
     const { app, leave, channel } = makeApp(
       async () => ({ session_id: 's1' }),
-      ['session-stream:s1']
+      [sessionStreamRoomName('standalone', 's1')]
     );
     const service = createSessionStreamsService(app);
 
     const result = await service.remove('s1', { connection, provider: 'socketio' } as never);
 
-    expect(channel).toHaveBeenCalledWith('session-stream:s1');
+    expect(channel).toHaveBeenCalledWith(sessionStreamRoomName('standalone', 's1'));
     expect(leave).toHaveBeenCalledWith(connection);
     expect(result).toEqual({ session_id: 's1', subscribed: false });
   });
@@ -160,7 +196,7 @@ describe('session-streams service', () => {
     const fullId = 'ffffffff-1111-2222-3333-444444444444';
     const { app, leave, channel, get } = makeApp(
       async () => ({ session_id: 's1' }),
-      [`session-stream:${fullId}`]
+      [sessionStreamRoomName('standalone', fullId)]
     );
     const service = createSessionStreamsService(app);
 
@@ -168,7 +204,7 @@ describe('session-streams service', () => {
 
     // The client already sends the canonical id, so no sessions.get lookup.
     expect(get).not.toHaveBeenCalled();
-    expect(channel).toHaveBeenCalledWith(`session-stream:${fullId}`);
+    expect(channel).toHaveBeenCalledWith(sessionStreamRoomName('standalone', fullId));
     expect(leave).toHaveBeenCalledWith(connection);
     expect(result).toEqual({ session_id: fullId, subscribed: false });
   });
@@ -183,7 +219,7 @@ describe('session-streams service', () => {
 
     // The leave path is existence-gated: no channel created, no leave issued.
     expect(leave).not.toHaveBeenCalled();
-    expect(app.channels).not.toContain(`session-stream:${fullId}`);
+    expect(app.channels).not.toContain(sessionStreamRoomName('standalone', fullId));
     expect(result).toEqual({ session_id: fullId, subscribed: false });
   });
 });
