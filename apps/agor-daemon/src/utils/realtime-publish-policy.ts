@@ -376,6 +376,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: `${NO_CONSUMER} Lands as board-comments.patched.`,
   },
+  'board-comments/:id/reposition': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Lands as board-comments.patched.`,
+  },
   'repos/local': { audience: 'none', why: `${NO_CONSUMER} Lands as repos.created.` },
   'repos/clone': { audience: 'none', why: `${NO_CONSUMER} Clone URLs can embed credentials.` },
   'repos/:id/branches': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.created.` },

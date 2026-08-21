@@ -64,7 +64,7 @@ construct authorization by concatenating raw IDs.
 | Board presence                       | `boardPresenceRoomName`                                            | authenticated non-executor user with current `boards.get` access                                                                                      | `presence:watch-board` calls the hooked boards service, then rechecks live identity                   | cursor packets require the board in the socket's authorized set; room is tenant-qualified                                           | native Redis allowlist; unwatch/logout/invalidation/disconnect remove capability                                        |
 | Board Feathers audience              | `resolvePublishScope(kind=board)`                                  | not directly client-joinable                                                                                                                          | `BoardRepository.canView` per receiving connection                                                    | boards/cards/objects/comments resolve board ID and current board visibility; missing board is service-only                          | receiving replica re-authorizes; delete uses pre-delete visibility snapshot                                             |
 | Session stream                       | `sessionStreamRoomName`                                            | authenticated browser with current session/branch view; task executors denied                                                                         | `session-streams.create` plus session/branch hooks                                                    | every chunk intersects the current tenant channel and current branch visibility                                                     | room cleared on logout/login; cache invalidation + tenant eviction on ACL changes                                       |
-| Executor task                        | `executorTaskRoomName`                                             | only an executor-session token whose signed task claim equals the authenticated result                                                                | `configureChannels`                                                                                   | task/message private control events target the tenant-qualified task room                                                           | cleared on login/logout/disconnect; relay envelope keeps tenant/task scope                                              |
+| Executor task                        | `executorTaskRoomName`                                             | only an executor-session token whose signed task claim equals the authenticated result                                                                | final server-owned capability commit in `createSocketIOConfig`                                        | task/message private control events target the tenant-qualified task room                                                           | cleared on login/logout/disconnect; relay envelope keeps tenant/task scope                                              |
 | Terminal attachment                  | `terminalChannelName`                                              | current user for own allocated terminal, or terminal-scoped service token matching tenant/user/terminal/branch/boot and live process-local attachment | terminal allocation server capability plus per-event guard; generic `join` repeats exact scope checks | browser input/resize goes only to active local executor socket; executor output/lifecycle requires scoped token and live attachment | PTY payloads are `.local`; only qualified lifecycle metadata crosses replicas; replacement/disconnect fences duplicates |
 | Branch/session/task/message services | central realtime policy + `RealtimeAccessCache`                    | not client-joinable except session stream above                                                                                                       | branch repository / session derivation                                                                | current branch visibility; malformed or unresolved parent narrows to service-only                                                   | relay v3 re-authorizes on each replica; branch removal carries a pre-delete snapshot                                    |
 | Artifact events                      | artifact audience                                                  | not directly joinable                                                                                                                                 | branch visibility, or creator/admin for null-branch artifacts                                         | CRUD uses artifact audience; `agor-query` is requester-socket only and never enters Redis                                           | requester query is local; metadata relay is re-authorized                                                               |
@@ -216,6 +216,25 @@ The executor regression uses a real Socket.IO client plus the production
 Feathers `AuthenticationService`/`ServiceJWTStrategy`, including a deterministic
 pause-after-authority-validation revoke race.
 
+A third review pass exercised live identity replacement and generic comment
+mutation fields. The final boundaries additionally:
+
+- retire the executor capability symbol and every executor-task Feathers
+  channel as one login-transition operation. The transition is performed once
+  regardless of listener order, and only the Socket.IO capability commit owns
+  the task-room join;
+- prove with a real tenant-A executor to tenant-B user authentication
+  replacement that the old room has no connection and neither
+  `termination_requested` nor `permission_resolved` reaches the passive client
+  buffer;
+- project external comment patch to the typed `content`/`resolved` contract,
+  derive edited/preview state server-side, reject generic full replacement, and
+  keep reactions on their caller-bound toggle operation; and
+- preserve legitimate spatial movement through a strict, author-only
+  reposition operation that cannot change the comment's branch/session
+  audience anchor. All comment custom mutation routes now run in the same
+  tenant database/RLS scope as ordinary comment CRUD.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -255,7 +274,7 @@ pause-after-authority-validation revoke race.
 
 Observed results on the audit branch:
 
-- daemon suite: 251 files passed, 14 skipped; 3,288 tests passed, 87 skipped;
+- daemon suite: 251 files passed, 14 skipped; 3,310 tests passed, 87 skipped;
 - focused realtime/security suite: 12 files and 430 tests passed;
 - PostgreSQL/RLS suite: 140 tests passed across 30 isolated databases, with the
   application role verified as `NOSUPERUSER` and `NOBYPASSRLS`;

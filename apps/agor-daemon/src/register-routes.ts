@@ -24,6 +24,7 @@ import {
 import {
   assertTenantWritable,
   BoardCommentsRepository,
+  BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
@@ -61,6 +62,7 @@ import {
 import type {
   AuthenticatedParams,
   BoardComment,
+  BoardCommentReposition,
   BranchArchiveOrDeleteOptions,
   HookContext,
   MCPMemberPolicy,
@@ -132,6 +134,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import {
@@ -440,6 +443,47 @@ export function boardCommentReplyInput(
     created_by: userId as UserID,
     ...(Array.isArray(data.mentions) ? { mentions: data.mentions } : {}),
   };
+}
+
+/**
+ * Authorize spatial movement without turning it into an audience mutation.
+ * Branch/session attachment anchors remain immutable; relative parent IDs are
+ * checked against those anchors, and zone IDs must belong to the same board.
+ */
+export async function authorizeBoardCommentReposition(input: {
+  comment: BoardComment;
+  data: BoardCommentReposition;
+  params: BoardCommentRouteParams;
+  findBoard: (boardId: string) => Promise<import('@agor/core/types').Board | null>;
+}): Promise<void> {
+  const user = input.params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  const privileged = user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN);
+  if (!privileged && input.comment.created_by !== user.user_id) {
+    throw new Forbidden('Only the comment author may reposition this board comment');
+  }
+
+  if (Object.hasOwn(input.data, 'branch_id')) {
+    const expectedBranchId = input.comment.branch_id ?? null;
+    if (input.data.branch_id !== expectedBranchId) {
+      throw new Forbidden('Board comment attachments cannot be changed while repositioning');
+    }
+  }
+
+  const relative = input.data.position.relative;
+  if (!relative) return;
+  if (relative.parent_type === 'branch' && relative.parent_id !== input.comment.branch_id) {
+    throw new Forbidden('Board comment branch position does not match its attachment');
+  }
+  if (relative.parent_type === 'session' && relative.parent_id !== input.comment.session_id) {
+    throw new Forbidden('Board comment session position does not match its attachment');
+  }
+  if (relative.parent_type === 'zone') {
+    const board = await input.findBoard(input.comment.board_id);
+    if (board?.objects?.[relative.parent_id]?.type !== 'zone') {
+      throw new NotFound('Board resource not found');
+    }
+  }
 }
 
 /**
@@ -3555,6 +3599,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const boardCommentRouteRepository = new BoardCommentsRepository(db);
+  const boardCommentBoardRepository = new BoardRepository(db);
   const authorizeBoardCommentRoute = (id: string, params: RouteParams) =>
     authorizeBoardCommentRouteAccess({
       commentId: id,
@@ -3572,6 +3617,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     createReply: (
       parentId: string,
       data: Partial<import('@agor/core/types').BoardComment>,
+      params?: unknown
+    ) => Promise<import('@agor/core/types').BoardComment>;
+    reposition: (
+      id: string,
+      data: BoardCommentReposition,
       params?: unknown
     ) => Promise<import('@agor/core/types').BoardComment>;
   };
@@ -3632,6 +3682,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       },
       {
         create: { role: ROLES.MEMBER, action: 'reply to board comments' },
+      },
+      requireAuth
+    );
+
+  if (boardCommentsService)
+    registerAuthenticatedRoute(
+      app,
+      '/board-comments/:id/reposition',
+      {
+        async create(data: unknown, params: RouteParams) {
+          const id = params.route?.id;
+          if (!id) throw new Error('Comment ID required');
+          const comment = await authorizeBoardCommentRoute(id, params);
+          const reposition = publicBoardCommentRepositionInput(data);
+          await authorizeBoardCommentReposition({
+            comment,
+            data: reposition,
+            params,
+            findBoard: (boardId) => boardCommentBoardRepository.findById(boardId),
+          });
+          const updated = await boardCommentsService.reposition(
+            comment.comment_id,
+            reposition,
+            params
+          );
+          emitServiceEvent(app, {
+            path: 'board-comments',
+            event: 'patched',
+            data: updated,
+            params,
+            id: updated.comment_id,
+          });
+          return updated;
+        },
+      },
+      {
+        create: { role: ROLES.MEMBER, action: 'reposition board comments' },
       },
       requireAuth
     );

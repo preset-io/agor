@@ -3,6 +3,7 @@ import { type AgorClient, createClient } from '@agor/core/api';
 import { runWithTenantContext } from '@agor/core/db';
 import { AuthenticationService, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getExecutorConnectionCapability,
@@ -19,6 +20,7 @@ import { configureChannels, createSocketIOConfig, getSocketAuthState } from './s
 
 const JWT_SECRET = 'executor-capability-integration-secret';
 const TENANT_ID = 'executor-capability-tenant';
+const REPLACEMENT_TENANT_ID = 'replacement-user-tenant';
 const USER_ID = '018f0000-0000-7000-8000-0000000000a1';
 const SESSION_ID = '018f0000-0000-7000-8000-0000000000a2';
 const TASK_ID = '018f0000-0000-7000-8000-0000000000a3';
@@ -41,6 +43,14 @@ function waitForDisconnect(client: AgorClient): Promise<void> {
   return new Promise((resolve) => client.io.once('disconnect', () => resolve()));
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for Socket.IO event');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 interface Harness {
   app: ReturnType<typeof feathersExpress>;
   client: AgorClient;
@@ -48,6 +58,22 @@ interface Harness {
   sessionTokens: SessionTokenService;
   socketConfig: ReturnType<typeof createSocketIOConfig>;
   token: string;
+  userToken: string;
+}
+
+function emitControlEventToExecutorRoom(
+  harness: Harness,
+  path: 'tasks' | 'messages',
+  event: 'termination_requested' | 'permission_resolved',
+  data: unknown
+): void {
+  const room = harness.app.channel(executorTaskChannelName(TENANT_ID, TASK_ID));
+  for (const connection of room.connections) {
+    const socket = [
+      ...(harness.socketConfig.getSocketServer()?.sockets.sockets.values() ?? []),
+    ].find((candidate) => (candidate as unknown as { feathers?: unknown }).feathers === connection);
+    socket?.emit(`${path} ${event}`, data);
+  }
 }
 
 async function startHarness(
@@ -131,6 +157,24 @@ async function startHarness(
       return { user_id: id, email: 'executor-owner@example.test', role: ROLES.MEMBER };
     },
   });
+  app.use(
+    'tasks',
+    {
+      async get(id: string) {
+        return { task_id: id };
+      },
+    },
+    { events: ['termination_requested'] }
+  );
+  app.use(
+    'messages',
+    {
+      async get(id: string) {
+        return { message_id: id };
+      },
+    },
+    { events: ['permission_resolved'] }
+  );
   const authentication = new AuthenticationService(app);
   authentication.register(
     'jwt',
@@ -186,6 +230,16 @@ async function startHarness(
     sessionTokens,
     socketConfig,
     token,
+    userToken: jwt.sign(
+      { sub: USER_ID, type: 'access', tenant_id: REPLACEMENT_TENANT_ID },
+      JWT_SECRET,
+      {
+        algorithm: 'HS256',
+        audience: RUNTIME_JWT_AUDIENCE,
+        issuer: RUNTIME_JWT_ISSUER,
+        expiresIn: '1m',
+      }
+    ),
     ...(validationStarted ? { validationStarted, releaseValidation } : {}),
   };
 }
@@ -253,5 +307,53 @@ describe('executor Socket.IO connection capability', () => {
     await Promise.all([authentication, disconnected]);
     expect(getExecutorConnectionCapability(connection)).toBeUndefined();
     expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+  });
+
+  it('atomically retires the old executor room on replacement with an ordinary user', async () => {
+    const harness = await startHarness();
+    harnesses.push(harness);
+    const received: string[] = [];
+    harness.client
+      .service('tasks')
+      .on('termination_requested', () => received.push('termination_requested'));
+    harness.client
+      .service('messages')
+      .on('permission_resolved', () => received.push('permission_resolved'));
+
+    await harness.client.authenticate({ strategy: 'jwt', accessToken: harness.token });
+    const serverSocket = harness.socketConfig
+      .getSocketServer()
+      ?.sockets.sockets.get(harness.client.io.id!);
+    expect(serverSocket).toBeDefined();
+    const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> }).feathers;
+    const executorRoom = executorTaskChannelName(TENANT_ID, TASK_ID);
+    expect(harness.app.channel(executorRoom).connections).toContain(connection);
+
+    // Prove the passive delivery fixture before changing identity.
+    emitControlEventToExecutorRoom(harness, 'tasks', 'termination_requested', {
+      task_id: TASK_ID,
+    });
+    await waitFor(() => received.includes('termination_requested'));
+    received.length = 0;
+
+    await harness.client.authenticate({ strategy: 'jwt', accessToken: harness.userToken });
+    expect(getExecutorConnectionCapability(connection)).toBeUndefined();
+    expect(getSocketAuthState(serverSocket!)).toMatchObject({
+      userId: USER_ID,
+      isService: false,
+      tenant: { tenant_id: REPLACEMENT_TENANT_ID },
+    });
+    expect(getSocketAuthState(serverSocket!).isTaskExecutor).not.toBe(true);
+    expect(harness.app.channel(executorRoom).connections).not.toContain(connection);
+
+    emitControlEventToExecutorRoom(harness, 'tasks', 'termination_requested', {
+      task_id: TASK_ID,
+    });
+    emitControlEventToExecutorRoom(harness, 'messages', 'permission_resolved', {
+      task_id: TASK_ID,
+      request_id: 'request-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(received).toEqual([]);
   });
 });

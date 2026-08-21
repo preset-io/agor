@@ -2,6 +2,7 @@ import type { BoardComment, UUID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  authorizeBoardCommentReposition,
   authorizeBoardCommentRouteAccess,
   boardCommentReactionInput,
   boardCommentReplyInput,
@@ -96,5 +97,99 @@ describe('board comment custom-route authorization', () => {
       created_by: USER,
       mentions: [OTHER],
     });
+  });
+
+  it('keeps spatial movement bound to the existing author and audience anchor', async () => {
+    const branchComment = {
+      ...COMMENT,
+      created_by: USER,
+      branch_id: 'branch-1',
+    } as BoardComment;
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: branchComment,
+        data: {
+          branch_id: 'branch-1' as never,
+          position: {
+            relative: {
+              parent_id: 'branch-1',
+              parent_type: 'branch',
+              offset_x: 2,
+              offset_y: 3,
+            },
+          },
+        },
+        params: params(),
+        findBoard: async () => null,
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: branchComment,
+        data: {
+          branch_id: 'hidden-branch' as never,
+          position: { absolute: { x: 1, y: 2 } },
+        },
+        params: params(),
+        findBoard: async () => null,
+      })
+    ).rejects.toThrow(/attachments cannot be changed/);
+
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: branchComment,
+        data: {
+          position: {
+            relative: {
+              parent_id: 'hidden-branch',
+              parent_type: 'branch',
+              offset_x: 2,
+              offset_y: 3,
+            },
+          },
+        },
+        params: params(),
+        findBoard: async () => null,
+      })
+    ).rejects.toThrow(/does not match its attachment/);
+  });
+
+  it('validates zone parents on the same board and rejects non-authors', async () => {
+    const ownComment = { ...COMMENT, created_by: USER } as BoardComment;
+    const position = {
+      relative: {
+        parent_id: 'zone-1',
+        parent_type: 'zone' as const,
+        offset_x: 2,
+        offset_y: 3,
+      },
+    };
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: ownComment,
+        data: { position },
+        params: params(),
+        findBoard: async () =>
+          ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'zone' } } }) as never,
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: ownComment,
+        data: { position },
+        params: params(),
+        findBoard: async () =>
+          ({ board_id: COMMENT.board_id, objects: { 'zone-1': { type: 'markdown' } } }) as never,
+      })
+    ).rejects.toThrow(/Board resource not found/);
+    await expect(
+      authorizeBoardCommentReposition({
+        comment: COMMENT,
+        data: { position: { absolute: { x: 1, y: 2 } } },
+        params: params(),
+        findBoard: async () => null,
+      })
+    ).rejects.toThrow(/Only the comment author/);
   });
 });

@@ -27,6 +27,7 @@ import type { BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   commitExecutorConnectionCapability,
+  getExecutorConnectionCapability,
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-capability.js';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
@@ -2379,7 +2380,7 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.get('authenticated')).toEqual([connection]);
   });
 
-  it('joins only the Task room proven by a verified executor-session login', () => {
+  it('leaves executor Task-room ownership to the Socket.IO capability commit', () => {
     const { app, handlers, joins } = makeChannelHarness();
     configureChannels(app, {
       multiTenancy: {
@@ -2408,7 +2409,8 @@ describe('configureChannels tenant isolation', () => {
       { connection }
     );
 
-    expect(joins.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
+    expect(getExecutorConnectionCapability(connection)).toBeUndefined();
   });
 
   it('does not trust an unscoped login or mismatched result task claim', () => {
@@ -2437,12 +2439,13 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
   });
 
-  it('drops the prior Task room before replacing socket authentication', () => {
+  it('drops the prior Task room without independently joining the replacement room', () => {
     const { app, handlers, joins, leaves } = makeChannelHarness();
     configureChannels(app, {
       multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
     });
     const connection = { data: {} } as any;
+    joins.set(executorTaskChannelName('tenant-a', 'task-1'), [connection]);
     const login = (taskId: string) => {
       installTaskExecutorCapability(app, connection, 'tenant-a', 'session-1', taskId);
       handlers.get('login')?.(
@@ -2461,10 +2464,9 @@ describe('configureChannels tenant isolation', () => {
       );
     };
 
-    login('task-1');
     login('task-2');
 
-    expect(joins.get(executorTaskChannelName('tenant-a', 'task-2'))).toEqual([connection]);
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
     expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
     expect(joins.has('authenticated')).toBe(false);
     expect(joins.has(tenantChannelName('tenant-a'))).toBe(false);

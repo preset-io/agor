@@ -203,11 +203,18 @@ export type BoardCommentCreate = Pick<
 >;
 
 /**
- * Patch input for updating comment (partial)
+ * Public patch input. `edited`, previews, reactions, attachments, identity,
+ * and timestamps are server-owned. Reactions and replies use their dedicated
+ * operations.
  */
-export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved'>> & {
-  edited?: boolean; // Auto-set to true when content is updated
-};
+export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved'>>;
+
+/** Dedicated spatial mutation DTO; generic patch deliberately excludes it. */
+export interface BoardCommentReposition {
+  position: NonNullable<BoardComment['position']>;
+  /** Optional audience-anchor precondition; the route never changes it. */
+  branch_id?: BranchID | null;
+}
 
 // ============================================================================
 // Helper Functions (Phase 2: Threading + Reactions)

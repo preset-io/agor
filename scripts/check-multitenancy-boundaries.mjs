@@ -82,6 +82,11 @@ const checks = [
       // The second cursor packet is deliberately sent after revoke/reconnect
       // denial to prove a stale client cannot publish through its former room.
       'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,
+      // Real authentication-replacement coverage deliberately inspects the
+      // private Feathers task channel and injects both executor control event
+      // names into its current connections. The pre-replacement delivery and
+      // post-replacement empty passive buffer prove the room retirement.
+      'apps/agor-daemon/src/setup/socketio-executor-auth.integration.test.ts': 3,
     },
   },
 

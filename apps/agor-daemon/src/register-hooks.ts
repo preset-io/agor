@@ -121,7 +121,11 @@ import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
-import { publicBoardCommentCreateInput } from './services/board-comments.js';
+import {
+  publicBoardCommentCreateInput,
+  publicBoardCommentPatchInput,
+  rejectPublicBoardCommentUpdate,
+} from './services/board-comments.js';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './services/codex-auth-shared.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -483,6 +487,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'session-mcp-servers',
   'user-mcp-oauth-tokens',
   'board-comments',
+  'board-comments/:id/toggle-reaction',
+  'board-comments/:id/reply',
+  'board-comments/:id/reposition',
   'gateway-channels',
   'gateway',
   'thread-session-map',
@@ -1114,6 +1121,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const enforcePublicBoardCommentCreate = async (context: HookContext): Promise<HookContext> => {
     if (context.params.provider) {
       context.data = publicBoardCommentCreateInput(context.data) as typeof context.data;
+    }
+    return context;
+  };
+
+  const enforcePublicBoardCommentPatch = async (context: HookContext): Promise<HookContext> => {
+    if (context.params.provider) {
+      context.data = publicBoardCommentPatchInput(context.data) as typeof context.data;
+    }
+    return context;
+  };
+
+  const rejectExternalBoardCommentUpdate = async (context: HookContext): Promise<HookContext> => {
+    if (context.params.provider) {
+      // Complete row replacement has no public use case and would require a
+      // client to submit server-owned identity/audience/reaction state.
+      rejectPublicBoardCommentUpdate();
     }
     return context;
   };
@@ -1850,10 +1873,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       update: [
         requireMinimumRole(ROLES.MEMBER, 'update board comments'),
+        rejectExternalBoardCommentUpdate,
         boardCommentAccess('author', 'update this board comment'),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update board comments'),
+        enforcePublicBoardCommentPatch,
         boardCommentAccess('author', 'update this board comment'),
       ],
       remove: [

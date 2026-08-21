@@ -369,6 +369,16 @@ describe('tenant-owned service registration', () => {
     );
   });
 
+  it('wraps custom board-comment mutation routes in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([
+        'board-comments/:id/toggle-reaction',
+        'board-comments/:id/reply',
+        'board-comments/:id/reposition',
+      ])
+    );
+  });
+
   it('wraps MCP OAuth/session database helpers in tenant scope without holding network I/O open', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([
@@ -399,6 +409,90 @@ describe('tenant-owned service registration', () => {
         'kb/indexing/reindex',
       ])
     );
+  });
+});
+
+describe('registered external board-comment mutation boundary', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'patch' | 'update', RegisteredHook[]>>;
+  };
+
+  const captureBoardCommentHooks = (): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'board-comments') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: false },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+    return registrations;
+  };
+
+  const runMethodHooks = async (method: 'patch' | 'update', data: unknown) => {
+    const context = {
+      path: 'board-comments',
+      method,
+      id: 'comment-1',
+      data,
+      params: {
+        provider: 'socketio',
+        user: { user_id: 'member-1', role: 'member' },
+      },
+    } as HookContext;
+    for (const registration of captureBoardCommentHooks()) {
+      for (const hook of registration.before?.[method] ?? []) await hook(context);
+    }
+    return context;
+  };
+
+  it('rejects reaction and derived-state forgery through the actual patch hooks', async () => {
+    await expect(
+      runMethodHooks('patch', {
+        content: 'edited',
+        reactions: [{ user_id: 'another-user', emoji: '👍' }],
+        edited: false,
+      })
+    ).rejects.toThrow(/Unsupported board comment patch fields/);
+  });
+
+  it('rejects external complete replacement through the actual update hooks', async () => {
+    await expect(
+      runMethodHooks('update', {
+        content: 'replacement',
+        reactions: [{ user_id: 'another-user', emoji: '👍' }],
+      })
+    ).rejects.toThrow(/do not support external update/);
+  });
+
+  it('preserves the canonical content/resolved patch contract', async () => {
+    const context = await runMethodHooks('patch', { content: 'edited', resolved: true });
+    expect(context.data).toEqual({ content: 'edited', resolved: true });
   });
 });
 

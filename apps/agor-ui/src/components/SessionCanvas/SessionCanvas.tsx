@@ -4,6 +4,7 @@ import type {
   Board,
   BoardComment,
   BoardCommentCreate,
+  BoardCommentReposition,
   BoardEntityObject,
   BoardID,
   BoardObject,
@@ -2116,9 +2117,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               parentType,
               newReactFlowParentId,
             } of commentUpdates) {
-              const commentData: Partial<Omit<BoardComment, 'branch_id'>> & {
-                branch_id?: BranchID | null;
-              } = {};
+              const commentData: Partial<BoardCommentReposition> = {};
 
               if (parentId && parentType === 'zone') {
                 // Comment pinned to zone
@@ -2137,6 +2136,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       offset_y: relativePos.y,
                     },
                   };
+                  commentData.branch_id = null;
                 } else {
                   commentData.position = { absolute: position };
                   commentData.branch_id = null;
@@ -2171,7 +2171,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 commentData.branch_id = null;
               }
 
-              await client.service('board-comments').patch(comment_id, commentData);
+              await client.service(`board-comments/${comment_id}/reposition`).create(commentData);
 
               // Clear localPositionsRef immediately after patching
               // We've saved the correct position to DB, no need to keep overriding

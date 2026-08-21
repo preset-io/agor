@@ -315,6 +315,40 @@ export interface SocketIOResult {
   socketServer: Server | null;
 }
 
+const retiredExecutorLoginTransitions = new WeakSet<object>();
+
+/**
+ * Retire the complete passive executor capability, not merely its metadata.
+ * The Feathers channel and the server-owned connection symbol are one
+ * authority: clearing either in isolation can leave the other usable.
+ */
+function retireExecutorConnectionCapability(app: Application, connection: unknown): void {
+  leaveAllExecutorTaskChannels(app, connection);
+  clearExecutorConnectionCapability(connection);
+}
+
+/**
+ * Authentication replacement emits one login result to multiple listeners.
+ * Retire the previous executor identity exactly once before either listener
+ * derives the replacement identity. A process-local WeakSet makes listener
+ * ordering irrelevant without adding transport-shaped fields to auth results:
+ * a later listener will not clear a capability that the first listener just
+ * committed for this same login result.
+ */
+function beginExecutorLoginTransition(
+  app: Application,
+  connection: unknown,
+  authResult: unknown
+): void {
+  if (!authResult || typeof authResult !== 'object') {
+    retireExecutorConnectionCapability(app, connection);
+    return;
+  }
+  if (retiredExecutorLoginTransitions.has(authResult)) return;
+  retireExecutorConnectionCapability(app, connection);
+  retiredExecutorLoginTransitions.add(authResult);
+}
+
 /**
  * Global presence consumers (e.g. navbar facepile) don't need every cursor
  * sample. Emit a lightweight presence heartbeat at most this often while a
@@ -827,8 +861,7 @@ export function createSocketIOConfig(
         // because the diagnostic session id accompanies it. Session-wide
         // revocation is represented by omitting tokenFingerprint.
         if (tokenFingerprint ? exactMatch : sessionMatch) {
-          leaveAllExecutorTaskChannels(app, feathers);
-          clearExecutorConnectionCapability(feathers);
+          retireExecutorConnectionCapability(app, feathers);
           socket.disconnect(true);
         }
       }
@@ -1489,7 +1522,7 @@ export function createSocketIOConfig(
         activeConnections--;
         const disconnectedBeforeAuthentication =
           !authenticatedIdentities.has(socket) && !isAuthenticated(getSocketAuthState(socket));
-        clearExecutorConnectionCapability((socket as FeathersSocket).feathers);
+        retireExecutorConnectionCapability(app, (socket as FeathersSocket).feathers);
         if (disconnectedBeforeAuthentication) {
           unauthenticatedDisconnects = Math.min(
             unauthenticatedDisconnects + 1,
@@ -1536,7 +1569,7 @@ export function createSocketIOConfig(
           // Revoke captured functions before any yields or room changes. A
           // replacement login may reuse the same transport/connection object.
           invalidateTerminalRequestJoin(fs);
-          clearExecutorConnectionCapability(fs.feathers);
+          beginExecutorLoginTransition(app, fs.feathers, authResult);
           const isService =
             result.user?._isServiceAccount === true || isTerminalExecutorIdentity(result.user);
           const isTerminalExecutor = isTerminalExecutorIdentity(result.user);
@@ -1614,7 +1647,6 @@ export function createSocketIOConfig(
             // Socket.IO finished creating this callback. Own the task-room
             // commit here as well: this is the exact point where the durable
             // capability exists, and joining twice is set/idempotent behavior.
-            leaveAllExecutorTaskChannels(app, fs.feathers);
             joinExecutorTaskChannel(
               app,
               executorCapability.tenant.tenant_id,
@@ -1651,7 +1683,7 @@ export function createSocketIOConfig(
         const fs = socket as FeathersSocket;
         clearSocketAuthExpiry(socket);
         invalidateTerminalRequestJoin(fs);
-        clearExecutorConnectionCapability(fs.feathers);
+        retireExecutorConnectionCapability(app, fs.feathers);
         for (const room of socket.rooms) {
           if (isTenantRealtimeRoomName(room) || parseTerminalChannel(room)) socket.leave(room);
         }
@@ -1723,6 +1755,9 @@ export function configureChannels(
   // This is the only way to receive broadcast events
   app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
     if (context.connection) {
+      // Own the executor symbol + task channel as one transition. This listener
+      // may run before or after createSocketIOConfig's per-socket listener.
+      beginExecutorLoginTransition(app, context.connection, authResult);
       const result = authResult as {
         user?: { user_id?: string; email?: string; tenant_id?: string };
         authentication?: { payload?: unknown };
@@ -1735,11 +1770,8 @@ export function configureChannels(
       app.channel('authenticated').leave(context.connection as never);
       leaveAllTenantChannels(app, context.connection);
       leaveAllSessionStreamChannels(app, context.connection);
-      leaveAllExecutorTaskChannels(app, context.connection);
 
       const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
-      delete connection.tenant;
-      if (connection.data) delete connection.data.tenant;
 
       // A terminal-executor identity must NOT receive broadcast events. It only
       // consumes raw `terminal:*` events on its own qualified terminal room,
@@ -1747,35 +1779,33 @@ export function configureChannels(
       // channels would give the long-lived terminal token a read-everything
       // subscription to the realtime firehose. Keyed on `_isTerminalExecutor`
       // specifically so full service accounts KEEP their channel membership.
-      if (isTerminalExecutorIdentity(result.user)) return;
-
-      const executorCapability = getExecutorConnectionCapability(context.connection);
-      if (executorCapability) {
-        connection.tenant = executorCapability.tenant;
-        if (connection.data) connection.data.tenant = executorCapability.tenant;
-        if (
-          !executorCapability.taskId ||
-          (result.task_id !== undefined && result.task_id !== executorCapability.taskId)
-        ) {
-          return;
-        }
-        joinExecutorTaskChannel(
-          app,
-          executorCapability.tenant.tenant_id,
-          executorCapability.taskId,
-          context.connection
-        );
-        console.debug(
-          `🎯 Executor connection joined its task control room: ${shortId(executorCapability.taskId)}`
-        );
+      if (isTerminalExecutorIdentity(result.user)) {
+        delete connection.tenant;
+        if (connection.data) delete connection.data.tenant;
         return;
       }
 
-      // The transient verified payload identifies an executor login, but only
-      // the server-owned capability committed by createSocketIOConfig may own
-      // a passive task room. Never fall through and classify its creator as a
-      // normal user when the candidate was missing or fenced by revocation.
-      if (isExecutorSessionTokenPayload(result.authentication?.payload)) return;
+      const isExecutorLogin =
+        Boolean(getExecutorConnectionCapabilityCandidate(authResult)) ||
+        isExecutorSessionTokenPayload(result.authentication?.payload);
+      const executorCapability = getExecutorConnectionCapability(context.connection);
+      if (isExecutorLogin) {
+        // createSocketIOConfig is the sole owner of committing and joining an
+        // executor capability. Depending on listener order it may already have
+        // done so; preserve only that freshly committed tenant state here and
+        // never independently create/rejoin a task room.
+        if (executorCapability) {
+          connection.tenant = executorCapability.tenant;
+          if (connection.data) connection.data.tenant = executorCapability.tenant;
+        } else {
+          delete connection.tenant;
+          if (connection.data) delete connection.data.tenant;
+        }
+        return;
+      }
+
+      delete connection.tenant;
+      if (connection.data) delete connection.data.tenant;
 
       let tenant: TenantContext | undefined;
       try {
@@ -1815,13 +1845,12 @@ export function configureChannels(
 
       // Remove from authenticated channel - no more broadcast events
       app.channel('authenticated').leave(context.connection as never);
-      leaveAllExecutorTaskChannels(app, context.connection);
+      retireExecutorConnectionCapability(app, context.connection);
       leaveAllTenantChannels(app, context.connection);
       // Streaming rooms are separate per-session channels; drop the logged-out
       // connection from all of them so it stops receiving live session text
       // while it remains socket-connected.
       leaveAllSessionStreamChannels(app, context.connection);
-      clearExecutorConnectionCapability(context.connection);
       delete connection.tenant;
       if (connection.data) delete connection.data.tenant;
     }

@@ -10,6 +10,9 @@ import type {
   Artifact,
   AuthenticationResult,
   Board,
+  BoardComment,
+  BoardCommentCreate,
+  BoardCommentPatch,
   BoardExportBlob,
   BoardGroupGrantWithGroup,
   Branch,
@@ -204,6 +207,7 @@ export interface TemplatesService {
 export interface ServiceTypes {
   sessions: Session;
   tasks: Task;
+  'board-comments': BoardComment;
   boards: Board;
   repos: Repo;
   'repos/clone': Repo;
@@ -449,6 +453,12 @@ export type MessagesService = Omit<
 > & {
   patch(id: string, data: ClientInput<MessagePatch>, params?: Params): Promise<Message>;
 };
+
+/** Public comment CRUD surface; spatial movement and reactions use custom routes. */
+export type BoardCommentsService = Omit<
+  AgorService<BoardComment, ClientInput<BoardCommentCreate>, never, ClientInput<BoardCommentPatch>>,
+  'update'
+>;
 
 /**
  * Repos service with branch management
@@ -717,6 +727,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'sessions'): SessionsService;
   service(path: 'tasks'): TasksService;
   service(path: 'messages'): MessagesService;
+  service(path: 'board-comments'): BoardCommentsService;
   service(path: 'repos'): ReposService;
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
