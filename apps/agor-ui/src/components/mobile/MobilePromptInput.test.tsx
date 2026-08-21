@@ -59,16 +59,11 @@ describe('MobilePromptInput', () => {
   // register with the text they underline.
   it('keeps the mention highlight overlay on the same text metrics', () => {
     const { container } = render(
-      <MobilePromptInput
-        onSend={vi.fn()}
-        client={null}
-        sessionId={null}
-        userById={new Map()}
-        promptDraft="ping @amin"
-      />
+      <MobilePromptInput onSend={vi.fn()} client={null} sessionId={null} userById={new Map()} />
     );
 
     const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'ping @amin' } });
     const overlay = container.querySelector<HTMLElement>('div[aria-hidden="true"]');
     expect(overlay).not.toBeNull();
     expect(overlay?.style.fontSize).toBe(textarea.style.fontSize);
