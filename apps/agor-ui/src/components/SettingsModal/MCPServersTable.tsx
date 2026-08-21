@@ -141,7 +141,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const { token } = theme.useToken();
   // Same set the session panel and the picker read, so an install is
   // "unfinished" in exactly one sense across all three.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
@@ -671,7 +670,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Space>
         )}
       />
-
 
       <Table
         dataSource={servers}

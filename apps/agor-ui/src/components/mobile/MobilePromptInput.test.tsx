@@ -1,24 +1,7 @@
 import type { SessionID } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { forwardRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { MobilePromptInput } from './MobilePromptInput';
-
-vi.mock('../AutocompleteTextarea', () => ({
-  AutocompleteTextarea: forwardRef<
-    HTMLTextAreaElement,
-    React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-      onChange?: (value: string) => void;
-    }
-  >(({ onChange, value, placeholder }, ref) => (
-    <textarea
-      ref={ref}
-      value={value}
-      placeholder={placeholder}
-      onChange={(event) => onChange?.(event.target.value)}
-    />
-  )),
-}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -53,5 +36,41 @@ describe('MobilePromptInput draft ownership', () => {
 
     await act(async () => send.resolve(true));
     expect(screen.getByRole('textbox')).toHaveValue('same prompt');
+  });
+});
+
+describe('MobilePromptInput', () => {
+  // Regression: focusing the composer on a real phone zoomed the visual
+  // viewport in and never zoomed back out on blur, leaving message rows
+  // running off the right edge until the user pinched out. WebKit on iOS does
+  // that to any focused form control rendering below 16px, and antd's default
+  // token.fontSize is 14px.
+  it('renders the textarea at the iOS no-autozoom threshold', () => {
+    render(
+      <MobilePromptInput onSend={vi.fn()} client={null} sessionId={null} userById={new Map()} />
+    );
+
+    const textarea = screen.getByRole('textbox');
+    expect(Number.parseFloat(textarea.style.fontSize)).toBeGreaterThanOrEqual(16);
+  });
+
+  // The @-mention highlights are painted on a separate layer behind the
+  // textarea, so bumping only the textarea's font size would slide them out of
+  // register with the text they underline.
+  it('keeps the mention highlight overlay on the same text metrics', () => {
+    const { container } = render(
+      <MobilePromptInput
+        onSend={vi.fn()}
+        client={null}
+        sessionId={null}
+        userById={new Map()}
+        promptDraft="ping @amin"
+      />
+    );
+
+    const textarea = screen.getByRole('textbox');
+    const overlay = container.querySelector<HTMLElement>('div[aria-hidden="true"]');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.style.fontSize).toBe(textarea.style.fontSize);
   });
 });
