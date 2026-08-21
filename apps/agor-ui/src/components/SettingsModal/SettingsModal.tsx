@@ -31,7 +31,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Layout, Menu, Modal, theme } from 'antd';
+import { Grid, Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -199,6 +199,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   };
 
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Role gate — Agentic Tools and Gateway Channels are global admin-managed
@@ -480,8 +482,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       onCancel={onClose}
       footer={null}
       closable
-      width={1200}
-      style={{ top: 40 }}
+      width={compact ? 'calc(100vw - 16px)' : 1200}
+      style={{ top: compact ? 8 : 40 }}
       styles={{
         wrapper: {
           padding: 0,
@@ -489,7 +491,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         container: {
           padding: 0,
-          borderRadius: 8,
+          borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
           overflow: 'hidden',
         },
         header: {
@@ -497,28 +499,28 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         body: {
           padding: 0,
-          height: 'calc(100vh - 200px)',
-          minHeight: 500,
-          maxHeight: 800,
+          height: compact ? 'calc(100dvh - 16px)' : 'calc(100vh - 200px)',
+          minHeight: compact ? 0 : 500,
+          maxHeight: compact ? 'none' : 800,
         },
       }}
       closeIcon={<CloseOutlined />}
     >
       <Layout style={{ height: '100%', background: token.colorBgContainer }}>
         <Sider
-          width={240}
+          width={compact ? 148 : 240}
           style={{
             background: token.colorBgElevated,
             borderRight: `1px solid ${token.colorBorderSecondary}`,
             overflow: 'auto',
-            padding: '20px 0',
+            padding: compact ? '12px 0' : '20px 0',
           }}
         >
           <div
             style={{
-              padding: '0 24px 16px',
+              padding: compact ? '0 12px 10px' : '0 24px 16px',
               fontWeight: 600,
-              fontSize: 18,
+              fontSize: compact ? 15 : 18,
               color: token.colorText,
             }}
           >
@@ -539,7 +541,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             }}
           />
         </Sider>
-        <Content style={{ padding: '40px 32px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+        <Content
+          style={{ padding: compact ? '40px 12px 20px' : '40px 32px 32px', overflow: 'auto' }}
+        >
+          {renderContent()}
+        </Content>
       </Layout>
       <BranchModal
         open={branchModalOpen}

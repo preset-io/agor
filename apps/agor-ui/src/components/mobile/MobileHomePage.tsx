@@ -1,0 +1,223 @@
+import type { Board, Branch, Session, User } from '@agor-live/client';
+import {
+  AppstoreAddOutlined,
+  AppstoreOutlined,
+  BulbOutlined,
+  PlusOutlined,
+  RobotOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import {
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Layout,
+  List,
+  Space,
+  Statistic,
+  Typography,
+  theme,
+} from 'antd';
+import { useNavigate } from 'react-router-dom';
+import { getSessionDisplayTitle } from '@/utils/sessionTitle';
+import { formatRelativeTime } from '@/utils/time';
+import { getBoardEmoji } from '../BoardTile';
+import { MobileHeader } from './MobileHeader';
+
+const { Content } = Layout;
+const { Text, Title } = Typography;
+
+interface MobileHomePageProps {
+  user?: User | null;
+  boardById: Map<string, Board>;
+  branchById: Map<string, Branch>;
+  sessionById: Map<string, Session>;
+  onMenuClick: () => void;
+  onOpenSettings: (section: string) => void;
+}
+
+export const MobileHomePage: React.FC<MobileHomePageProps> = ({
+  user,
+  boardById,
+  branchById,
+  sessionById,
+  onMenuClick,
+  onOpenSettings,
+}) => {
+  const navigate = useNavigate();
+  const { token } = theme.useToken();
+  const boards = Array.from(boardById.values()).filter((board) => !board.archived);
+  const sessions = Array.from(sessionById.values())
+    .filter((session) => !session.archived && (!user || session.created_by === user.user_id))
+    .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+  const running = sessions.filter((session) => session.status === 'running').length;
+  const activeBranches = Array.from(branchById.values()).filter(
+    (branch) => !branch.archived
+  ).length;
+
+  return (
+    <>
+      <MobileHeader showLogo user={user} onMenuClick={onMenuClick} />
+      <Content style={{ overflowY: 'auto', padding: token.paddingMD, paddingBottom: 40 }}>
+        <Flex vertical gap={token.marginLG} style={{ maxWidth: 680, margin: '0 auto' }}>
+          <div>
+            <Title level={4} style={{ margin: 0 }}>
+              Hi, {user?.name || 'there'}! 👋
+            </Title>
+            <Text type="secondary">Here’s an overview of your workspace.</Text>
+          </div>
+          <Flex gap={token.marginSM} wrap>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => onOpenSettings('teammates')}
+            >
+              New teammate
+            </Button>
+            <Button icon={<AppstoreAddOutlined />} onClick={() => onOpenSettings('branches')}>
+              New branch
+            </Button>
+            <Button icon={<AppstoreOutlined />} onClick={() => onOpenSettings('boards')}>
+              New board
+            </Button>
+          </Flex>
+          <Flex gap={token.marginSM} wrap>
+            <Card size="small" style={{ flex: '1 1 140px' }}>
+              <Statistic title="Boards" value={boards.length} prefix={<AppstoreOutlined />} />
+            </Card>
+            <Card size="small" style={{ flex: '1 1 140px' }}>
+              <Statistic
+                title="Active branches"
+                value={activeBranches}
+                prefix={<AppstoreAddOutlined />}
+              />
+            </Card>
+            <Card size="small" style={{ flex: '1 1 140px' }}>
+              <Statistic title="Running now" value={running} prefix={<ThunderboltOutlined />} />
+            </Card>
+          </Flex>
+          <section aria-labelledby="mobile-home-sessions">
+            <Flex justify="space-between" align="center" style={{ marginBottom: token.marginSM }}>
+              <Title id="mobile-home-sessions" level={5} style={{ margin: 0 }}>
+                My sessions
+              </Title>
+              <Text type="secondary">{sessions.length} total</Text>
+            </Flex>
+            <Card size="small" styles={{ body: { padding: 0 } }}>
+              {sessions.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No sessions yet" />
+              ) : (
+                <List
+                  dataSource={sessions.slice(0, 8)}
+                  renderItem={(session) => {
+                    const branch = branchById.get(session.branch_id);
+                    return (
+                      <List.Item
+                        onClick={() => navigate(`/m/session/${session.session_id}`)}
+                        style={{ cursor: 'pointer', paddingInline: token.paddingSM }}
+                      >
+                        <List.Item.Meta
+                          avatar={
+                            <Badge
+                              status={session.status === 'running' ? 'processing' : 'default'}
+                            />
+                          }
+                          title={
+                            <Text ellipsis>
+                              {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                            </Text>
+                          }
+                          description={
+                            <Space size={token.marginXS} wrap>
+                              {branch && <Text type="secondary">{branch.name}</Text>}
+                              <Text type="secondary">
+                                {formatRelativeTime(session.last_updated)}
+                              </Text>
+                            </Space>
+                          }
+                        />
+                      </List.Item>
+                    );
+                  }}
+                />
+              )}
+            </Card>
+          </section>
+          <section aria-labelledby="mobile-home-boards">
+            <Flex justify="space-between" align="center" style={{ marginBottom: token.marginSM }}>
+              <Title id="mobile-home-boards" level={5} style={{ margin: 0 }}>
+                Boards
+              </Title>
+              <Button type="link" onClick={() => onOpenSettings('boards')}>
+                Manage
+              </Button>
+            </Flex>
+            {boards.length === 0 ? (
+              <Card>
+                <Empty description="No boards yet" />
+              </Card>
+            ) : (
+              <Flex vertical gap={token.marginSM}>
+                {boards.map((board) => {
+                  const branchCount = Array.from(branchById.values()).filter(
+                    (branch) => !branch.archived && branch.board_id === board.board_id
+                  ).length;
+                  return (
+                    <Card
+                      key={board.board_id}
+                      size="small"
+                      hoverable
+                      onClick={() => navigate(`/m/board/${board.board_id}`)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <Flex align="center" gap={token.marginSM}>
+                        <span aria-hidden style={{ fontSize: 28 }}>
+                          {getBoardEmoji(board, branchById)}
+                        </span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <Text strong ellipsis style={{ display: 'block' }}>
+                            {board.name}
+                          </Text>
+                          <Text type="secondary">
+                            {branchCount} {branchCount === 1 ? 'branch' : 'branches'}
+                          </Text>
+                        </div>
+                      </Flex>
+                    </Card>
+                  );
+                })}
+              </Flex>
+            )}
+          </section>
+          <Card size="small">
+            <Flex align="center" justify="space-between" gap={token.marginSM}>
+              <Space>
+                <BulbOutlined />
+                <div>
+                  <Text strong>Knowledge Base</Text>
+                  <br />
+                  <Text type="secondary">Browse team context and documentation</Text>
+                </div>
+              </Space>
+              <Button type="link" href="/knowledge">
+                Open
+              </Button>
+            </Flex>
+          </Card>
+          <Card size="small" title="Workspace setup">
+            <Flex vertical gap={token.marginXS}>
+              <Button block icon={<AppstoreOutlined />} onClick={() => onOpenSettings('repos')}>
+                Connect a repository
+              </Button>
+              <Button block icon={<RobotOutlined />} onClick={() => onOpenSettings('mcp')}>
+                Configure MCP tools
+              </Button>
+            </Flex>
+          </Card>
+        </Flex>
+      </Content>
+    </>
+  );
+};

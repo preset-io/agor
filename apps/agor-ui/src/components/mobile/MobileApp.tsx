@@ -1,5 +1,5 @@
 import type { AgorClient, User } from '@agor-live/client';
-import { Drawer, Layout, Typography } from 'antd';
+import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
@@ -15,15 +15,11 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
-import { BrandMark } from '../BrandMark';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
-import { MobileHeader } from './MobileHeader';
+import { MobileHomePage } from './MobileHomePage';
 import { MobileNavTree } from './MobileNavTree';
 import { SessionPage } from './SessionPage';
-
-const { Content } = Layout;
-const { Text } = Typography;
 
 interface MobileAppProps {
   client: AgorClient | null;
@@ -38,6 +34,10 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
+  onOpenWorkspaceSettings: (section: string) => void;
+  onOpenUserSettings: () => void;
+  promptDrafts: Map<string, string>;
+  onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -50,6 +50,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
+  onOpenWorkspaceSettings,
+  onOpenUserSettings,
+  promptDrafts,
+  onUpdateDraft,
 }) => {
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
@@ -85,6 +89,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           sessionsByBranch={sessionsByBranch}
           commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
+          onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+          onOpenUserSettings={onOpenUserSettings}
+          onLogout={onLogout}
+          currentUser={user}
         />
       </Drawer>
 
@@ -93,29 +101,14 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <Route
           path="/"
           element={
-            <>
-              <MobileHeader
-                showLogo
-                user={user}
-                onMenuClick={() => setDrawerOpen(true)}
-                onLogout={onLogout}
-              />
-              <Content
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 24,
-                  flexDirection: 'column',
-                  gap: 24,
-                }}
-              >
-                <BrandMark size={160} style={{ opacity: 0.5 }} />
-                <Text type="secondary" style={{ textAlign: 'center' }}>
-                  Tap the menu icon to browse boards and sessions
-                </Text>
-              </Content>
-            </>
+            <MobileHomePage
+              user={user}
+              boardById={boardById}
+              branchById={branchById}
+              sessionById={sessionById}
+              onMenuClick={() => setDrawerOpen(true)}
+              onOpenSettings={onOpenWorkspaceSettings}
+            />
           }
         />
 

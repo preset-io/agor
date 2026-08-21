@@ -1,6 +1,26 @@
-import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
-import { AppstoreOutlined, CommentOutlined, DownOutlined } from '@ant-design/icons';
-import { Badge, Button, Collapse, Space, Typography, theme } from 'antd';
+import type { Board, BoardComment, Branch, Session, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BranchesOutlined,
+  BulbOutlined,
+  CommentOutlined,
+  CreditCardOutlined,
+  DownOutlined,
+  ExperimentOutlined,
+  FolderOutlined,
+  InfoCircleOutlined,
+  LogoutOutlined,
+  MessageOutlined,
+  RobotOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
+import type { MenuProps } from 'antd';
+import { Badge, Button, Collapse, Divider, Menu, Space, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
@@ -15,6 +35,10 @@ interface MobileNavTreeProps {
   sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   commentById: Map<string, BoardComment>;
   onNavigate?: () => void;
+  onOpenWorkspaceSettings: (section: string) => void;
+  onOpenUserSettings: () => void;
+  onLogout?: () => void;
+  currentUser?: User | null;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -23,6 +47,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   sessionsByBranch,
   commentById,
   onNavigate,
+  onOpenWorkspaceSettings,
+  onOpenUserSettings,
+  onLogout,
+  currentUser,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -91,6 +119,46 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   };
 
   const boards = mapToArray(boardById);
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const openSettings = (section: string) => {
+    onOpenWorkspaceSettings(section);
+    onNavigate?.();
+  };
+  const utilityItems: MenuProps['items'] = [
+    { key: 'home', label: 'Home', icon: <AppstoreOutlined /> },
+    { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
+    {
+      key: 'workspace-settings',
+      label: 'Workspace settings',
+      icon: <SettingOutlined />,
+      children: [
+        { key: 'settings:boards', label: 'Boards', icon: <AppstoreOutlined /> },
+        { key: 'settings:repos', label: 'Repositories', icon: <FolderOutlined /> },
+        { key: 'settings:branches', label: 'Branches', icon: <BranchesOutlined /> },
+        { key: 'settings:teammates', label: 'Teammates', icon: <RobotOutlined /> },
+        { key: 'settings:cards', label: 'Cards (Beta)', icon: <CreditCardOutlined /> },
+        { key: 'settings:artifacts', label: 'Artifacts', icon: <ExperimentOutlined /> },
+        ...(isAdmin
+          ? [
+              {
+                key: 'settings:agentic-tools',
+                label: 'Agentic Tools',
+                icon: <ThunderboltOutlined />,
+              },
+              { key: 'settings:mcp', label: 'MCP Servers', icon: <ApiOutlined /> },
+              { key: 'settings:gateway', label: 'Gateway Channels', icon: <MessageOutlined /> },
+              { key: 'settings:groups', label: 'Groups', icon: <TeamOutlined /> },
+            ]
+          : []),
+        { key: 'settings:users', label: 'Users', icon: <TeamOutlined /> },
+        { key: 'settings:about', label: 'About', icon: <InfoCircleOutlined /> },
+      ],
+    },
+    { key: 'user-settings', label: 'User settings', icon: <UserOutlined /> },
+    { key: 'documentation', label: 'Documentation', icon: <InfoCircleOutlined /> },
+    { type: 'divider' },
+    { key: 'logout', label: 'Logout', icon: <LogoutOutlined />, danger: true },
+  ];
 
   return (
     <div
@@ -252,6 +320,22 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
               ),
           };
         })}
+      />
+      <Divider style={{ marginBlock: token.marginSM }} />
+      <Menu
+        mode="inline"
+        selectable={false}
+        items={utilityItems}
+        onClick={({ key }) => {
+          if (key === 'home') navigate('/m');
+          else if (key === 'knowledge') navigate('/knowledge');
+          else if (key === 'user-settings') onOpenUserSettings();
+          else if (key === 'documentation')
+            window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');
+          else if (key === 'logout') onLogout?.();
+          else if (key.startsWith('settings:')) openSettings(key.slice('settings:'.length));
+          if (!key.startsWith('settings:')) onNavigate?.();
+        }}
       />
     </div>
   );
