@@ -55,9 +55,16 @@ export function MarketplacePromptSuggestion({
               Dismiss
             </Button>
           </Space>
-          <span role="status" aria-live="polite" style={{ position: 'absolute', opacity: 0 }}>
-            {copyStatus}
-          </span>
+          {copyStatus ? (
+            <Typography.Text
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              type={copyStatus.startsWith('Could not') ? 'danger' : 'success'}
+            >
+              {copyStatus}
+            </Typography.Text>
+          ) : null}
         </Space>
       }
     />

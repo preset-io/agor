@@ -68,7 +68,6 @@ import {
   claimMarketplaceOAuthPrompt,
   consumeMarketplacePromptSuggestion,
   discardMarketplacePromptSuggestion,
-  saveMarketplacePromptSuggestion,
 } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -467,28 +466,29 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // wins without relying on a nonexistent localStorage compare-and-set.
   React.useEffect(() => {
     const operation = marketplaceHandoffGuard.begin();
-    if (!session || !client || !currentUserId || !currentRole || !operation.isCurrent()) return;
+    if (
+      !marketplaceSuggestionSessionId ||
+      !client ||
+      !currentUserId ||
+      !currentRole ||
+      !operation.isCurrent()
+    )
+      return;
     void claimMarketplaceOAuthPrompt({
       client,
-      sessionId: session.session_id,
+      sessionId: marketplaceSuggestionSessionId,
       authenticatedServerIds: userAuthenticatedMcpServerIds,
       authority: { userId: currentUserId, role: currentRole, authGeneration },
       isCurrent: operation.isCurrent,
     }).then((prompt) => {
-      if (!prompt || !operation.isCurrent()) return;
-      saveMarketplacePromptSuggestion({
-        sessionId: session.session_id,
-        prompt,
-        authority: { userId: currentUserId, role: currentRole, authGeneration },
-      });
       if (operation.isCurrent()) {
-        setMarketplacePromptSuggestion(
-          consumeMarketplacePromptSuggestion(session.session_id, {
-            userId: currentUserId,
-            role: currentRole,
-            authGeneration,
-          })
-        );
+        const staged = consumeMarketplacePromptSuggestion(marketplaceSuggestionSessionId, {
+          userId: currentUserId,
+          role: currentRole,
+          authGeneration,
+        });
+        if (!staged && !prompt) return;
+        setMarketplacePromptSuggestion(staged ?? prompt);
       }
     });
     return operation.cancel;
@@ -498,7 +498,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     currentRole,
     currentUserId,
     marketplaceHandoffGuard,
-    session,
+    marketplaceSuggestionSessionId,
     userAuthenticatedMcpServerIds,
   ]);
 

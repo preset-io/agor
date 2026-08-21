@@ -19,52 +19,11 @@ import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { type Database, IN_MEMORY_SQLITE_DATABASE } from './client';
+import type { Database } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
 import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-context';
-
-/**
- * Literal in-memory libsql databases have exactly one physical connection.
- *
- * The libsql driver's native transaction helper detaches that connection from
- * the base client, which makes the next base-client query open a different,
- * empty `:memory:` database. We therefore keep those transactions on the
- * original handle. A manual BEGIN is only safe if *every* operation using that
- * handle observes the same ownership boundary, though: otherwise an unrelated
- * base query can accidentally join, commit, or roll back the open transaction.
- *
- * The coordinator lives below Drizzle on the one libsql client. It is not
- * process-global: two database handles never wait on each other.
- */
-const IN_MEMORY_SQLITE_TRANSACTION_SCOPE = Symbol('agor.db.sqlite.in-memory.transaction-scope');
-
-interface InMemorySQLiteTransactionScope {
-  /** The current Drizzle transaction/savepoint handle. */
-  current: Database;
-  /** Serializes sibling savepoint callbacks on the one connection. */
-  tail: Promise<void>;
-}
-
-function readInMemoryTransactionScope(db: Database): InMemorySQLiteTransactionScope | undefined {
-  return (db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_TRANSACTION_SCOPE] as
-    | InMemorySQLiteTransactionScope
-    | undefined;
-}
-
-async function acquireNestedTransactionScope(
-  scope: InMemorySQLiteTransactionScope
-): Promise<() => void> {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const previous = scope.tail;
-  scope.tail = previous.then(() => gate);
-  await previous;
-  return release;
-}
 
 /** Execute one query without allowing it to cross a literal-memory tx boundary. */
 async function coordinateDatabaseOperation<T>(
@@ -75,49 +34,6 @@ async function coordinateDatabaseOperation<T>(
   // decorated libsql Client, so direct builders and wrapper helpers share the
   // same boundary. Keep this helper as the unified execution seam.
   return operation();
-}
-
-function createInMemorySQLiteTransactionHandle(
-  current: Database,
-  scope: InMemorySQLiteTransactionScope
-): Database {
-  return new Proxy(current as object, {
-    get(target, property) {
-      if (property === IN_MEMORY_SQLITE_TRANSACTION_SCOPE) return scope;
-      if (property === 'transaction') {
-        return <T>(work: (tx: Database) => Promise<T>) =>
-          runNestedInMemorySQLiteTransaction(scope, work);
-      }
-      // Drizzle/libsql methods may use private receiver state. Bind them to the
-      // real database while wrapper execution still sees this scoped handle.
-      const value = Reflect.get(target, property, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  }) as Database;
-}
-
-async function runNestedInMemorySQLiteTransaction<T>(
-  scope: InMemorySQLiteTransactionScope,
-  work: (tx: Database) => Promise<T>
-): Promise<T> {
-  const release = await acquireNestedTransactionScope(scope);
-  try {
-    const transaction = (
-      scope.current as unknown as {
-        transaction(callback: (tx: unknown) => Promise<T>): Promise<T>;
-      }
-    ).transaction.bind(scope.current);
-    return await transaction((tx) => {
-      const nested = txAsDb(tx);
-      const nestedScope: InMemorySQLiteTransactionScope = {
-        current: nested,
-        tail: Promise.resolve(),
-      };
-      return work(createInMemorySQLiteTransactionHandle(nested, nestedScope));
-    });
-  } finally {
-    release();
-  }
 }
 
 /**
@@ -138,17 +54,10 @@ export async function runDatabaseTransaction<T>(
   work: (tx: Database) => Promise<T>,
   options: { sqliteImmediate?: boolean } = {}
 ): Promise<T> {
-  // `@libsql/client` implements `transaction()` by moving its current native
-  // connection into a transaction object and lazily opening a different one
-  // for the base client. That is correct for files, but every connection named
-  // `:memory:` is a different empty database. Keep test/embedded in-memory
-  // transactions on the original connection so schema and committed rows
-  // remain visible after commit. Production file SQLite and PostgreSQL retain
-  // their native transaction handles below.
-  const existingMemoryScope = readInMemoryTransactionScope(db);
-  if (existingMemoryScope) {
-    return runNestedInMemorySQLiteTransaction(existingMemoryScope, work);
-  }
+  // Literal-memory SQLite decorates both the libsql client and Drizzle's
+  // transaction callback at database creation, so this helper and direct
+  // callers share exactly the same connection/savepoint ownership. File
+  // SQLite and PostgreSQL retain their native transaction paths.
   const transaction = (
     db as unknown as {
       transaction(
@@ -158,17 +67,7 @@ export async function runDatabaseTransaction<T>(
     }
   ).transaction.bind(db);
   return transaction(
-    (tx) => {
-      const transactionDb = txAsDb(tx);
-      if ((db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] !== true) {
-        return work(transactionDb);
-      }
-      const scope: InMemorySQLiteTransactionScope = {
-        current: transactionDb,
-        tail: Promise.resolve(),
-      };
-      return work(createInMemorySQLiteTransactionHandle(transactionDb, scope));
-    },
+    (tx) => work(txAsDb(tx)),
     isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
   );
 }

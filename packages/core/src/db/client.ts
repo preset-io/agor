@@ -16,7 +16,10 @@ import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { loadConfigSync } from '../config/config-manager';
 import type { AgorConfig } from '../config/types';
-import { coordinateInMemorySQLiteClient } from './in-memory-sqlite-coordinator';
+import {
+  coordinateInMemorySQLiteClient,
+  coordinateInMemorySQLiteDatabase,
+} from './in-memory-sqlite-coordinator';
 import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
 // Import both schemas explicitly
@@ -40,6 +43,7 @@ function isInMemorySQLiteUrl(url: string): boolean {
 function markInMemorySQLiteDatabase<T extends object>(db: T, url: string): T {
   if (isInMemorySQLiteUrl(url)) {
     Object.defineProperty(db, IN_MEMORY_SQLITE_DATABASE, { value: true });
+    return coordinateInMemorySQLiteDatabase(db);
   }
   return db;
 }

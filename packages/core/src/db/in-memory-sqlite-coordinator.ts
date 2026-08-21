@@ -28,9 +28,13 @@ interface Coordinator {
 }
 
 interface OwnedTransactionState {
-  closed: boolean;
+  phase: 'open' | 'finishing' | 'closed';
   tail: Promise<void>;
   finishing?: Promise<void>;
+}
+
+interface DrizzleNestedTransactionScope {
+  tail: Promise<void>;
 }
 
 async function acquire(coordinator: Coordinator): Promise<() => void> {
@@ -55,6 +59,44 @@ function beginStatement(mode: TransactionMode | undefined): string {
   return mode === 'read' || mode === 'deferred' ? 'BEGIN' : 'BEGIN IMMEDIATE';
 }
 
+async function recoverRollback(raw: Client, primaryError: unknown): Promise<never> {
+  const rollbackErrors: unknown[] = [];
+  // A deferred-constraint COMMIT failure leaves SQLite's transaction open.
+  // Retry a failed rollback once: a transport/client can report a transient
+  // terminal error even though the connection remains usable.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await raw.execute('ROLLBACK');
+    } catch (error) {
+      rollbackErrors.push(error);
+      continue;
+    }
+    if (rollbackErrors.length === 0) throw primaryError;
+    throw new AggregateError(
+      [primaryError, ...rollbackErrors],
+      'SQLite transaction failed; rollback succeeded after a retry'
+    );
+  }
+
+  // Do not release an open transaction back to the coordinator. If SQLite
+  // refuses both rollback attempts, close and reconnect the one literal-memory
+  // handle before ownership is released. This is intentionally a last-resort
+  // fail-closed path; the caller receives every terminal failure.
+  let resetError: unknown;
+  try {
+    raw.close();
+    await raw.reconnect();
+  } catch (error) {
+    resetError = error;
+  }
+  throw new AggregateError(
+    [primaryError, ...rollbackErrors, ...(resetError === undefined ? [] : [resetError])],
+    resetError === undefined
+      ? 'SQLite transaction failed and the connection was reset after rollback failed'
+      : 'SQLite transaction failed and rollback/connection reset both failed'
+  );
+}
+
 async function finishTransaction(
   raw: Client,
   coordinator: Coordinator,
@@ -63,17 +105,35 @@ async function finishTransaction(
   release: () => void,
   command: 'COMMIT' | 'ROLLBACK'
 ): Promise<void> {
-  if (state.closed) return;
+  if (state.phase === 'closed') return;
   if (state.finishing) return state.finishing;
+  // Close the admission gate synchronously. Anything accepted before this
+  // point is represented by `tail`; anything later is rejected immediately.
+  state.phase = 'finishing';
   // Wait for every statement already accepted by this transaction. Statements
   // are serialized because libsql's one native connection cannot safely run
   // two operations at once.
   state.finishing = (async () => {
     await state.tail;
     try {
-      await raw.execute(command);
+      if (command === 'COMMIT') {
+        try {
+          await raw.execute('COMMIT');
+        } catch (commitError) {
+          await recoverRollback(raw, commitError);
+        }
+      } else {
+        try {
+          await raw.execute('ROLLBACK');
+        } catch (rollbackError) {
+          await recoverRollback(raw, rollbackError);
+        }
+      }
     } finally {
-      state.closed = true;
+      // `recoverRollback` returns only by throwing after rollback or a hard
+      // connection reset has completed, so no raw open transaction is ever
+      // released through this finally block.
+      state.phase = 'closed';
       if (coordinator.activeOwner === owner) coordinator.activeOwner = undefined;
       release();
     }
@@ -87,10 +147,16 @@ function createOwnedTransaction(
   owner: symbol,
   release: () => void
 ): Transaction {
-  const state: OwnedTransactionState = { closed: false, tail: Promise.resolve() };
+  const state: OwnedTransactionState = { phase: 'open', tail: Promise.resolve() };
 
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
-    if (state.closed) return Promise.reject(new Error('Transaction is closed'));
+    if (state.phase !== 'open') {
+      return Promise.reject(
+        new Error(
+          state.phase === 'finishing' ? 'Transaction is finishing' : 'Transaction is closed'
+        )
+      );
+    }
     const result = state.tail.then(operation);
     // A rejected statement must not poison the serialization chain: callers
     // may still explicitly roll the transaction back.
@@ -103,7 +169,7 @@ function createOwnedTransaction(
 
   return {
     get closed() {
-      return state.closed;
+      return state.phase === 'closed';
     },
     execute: (statement) => enqueue(() => raw.execute(statement)),
     batch: (statements) =>
@@ -116,10 +182,15 @@ function createOwnedTransaction(
     commit: () => finishTransaction(raw, coordinator, owner, state, release, 'COMMIT'),
     rollback: () => finishTransaction(raw, coordinator, owner, state, release, 'ROLLBACK'),
     close: () => {
-      if (!state.closed) {
+      if (state.phase === 'open') {
         // The Client contract makes close synchronous. Queue rollback behind
-        // accepted statements and retain ownership until it completes.
-        void finishTransaction(raw, coordinator, owner, state, release, 'ROLLBACK');
+        // accepted statements and retain ownership until it completes. There
+        // is no asynchronous error channel on close; terminal cleanup still
+        // completes fail-closed, while its rejection is deliberately observed
+        // rather than becoming an unhandled promise rejection.
+        void finishTransaction(raw, coordinator, owner, state, release, 'ROLLBACK').catch(
+          () => undefined
+        );
       }
     },
   };
@@ -137,13 +208,79 @@ async function runBatch(
     await raw.execute('COMMIT');
     return results;
   } catch (error) {
-    try {
-      await raw.execute('ROLLBACK');
-    } catch {
-      // Preserve the statement failure.
-    }
-    throw error;
+    return recoverRollback(raw, error);
   }
+}
+
+async function acquireNestedScope(scope: DrizzleNestedTransactionScope): Promise<() => void> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = scope.tail;
+  scope.tail = previous.then(() => gate);
+  await previous;
+  return release;
+}
+
+type DrizzleTransactionCallback = (transaction: unknown) => unknown | Promise<unknown>;
+type DrizzleTransactionMethod = (
+  callback: DrizzleTransactionCallback,
+  config?: unknown
+) => Promise<unknown>;
+
+function coordinateDrizzleTransactionHandle<T extends object>(raw: T): T {
+  const scope: DrizzleNestedTransactionScope = { tail: Promise.resolve() };
+  return new Proxy(raw, {
+    get(target, property) {
+      if (property === 'transaction') {
+        const transaction = Reflect.get(target, property, target) as DrizzleTransactionMethod;
+        return async (callback: DrizzleTransactionCallback, config?: unknown) => {
+          // Drizzle uses a savepoint name derived only from nesting depth. Two
+          // sibling callbacks therefore both use `sp0`; serialize the complete
+          // callbacks so one sibling's rollback can never erase another one's
+          // successful release.
+          const release = await acquireNestedScope(scope);
+          try {
+            return await transaction.call(
+              target,
+              (nested) => callback(coordinateDrizzleTransactionHandle(nested as object)),
+              config
+            );
+          } finally {
+            release();
+          }
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as T;
+}
+
+/**
+ * Decorate Drizzle's literal-memory database handle as well as its libsql
+ * client. The driver coordinator owns the physical connection; this layer is
+ * the only place where the full nested callback lifetime is visible, so it
+ * serializes sibling savepoints for callers of Drizzle's direct transaction
+ * method too.
+ */
+export function coordinateInMemorySQLiteDatabase<T extends object>(raw: T): T {
+  return new Proxy(raw, {
+    get(target, property) {
+      if (property === 'transaction') {
+        const transaction = Reflect.get(target, property, target) as DrizzleTransactionMethod;
+        return (callback: DrizzleTransactionCallback, config?: unknown) =>
+          transaction.call(
+            target,
+            (tx) => callback(coordinateDrizzleTransactionHandle(tx as object)),
+            config
+          );
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as T;
 }
 
 /** Decorate one literal-memory client so no Drizzle path can bypass ownership. */

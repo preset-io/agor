@@ -40,6 +40,7 @@ describe('MarketplacePromptSuggestion', () => {
     expect(onInsert).not.toHaveBeenCalled();
     expect(onDismiss).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('Starter prompt copied');
+    expect(screen.getByRole('status')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss starter prompt' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
@@ -47,5 +48,18 @@ describe('MarketplacePromptSuggestion', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Insert starter prompt in composer' }));
     expect(onInsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows visible copy failure feedback as a live status', async () => {
+    copyToClipboard.mockResolvedValue(false);
+    render(
+      <MarketplacePromptSuggestion prompt="Try search" onInsert={vi.fn()} onDismiss={vi.fn()} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy starter prompt' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Could not copy starter prompt')
+    );
+    expect(screen.getByRole('status')).toBeVisible();
   });
 });

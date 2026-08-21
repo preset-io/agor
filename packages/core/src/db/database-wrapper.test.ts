@@ -89,11 +89,8 @@ describe('literal-memory SQLite transaction ownership', () => {
     const db = await memoryDatabase();
     const entered = deferred();
     const finish = deferred();
-    const transaction = runDatabaseTransaction(db, async (tx) => {
-      await asSQLite(tx)
-        .insert(sqliteAppVariables)
-        .values(directVariable('tx-direct', 'discard'))
-        .run();
+    const transaction = db['transaction'](async (tx) => {
+      await tx.insert(sqliteAppVariables).values(directVariable('tx-direct', 'discard')).run();
       entered.resolve();
       await finish.promise;
       throw new Error('direct rollback');
@@ -267,10 +264,10 @@ describe('literal-memory SQLite transaction ownership', () => {
     const finish = deferred();
     const order: string[] = [];
 
-    await runDatabaseTransaction(db, async (outer) => {
-      const first = runDatabaseTransaction(outer, async (nested) => {
+    await db['transaction'](async (outer) => {
+      const first = outer['transaction'](async (nested) => {
         order.push('a-enter');
-        await asSQLite(nested)
+        await nested
           .insert(sqliteAppVariables)
           .values(directVariable('sibling-a', 'discard'))
           .run();
@@ -280,12 +277,9 @@ describe('literal-memory SQLite transaction ownership', () => {
         throw new Error('rollback sibling A');
       });
       await entered.promise;
-      const second = runDatabaseTransaction(outer, async (nested) => {
+      const second = outer['transaction'](async (nested) => {
         order.push('b-enter');
-        await asSQLite(nested)
-          .insert(sqliteAppVariables)
-          .values(directVariable('sibling-b', 'keep'))
-          .run();
+        await nested.insert(sqliteAppVariables).values(directVariable('sibling-b', 'keep')).run();
         order.push('b-commit');
       });
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -310,21 +304,18 @@ describe('literal-memory SQLite transaction ownership', () => {
     const finish = deferred();
     const order: string[] = [];
 
-    await runDatabaseTransaction(db, async (outer) => {
-      const first = runDatabaseTransaction(outer, async (nested) => {
+    await db['transaction'](async (outer) => {
+      const first = outer['transaction'](async (nested) => {
         order.push('a-enter');
-        await asSQLite(nested)
-          .insert(sqliteAppVariables)
-          .values(directVariable('inverse-a', 'keep'))
-          .run();
+        await nested.insert(sqliteAppVariables).values(directVariable('inverse-a', 'keep')).run();
         entered.resolve();
         await finish.promise;
         order.push('a-commit');
       });
       await entered.promise;
-      const second = runDatabaseTransaction(outer, async (nested) => {
+      const second = outer['transaction'](async (nested) => {
         order.push('b-enter');
-        await asSQLite(nested)
+        await nested
           .insert(sqliteAppVariables)
           .values(directVariable('inverse-b', 'discard'))
           .run();
@@ -369,6 +360,33 @@ describe('literal-memory SQLite transaction ownership', () => {
     ).rejects.toThrow();
     await db.delete(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'builder')).run();
     await expect(db.select().from(sqliteAppVariables).all()).resolves.toEqual([]);
+  });
+
+  it('rolls back a deferred-foreign-key COMMIT failure before admitting later work', async () => {
+    const db = await memoryDatabase();
+    await db.run(sql.raw('CREATE TABLE deferred_parent (id INTEGER PRIMARY KEY)'));
+    await db.run(
+      sql.raw(
+        'CREATE TABLE deferred_child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, FOREIGN KEY(parent_id) REFERENCES deferred_parent(id) DEFERRABLE INITIALLY DEFERRED)'
+      )
+    );
+
+    await expect(
+      db['transaction'](async (transaction) => {
+        await transaction.run(sql.raw('INSERT INTO deferred_child (id, parent_id) VALUES (1, 9)'));
+      })
+    ).rejects.toThrow();
+
+    // SQLite leaves a deferred-constraint transaction open when COMMIT fails.
+    // The coordinator must finish rollback before this base write, then allow
+    // both ordinary work and another transaction to proceed.
+    await db.run(sql.raw('INSERT INTO deferred_parent (id) VALUES (9)'));
+    await db['transaction'](async (transaction) => {
+      await transaction.run(sql.raw('INSERT INTO deferred_child (id, parent_id) VALUES (2, 9)'));
+    });
+    await expect(db.all(sql.raw('SELECT id FROM deferred_child ORDER BY id'))).resolves.toEqual([
+      { id: 2 },
+    ]);
   });
 
   dbTest('leaves normal file SQLite on the native transaction path', async ({ db }) => {
