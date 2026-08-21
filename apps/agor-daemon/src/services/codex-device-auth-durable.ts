@@ -22,6 +22,10 @@ import {
 } from './codex-auth-shared.js';
 import type { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 import {
+  exchangeCodexDeviceAuthorization,
+  pollCodexDeviceAuthorization,
+} from './codex-device-auth-flow.js';
+import {
   buildDeviceAuthJson,
   CODEX_AUTH_ISSUER,
   type CodexDeviceAuthProvider,
@@ -182,23 +186,18 @@ export function createDurableCodexDeviceAuthService(
         return;
       }
 
-      let polled: Awaited<ReturnType<CodexDeviceAuthProvider['pollDeviceToken']>>;
-      try {
-        polled = await provider.pollDeviceToken(material.deviceAuthId, material.userCode);
-      } catch (error) {
-        if (error instanceof DeviceAuthProviderError && error.disposition === 'terminal') {
-          await authority.finishPoll(claimed, 'failed', 'provider_poll_rejected');
-        } else {
-          await authority.recordPending(claimed, claimed.pollIntervalMs ?? 5_000);
-        }
+      const polled = await pollCodexDeviceAuthorization(provider, {
+        deviceAuthId: material.deviceAuthId,
+        userCode: material.userCode,
+        intervalMs: claimed.pollIntervalMs ?? 5_000,
+      });
+
+      if (polled.outcome === 'retry') {
+        await authority.recordPending(claimed, polled.intervalMs);
         return;
       }
-
-      if (polled.outcome === 'pending' || polled.outcome === 'slow_down') {
-        const interval =
-          (claimed.pollIntervalMs ?? 5_000) +
-          (polled.outcome === 'slow_down' ? polled.intervalIncreaseMs : 0);
-        await authority.recordPending(claimed, interval);
+      if (polled.outcome === 'failed') {
+        await authority.finishPoll(claimed, 'failed', 'provider_poll_rejected');
         return;
       }
       if (polled.outcome === 'denied') {
@@ -212,19 +211,18 @@ export function createDurableCodexDeviceAuthService(
 
       const exchange = await authority.claimExchange(claimed);
       if (!exchange) return;
-      let tokens: Awaited<ReturnType<CodexDeviceAuthProvider['exchangeCodeForTokens']>>;
-      try {
-        tokens = await provider.exchangeCodeForTokens(polled.approved);
-      } catch (error) {
-        const ambiguous =
-          !(error instanceof DeviceAuthProviderError) || error.disposition === 'ambiguous';
+      const exchanged = await exchangeCodexDeviceAuthorization(provider, polled.approved);
+      if (exchanged.outcome === 'failed') {
         await authority.failExchange(
           exchange,
-          ambiguous ? 'ambiguous' : 'failed',
-          ambiguous ? 'token_exchange_ambiguous' : 'token_exchange_rejected'
+          exchanged.certainty === 'ambiguous' ? 'ambiguous' : 'failed',
+          exchanged.certainty === 'ambiguous'
+            ? 'token_exchange_ambiguous'
+            : 'token_exchange_rejected'
         );
         return;
       }
+      const { tokens } = exchanged;
 
       try {
         await authority.finalize(exchange, async (route) => {

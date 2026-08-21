@@ -29,15 +29,15 @@ import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/c
 import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
+  type CodexCredentialMutationCoordinator,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
-import type { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 
 export function createCodexAuthImportService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  deviceAttempts?: CodexDeviceAuthAttemptAuthority
+  credentialMutations?: CodexCredentialMutationCoordinator
 ) {
   return {
     async create(
@@ -85,8 +85,8 @@ export function createCodexAuthImportService(
           codexHome: identity.codexHome,
           authorityGeneration,
         });
-      const summary = deviceAttempts
-        ? await deviceAttempts.runCredentialMutation(
+      const summary = credentialMutations
+        ? await credentialMutations.runCredentialMutation(
             String(tenantId),
             userId,
             'credentials_imported',

@@ -6,6 +6,7 @@ export * from './agentic-tool-presets';
 export * from './app-variables';
 export * from './artifact-trust';
 export * from './artifacts';
+export * from './authority-primitives';
 export * from './base';
 export * from './board-comments';
 export * from './board-objects';

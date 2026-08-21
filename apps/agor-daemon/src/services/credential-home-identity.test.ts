@@ -76,4 +76,13 @@ describe('native credential home identity', () => {
       )
     ).toBe(false);
   });
+
+  it('returns one typed failure when delegated home identity is missing', async () => {
+    rows[ALICE] = { unix_username: null };
+    await expect(
+      homeFor(ALICE, { execution: { unix_user_mode: 'delegated' } })
+    ).rejects.toMatchObject({
+      reason: 'missing-username',
+    });
+  });
 });

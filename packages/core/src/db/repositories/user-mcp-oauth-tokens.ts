@@ -15,7 +15,7 @@ import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/cor
 import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
-import { openMCPOAuthSecret, sealMCPOAuthSecret } from '../oauth-secret-envelope';
+import { openBoundSecret, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
   type UserMCPOAuthTokenRow,
@@ -156,7 +156,7 @@ function rowToToken(
     if (!options.tenantId || !options.masterSecret) {
       throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
     }
-    return openMCPOAuthSecret(
+    return openBoundSecret(
       String(value),
       options.masterSecret,
       purpose,
@@ -351,7 +351,7 @@ export class UserMCPOAuthTokenRepository {
       ): string | undefined => {
         if (value == null) return undefined;
         if (!this.postgres) return value;
-        return sealMCPOAuthSecret(
+        return sealBoundSecret(
           value,
           this.masterSecret!,
           purpose,
@@ -618,14 +618,14 @@ export class UserMCPOAuthTokenRepository {
     if (!this.postgres) throw new RepositoryError('Durable refresh completion requires PostgreSQL');
     const tenantId = this.tenantId()!;
     const userPredicate = userId === null ? sql`user_id IS NULL` : sql`user_id = ${userId}`;
-    const sealedAccess = sealMCPOAuthSecret(
+    const sealedAccess = sealBoundSecret(
       input.accessToken,
       this.masterSecret!,
       'access-token',
       grantSecretBinding(tenantId, userId, serverId, claim.grantGeneration, 'access')
     );
     const refreshAssignment = input.refreshToken
-      ? sql`, oauth_refresh_token = ${sealMCPOAuthSecret(
+      ? sql`, oauth_refresh_token = ${sealBoundSecret(
           input.refreshToken,
           this.masterSecret!,
           'refresh-token',

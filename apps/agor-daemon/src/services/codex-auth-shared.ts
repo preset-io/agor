@@ -17,12 +17,8 @@
  */
 
 import { join } from 'node:path';
-import {
-  type AgorConfig,
-  hasTenantSafeExecutorCredentialHome,
-  unixUserModeRequiresExecutionHomeKey,
-} from '@agor/core/config';
-import { getCurrentTenantId, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import { type AgorConfig, hasTenantSafeExecutorCredentialHome } from '@agor/core/config';
+import { getCurrentTenantId, type TenantScopedDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
@@ -31,14 +27,26 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
-import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
+import {
+  ExecutionCredentialHomeResolutionError,
+  resolveExecutionCredentialHome,
+} from './credential-home-identity.js';
 
 export interface AppLike {
   get(name: 'config'): DeepReadonly<AgorConfig>;
   service(path: string): unknown;
+}
+
+/** Narrow authority required by import/logout to serialize credential-file mutations. */
+export interface CodexCredentialMutationCoordinator {
+  runCredentialMutation<T>(
+    tenantId: string,
+    userId: UserID,
+    reason: 'credentials_imported' | 'credentials_removed',
+    work: (authorityGeneration: number) => Promise<T>
+  ): Promise<T>;
 }
 
 /** In-process users-service flag: publish this mutation only after its outer DB commit. */
@@ -91,7 +99,7 @@ export async function resolveCodexCredentialRoute(
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
   config: DeepReadonly<AgorConfig>
 ): Promise<CodexCredentialRouteResolution> {
-  const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+  const mode = config.execution?.unix_user_mode ?? 'simple';
 
   if (!hasTenantSafeExecutorCredentialHome(config)) {
     return {
@@ -121,36 +129,7 @@ export async function resolveCodexCredentialRoute(
     };
   }
 
-  let unixUsername: string | null = null;
-  // Delegated execution requires a stable per-user home key. A missing value
-  // must surface as the actionable `missing-username` result.
-  if (unixUserModeRequiresExecutionHomeKey(mode)) {
-    if (!userId) {
-      return {
-        ok: false,
-        reason: 'resolve-failed',
-        message: 'Delegated execution mode requires an authenticated user context.',
-      };
-    }
-    const row = await withTenantDatabase((tenantDb) =>
-      new UsersRepository(tenantDb).findById(userId)
-    );
-    unixUsername = row?.unix_username ?? null;
-    if (!unixUsername) {
-      return {
-        ok: false,
-        reason: 'missing-username',
-        message:
-          'Delegated execution mode requires a unix_username — ask an admin to set one for your account.',
-      };
-    }
-  }
-
   try {
-    const resolved = resolveDelegatedHomeKey({
-      mode,
-      executionHomeKey: unixUsername,
-    });
     if (!userId) {
       return {
         ok: false,
@@ -158,26 +137,16 @@ export async function resolveCodexCredentialRoute(
         message: 'Codex credential routing requires an authenticated user identity.',
       };
     }
-    // In sandbox mode the executor runs as the daemon user with the caller's
-    // per-user store overlaid at `~`. Auth must be written to THAT store's
-    // `.codex` (honoring an explicit filesystem_home), so both the auth flow and
-    // later sandboxed sessions agree on where auth.json lives.
-    let codexHome: string | undefined;
-    if (mode === 'sandbox') {
-      const tenantId = getCurrentTenantId();
-      const row = await withTenantDatabase((tenantDb) =>
-        new UsersRepository(tenantDb).findById(userId)
-      );
-      codexHome = join(
-        resolveOwnerHomeStore({
-          config,
-          tenantId,
-          ownerUserId: userId,
-          filesystemHome: row?.filesystem_home,
-        }),
-        '.codex'
-      );
-    }
+    // Resolve the exact same identity used by the session execution path. The
+    // native-auth safety check compares these values, so deriving the write
+    // route independently would make that check vulnerable to semantic drift.
+    const resolved = await resolveExecutionCredentialHome({
+      userId,
+      tenantId: getCurrentTenantId(),
+      config,
+      withTenantDatabase,
+    });
+    const codexHome = resolved.homeStore ? join(resolved.homeStore, '.codex') : undefined;
     return {
       ok: true,
       delegatedHomeKey: resolved.delegatedHomeKey,
@@ -187,7 +156,10 @@ export async function resolveCodexCredentialRoute(
   } catch (err) {
     return {
       ok: false,
-      reason: 'resolve-failed',
+      reason:
+        err instanceof ExecutionCredentialHomeResolutionError && err.reason === 'missing-username'
+          ? 'missing-username'
+          : 'resolve-failed',
       message: err instanceof Error ? err.message : String(err),
     };
   }

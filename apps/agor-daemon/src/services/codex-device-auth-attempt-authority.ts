@@ -2,14 +2,14 @@
 
 import { randomUUID } from 'node:crypto';
 import {
+  BOUND_SECRET_ENVELOPE_VERSION,
   type CodexDeviceAuthAttemptRecord,
   CodexDeviceAuthAttemptRepository,
   generateId,
-  MCP_OAUTH_SECRET_ENVELOPE_VERSION,
-  openMCPOAuthSecret,
+  openBoundSecret,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
-  sealMCPOAuthSecret,
+  sealBoundSecret,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
@@ -68,7 +68,7 @@ export class CodexDeviceAuthAttemptAuthority {
   }
 
   private seal(material: CodexDeviceAuthSealedMaterial): string {
-    return sealMCPOAuthSecret(
+    return sealBoundSecret(
       JSON.stringify(material),
       this.masterSecret!,
       'codex-device-attempt',
@@ -77,13 +77,13 @@ export class CodexDeviceAuthAttemptAuthority {
   }
 
   open(record: CodexDeviceAuthAttemptRecord): CodexDeviceAuthSealedMaterial {
-    if (!record.sealedMaterial || record.envelopeVersion !== MCP_OAUTH_SECRET_ENVELOPE_VERSION) {
+    if (!record.sealedMaterial || record.envelopeVersion !== BOUND_SECRET_ENVELOPE_VERSION) {
       throw new Error('Codex device auth attempt material is unavailable');
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(
-        openMCPOAuthSecret(
+        openBoundSecret(
           record.sealedMaterial,
           this.masterSecret!,
           'codex-device-attempt',
@@ -134,7 +134,7 @@ export class CodexDeviceAuthAttemptAuthority {
         userId: input.userId,
         attemptId,
         attemptGeneration,
-        envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
+        envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
         sealedMaterial: this.seal(material),
         ttlMs: STARTING_ATTEMPT_LIFETIME_MS,
       });

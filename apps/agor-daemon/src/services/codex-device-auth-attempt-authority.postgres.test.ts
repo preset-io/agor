@@ -5,7 +5,7 @@ import {
   createTenantScopedDatabaseProxy,
   executeRaw,
   initializeDatabase,
-  isMCPOAuthSecretEnvelope,
+  isBoundSecretEnvelope,
   isPostgresDatabase,
   type RawDatabase,
   runWithTenantContext,
@@ -144,6 +144,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         execution: {
           unix_user_mode: 'sandbox',
           executor_storage: { user_home: 'persistent-per-user' },
+          // Production config resolution forces these invariants for the
+          // named sandbox mode; this direct service fixture supplies the
+          // already-resolved shape explicitly.
+          sandbox: { enabled: true, home_mode: 'per_user' },
         },
         multi_tenancy: { mode: 'required_from_auth' },
       } as const;
@@ -200,7 +204,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const { owner, record } = await pending('peer');
       const observed = await authorityB.getCurrentForUser(owner.tenantId, owner.userId);
       expect(observed).toMatchObject({ attemptId: record.attemptId, status: 'pending' });
-      expect(isMCPOAuthSecretEnvelope(observed!.sealedMaterial!)).toBe(true);
+      expect(isBoundSecretEnvelope(observed!.sealedMaterial!)).toBe(true);
       expect(observed!.sealedMaterial).not.toContain('device-peer');
       expect(observed!.sealedMaterial).not.toContain('CODE-peer');
       expect(authorityB.open(observed!)).toMatchObject({

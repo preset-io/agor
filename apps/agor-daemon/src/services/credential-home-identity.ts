@@ -17,6 +17,16 @@ export interface ExecutionCredentialHome {
   homeStore: string | null;
 }
 
+export class ExecutionCredentialHomeResolutionError extends Error {
+  constructor(
+    readonly reason: 'missing-username' | 'invalid-username',
+    message: string
+  ) {
+    super(message);
+    this.name = 'ExecutionCredentialHomeResolutionError';
+  }
+}
+
 export async function resolveExecutionCredentialHome(options: {
   userId: UserID;
   tenantId: string | undefined;
@@ -32,11 +42,28 @@ export async function resolveExecutionCredentialHome(options: {
       ? await withTenantDatabase((db) => new UsersRepository(db).findById(userId))
       : null;
 
-  return {
-    delegatedHomeKey: resolveDelegatedHomeKey({
+  if (mode === 'delegated' && !row?.unix_username) {
+    throw new ExecutionCredentialHomeResolutionError(
+      'missing-username',
+      'Delegated execution mode requires a unix_username — ask an admin to set one for your account.'
+    );
+  }
+
+  let delegatedHomeKey: string | null;
+  try {
+    delegatedHomeKey = resolveDelegatedHomeKey({
       mode,
       executionHomeKey: row?.unix_username ?? null,
-    }).delegatedHomeKey,
+    }).delegatedHomeKey;
+  } catch (error) {
+    throw new ExecutionCredentialHomeResolutionError(
+      'invalid-username',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  return {
+    delegatedHomeKey,
     homeStore: perOwnerHome
       ? resolveOwnerHomeStore({
           config,

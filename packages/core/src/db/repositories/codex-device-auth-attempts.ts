@@ -7,12 +7,11 @@ import type {
 } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { executeRaw, isPostgresDatabase } from '../database-wrapper';
+import { executeRaw, isPostgresDatabase, rawRows, rawRowsAffected } from '../database-wrapper';
 import { sanitizeDbError } from '../sanitize-error';
-import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertAuthorityFailureCode, lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 
-const SAFE_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
 const STATUSES: readonly CodexDeviceAuthAttemptStatus[] = [
   'starting',
   'pending',
@@ -50,12 +49,6 @@ export interface CodexDeviceAuthAttemptRecord {
   expiresAt: Date;
   exchangeStartedAt: Date | null;
   finishedAt: Date | null;
-}
-
-function rowsOf(result: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
-  const rows = (result as { rows?: unknown[] } | undefined)?.rows;
-  return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
 }
 
 function date(value: unknown, field: string): Date {
@@ -121,10 +114,6 @@ function failure(operation: string, error: unknown): RepositoryError {
   );
 }
 
-function assertFailureCode(code: string): void {
-  if (!SAFE_FAILURE_CODE.test(code)) throw new RepositoryError('Invalid Codex auth failure code');
-}
-
 export class CodexDeviceAuthAttemptRepository {
   constructor(private readonly db: Database) {
     if (!isPostgresDatabase(db)) {
@@ -133,19 +122,7 @@ export class CodexDeviceAuthAttemptRepository {
   }
 
   async lockUser(tenantId: string, userId: UserID): Promise<void> {
-    const scope = getCurrentTenantDatabaseScope();
-    if (
-      scope?.kind !== 'tenant' ||
-      !scope.transactionActive ||
-      scope.db !== this.db ||
-      scope.tenantId !== tenantId
-    ) {
-      throw new RepositoryError('Codex device auth user lock requires its tenant transaction');
-    }
-    await executeRaw(
-      this.db,
-      sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${tenantId}\u001f${userId}`}, 0))`
-    );
+    await lockTenantAuthoritySubject(this.db, tenantId, `${tenantId}\u001f${userId}`);
   }
 
   async allocateGeneration(tenantId: string, userId: UserID): Promise<number> {
@@ -154,7 +131,7 @@ export class CodexDeviceAuthAttemptRepository {
       this.db,
       sql`SELECT nextval('codex_device_auth_attempt_generation_seq') AS generation`
     );
-    const generation = Number(rowsOf(result)[0]?.generation);
+    const generation = Number(rawRows(result)[0]?.generation);
     if (!Number.isSafeInteger(generation) || generation <= 0) {
       throw new RepositoryError('Invalid Codex device auth generation');
     }
@@ -211,7 +188,7 @@ export class CodexDeviceAuthAttemptRepository {
                     clock_timestamp() + (${input.ttlMs} * INTERVAL '1 millisecond'))
             RETURNING *`
       );
-      return mapRow(rowsOf(inserted)[0]!);
+      return mapRow(rawRows(inserted)[0]!);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw failure('creation', error);
@@ -241,7 +218,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND status = 'starting' AND is_current = true
             RETURNING *`
       );
-      const row = rowsOf(result)[0];
+      const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
     } catch (error) {
       throw failure('grant attachment', error);
@@ -259,7 +236,7 @@ export class CodexDeviceAuthAttemptRepository {
             WHERE tenant_id = ${tenantId} AND user_id = ${userId} AND is_current = true
             ORDER BY attempt_generation DESC LIMIT 1`
       );
-      const row = rowsOf(result)[0];
+      const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
     } catch (error) {
       throw failure('status read', error);
@@ -278,7 +255,7 @@ export class CodexDeviceAuthAttemptRepository {
             WHERE tenant_id = ${tenantId} AND user_id = ${userId}
               AND attempt_id = ${attemptId} LIMIT 1`
       );
-      const row = rowsOf(result)[0];
+      const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
     } catch (error) {
       throw failure('attempt read', error);
@@ -319,7 +296,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND (poll_lease_expires_at IS NULL OR poll_lease_expires_at <= clock_timestamp())
             RETURNING *`
       );
-      const row = rowsOf(result)[0];
+      const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
     } catch (error) {
       throw failure('poll claim', error);
@@ -347,7 +324,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND poll_claim_generation = ${input.claimGeneration}
             RETURNING attempt_id`
       );
-      return rowsOf(result).length === 1;
+      return rawRows(result).length === 1;
     } catch (error) {
       throw failure('pending transition', error);
     }
@@ -358,7 +335,7 @@ export class CodexDeviceAuthAttemptRepository {
     status: 'denied' | 'failed' | 'expired',
     failureCode: string
   ): Promise<boolean> {
-    assertFailureCode(failureCode);
+    assertAuthorityFailureCode(failureCode, 'Codex device auth');
     if (!record.pollClaimId) return false;
     try {
       const result = await executeRaw(
@@ -373,7 +350,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND poll_claim_generation = ${record.pollClaimGeneration}
             RETURNING attempt_id`
       );
-      return rowsOf(result).length === 1;
+      return rawRows(result).length === 1;
     } catch (error) {
       throw failure(`${status} transition`, error);
     }
@@ -397,7 +374,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND poll_claim_generation = ${record.pollClaimGeneration}
             RETURNING *`
       );
-      const row = rowsOf(result)[0];
+      const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
     } catch (error) {
       throw failure('exchange claim', error);
@@ -416,7 +393,9 @@ export class CodexDeviceAuthAttemptRepository {
     if (status !== 'succeeded' && !options.failureCode) {
       throw new RepositoryError('Failed Codex device auth requires a failure code');
     }
-    if (options.failureCode) assertFailureCode(options.failureCode);
+    if (options.failureCode) {
+      assertAuthorityFailureCode(options.failureCode, 'Codex device auth');
+    }
     try {
       const result = await executeRaw(
         this.db,
@@ -430,7 +409,7 @@ export class CodexDeviceAuthAttemptRepository {
               AND exchange_claim_id = ${record.exchangeClaimId}
             RETURNING attempt_id`
       );
-      return rowsOf(result).length === 1;
+      return rawRows(result).length === 1;
     } catch (error) {
       throw failure(`${status} exchange transition`, error);
     }
@@ -446,7 +425,7 @@ export class CodexDeviceAuthAttemptRepository {
             AND exchange_claim_id = ${record.exchangeClaimId}
           RETURNING attempt_id`
     );
-    return rowsOf(result).length === 1;
+    return rawRows(result).length === 1;
   }
 
   async invalidateForUser(
@@ -456,7 +435,7 @@ export class CodexDeviceAuthAttemptRepository {
     failureCode: string,
     attemptId?: CodexDeviceAuthAttemptID
   ): Promise<number> {
-    assertFailureCode(failureCode);
+    assertAuthorityFailureCode(failureCode, 'Codex device auth');
     await this.lockUser(tenantId, userId);
     const result = await executeRaw(
       this.db,
@@ -489,7 +468,7 @@ export class CodexDeviceAuthAttemptRepository {
             )
           RETURNING attempt_id`
     );
-    return rowsOf(result).length;
+    return rawRows(result).length;
   }
 
   async markStartingTerminal(
@@ -498,7 +477,7 @@ export class CodexDeviceAuthAttemptRepository {
     status: 'unavailable' | 'failed',
     failureCode: string
   ): Promise<boolean> {
-    assertFailureCode(failureCode);
+    assertAuthorityFailureCode(failureCode, 'Codex device auth');
     const result = await executeRaw(
       this.db,
       sql`UPDATE codex_device_auth_attempts
@@ -507,7 +486,7 @@ export class CodexDeviceAuthAttemptRepository {
           WHERE tenant_id = ${tenantId} AND attempt_id = ${attemptId}
             AND status = 'starting' AND is_current = true RETURNING attempt_id`
     );
-    return rowsOf(result).length === 1;
+    return rawRows(result).length === 1;
   }
 
   async maintain(): Promise<{ expired: number; ambiguous: number; purged: number }> {
@@ -534,14 +513,11 @@ export class CodexDeviceAuthAttemptRepository {
             WHERE status IN ('succeeded','unavailable','denied','failed','ambiguous','expired','superseded','cancelled')
               AND finished_at <= clock_timestamp() - INTERVAL '24 hours'`
       );
-      const count = (value: unknown) =>
-        Number(
-          (value as { rowCount?: number; rowsAffected?: number }).rowCount ??
-            (value as { rowsAffected?: number }).rowsAffected ??
-            (value as { count?: number }).count ??
-            0
-        );
-      return { expired: count(expired), ambiguous: count(ambiguous), purged: count(purged) };
+      return {
+        expired: rawRowsAffected(expired),
+        ambiguous: rawRowsAffected(ambiguous),
+        purged: rawRowsAffected(purged),
+      };
     } catch (error) {
       throw failure('maintenance', error);
     }

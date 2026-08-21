@@ -47,12 +47,15 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  exchangeCodexDeviceAuthorization,
+  pollCodexDeviceAuthorization,
+} from './codex-device-auth-flow.js';
+import {
   buildDeviceAuthJson,
   CODEX_AUTH_ISSUER,
+  codexDeviceAuthProvider,
   DEVICE_CODE_LIFETIME_MS,
   DeviceAuthProviderError,
-  exchangeCodeForTokens,
-  pollDeviceToken,
   requestUserCode,
   type UserCodeGrant,
 } from './codex-device-auth-provider.js';
@@ -148,25 +151,20 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       return;
     }
 
-    let polled: Awaited<ReturnType<typeof pollDeviceToken>>;
-    try {
-      polled = await pollDeviceToken(attempt.deviceAuthId, attempt.userCode);
-    } catch (err) {
-      // Network blips and provider 5xx are transient — keep polling until the
-      // code expires. Only a definitive rejection or contract break ends the
-      // attempt early.
-      if (err instanceof DeviceAuthProviderError && err.disposition === 'terminal') {
-        finish(attempt, 'error', 'ChatGPT sign-in failed — get a new code and try again.');
-        return;
-      }
+    const polled = await pollCodexDeviceAuthorization(codexDeviceAuthProvider, {
+      deviceAuthId: attempt.deviceAuthId,
+      userCode: attempt.userCode,
+      intervalMs: attempt.intervalMs,
+    });
+    if (attempt.cancelled) return;
+
+    if (polled.outcome === 'retry') {
+      attempt.intervalMs = polled.intervalMs;
       scheduleNext(attempt);
       return;
     }
-    if (attempt.cancelled) return;
-
-    if (polled.outcome === 'pending' || polled.outcome === 'slow_down') {
-      if (polled.outcome === 'slow_down') attempt.intervalMs += polled.intervalIncreaseMs;
-      scheduleNext(attempt);
+    if (polled.outcome === 'failed') {
+      finish(attempt, 'error', 'ChatGPT sign-in failed — get a new code and try again.');
       return;
     }
     if (polled.outcome === 'denied') {
@@ -179,7 +177,15 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     }
 
     try {
-      const tokens = await exchangeCodeForTokens(polled.approved);
+      const exchanged = await exchangeCodexDeviceAuthorization(
+        codexDeviceAuthProvider,
+        polled.approved
+      );
+      if (exchanged.outcome === 'failed') {
+        finish(attempt, 'error', 'Signing in succeeded but saving the login failed — try again.');
+        return;
+      }
+      const { tokens } = exchanged;
       // Ownership check in addition to the cancelled flag: a replacement
       // attempt registered during the exchange must not have its freshly
       // written credential clobbered by this older one.

@@ -43,9 +43,9 @@ import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import {
   type AppLike,
   CODEX_AUTH_DEFER_USER_REALTIME,
+  type CodexCredentialMutationCoordinator,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
-import type { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
 interface UsersServiceLike {
@@ -59,7 +59,7 @@ interface UsersServiceLike {
 export function createCodexAuthLogoutService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  deviceAttempts?: CodexDeviceAuthAttemptAuthority
+  credentialMutations?: CodexCredentialMutationCoordinator
 ) {
   return {
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexAuthLogoutResult> {
@@ -132,8 +132,8 @@ export function createCodexAuthLogoutService(
         );
       };
 
-      if (deviceAttempts) {
-        await deviceAttempts.runCredentialMutation(
+      if (credentialMutations) {
+        await credentialMutations.runCredentialMutation(
           String(tenantId),
           userId,
           'credentials_removed',
