@@ -71,8 +71,7 @@ describe('prompt and widget transaction scopes', () => {
     expect(start).toBeGreaterThan(0);
     expect(initialization).toContain('registerLongAuthenticatedRoute(');
     expect(initialization).toContain('data?.expectedUserId !== callerId');
-    expect(initialization).toContain('runWithTenantDatabaseTransaction(db, tenantId');
-    expect(initialization).toContain('await assertTenantWritable(tenantDb, tenantId)');
+    expect(initialization).toContain('runSessionInitializationStages({');
     const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
     const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
     const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");

@@ -1091,8 +1091,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
+      // Admission can outlive this composer. Re-check ownership after the
+      // await rather than reusing the pre-admission snapshot: a later caller
+      // may have typed identical text and selected different attachments.
+      const composerOwnsAdmissionCompletion =
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
       const composerStillOwnsSentText =
-        composerStillOwnsSend && promptRef.current?.getValue() === latestValue;
+        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
       if (composerStillOwnsSentText) {
         promptRef.current?.clear();
         clearComposerAttachments();
@@ -1107,7 +1112,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent
       // message and the streaming reply (behavior 3). `scrollToBottom` is the
       // function ConversationView exposed via onScrollRef.
-      if (composerStillOwnsSend) scrollToBottom?.();
+      if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
       if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
       console.error('Composer send failed — keeping prompt and files in composer:', error);

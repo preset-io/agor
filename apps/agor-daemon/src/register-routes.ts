@@ -29,7 +29,6 @@ import {
   MessagesRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
-  runWithTenantDatabaseTransaction,
   ScheduleRepository,
   type SessionRepository,
   setMcpMemberPolicy,
@@ -131,6 +130,7 @@ import {
   ScheduleNotReadyError,
   type SchedulerService,
 } from './services/scheduler.js';
+import { runSessionInitializationStages } from './services/session-initialization.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import {
@@ -4528,60 +4528,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           configuredEnvVarNames = normalizeEnvVarNames(data.envVarNames);
         }
 
-        await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
-          await assertTenantWritable(tenantDb, tenantId);
-          if (configuredMcpServerIds) {
+        const prompt = data.prompt?.trim();
+        const task = await runSessionInitializationStages({
+          db,
+          tenantId,
+          mcpServerIds: configuredMcpServerIds,
+          envVarNames: configuredEnvVarNames,
+          setMcpServers: async (serverIds) => {
             try {
-              await sessionMCPServersService.setServers(
-                session.session_id,
-                configuredMcpServerIds,
-                params
-              );
+              await sessionMCPServersService.setServers(session.session_id, serverIds, params);
             } catch (error) {
               if (error instanceof MCPServerNotUsableError) {
                 throw new Forbidden('An MCP server is private to another user');
               }
               throw error;
             }
-          }
-          if (configuredEnvVarNames) {
-            await sessionEnvSelectionsService.setAll(
-              session.session_id,
-              configuredEnvVarNames,
-              params
-            );
-          }
-
-          // emitServiceEvent queues these until the explicit transaction has
-          // committed on both SQLite and PostgreSQL.
-          if (configuredMcpServerIds) {
+          },
+          setEnvVarNames: (envVarNames) =>
+            sessionEnvSelectionsService.setAll(session.session_id, envVarNames, params),
+          publishMcpServersChanged: (serverIds) =>
             emitServiceEvent(app, {
               path: 'session-mcp-servers',
               event: 'patched',
-              data: { session_id: session.session_id, mcp_server_ids: configuredMcpServerIds },
+              data: { session_id: session.session_id, mcp_server_ids: serverIds },
               params,
-            });
-          }
-          if (configuredEnvVarNames) {
+            }),
+          publishEnvVarNamesChanged: (envVarNames) =>
             emitServiceEvent(app, {
               path: 'session-env-selections',
               event: 'patched',
-              data: { session_id: session.session_id, env_var_names: configuredEnvVarNames },
+              data: { session_id: session.session_id, env_var_names: envVarNames },
               params,
-            });
-          }
+            }),
+          admitPrompt: prompt
+            ? () =>
+                app.service('/sessions/:id/prompt').create(
+                  {
+                    prompt: data.prompt,
+                    permissionMode: data.permissionMode,
+                  },
+                  { ...params, route: { id: session.session_id } }
+                )
+            : undefined,
         });
-
-        const prompt = data.prompt?.trim();
-        const task = prompt
-          ? await app.service('/sessions/:id/prompt').create(
-              {
-                prompt: data.prompt,
-                permissionMode: data.permissionMode,
-              },
-              { ...params, route: { id: session.session_id } }
-            )
-          : undefined;
 
         return { sessionId: session.session_id, task };
       },

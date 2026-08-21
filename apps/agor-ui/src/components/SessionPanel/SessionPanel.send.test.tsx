@@ -278,6 +278,34 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(replacement).toHaveValue('Same user, new login draft'));
   });
 
+  it("does not clear a later caller's identical text or attachments after admission", async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'Identical prompt' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+
+    rerenderUser('user-b');
+    const replacement = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(replacement, { target: { value: 'Identical prompt' } });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['later caller'], 'user-b.txt', { type: 'text/plain' })],
+      },
+    });
+    await waitFor(() => expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument());
+
+    send.resolve(true);
+
+    await waitFor(() => expect(replacement).toHaveValue('Identical prompt'));
+    expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument();
+  });
+
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
     const upload = deferred<UploadFilesToSessionResult>();
     const onSendPrompt = vi.fn();
