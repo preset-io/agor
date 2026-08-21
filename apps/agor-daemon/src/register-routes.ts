@@ -84,6 +84,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  boardCommentZoneParentObjectKey,
   hasMinimumRole,
   isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
@@ -505,7 +506,7 @@ export async function authorizeBoardCommentReposition(input: {
     const board = privileged
       ? await input.findBoard(input.comment.board_id)
       : await input.findVisibleBoard(user.user_id as UUID, input.comment.board_id);
-    if (board?.objects?.[`zone-${relative.parent_id}`]?.type !== 'zone') {
+    if (board?.objects?.[boardCommentZoneParentObjectKey(relative.parent_id)]?.type !== 'zone') {
       throw new NotFound('Board resource not found');
     }
   }

@@ -216,6 +216,11 @@ export interface BoardCommentReposition {
   branch_id: BranchID | null;
 }
 
+/** Convert a stored comment zone-parent suffix to its board-object key. */
+export function boardCommentZoneParentObjectKey(parentId: string): `zone-${string}` {
+  return `zone-${parentId}`;
+}
+
 // ============================================================================
 // Helper Functions (Phase 2: Threading + Reactions)
 // ============================================================================

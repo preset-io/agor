@@ -5,7 +5,13 @@
  * including labels and colors for UI display.
  */
 
-import type { Board, BoardComment, BoardCommentReposition, Branch } from '@agor-live/client';
+import {
+  type Board,
+  type BoardComment,
+  type BoardCommentReposition,
+  type Branch,
+  boardCommentZoneParentObjectKey,
+} from '@agor-live/client';
 
 export interface ParentInfo {
   parentId?: string;
@@ -72,9 +78,10 @@ export function planBoardCommentReposition(
  * // { parentId: 'zone-zone_123', parentLabel: '📍 My Zone', parentColor: '#ff0000' }
  */
 export function getZoneParentInfo(zoneId: string, board?: Board): ParentInfo {
-  const zone = board?.objects?.[`zone-${zoneId}`];
+  const parentId = boardCommentZoneParentObjectKey(zoneId);
+  const zone = board?.objects?.[parentId];
   return {
-    parentId: `zone-${zoneId}`,
+    parentId,
     parentLabel: zone?.type === 'zone' ? `📍 ${zone.label}` : undefined,
     parentColor: zone?.type === 'zone' ? zone.color : undefined,
   };
