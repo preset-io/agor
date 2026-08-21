@@ -14,6 +14,7 @@ export * from './branch-access';
 export * from './branches';
 export * from './card-types';
 export * from './cards';
+export * from './codex-device-auth-attempts';
 export * from './environment-health';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';

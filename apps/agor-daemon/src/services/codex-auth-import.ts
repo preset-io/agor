@@ -32,8 +32,13 @@ import {
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
+import type { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 
-export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareDatabase) {
+export function createCodexAuthImportService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  deviceAttempts?: CodexDeviceAuthAttemptAuthority
+) {
   return {
     async create(
       data: { authJson?: string },
@@ -70,14 +75,24 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      const summary = await persistVerifiedCodexAuth({
-        app,
-        normalized: parsed.normalized,
-        delegatedHomeKey: identity.delegatedHomeKey,
-        userId,
-        authUser,
-        codexHome: identity.codexHome,
-      });
+      const persist = (authorityGeneration?: number) =>
+        persistVerifiedCodexAuth({
+          app,
+          normalized: parsed.normalized,
+          delegatedHomeKey: identity.delegatedHomeKey,
+          userId,
+          authUser,
+          codexHome: identity.codexHome,
+          authorityGeneration,
+        });
+      const summary = deviceAttempts
+        ? await deviceAttempts.runCredentialMutation(
+            String(tenantId),
+            userId,
+            'credentials_imported',
+            persist
+          )
+        : await persist();
 
       return {
         status: 'authenticated',

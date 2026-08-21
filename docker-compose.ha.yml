@@ -37,13 +37,17 @@ x-daemon-common: &daemon-common
     args:
       AGOR_BUILD_SHA: ${AGOR_BUILD_SHA:-dev}
   environment: *daemon-environment
+  # This disposable smoke stack runs bubblewrap inside Docker. Permit the
+  # unprivileged user/mount namespaces required by the fail-closed sandbox; the
+  # container remains the outer development security boundary.
+  security_opt:
+    - apparmor=unconfined
+    - seccomp=unconfined
   volumes:
-    # The smoke profile has one shared container execution identity. Mount its
-    # complete home so short-lived auth helpers and Tasks on either daemon see
-    # the same CLI-native credential files. Keep Agor's own state/workspaces
-    # on the separately named historical volume: existing managed HA projects
-    # already have PostgreSQL rows whose absolute paths point into this mount.
-    # Nested Docker mounts are intentional. This is not per-user isolation.
+    # Mount the container home plus the nested historical Agor workspace volume
+    # at identical paths. Sandbox per-user homes live below the nested volume,
+    # so short-lived auth helpers and Tasks on either daemon see the same exact
+    # tenant/user credential store.
     - agor-ha-user-home:/home/agor
     - agor-ha-home:/home/agor/.agor
   restart: unless-stopped

@@ -187,6 +187,7 @@ function socketHealth(socket) {
 
 let cleanupAccessToken;
 let cleanupApiKeyId;
+let cleanupCodexAuth = false;
 const cleanupBoardIds = new Set();
 const cleanupSockets = new Set();
 const cleanupStoppedServices = new Set();
@@ -425,33 +426,94 @@ try {
     assert.equal(health.deployment.capabilities.gatewayOutboundExactlyOnce, false);
     assert.equal(health.deployment.capabilities.environmentHealthMonitor, true);
     assert.equal(health.deployment.capabilities.codexCredentialFiles, true);
-    assert.equal(health.deployment.capabilities.codexDeviceAuth, false);
+    assert.equal(health.deployment.capabilities.codexDeviceAuth, true);
     assert.equal(health.deployment.realtime.ready, true);
   }
   console.log(
     'ok - distinct daemon/boot identities expose the constrained merged-foundation profile'
   );
 
-  const rejectedCodexDeviceAuth = await fetch(`${ingress}/codex-auth/device`, {
+  // Status is safe to probe without creating an uncontrolled provider device
+  // attempt. Both replicas must admit it and observe the same durable state.
+  const [codexDeviceStatusA, codexDeviceStatusB] = await Promise.all(
+    [daemonA, daemonB].map((origin) =>
+      fetch(`${origin}/codex-auth/device`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+    )
+  );
+  assert.equal(codexDeviceStatusA.status, 200);
+  assert.equal(codexDeviceStatusB.status, 200);
+  assert.deepEqual(await codexDeviceStatusA.json(), await codexDeviceStatusB.json());
+
+  // Persist only simulated, unusable token material. This exercises the exact
+  // sandbox user home across replicas without contacting OpenAI or creating a
+  // real device attempt; check-auth reads the same path a Codex executor uses.
+  const dummyRefreshToken = `ha-refresh-${crypto.randomUUID()}`;
+  const dummyAccessToken = `ha-access-${crypto.randomUUID()}`;
+  const dummyIdToken = `${Buffer.from('{}').toString('base64url')}.${Buffer.from(
+    JSON.stringify({
+      'https://api.openai.com/auth': {
+        chatgpt_plan_type: 'ha-simulated',
+        chatgpt_account_id: 'ha-simulated-account',
+      },
+    })
+  ).toString('base64url')}.signature`;
+  const admittedCodexImport = await fetch(`${daemonA}/codex-auth/import`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      authJson: JSON.stringify({
+        auth_mode: 'chatgpt',
+        OPENAI_API_KEY: null,
+        tokens: {
+          id_token: dummyIdToken,
+          access_token: dummyAccessToken,
+          refresh_token: dummyRefreshToken,
+          account_id: 'ha-simulated-account',
+        },
+        last_refresh: new Date().toISOString(),
+      }),
+    }),
+  });
+  assert.equal(admittedCodexImport.status, 201);
+  const admittedCodexImportBody = await admittedCodexImport.json();
+  assert.equal(admittedCodexImportBody.status, 'authenticated');
+  cleanupCodexAuth = true;
+
+  const inspectedThroughB = await fetch(`${daemonB}/check-auth`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ tool: 'codex', validateNative: true }),
+  });
+  assert.equal(inspectedThroughB.status, 201);
+  assert.deepEqual(await inspectedThroughB.json(), {
+    status: 'authenticated',
+    authenticated: true,
+    method: 'oauth',
+    hint: 'ChatGPT login found (ha-simulated plan).',
+  });
+
+  const logoutThroughB = await fetch(`${daemonB}/codex-auth/logout`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: '{}',
   });
-  assert.equal(rejectedCodexDeviceAuth.status, 503);
-  const rejectedCodexDeviceBody = await rejectedCodexDeviceAuth.json();
-  assert.equal(rejectedCodexDeviceBody.data?.feature, 'codexDeviceAuth');
-
-  // A deliberately empty document proves that import reached validation
-  // instead of the HA feature gate without writing a credential.
-  const admittedCodexImport = await fetch(`${ingress}/codex-auth/import`, {
+  assert.equal(logoutThroughB.status, 201);
+  cleanupCodexAuth = false;
+  const inspectedAfterLogout = await fetch(`${daemonA}/check-auth`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ authJson: '{}' }),
+    body: JSON.stringify({ tool: 'codex', validateNative: true }),
   });
-  assert.equal(admittedCodexImport.status, 400);
-  const admittedCodexImportBody = await admittedCodexImport.json();
-  assert.notEqual(admittedCodexImportBody.data?.code, 'HA_FEATURE_UNSUPPORTED');
-  console.log('ok - consistent-home Codex import is admitted while device polling stays gated');
+  assert.equal(inspectedAfterLogout.status, 201);
+  assert.equal((await inspectedAfterLogout.json()).status, 'unauthenticated');
+  const authLogs = dockerOutput('logs', '--no-color', 'daemon-a', 'daemon-b', 'ingress');
+  assert(!authLogs.includes(dummyRefreshToken), 'Codex refresh token appeared in HA logs');
+  assert(!authLogs.includes(dummyAccessToken), 'Codex access token appeared in HA logs');
+  console.log(
+    'ok - Codex exact-user auth file is written on A, consumed on B, removed on B, and absent on A'
+  );
 
   const ingressInstances = new Set();
   for (let attempt = 0; attempt < 12; attempt++) {
@@ -743,6 +805,23 @@ try {
       await removed.text();
     } catch (error) {
       cleanupWarning('API key removal failed', error);
+    }
+  }
+
+  if (cleanupAccessToken && cleanupCodexAuth) {
+    try {
+      const removed = await fetch(`${ingress}/codex-auth/logout`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${cleanupAccessToken}`,
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      });
+      if (removed.status !== 201) cleanupWarning(`Codex auth cleanup returned ${removed.status}`);
+      await removed.text();
+    } catch (error) {
+      cleanupWarning('Codex auth cleanup failed', error);
     }
   }
 

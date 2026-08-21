@@ -1908,6 +1908,84 @@ export const mcpOauthPendingFlows = pgTable(
 );
 
 /**
+ * Durable, short-lived authority for Codex ChatGPT device sign-in attempts.
+ *
+ * Device identifiers and user codes live only in `sealed_material`, bound to
+ * tenant/user/attempt/generation. Poll ownership is a DB-clock lease; the
+ * authorization-code exchange is a separate one-shot claim.
+ */
+export const codexDeviceAuthAttempts = pgTable(
+  'codex_device_auth_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: [
+        'starting',
+        'pending',
+        'exchanging',
+        'persisting',
+        'succeeded',
+        'unavailable',
+        'denied',
+        'failed',
+        'ambiguous',
+        'expired',
+        'superseded',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('starting'),
+    // Cleared on every terminal transition.
+    sealed_material: text('sealed_material'),
+    poll_interval_ms: integer('poll_interval_ms'),
+    poll_next_at: t.timestamp('poll_next_at'),
+    poll_claim_id: varchar('poll_claim_id', { length: 36 }),
+    poll_claim_generation: bigint('poll_claim_generation', { mode: 'number' }).notNull().default(0),
+    poll_lease_expires_at: t.timestamp('poll_lease_expires_at'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    plan_type: text('plan_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentUserUnique: uniqueIndex('codex_device_auth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
+    tenantUserFk: foreignKey({
+      name: 'codex_device_auth_attempts_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    tenantUserIdx: index('codex_device_auth_attempts_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    pollIdx: index('codex_device_auth_attempts_poll_idx').on(
+      table.status,
+      table.poll_next_at,
+      table.poll_lease_expires_at
+    ),
+    maintenanceIdx: index('codex_device_auth_attempts_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
  * Board Comments table - Human-to-human conversations and collaboration
  *
  * Flexible attachment strategy:
@@ -2811,6 +2889,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
+export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;

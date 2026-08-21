@@ -25,12 +25,16 @@ execution:
   # These are assertions about the named shared home and nested Agor workspace
   # volumes mounted at the same paths on both daemons. They do not configure mounts.
   executor_storage:
-    # One shared execution home for this static smoke profile. This makes
-    # auth-file import/logout and Tasks replica-consistent, but is not Cloud's
-    # per-user isolation contract. The device-code poller remains gated.
-    user_home: shared
+    # The nested Agor volume contains the tenant/user-keyed sandbox home stores
+    # at the same path on both replicas. Device completion and later Codex Tasks
+    # therefore resolve the same exact user's `.codex/auth.json`.
+    user_home: persistent-per-user
     branch_workspace: shared
     base_repository: shared
+  # The checked-in HA smoke must exercise the same exact-user credential route
+  # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
+  # fail-closed bubblewrap isolation; it does not impersonate host accounts.
+  unix_user_mode: sandbox
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
   # create/control connection on its owner; owner loss is a visible disconnect
   # and reconnect creates a new attachment (possibly reattaching local Zellij).

@@ -115,6 +115,7 @@ import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
+import { CODEX_AUTH_DEFER_USER_REALTIME } from './services/codex-auth-shared.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import {
@@ -2409,6 +2410,26 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       patch: [
+        (context: HookContext) => {
+          const params = context.params as HookContext['params'] & {
+            [CODEX_AUTH_DEFER_USER_REALTIME]?: boolean;
+          };
+          if (!params[CODEX_AUTH_DEFER_USER_REALTIME]) return context;
+
+          // Codex HA completion/import/logout runs the users patch inside the
+          // same generation-fenced transaction as its credential mutation.
+          // Suppress Feathers' pre-commit automatic event and enqueue one
+          // redacted event that can be observed only after commit.
+          context.event = null;
+          emitServiceEvent(app, {
+            path: 'users',
+            event: 'patched',
+            id: context.id,
+            data: redactUserPayload(context.result),
+            params,
+          });
+          return context;
+        },
         async (context: HookContext) => {
           if ((context.params as Params & { skipAvatarRefresh?: boolean }).skipAvatarRefresh) {
             return context;

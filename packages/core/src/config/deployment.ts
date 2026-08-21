@@ -1,4 +1,7 @@
-import { hasTenantSafeExecutorCredentialHome } from './executor-credential-storage';
+import {
+  hasExactUserExecutorCredentialHome,
+  hasTenantSafeExecutorCredentialHome,
+} from './executor-credential-storage';
 import type {
   AgorConfig,
   AgorDeploymentMode,
@@ -72,7 +75,7 @@ export type ResolvedDeploymentConfig =
         widgetResolutionDurableClaim: true;
         githubInstall: true;
         codexCredentialFiles: boolean;
-        codexDeviceAuth: false;
+        codexDeviceAuth: boolean;
         processAffineAuth: false;
         gatewayListeners: true;
         gatewayOutboundExactlyOnce: false;
@@ -373,6 +376,7 @@ export function resolveDeploymentConfig(
     );
   }
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
+  const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
@@ -468,7 +472,11 @@ export function resolveDeploymentConfig(
       githubInstall: true,
       codexCredentialFiles:
         executorStorage.user_home !== 'replica-local' && tenantSafeCredentialHome,
-      codexDeviceAuth: false,
+      // Device completion mutates a credential on behalf of one authenticated
+      // browser user. Replica consistency alone is insufficient: a static
+      // deployment's intentional shared Unix identity would let users replace
+      // each other's login. Admit only a concrete tenant/user-keyed route.
+      codexDeviceAuth: exactUserCredentialHome,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,

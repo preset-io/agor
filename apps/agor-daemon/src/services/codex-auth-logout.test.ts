@@ -3,6 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexAuthLogoutService } from './codex-auth-logout';
+import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -90,6 +91,32 @@ describe('codex-auth-logout', () => {
     expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
     expect(usersService.patch).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ status: 'removed' });
+  });
+
+  it('generation-fences HA logout and defers its users event until commit', async () => {
+    const { app, usersService } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation: number) => Promise<unknown>
+        ) => work(42)
+      ),
+    };
+    const delegate = createCodexAuthLogoutService(app as never, TEST_DB, coordinator as never);
+
+    await runWithTenantContext('tenant-test', () => delegate.create({}, AUTH_PARAMS));
+
+    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1' }),
+      42
+    );
+    expect(usersService.patch.mock.calls[0]?.[2]).toMatchObject({
+      authenticated: true,
+      [CODEX_AUTH_DEFER_USER_REALTIME]: true,
+    });
   });
 
   it('surfaces a friendly error and does NOT clear the method if the delete fails', async () => {

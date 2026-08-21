@@ -3,6 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
+import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -152,6 +153,35 @@ describe('codex-auth-import', () => {
     expect(result).toMatchObject({ status: 'authenticated', authMode: 'chatgpt' });
     expect(JSON.stringify(result)).not.toContain('refresh-xyz');
     expect(JSON.stringify(result)).not.toContain('access-abc');
+  });
+
+  it('generation-fences HA import and defers its users event until commit', async () => {
+    const { app, usersService } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation: number) => Promise<unknown>
+        ) => work(41)
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator as never);
+
+    await runWithTenantContext('tenant-test', () =>
+      delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+    );
+
+    expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ userId: 'user-1' }),
+      41
+    );
+    expect(usersService.patch.mock.calls[0]?.[2]).toMatchObject({
+      authenticated: true,
+      [CODEX_AUTH_DEFER_USER_REALTIME]: true,
+    });
   });
 
   it('maps write failures to a friendly error and logs only the error class', async () => {

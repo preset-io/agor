@@ -78,6 +78,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
         ? (client.service('codex-auth/device') as unknown as {
             create(data: Record<string, never>): Promise<unknown>;
             find(): Promise<unknown>;
+            remove(id: string): Promise<unknown>;
           })
         : null,
     [client]
@@ -115,6 +116,22 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       setStarting(false);
     }
   }, [deviceService, run]);
+
+  const cancelAttempt = useCallback(async () => {
+    if (!deviceService || !status.attemptId) return;
+    try {
+      const next = (await run(() =>
+        deviceService.remove(status.attemptId!)
+      )) as CodexDeviceAuthStatus;
+      setStatus(
+        next.phase === 'idle' ? { phase: 'error', hint: 'ChatGPT sign-in was cancelled.' } : next
+      );
+      setRemainingMs(null);
+    } catch {
+      // Keep displaying and polling the current attempt when cancellation did
+      // not reach the daemon. A later retry remains fenced by attempt id.
+    }
+  }, [deviceService, run, status.attemptId]);
 
   // On mount (and on client swap), adopt a still-live attempt (user toggled
   // away and back) instead of burning a fresh code; otherwise request one.
@@ -158,7 +175,10 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
         const next = (await deviceService.find()) as CodexDeviceAuthStatus;
         if (cancelled || !isCurrent()) return;
         setStatus((prev) =>
-          prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
+          prev.phase === next.phase &&
+          prev.attemptId === next.attemptId &&
+          prev.userCode === next.userCode &&
+          prev.hint === next.hint
             ? prev
             : next
         );
@@ -265,6 +285,9 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
             Waiting for approval — we finish automatically once you approve.
             {remainingMs !== null && ` Code expires in ${formatCountdown(remainingMs)}.`}
           </Text>
+          <Button size="small" type="text" onClick={cancelAttempt}>
+            Cancel
+          </Button>
         </div>
       </div>
     );

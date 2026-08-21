@@ -1,9 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
 import type { CodexAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveCodexAuthPath } from '../user-runtime-paths.js';
+import { mutateCredentialFile } from './credential-file-io.js';
 import type { CommandOptions } from './index.js';
 
 export async function handleCodexAuthFile(
@@ -72,20 +71,30 @@ export async function handleCodexAuthFile(
     }
   }
   if (operation === 'delete') {
-    await rm(target, { force: true });
+    const outcome = await mutateCredentialFile({
+      target,
+      generation: payload.params.generation,
+    });
+    if (outcome === 'stale') {
+      return {
+        success: false,
+        error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
+      };
+    }
     return { success: true, data: { status: 'deleted' } };
   }
 
-  const dir = join(target, '..');
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
-  const temporary = join(dir, `.auth.json.${randomBytes(6).toString('hex')}`);
-  try {
-    await writeFile(temporary, payload.params.content, { mode: 0o600, flag: 'wx' });
-    await chmod(temporary, 0o600);
-    await rename(temporary, target);
-  } finally {
-    await rm(temporary, { force: true });
+  if (
+    (await mutateCredentialFile({
+      target,
+      content: payload.params.content,
+      generation: payload.params.generation,
+    })) === 'stale'
+  ) {
+    return {
+      success: false,
+      error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
+    };
   }
   let readBack: string;
   try {

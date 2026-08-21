@@ -231,6 +231,7 @@ describe('resolveDeploymentConfig', () => {
       },
       execution: {
         ...haConfig.execution,
+        unix_user_mode: 'delegated',
         executor_command_template: 'cell launch --tenant {tenant_id} -- {command}',
         executor_storage: {
           user_home: 'persistent-per-user',
@@ -287,6 +288,28 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.mode).toBe('ha');
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexCredentialFiles).toBe(true);
+    expect(deployment.capabilities.codexDeviceAuth).toBe(false);
+  });
+
+  it('admits HA device auth only with a concrete exact-user credential route', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.codexDeviceAuth).toBe(true);
   });
 
   it('rejects HA when the executor storage contract is omitted', () => {

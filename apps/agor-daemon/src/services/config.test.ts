@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
+  hasExactUserExecutorCredentialHome: vi.fn(() => false),
   loadConfig: vi.fn(async () => ({})),
   resolveApiKey: vi.fn(),
+}));
+
+const homeMocks = vi.hoisted(() => ({
+  resolveExecutionCredentialHome: vi.fn(async ({ userId }: { userId: string }) => ({
+    delegatedHomeKey: null,
+    homeStore: `/homes/${userId}`,
+  })),
+  sameExecutionCredentialHome: vi.fn(
+    (a: { homeStore: string }, b: { homeStore: string }) => a.homeStore === b.homeStore
+  ),
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -13,6 +24,7 @@ const dbMocks = vi.hoisted(() => ({
 
 vi.mock('@agor/core/config', () => configMocks);
 vi.mock('@agor/core/db', () => dbMocks);
+vi.mock('./credential-home-identity.js', () => homeMocks);
 
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { TaskID, UserID } from '@agor/core/types';
@@ -22,6 +34,12 @@ import { ConfigService } from './config.js';
 describe('ConfigService.resolveApiKey', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(false);
+    homeMocks.resolveExecutionCredentialHome.mockImplementation(async ({ userId }) => ({
+      delegatedHomeKey: null,
+      homeStore: `/homes/${userId}`,
+    }));
+    homeMocks.sameExecutionCredentialHome.mockImplementation((a, b) => a.homeStore === b.homeStore);
     configMocks.resolveApiKey.mockResolvedValue({
       apiKey: 'resolved-test-key',
       source: 'user',
@@ -359,5 +377,144 @@ describe('ConfigService.resolveApiKey', () => {
     ).rejects.toBeInstanceOf(Forbidden);
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('admits hosted Codex native auth only on the exact-user sandbox route', async () => {
+    configMocks.resolveApiKey.mockResolvedValue({
+      apiKey: null,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(true);
+    const service = new ConfigService(
+      {} as never,
+      {
+        multi_tenancy: { mode: 'required_from_auth' },
+        execution: {
+          unix_user_mode: 'sandbox',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      } as never
+    );
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({ agentic_tool: 'codex', created_by: 'creator-1' })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          tenant: { tenant_id: 'tenant-1' },
+          authentication: {
+            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          },
+        } as never
+      )
+    ).resolves.toMatchObject({ useNativeAuth: true });
+  });
+
+  it('keeps hosted native auth gated without a concrete exact-user route', async () => {
+    configMocks.resolveApiKey.mockResolvedValue({
+      apiKey: null,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    const service = new ConfigService(
+      {} as never,
+      {
+        multi_tenancy: { mode: 'required_from_auth' },
+      } as never
+    );
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          tenant: { tenant_id: 'tenant-1' },
+          authentication: {
+            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(BadRequest);
+  });
+
+  it('refuses to borrow native auth from a different session-owner home', async () => {
+    configMocks.resolveApiKey.mockResolvedValue({
+      apiKey: null,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    const service = new ConfigService(
+      {} as never,
+      {
+        multi_tenancy: { mode: 'static' },
+        execution: { unix_user_mode: 'sandbox' },
+      } as never
+    );
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'prompter-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({ agentic_tool: 'codex', created_by: 'owner-2' })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          authentication: {
+            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+    expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledTimes(2);
   });
 });

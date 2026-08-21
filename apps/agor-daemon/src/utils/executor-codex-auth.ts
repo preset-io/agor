@@ -1,4 +1,4 @@
-import { requestExecutor } from './spawn-executor.js';
+import { requestExecutor, startContainedExecutorCommand } from './spawn-executor.js';
 
 export interface ExecutorCodexAuthRouting {
   delegatedHomeKey: string | null;
@@ -42,6 +42,24 @@ const options = (routing: ExecutorCodexAuthRouting) => ({
   logPrefix: '[CodexAuthExecutor]',
 });
 
+async function mutateViaExecutor(
+  payload: Record<string, unknown>,
+  routing: ExecutorCodexAuthRouting,
+  authorityGeneration: number | undefined
+) {
+  const executorOptions = options(routing);
+  // HA sandbox mutations hold the database user-authority lock while this
+  // command runs. Do not release that lock on timeout until the local process
+  // group is proven absent; otherwise a straggler could race a newer
+  // generation after the transaction rolls back. Delegated helpers cannot
+  // provide this containment proof and therefore are not admitted for device
+  // auth. Standalone and legacy auth-file operations retain request mode.
+  if (authorityGeneration !== undefined && routing.codexHome) {
+    return startContainedExecutorCommand(payload, executorOptions).result;
+  }
+  return requestExecutor(payload, executorOptions);
+}
+
 export async function inspectCodexAuthViaExecutor(
   routing: ExecutorCodexAuthRouting
 ): Promise<ExecutorCodexAuthInspection> {
@@ -71,11 +89,16 @@ export async function inspectCodexAuthViaExecutor(
 
 export async function writeCodexAuthViaExecutor(
   content: string,
-  routing: ExecutorCodexAuthRouting
+  routing: ExecutorCodexAuthRouting,
+  authorityGeneration?: number
 ): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
-  const result = await requestExecutor(
-    { command: 'codex.auth-file', params: { operation: 'write', content } },
-    options(routing)
+  const result = await mutateViaExecutor(
+    {
+      command: 'codex.auth-file',
+      params: { operation: 'write', content, generation: authorityGeneration },
+    },
+    routing,
+    authorityGeneration
   );
   if (!result.success) throw new Error('Executor credential write failed');
   const data = result.data as Record<string, unknown>;
@@ -89,10 +112,17 @@ export async function writeCodexAuthViaExecutor(
   };
 }
 
-export async function deleteCodexAuthViaExecutor(routing: ExecutorCodexAuthRouting): Promise<void> {
-  const result = await requestExecutor(
-    { command: 'codex.auth-file', params: { operation: 'delete' } },
-    options(routing)
+export async function deleteCodexAuthViaExecutor(
+  routing: ExecutorCodexAuthRouting,
+  authorityGeneration?: number
+): Promise<void> {
+  const result = await mutateViaExecutor(
+    {
+      command: 'codex.auth-file',
+      params: { operation: 'delete', generation: authorityGeneration },
+    },
+    routing,
+    authorityGeneration
   );
   if (!result.success) throw new Error('Executor credential delete failed');
 }

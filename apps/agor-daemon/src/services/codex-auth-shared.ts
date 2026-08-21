@@ -41,6 +41,9 @@ export interface AppLike {
   service(path: string): unknown;
 }
 
+/** In-process users-service flag: publish this mutation only after its outer DB commit. */
+export const CODEX_AUTH_DEFER_USER_REALTIME = Symbol('codex-auth-defer-user-realtime');
+
 /** Minimal users-service surface — mirrors the widget handlers' structural typing. */
 interface UsersServiceLike {
   get(id: UserID, params?: unknown): Promise<User>;
@@ -205,16 +208,23 @@ export async function persistVerifiedCodexAuth(options: {
   authUser: NonNullable<AuthenticatedParams['user']>;
   /** Per-user store `.codex` for sandbox mode (see CodexCredentialRouteResolution.codexHome). */
   codexHome?: string;
+  /** PostgreSQL authority generation for delayed-executor filesystem fencing. */
+  authorityGeneration?: number;
 }): Promise<CodexAuthSummary> {
-  const { app, normalized, delegatedHomeKey, userId, authUser, codexHome } = options;
+  const { app, normalized, delegatedHomeKey, userId, authUser, codexHome, authorityGeneration } =
+    options;
 
   let summary: CodexAuthSummary;
   try {
-    summary = await writeCodexAuthViaExecutor(normalized, {
-      delegatedHomeKey,
-      userId,
-      codexHome,
-    });
+    summary = await writeCodexAuthViaExecutor(
+      normalized,
+      {
+        delegatedHomeKey,
+        userId,
+        codexHome,
+      },
+      authorityGeneration
+    );
   } catch (err) {
     // The error may carry launcher stderr; log a class-level summary only
     // so token material (or its absence) never reaches daemon logs.
@@ -231,7 +241,11 @@ export async function persistVerifiedCodexAuth(options: {
   await usersService.patch(
     userId,
     { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
-    { user: authUser, authenticated: true }
+    {
+      user: authUser,
+      authenticated: true,
+      ...(authorityGeneration === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+    }
   );
 
   return summary;

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleCodexAuthFile } from './codex-auth-file.js';
+import { executeInteractiveCommand } from './index.js';
 
 const originalCodexHome = process.env.CODEX_HOME;
 afterEach(() => {
@@ -11,6 +12,21 @@ afterEach(() => {
 });
 
 describe('codex.auth-file executor boundary', () => {
+  it('is available through the contained interactive transport used by HA', async () => {
+    process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), 'agor-codex-auth-'));
+
+    await expect(
+      executeInteractiveCommand(
+        { command: 'codex.auth-file', params: { operation: 'inspect' } },
+        {},
+        {
+          emit: () => undefined,
+          read: () => Promise.reject(new Error('codex auth does not read control frames')),
+        }
+      )
+    ).resolves.toEqual({ success: true, data: { status: 'not-found' } });
+  });
+
   it('atomically writes 0600, reads, and idempotently deletes in its own runtime home', async () => {
     process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), 'agor-codex-auth-'));
     const content = '{"tokens":{"refresh_token":"secret"}}\n';
@@ -51,5 +67,61 @@ describe('codex.auth-file executor boundary', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('fences delayed writes and logout with a durable per-home generation', async () => {
+    process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), 'agor-codex-auth-'));
+    const base = { command: 'codex.auth-file' as const };
+
+    await expect(
+      handleCodexAuthFile(
+        {
+          ...base,
+          params: {
+            operation: 'write',
+            content: '{"tokens":{"refresh_token":"new"}}\n',
+            generation: 20,
+          },
+        },
+        {}
+      )
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      handleCodexAuthFile(
+        {
+          ...base,
+          params: {
+            operation: 'write',
+            content: '{"tokens":{"refresh_token":"stale-secret"}}\n',
+            generation: 19,
+          },
+        },
+        {}
+      )
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: 'AUTH_FILE_STALE' },
+    });
+    expect(await readFile(join(process.env.CODEX_HOME, 'auth.json'), 'utf8')).toBe(
+      '{"tokens":{"refresh_token":"new"}}\n'
+    );
+
+    await expect(
+      handleCodexAuthFile({ ...base, params: { operation: 'delete', generation: 21 } }, {})
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      handleCodexAuthFile(
+        {
+          ...base,
+          params: {
+            operation: 'write',
+            content: '{"tokens":{"refresh_token":"resurrected"}}\n',
+            generation: 20,
+          },
+        },
+        {}
+      )
+    ).resolves.toMatchObject({ success: false, error: { code: 'AUTH_FILE_STALE' } });
+    expect(await readdir(process.env.CODEX_HOME)).toEqual(['.agor-auth-generation']);
   });
 });

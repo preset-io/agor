@@ -137,6 +137,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0074_knowledge_embedding_claims',
     '0078_mcp_oauth_pending_flows',
     '0082_github_install_state',
+    '0091_codex_device_auth_attempts',
   ].map(
     (name) =>
       [

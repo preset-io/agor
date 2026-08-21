@@ -196,7 +196,24 @@ describe('codex-device-auth', () => {
     expect(fetchMock.mock.calls.length).toBe(3); // usercode + two polls
   });
 
-  it('retries the post-approval token exchange once on a provider 5xx', async () => {
+  it('honors provider slow_down by increasing every later poll interval', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(403, { error: 'slow_down' }))
+      .mockResolvedValueOnce(jsonResponse(403, { error: 'authorization_pending' }));
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not replay an ambiguous post-approval token exchange', async () => {
     const { app, usersService } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB);
     mockUserCodeIssued();
@@ -208,21 +225,15 @@ describe('codex-device-auth', () => {
           code_verifier: 'verif',
         })
       )
-      .mockResolvedValueOnce(jsonResponse(502, {}))
-      .mockResolvedValueOnce(
-        jsonResponse(200, {
-          id_token: ID_TOKEN,
-          access_token: 'access-tok',
-          refresh_token: 'refresh-tok',
-        })
-      );
+      .mockResolvedValueOnce(jsonResponse(502, {}));
 
     await withTenant(() => service.create({}, AUTH_PARAMS));
     await vi.advanceTimersByTimeAsync(2100);
 
     const status = await withTenant(() => service.find(AUTH_PARAMS));
-    expect(status.phase).toBe('success');
-    expect(usersService.patch).toHaveBeenCalledTimes(1);
+    expect(status.phase).toBe('error');
+    expect(usersService.patch).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(3); // usercode + poll + exactly one exchange
   });
 
   it('a non-pending 4xx during polling is terminal', async () => {
@@ -315,6 +326,28 @@ describe('codex-device-auth', () => {
 
     expect(status.phase).toBe('pending');
     expect(status.userCode).toBe('WXYZ-9876');
+  });
+
+  it('fences cancellation to the attempt displayed by the caller', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    const first = await withTenant(() => service.create({}, AUTH_PARAMS));
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { device_auth_id: 'dev-2', user_code: 'WXYZ-9876', interval: '1' })
+    );
+    const second = await withTenant(() => service.create({}, AUTH_PARAMS));
+    const staleCancel = await withTenant(() => service.remove(first.attemptId, AUTH_PARAMS));
+
+    expect(staleCancel).toMatchObject({
+      phase: 'pending',
+      attemptId: second.attemptId,
+      userCode: 'WXYZ-9876',
+    });
+    await expect(withTenant(() => service.remove(second.attemptId, AUTH_PARAMS))).resolves.toEqual({
+      phase: 'idle',
+    });
   });
 
   it('find with no attempt reports idle; unauthenticated callers are rejected', async () => {

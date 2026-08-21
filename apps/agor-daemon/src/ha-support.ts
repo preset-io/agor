@@ -10,7 +10,8 @@ export const HA_UNSUPPORTED_FEATURES = {
     'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
-  codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
+  codexDeviceAuth:
+    'Codex device authentication without durable attempt ownership or exact per-user credential routing',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -36,6 +37,7 @@ export function isHaFeatureUnavailable(
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
   if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
+  if (feature === 'codexDeviceAuth') return !deployment.capabilities.codexDeviceAuth;
   return true;
 }
 

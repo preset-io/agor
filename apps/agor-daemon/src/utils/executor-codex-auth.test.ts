@@ -4,10 +4,14 @@ import {
   inspectCodexAuthViaExecutor,
   writeCodexAuthViaExecutor,
 } from './executor-codex-auth.js';
-import { requestExecutor } from './spawn-executor.js';
+import { requestExecutor, startContainedExecutorCommand } from './spawn-executor.js';
 
-vi.mock('./spawn-executor.js', () => ({ requestExecutor: vi.fn() }));
+vi.mock('./spawn-executor.js', () => ({
+  requestExecutor: vi.fn(),
+  startContainedExecutorCommand: vi.fn(),
+}));
 const runMock = vi.mocked(requestExecutor);
+const containedMock = vi.mocked(startContainedExecutorCommand);
 
 describe('executor Codex auth dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -70,6 +74,38 @@ describe('executor Codex auth dispatch', () => {
         user_id: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
       },
     });
+  });
+
+  it('contains generation-fenced sandbox mutations before releasing authority', async () => {
+    containedMock.mockReturnValue({
+      result: Promise.resolve({
+        success: true,
+        data: { status: 'written', authMode: 'chatgpt' },
+      }),
+      verifyAbsence: vi.fn(),
+      retainContainmentFence: vi.fn(),
+    });
+    await writeCodexAuthViaExecutor(
+      'credential-json',
+      {
+        delegatedHomeKey: null,
+        userId: 'user-1',
+        codexHome: '/tenant/user/.codex',
+      },
+      42
+    );
+
+    expect(runMock).not.toHaveBeenCalled();
+    expect(containedMock).toHaveBeenCalledWith(
+      {
+        command: 'codex.auth-file',
+        params: { operation: 'write', content: 'credential-json', generation: 42 },
+      },
+      expect.objectContaining({
+        env: expect.objectContaining({ CODEX_HOME: '/tenant/user/.codex' }),
+        sensitiveOutput: true,
+      })
+    );
   });
 
   it('dispatches idempotent deletion and throws a secret-free failure', async () => {

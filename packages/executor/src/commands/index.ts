@@ -265,3 +265,8 @@ registerCommand('git.managed-credentials.reconcile', handleGitManagedCredentials
 registerCommand('zellij.attach', handleZellijAttach);
 registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);
+// Generation-fenced HA mutations use the contained JSON-lines transport so
+// the daemon does not release its DB authority lock until the local process
+// group is proven absent. This command does not emit intermediate events, but
+// it must still be registered on that transport.
+registerInteractiveCommand('codex.auth-file', handleCodexAuthFile);

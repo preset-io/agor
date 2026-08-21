@@ -806,8 +806,15 @@ export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('codex.auth-file'),
   params: z.discriminatedUnion('operation', [
     z.object({ operation: z.literal('inspect') }),
-    z.object({ operation: z.literal('write'), content: z.string().max(64 * 1024) }),
-    z.object({ operation: z.literal('delete') }),
+    z.object({
+      operation: z.literal('write'),
+      content: z.string().max(64 * 1024),
+      generation: z.number().int().positive().optional(),
+    }),
+    z.object({
+      operation: z.literal('delete'),
+      generation: z.number().int().positive().optional(),
+    }),
   ]),
 });
 

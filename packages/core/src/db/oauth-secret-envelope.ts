@@ -9,6 +9,7 @@ const IV_LENGTH = 12;
 
 export type MCPOAuthSecretPurpose =
   | 'pending-exchange'
+  | 'codex-device-attempt'
   | 'access-token'
   | 'refresh-token'
   | 'client-id'

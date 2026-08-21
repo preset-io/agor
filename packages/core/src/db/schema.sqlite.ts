@@ -1782,6 +1782,72 @@ export const mcpOauthPendingFlows = sqliteTable(
 );
 
 /**
+ * Cross-dialect schema mirror. Standalone SQLite continues to use the simple
+ * process-local Codex device flow; durable polling authority is HA/PostgreSQL-only.
+ */
+export const codexDeviceAuthAttempts = sqliteTable(
+  'codex_device_auth_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    attempt_generation: integer('attempt_generation').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: [
+        'starting',
+        'pending',
+        'exchanging',
+        'persisting',
+        'succeeded',
+        'unavailable',
+        'denied',
+        'failed',
+        'ambiguous',
+        'expired',
+        'superseded',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('starting'),
+    sealed_material: text('sealed_material'),
+    poll_interval_ms: integer('poll_interval_ms'),
+    poll_next_at: t.timestamp('poll_next_at'),
+    poll_claim_id: text('poll_claim_id', { length: 36 }),
+    poll_claim_generation: integer('poll_claim_generation').notNull().default(0),
+    poll_lease_expires_at: t.timestamp('poll_lease_expires_at'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    plan_type: text('plan_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentUserUnique: uniqueIndex('codex_device_auth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
+    userIdx: index('codex_device_auth_attempts_user_idx').on(table.user_id, table.created_at),
+    pollIdx: index('codex_device_auth_attempts_poll_idx').on(
+      table.status,
+      table.poll_next_at,
+      table.poll_lease_expires_at
+    ),
+    maintenanceIdx: index('codex_device_auth_attempts_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
  * Board Comments table - Human-to-human conversations and collaboration
  *
  * Flexible attachment strategy:
@@ -2632,6 +2698,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
+export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;
