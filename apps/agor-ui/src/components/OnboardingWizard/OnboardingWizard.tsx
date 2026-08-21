@@ -360,6 +360,8 @@ export interface OnboardingCompletionResult {
 
 export interface OnboardingWizardProps {
   open: boolean;
+  /** Synchronous owner fence for every async continuation in this wizard instance. */
+  isCurrent?: () => boolean;
   onComplete: (result: OnboardingCompletionResult) => void | Promise<void>;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
@@ -374,6 +376,8 @@ export interface OnboardingWizardProps {
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
 }
+
+const ALWAYS_CURRENT = () => true;
 
 // ─── Static glass layer (non-token values intentionally kept) ─────────────────
 
@@ -403,6 +407,7 @@ const WIZARD_SELECTED_SHADOW =
 
 export function OnboardingWizard({
   open,
+  isCurrent = ALWAYS_CURRENT,
   onComplete,
   onDismiss,
   user,
@@ -766,19 +771,23 @@ export function OnboardingWizard({
 
   const saveOnboardingProgress = useCallback(
     async (updates: Record<string, unknown>) => {
+      if (!isCurrent()) return false;
       if (!user || !client) throw new Error('Not connected - try again when Agor reconnects.');
       // Preferences are a whole JSON object. Fetch immediately before the patch
       // so an unrelated settings write made while the wizard was open is not
       // replaced by the user snapshot captured at mount time.
       const latestUser = (await client.service('users').get(user.user_id)) as User;
+      if (!isCurrent()) return false;
       const current = (latestUser.preferences?.onboarding ?? {}) as Record<string, unknown>;
       const prefs: UserPreferences = {
         ...latestUser.preferences,
         onboarding: { ...current, ...updates },
       } as UserPreferences;
+      if (!isCurrent()) return false;
       await onUpdateUser(user.user_id, { preferences: prefs });
+      return isCurrent();
     },
-    [client, onUpdateUser, user]
+    [client, isCurrent, onUpdateUser, user]
   );
 
   const goToStep = useCallback((step: WizardStep) => {
@@ -835,6 +844,7 @@ export function OnboardingWizard({
   }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
 
   const handlePrimary = useCallback(async () => {
+    if (!isCurrent()) return;
     switch (currentStep) {
       case 'goals': {
         // Goals are persisted once, authoritatively and awaited, by the
@@ -879,6 +889,7 @@ export function OnboardingWizard({
         if (onCheckAuth) {
           try {
             const authResult = await onCheckAuth(selectedAgent, apiKey.trim());
+            if (!isCurrent()) return;
             // Only block on a definitive rejection; 'unknown' (transient/transport
             // failure) proceeds to save rather than rejecting a possibly-valid key.
             if (authResult.status === 'unauthenticated') {
@@ -893,6 +904,7 @@ export function OnboardingWizard({
             // auth check failure is non-fatal — proceed to save anyway
           }
         }
+        if (!isCurrent()) return;
         const keyName = keyNameForAgent(selectedAgent, authMethod);
         try {
           await onUpdateUser(user.user_id, {
@@ -900,13 +912,16 @@ export function OnboardingWizard({
               [selectedAgent]: { [keyName]: apiKey.trim() },
             } as UpdateUserInput['agentic_tools'],
           });
+          if (!isCurrent()) return;
           goToStep('done');
         } catch (err) {
-          setLlmError(
-            `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
-          );
+          if (isCurrent()) {
+            setLlmError(
+              `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
         } finally {
-          setLlmSaving(false);
+          if (isCurrent()) setLlmSaving(false);
         }
         break;
       }
@@ -930,6 +945,7 @@ export function OnboardingWizard({
         setCompleting(true);
         setBoardError(null);
         try {
+          if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
           // This is a small resumable saga: retain the board id before any later
@@ -942,6 +958,7 @@ export function OnboardingWizard({
               name: name || (user?.name ? `${user.name}'s board` : 'My board'),
               icon: teammateEmoji,
             });
+            if (!isCurrent()) return;
             boardId = board?.board_id ?? '';
             if (!boardId) {
               setBoardError('Board was created but returned no ID - try again.');
@@ -949,7 +966,8 @@ export function OnboardingWizard({
             }
             setCreatedBoardId(boardId);
           }
-          await saveOnboardingProgress({
+          if (!isCurrent()) return;
+          const progressSaved = await saveOnboardingProgress({
             path: 'teammate',
             boardId,
             goals: selectedGoals,
@@ -957,6 +975,7 @@ export function OnboardingWizard({
             teammateEmoji: name ? teammateEmoji : undefined,
             teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
           });
+          if (!progressSaved || !isCurrent()) return;
           await onComplete({
             branchId: '',
             sessionId: '',
@@ -974,15 +993,18 @@ export function OnboardingWizard({
             goals: selectedGoals,
           });
         } catch (err) {
-          setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
+          if (isCurrent()) {
+            setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
+          }
         } finally {
-          setCompleting(false);
+          if (isCurrent()) setCompleting(false);
         }
         break;
       }
     }
   }, [
     currentStep,
+    isCurrent,
     selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,

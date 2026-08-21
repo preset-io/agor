@@ -101,6 +101,26 @@ interface PendingEnvironmentToast {
   requestedAt: number;
 }
 
+interface OnboardingOperationOwner {
+  userId: UUID;
+  authenticationGeneration: number;
+  wizardInstance: number;
+}
+
+function isSameOnboardingOwner(
+  left: OnboardingOperationOwner | null,
+  right: OnboardingOperationOwner | null
+): boolean {
+  return (
+    left === right ||
+    (!!left &&
+      !!right &&
+      left.userId === right.userId &&
+      left.authenticationGeneration === right.authenticationGeneration &&
+      left.wizardInstance === right.wizardInstance)
+  );
+}
+
 // Stable reference — an inline object here re-processes the modal on every App
 // render (flicker). The onboarding surface is always dark.
 const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
@@ -341,6 +361,7 @@ function AppContent() {
     accessToken,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
+    isAuthenticationOwnerCurrent,
     login,
     logout,
     reAuthenticate,
@@ -460,9 +481,6 @@ function AppContent() {
     }
   }, [location.pathname, location.search]);
 
-  const currentUserIdRef = useRef(user?.user_id ?? null);
-  currentUserIdRef.current = user?.user_id ?? null;
-
   // Track if we've successfully loaded data at least once
   // This prevents UI from unmounting during reconnections
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -542,15 +560,27 @@ function AppContent() {
   }, [capturedSha, currentUser?.email]);
 
   // Onboarding wizard state
-  const [onboardingWizardOwner, setOnboardingWizardOwner] = useState<{
-    userId: UUID;
-    authenticationGeneration: number;
-  } | null>(null);
-  const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
+  const [onboardingWizardOwner, setOnboardingWizardOwnerState] =
+    useState<OnboardingOperationOwner | null>(null);
+  const onboardingWizardOwnerRef = useRef<OnboardingOperationOwner | null>(null);
+  const onboardingWizardInstanceRef = useRef(0);
+  const setOnboardingWizardOwner = useCallback((owner: OnboardingOperationOwner | null) => {
+    if (isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner)) return;
+    // Invalidate retained callbacks synchronously; waiting for React to commit
+    // the replacement wizard leaves a promise-continuation race.
+    onboardingWizardOwnerRef.current = owner;
+    setOnboardingWizardOwnerState(owner);
+  }, []);
+  const isOnboardingOwnerCurrent = useCallback(
+    (owner: OnboardingOperationOwner) =>
+      isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner) &&
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration),
+    [isAuthenticationOwnerCurrent]
+  );
   const onboardingWizardOpen =
     !!currentUser &&
     onboardingWizardOwner?.userId === currentUser.user_id &&
-    onboardingWizardOwner.authenticationGeneration === authenticationGeneration;
+    isOnboardingOwnerCurrent(onboardingWizardOwner);
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
@@ -739,6 +769,7 @@ function AppContent() {
       setOnboardingWizardOwner({
         userId: currentUser.user_id,
         authenticationGeneration,
+        wizardInstance: onboardingWizardInstanceRef.current,
       });
     }
   }, [
@@ -749,27 +780,26 @@ function AppContent() {
     currentSurface.startsWorkspaceRuntime,
     loading,
     authenticationGeneration,
+    setOnboardingWizardOwner,
   ]);
 
   // Handle wizard completion
-  const handleOnboardingComplete = async (result: OnboardingCompletionResult) => {
+  const handleOnboardingComplete = async (
+    owner: OnboardingOperationOwner,
+    result: OnboardingCompletionResult
+  ) => {
     // The wizard awaits this and stays open in a loading state until it
     // resolves, so we do the teammate creation + navigation FIRST and only
     // close the modal at the very end — otherwise the user stares at a blank
     // homepage while the async work runs.
-    if (!currentUser) {
-      setOnboardingWizardOwner(null);
-      return;
-    }
+    if (!currentUser || !isOnboardingOwnerCurrent(owner)) return;
     if (!client) throw new Error('Not connected - try again when Agor reconnects.');
-    const operationUserId = currentUser.user_id;
-    const operationAuthenticationGeneration = authenticationGeneration;
-    const isCurrentUser = () =>
-      currentUserIdRef.current === operationUserId &&
-      isAuthenticationGenerationCurrent(operationAuthenticationGeneration);
+    const operationUserId = owner.userId;
+    const isCurrentUser = () => isOnboardingOwnerCurrent(owner);
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
+    if (!isCurrentUser()) return;
     if (result.agent && client) {
       try {
         await setPrimaryAgenticToolIfUnset(client, currentUser, result.agent);
@@ -827,10 +857,7 @@ function AppContent() {
         email: currentUser.email,
       },
       expectedUserId: operationUserId,
-      isCurrentUser: (expectedUserId) =>
-        expectedUserId === operationUserId &&
-        currentUserIdRef.current === expectedUserId &&
-        isAuthenticationGenerationCurrent(operationAuthenticationGeneration),
+      isCurrentUser: (expectedUserId) => expectedUserId === operationUserId && isCurrentUser(),
       client,
       repoById: agorStore.getState().repoById,
       branchById: agorStore.getState().branchById,
@@ -868,6 +895,7 @@ function AppContent() {
     // Fetch immediately before the whole-preferences patch to preserve any
     // unrelated setting changed while the wizard was open.
     const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
+    if (!isCurrentUser()) return;
     const completionResult = { ...result, branchId, sessionId };
     await handleUpdateUser(
       currentUser.user_id,
@@ -1083,8 +1111,7 @@ function AppContent() {
     const operationAuthenticationGeneration = authenticationGeneration;
     const operationAccessToken = accessToken;
     const shouldContinue = () =>
-      currentUserIdRef.current === operationUserId &&
-      isAuthenticationGenerationCurrent(operationAuthenticationGeneration);
+      isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration);
     const { attachmentFiles, ...sessionConfig } = config;
     const outcome = await runSessionCreationStages({
       createSession: () => createSession({ ...sessionConfig, branch_id }),
@@ -1196,13 +1223,14 @@ function AppContent() {
     prompt: string,
     permissionMode?: PermissionMode
   ): Promise<boolean> => {
-    if (!client) return false;
-    const operationUserId = currentUserIdRef.current;
+    if (!client || !currentUser) return false;
+    const operationUserId = currentUser.user_id;
+    const operationAuthenticationGeneration = authenticationGeneration;
     try {
       await client.sessions.prompt(sessionId, prompt, { permissionMode });
-      return true;
+      return isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration);
     } catch (error) {
-      if (currentUserIdRef.current === operationUserId) {
+      if (isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration)) {
         showError(
           `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -1285,18 +1313,16 @@ function AppContent() {
       return;
     }
 
-    if (
-      currentUserIdRef.current !== operationUserId ||
-      !isAuthenticationGenerationCurrent(operationAuthenticationGeneration)
-    ) {
+    if (!isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration)) {
       return;
     }
 
     setOpenUserSettings(false);
-    setOnboardingWizardInstance((value) => value + 1);
+    onboardingWizardInstanceRef.current += 1;
     setOnboardingWizardOwner({
       userId: operationUserId,
       authenticationGeneration: operationAuthenticationGeneration,
+      wizardInstance: onboardingWizardInstanceRef.current,
     });
   };
 
@@ -1994,13 +2020,36 @@ function AppContent() {
             invalidate the old wizard and any pending completion work. */}
       <ConfigProvider theme={ONBOARDING_DARK_THEME}>
         <OnboardingWizard
-          key={`${currentUser?.user_id ?? '__anon__'}:${authenticationGeneration}:${onboardingWizardInstance}`}
+          key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.wizardInstance ?? 0}`}
           open={onboardingWizardOpen}
-          onComplete={handleOnboardingComplete}
+          isCurrent={() =>
+            !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
+          }
+          onComplete={(result) => {
+            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
+            return handleOnboardingComplete(onboardingWizardOwner, result);
+          }}
           user={currentUser}
           client={client}
-          onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
-          onCheckAuth={handleCheckAuth}
+          onUpdateUser={async (userId, updates) => {
+            if (
+              !onboardingWizardOwner ||
+              userId !== onboardingWizardOwner.userId ||
+              !isOnboardingOwnerCurrent(onboardingWizardOwner)
+            ) {
+              return;
+            }
+            await handleUpdateUser(userId, updates, { silent: true });
+          }}
+          onCheckAuth={async (tool, apiKey) => {
+            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
+              return { status: 'unknown', authenticated: false, method: 'none' };
+            }
+            const result = await handleCheckAuth(tool, apiKey);
+            return isOnboardingOwnerCurrent(onboardingWizardOwner)
+              ? result
+              : { status: 'unknown', authenticated: false, method: 'none' };
+          }}
         />
       </ConfigProvider>
 

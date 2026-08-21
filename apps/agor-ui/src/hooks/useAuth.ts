@@ -5,7 +5,7 @@
  * Manages user authentication state and provides login/logout functions
  */
 
-import type { User } from '@agor-live/client';
+import type { User, UserID } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
@@ -44,6 +44,11 @@ interface UseAuthReturn extends AuthState {
   /** Monotonic owner for caller-scoped async work. Token refresh does not advance it. */
   authenticationGeneration: number;
   isAuthenticationGenerationCurrent: (generation: number) => boolean;
+  /**
+   * Synchronously verifies the complete authenticated owner. Unlike render-time
+   * user state, this cannot be changed by an abandoned React render.
+   */
+  isAuthenticationOwnerCurrent: (userId: UserID, generation: number) => boolean;
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   reAuthenticate: () => Promise<void>;
@@ -84,7 +89,7 @@ export function useAuth(): UseAuthReturn {
   });
   const authenticationGenerationRef = useRef(0);
   const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
-  const activeUserIdRef = useRef<string | null>(null);
+  const activeUserIdRef = useRef<UserID | null>(null);
 
   const advanceAuthenticationGeneration = useCallback(() => {
     authenticationGenerationRef.current += 1;
@@ -115,6 +120,11 @@ export function useAuth(): UseAuthReturn {
 
   const isAuthenticationGenerationCurrent = useCallback(
     (generation: number) => authenticationGenerationRef.current === generation,
+    []
+  );
+  const isAuthenticationOwnerCurrent = useCallback(
+    (userId: UserID, generation: number) =>
+      activeUserIdRef.current === userId && authenticationGenerationRef.current === generation,
     []
   );
 
@@ -562,6 +572,7 @@ export function useAuth(): UseAuthReturn {
     ...state,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
+    isAuthenticationOwnerCurrent,
     login,
     logout,
     reAuthenticate,

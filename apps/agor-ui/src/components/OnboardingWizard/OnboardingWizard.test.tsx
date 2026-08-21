@@ -450,6 +450,36 @@ describe('OnboardingWizard', () => {
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
+  it('does not save credentials after the authentication owner changes during verification', async () => {
+    let current = true;
+    let resolveCheck!: (result: { authenticated: true }) => void;
+    const onCheckAuth = vi.fn(
+      () =>
+        new Promise<{ authenticated: true }>((resolve) => {
+          resolveCheck = resolve;
+        })
+    );
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({
+      initialStep: 'llm',
+      isCurrent: () => current,
+      onCheckAuth,
+      onUpdateUser,
+    });
+
+    clickButton('Claude');
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: validKey } });
+    clickButton(/^connect →/i);
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code', validKey));
+
+    current = false;
+    resolveCheck({ authenticated: true });
+    await Promise.resolve();
+
+    expect(onUpdateUser).not.toHaveBeenCalled();
+  });
+
   it('can save a Claude subscription token instead of an API key', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ initialStep: 'llm', onUpdateUser });
@@ -535,6 +565,74 @@ describe('OnboardingWizard', () => {
 
     expect(await screen.findByText('slug already exists')).toBeInTheDocument();
     expect(screen.getByText('Rusty needs one more try.')).toBeInTheDocument();
+  });
+
+  it('does not persist progress or complete after an identity switch during the latest-user read', async () => {
+    let current = true;
+    let resolveUser!: (user: User) => void;
+    const usersService = {
+      get: vi.fn(
+        () =>
+          new Promise<User>((resolve) => {
+            resolveUser = resolve;
+          })
+      ),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return usersService;
+        return {};
+      }),
+    };
+    const onUpdateUser = vi.fn(async () => undefined);
+    const onComplete = vi.fn();
+    renderWizard({
+      initialStep: 'done',
+      client: client as never,
+      isCurrent: () => current,
+      onUpdateUser,
+      onComplete,
+    });
+
+    clickButton(/open my board/i);
+    await waitFor(() => expect(usersService.get).toHaveBeenCalledTimes(1));
+    current = false;
+    resolveUser(makeUser());
+    await Promise.resolve();
+
+    expect(onUpdateUser).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('does not complete an old wizard after a same-user remount during progress persistence', async () => {
+    let current = true;
+    let resolveUpdate!: () => void;
+    const onUpdateUser = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpdate = resolve;
+        })
+    );
+    const onComplete = vi.fn();
+    renderWizard({
+      initialStep: 'done',
+      isCurrent: () => current,
+      onUpdateUser,
+      onComplete,
+    });
+
+    clickButton(/open my board/i);
+    await waitFor(() => expect(onUpdateUser).toHaveBeenCalledTimes(1));
+    current = false;
+    resolveUpdate();
+    await Promise.resolve();
+
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it('workspace step renders the template gallery below the name field', () => {

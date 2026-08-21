@@ -170,6 +170,8 @@ describe('useAuth launch-code fallback', () => {
     const loggedInGeneration = result.current.authenticationGeneration;
     expect(loggedInGeneration).toBeGreaterThan(initialGeneration);
     expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(true);
+    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(true);
+    expect(result.current.isAuthenticationOwnerCurrent('u2', loggedInGeneration)).toBe(false);
 
     act(() => {
       window.dispatchEvent(
@@ -185,6 +187,7 @@ describe('useAuth launch-code fallback', () => {
     });
     expect(result.current.authenticationGeneration).toBeGreaterThan(loggedInGeneration);
     expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(false);
+    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(false);
   });
 
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {
