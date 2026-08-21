@@ -63,6 +63,7 @@ function createBranchData(overrides?: {
   updated_at?: string;
   storage_mode?: 'worktree' | 'clone';
   clone_depth?: number;
+  archived?: boolean;
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
@@ -96,6 +97,7 @@ function createBranchData(overrides?: {
     updated_at: overrides?.updated_at,
     storage_mode: overrides?.storage_mode,
     clone_depth: overrides?.clone_depth,
+    archived: overrides?.archived,
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
@@ -692,8 +694,17 @@ describe('BranchRepository.findActiveEnvironmentRefs', () => {
       await branchRepo.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
-          name: 'env-missing',
+          name: 'env-archived-running',
           branch_unique_id: 5,
+          archived: true,
+          environment_instance: { status: 'running' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-missing',
+          branch_unique_id: 6,
         })
       );
 

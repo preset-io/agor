@@ -43,6 +43,7 @@ import {
   shouldValidateRepoEnvironmentPayload,
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
+  validateBranchEnvPolicyHook,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 
@@ -472,6 +473,45 @@ describe('shouldValidateRepoEnvironmentPayload', () => {
   it('validates present repo environment payloads', () => {
     expect(shouldValidateRepoEnvironmentPayload({})).toBe(true);
     expect(shouldValidateRepoEnvironmentPayload('invalid shape')).toBe(true);
+  });
+});
+
+describe('branch environment materialization validation', () => {
+  it('does not reject branch creation when the rendered health URL is invalid', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        stop_command: 'pkill -f pnpm',
+        health_check_url: 'not-an-http-url',
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).resolves.toBe(context);
+  });
+
+  it('still rejects unsafe rendered app URLs before persistence', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        app_url: 'javascript:alert(1)',
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).rejects.toThrow('managed environment app URL');
   });
 });
 

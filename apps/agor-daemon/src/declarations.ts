@@ -333,7 +333,11 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     data: { variant?: string } | undefined,
     params?: FeathersParams
   ): Promise<Branch>;
-  checkHealth(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  checkHealth(
+    id: BranchID,
+    params?: FeathersParams,
+    internalOptions?: { signal?: AbortSignal; automatic?: boolean }
+  ): Promise<Branch>;
   getLogs(
     id: BranchID,
     params?: FeathersParams

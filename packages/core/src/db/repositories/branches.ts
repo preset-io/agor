@@ -446,7 +446,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
     const rows = await select(this.db, columns)
       .from(branches)
-      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      .where(
+        and(eq(branches.archived, false), or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      )
       .all();
 
     return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({

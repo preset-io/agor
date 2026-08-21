@@ -1,12 +1,12 @@
 /**
  * Health Monitor Service
  *
- * Periodically checks health of running branch environments.
+ * Periodically checks health of non-archived starting/running branch environments.
  * Runs every 5 seconds and updates environment_instance.last_health_check.
  *
  * Features:
  * - Interval-based polling (5 seconds)
- * - Only monitors branches with status='running'
+ * - Only monitors non-archived branches with status='starting' or 'running'
  * - Automatic start/stop on environment state changes
  * - Graceful cleanup on daemon shutdown
  */
@@ -84,6 +84,7 @@ export class HealthMonitor {
    */
   private timers = new Map<BranchID, HealthMonitorTimer>();
   private checksInFlight = new Set<BranchID>();
+  private checkAbortControllers = new Map<BranchID, AbortController>();
   private branchParams = new Map<BranchID, HealthMonitorParams>();
   private isShuttingDown = false;
   private defaultParams?: HealthMonitorParams;
@@ -92,6 +93,13 @@ export class HealthMonitor {
   private tenantId?: TenantID | string;
   private requireTenantParams: boolean;
   private discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
+
+  private readonly onBranchPatched = (branch: Branch) => this.handleBranchUpdate(branch);
+  private readonly onBranchCreated = (branch: Branch) => this.handleBranchUpdate(branch);
+  private readonly onBranchRemoved = (branch: Branch) => {
+    this.stopMonitoring(branch.branch_id);
+    this.branchParams.delete(branch.branch_id);
+  };
 
   constructor(app: Application, options: HealthMonitorOptions = {}) {
     this.app = app;
@@ -120,20 +128,13 @@ export class HealthMonitor {
     const branchesService = this.app.service('branches');
 
     // Listen for branch updates (start/stop/status changes)
-    branchesService.on('patched', (branch: Branch) => {
-      this.handleBranchUpdate(branch);
-    });
+    branchesService.on('patched', this.onBranchPatched);
 
     // Listen for branch creation (in case created with running status)
-    branchesService.on('created', (branch: Branch) => {
-      this.handleBranchUpdate(branch);
-    });
+    branchesService.on('created', this.onBranchCreated);
 
     // Listen for branch removal (cleanup monitoring)
-    branchesService.on('removed', (branch: Branch) => {
-      this.stopMonitoring(branch.branch_id);
-      this.branchParams.delete(branch.branch_id);
-    });
+    branchesService.on('removed', this.onBranchRemoved);
   }
 
   /**
@@ -144,7 +145,7 @@ export class HealthMonitor {
 
     const status = branch.environment_instance?.status;
 
-    if (status === 'running' || status === 'starting') {
+    if (!branch.archived && (status === 'running' || status === 'starting')) {
       // Start monitoring if not already monitored.
       // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'.
       const params = this.paramsForBranch(branch);
@@ -224,6 +225,9 @@ export class HealthMonitor {
       else clearInterval(timer.handle);
       this.timers.delete(branchId);
     }
+    this.checkAbortControllers
+      .get(branchId)
+      ?.abort(new Error('Environment is no longer eligible for health monitoring'));
   }
 
   /**
@@ -236,6 +240,8 @@ export class HealthMonitor {
     // stale healthy/unhealthy result over the newer one.
     if (this.checksInFlight.has(branchId)) return;
     this.checksInFlight.add(branchId);
+    const controller = new AbortController();
+    this.checkAbortControllers.set(branchId, controller);
 
     try {
       const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
@@ -262,7 +268,7 @@ export class HealthMonitor {
 
         // Only check if still running or starting
         const status = branch.environment_instance?.status;
-        if (status !== 'running' && status !== 'starting') {
+        if (branch.archived || (status !== 'running' && status !== 'starting')) {
           // Silently stop monitoring (not an error - expected when env stops)
           // Start/stop logs are already handled in handleBranchUpdate()
           this.stopMonitoring(branchId);
@@ -274,7 +280,10 @@ export class HealthMonitor {
         // a db handle and tenant params, enter the same tenant DB/ALS scope the
         // scheduler uses before mutating branch environment state and emitting
         // realtime patches.
-        await branchesService.checkHealth(branchId, params as never);
+        await branchesService.checkHealth(branchId, params as never, {
+          signal: controller.signal,
+          automatic: true,
+        });
       };
 
       const tenantId = params?.tenant?.tenant_id;
@@ -302,6 +311,9 @@ export class HealthMonitor {
       );
     } finally {
       this.checksInFlight.delete(branchId);
+      if (this.checkAbortControllers.get(branchId) === controller) {
+        this.checkAbortControllers.delete(branchId);
+      }
     }
   }
 
@@ -341,8 +353,9 @@ export class HealthMonitor {
     // Start monitoring running or starting branches
     const activeBranches = branches.filter(
       (w) =>
-        w.environment_instance?.status === 'running' ||
-        w.environment_instance?.status === 'starting'
+        !w.archived &&
+        (w.environment_instance?.status === 'running' ||
+          w.environment_instance?.status === 'starting')
     );
 
     for (const branch of activeBranches) {
@@ -384,7 +397,7 @@ export class HealthMonitor {
         const loadAndStart = async () => {
           const branch = await branchesService.get(ref.branchId, params as never);
           const status = branch.environment_instance?.status;
-          if (status !== 'running' && status !== 'starting') return;
+          if (branch.archived || (status !== 'running' && status !== 'starting')) return;
           this.branchParams.set(branch.branch_id, tenantParamsFromBranch(branch) ?? params);
           this.startMonitoring(branch.branch_id, this.branchParams.get(branch.branch_id));
           activeCount += 1;
@@ -459,7 +472,15 @@ export class HealthMonitor {
     }
 
     this.timers.clear();
+    for (const controller of this.checkAbortControllers.values()) {
+      controller.abort(new Error('Environment health monitor is shutting down'));
+    }
+    this.checkAbortControllers.clear();
     this.branchParams.clear();
+    const branchesService = this.app.service('branches');
+    branchesService.off('patched', this.onBranchPatched);
+    branchesService.off('created', this.onBranchCreated);
+    branchesService.off('removed', this.onBranchRemoved);
     console.log(`🏥 Health Monitor cleaned up (${stoppedCount} monitor(s) stopped)`);
   }
 

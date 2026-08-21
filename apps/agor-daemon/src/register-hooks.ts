@@ -276,7 +276,7 @@ function branchEnvFieldsFromItem(item: Partial<Branch>) {
   };
 }
 
-function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
+export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
     const items = Array.isArray(context.data) ? context.data : [context.data];
     const shouldValidate = (items as Array<Record<string, unknown>>).some((item) =>
@@ -298,8 +298,11 @@ function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
           mode,
           'branch environment'
         );
+        // The app URL is rendered metadata consumed directly by clients, so it
+        // must be safe before persistence. The health URL is outbound runtime
+        // configuration: validate it at the observation boundary instead of
+        // making branch materialization depend on an inactive environment.
         validateRenderedManagedEnvUrlFields({
-          health: item.health_check_url,
           app: item.app_url,
         });
       } catch (error) {
