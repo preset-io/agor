@@ -1526,6 +1526,18 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
 
   const response = resolveExecutorResponseConfig(execution.executor_response);
 
+  // Enforced here, NOT in the raw config.yaml parse: one shared config.yaml
+  // legitimately declares the protocol while each replica's exact origin
+  // arrives via AGOR_EXECUTOR_RESPONSE_ORIGIN_URL, so the pairing is only
+  // decidable after environment projection.
+  if (response.externalProtocol && !response.originUrl) {
+    throw new Error(
+      'execution.executor_response.external_protocol requires an exact origin_url: set ' +
+        'execution.executor_response.origin_url or the AGOR_EXECUTOR_RESPONSE_ORIGIN_URL ' +
+        'environment variable for this daemon replica.'
+    );
+  }
+
   if (execution.unix_user_mode === 'delegated' && !execution.executor_command_template) {
     throw new Error(
       "execution.unix_user_mode 'delegated' requires execution.executor_command_template so execution is actually delegated to an external substrate."

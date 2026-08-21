@@ -54,9 +54,22 @@ describe('executor response config', () => {
     [{ origin_url: 'redis://internal' }, /http/i],
     [{ origin_url: 'https://user:secret@internal' }, /credentials/i],
     [{ origin_url: 'https://internal/path' }, /without a path/i],
-    [{ external_protocol: 'executor-response-v1' }, /requires.*origin_url/i],
   ] as const)('rejects unsafe config %#', (input, pattern) => {
     expect(() => resolveExecutorResponseConfig(input)).toThrow(pattern);
+  });
+
+  it('accepts a protocol declaration without an origin (raw config.yaml form)', () => {
+    // One shared config.yaml declares the protocol; each replica's exact
+    // origin arrives via AGOR_EXECUTOR_RESPONSE_ORIGIN_URL. The pairing is
+    // enforced post-projection by assertValidEffectiveExecutionConfig, so the
+    // parser itself must not reject the env-completed deployment form.
+    expect(resolveExecutorResponseConfig({ external_protocol: 'executor-response-v1' })).toEqual({
+      maxResponseBytes: EXECUTOR_RESPONSE_DEFAULT_MAX_BYTES,
+      maxActiveRequests: EXECUTOR_RESPONSE_DEFAULT_MAX_ACTIVE,
+      defaultTimeoutMs: EXECUTOR_RESPONSE_DEFAULT_TIMEOUT_MS,
+      timeoutByCommand: {},
+      externalProtocol: 'executor-response-v1',
+    });
   });
 
   it('uses command override, call-specific default, then global default', () => {

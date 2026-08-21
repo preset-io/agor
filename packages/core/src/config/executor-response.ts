@@ -85,10 +85,13 @@ export function resolveExecutorResponseConfig(
       `execution.executor_response.external_protocol must be '${EXECUTOR_RESPONSE_PROTOCOL}'`
     );
   }
+  // Deliberately no external_protocol/origin_url pairing check here: this
+  // parser also validates raw config.yaml, where a deployment may declare the
+  // protocol while the replica-exact origin arrives only later via
+  // AGOR_EXECUTOR_RESPONSE_ORIGIN_URL (one shared config.yaml, per-Pod env).
+  // The pairing is enforced on the effective config by
+  // assertValidEffectiveExecutionConfig, after environment projection.
   const originUrl = normalizeOrigin(raw?.origin_url);
-  if (raw?.external_protocol && !originUrl) {
-    throw new Error('execution.executor_response.external_protocol requires an exact origin_url');
-  }
   return {
     maxResponseBytes: resolveSafeIntegerInRange(raw?.max_response_bytes, {
       defaultValue: EXECUTOR_RESPONSE_DEFAULT_MAX_BYTES,

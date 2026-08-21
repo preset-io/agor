@@ -11,6 +11,7 @@ import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
   assertValidEffectiveExecutionConfig,
+  assertValidRawConfig,
   ConfigAlreadyExistsError,
   createInitialConfig,
   ensureBranchCloneDepthAllowed,
@@ -329,6 +330,40 @@ describe('assertValidEffectiveExecutionConfig', () => {
         },
       })
     ).not.toThrow();
+  });
+
+  it('boots the shared-yaml/per-replica-env executor response split', () => {
+    // Regression: one config.yaml declares external_protocol for every
+    // replica while the exact origin arrives only via
+    // AGOR_EXECUTOR_RESPONSE_ORIGIN_URL (Kubernetes downward-API Pod IP). The
+    // raw validation must accept it, and after environment projection the
+    // effective config must pass with the env-supplied origin.
+    const rawYamlForm: AgorConfig = {
+      execution: {
+        executor_command_template: 'launcher -- {command}',
+        executor_response: { external_protocol: 'executor-response-v1' },
+      },
+    };
+    expect(() => assertValidRawConfig(rawYamlForm)).not.toThrow();
+
+    const resolved = resolveEffectiveConfig(rawYamlForm, {
+      AGOR_EXECUTOR_RESPONSE_ORIGIN_URL: 'http://10.35.69.131:3030',
+    });
+    expect(resolved.execution?.executor_response?.origin_url).toBe('http://10.35.69.131:3030');
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).not.toThrow();
+  });
+
+  it('still requires an origin for the declared protocol on the effective config', () => {
+    // Without an origin from YAML or environment, the declared protocol is
+    // unusable; the effective-config gate keeps the raw parser's former
+    // guarantee, one projection step later.
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          executor_response: { external_protocol: 'executor-response-v1' },
+        },
+      })
+    ).toThrow(/external_protocol requires an exact origin_url/);
   });
 
   it('rejects sandboxing combined with an external executor template', () => {
