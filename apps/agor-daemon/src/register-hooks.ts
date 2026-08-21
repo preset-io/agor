@@ -494,6 +494,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'mcp-servers/oauth-attempt-status',
   'mcp-servers/oauth-disconnect',
   'mcp-servers/oauth-status',
+  'mcp-catalog/readiness',
+  'mcp-marketplace',
   'card-types',
   'cards',
   'artifacts',
@@ -2359,6 +2361,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [typedValidateQuery(mcpCatalogQueryValidator), requireAuth],
     },
   });
+
+  safeService('mcp-catalog/readiness')?.hooks({ before: { all: [requireAuth] } });
+  safeService('mcp-marketplace')?.hooks({ before: { all: [requireAuth] } });
 
   safeService('session-mcp-servers')?.hooks({
     before: {

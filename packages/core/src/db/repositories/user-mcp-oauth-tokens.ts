@@ -262,6 +262,28 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
+   * Read only the protected-resource binding used for catalog credential
+   * matching. Unlike `getToken`, this projection never loads or decrypts token
+   * or client material into the caller's process.
+   */
+  async getResourceUri(userId: UserID, serverId: MCPServerID): Promise<string | undefined> {
+    try {
+      const row = await select(this.db, {
+        oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+      })
+        .from(userMcpOauthTokens)
+        .where(matchKey(userId, serverId))
+        .one();
+      return row?.oauth_resource_uri ? String(row.oauth_resource_uri) : undefined;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read OAuth resource: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Return the access token if it exists and is not expired. Does NOT refresh.
    *
    * Refresh is performed via `refreshAndPersistToken` in

@@ -545,9 +545,7 @@ export function createRegisteredMCPCatalogConnectService(
       if (!userId) return undefined;
       const tenantId =
         (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
-      const read = async () =>
-        (await new UserMCPOAuthTokenRepository(db).getToken(userId, serverId))
-          ?.oauth_resource_uri ?? undefined;
+      const read = async () => new UserMCPOAuthTokenRepository(db).getResourceUri(userId, serverId);
       return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
     },
   });

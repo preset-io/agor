@@ -40,6 +40,8 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
+  MCPMarketplaceOverview,
   MCPMemberPolicySetting,
   MCPServer,
   Message,
@@ -201,6 +203,10 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
+export interface MCPMarketplaceService {
+  find(params?: Params): Promise<MCPMarketplaceOverview>;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -226,7 +232,9 @@ export interface ServiceTypes {
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-marketplace': MCPMarketplaceOverview;
   'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
@@ -773,7 +781,9 @@ export interface AgorClient
   service(path: 'users'): UsersService;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-marketplace'): MCPMarketplaceService;
   service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 

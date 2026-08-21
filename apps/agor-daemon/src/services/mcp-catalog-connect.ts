@@ -51,10 +51,13 @@ import type {
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug } from '@agor/core/types';
 import {
+  compatibleCatalogOAuthPeers,
+  hasLiveCallerOAuthGrant,
+} from './mcp-catalog-credential-match.js';
+import {
   catalogOAuthConfig,
   catalogServerTransport,
   isCurrentCatalogInstall,
-  sameCatalogEndpoint,
 } from './mcp-catalog-install-policy.js';
 import type { MCPServersService } from './mcp-servers.js';
 
@@ -69,12 +72,6 @@ import type { MCPServersService } from './mcp-servers.js';
  * install route somewhere the entry never named, which is a different promise
  * from the one the disclosure made. Cheaper to decline than to explain.
  */
-const CREDENTIAL_ROUTING_OVERRIDES = [
-  'oauth_authorization_url',
-  'oauth_token_url',
-  'oauth_client_secret',
-] as const satisfies readonly (keyof MCPAuth)[];
-
 /**
  * The cheap half of the identity test: whether `server` is configured to talk
  * to the place this entry names, on terms this entry would ask for.
@@ -110,23 +107,6 @@ const CREDENTIAL_ROUTING_OVERRIDES = [
  * user consents afresh. Today every entry states no scope and this compares
  * `undefined` to `undefined`; it starts mattering the moment one does.
  */
-function isCredentialPeerOf(
-  server: MCPServer,
-  entry: MCPCatalogEntry & { remote_url: string },
-  prescribed: MCPAuth
-): boolean {
-  const auth = server.auth;
-  if (auth?.type !== 'oauth' || prescribed.type !== 'oauth') return false;
-  if ((auth.oauth_mode ?? 'per_user') !== 'per_user') return false;
-  if (CREDENTIAL_ROUTING_OVERRIDES.some((field) => auth[field])) return false;
-  if ((auth.oauth_scope ?? undefined) !== (prescribed.oauth_scope ?? undefined)) return false;
-  return (
-    server.transport === catalogServerTransport(entry) &&
-    sameCatalogEndpoint(server.url, entry.remote_url) &&
-    Object.keys(server.headers ?? {}).length === 0
-  );
-}
-
 /**
  * Reconcile catalog-owned configuration without erasing the owner's explicit
  * OAuth compatibility choice.
@@ -149,28 +129,6 @@ function preserveExplicitOAuthCompatibility(server: MCPServer, prescribed: MCPAu
   const explicitMode = server.auth.oauth_compatibility_mode;
   if (explicitMode !== 'strict' && explicitMode !== 'legacy') return prescribed;
   return { ...prescribed, oauth_compatibility_mode: explicitMode };
-}
-
-async function hasCatalogCredentialPolicy(
-  server: MCPServer,
-  entry: MCPCatalogEntry & { remote_url: string },
-  prescribed: MCPAuth
-): Promise<boolean> {
-  if (server.auth?.oauth_client_id !== prescribed.oauth_client_id) return false;
-  if (
-    (server.auth?.oauth_dcr_mode ?? 'advertised') !== (prescribed.oauth_dcr_mode ?? 'advertised')
-  ) {
-    return false;
-  }
-  const actual =
-    server.auth?.oauth_compatibility_mode ??
-    (isCurrentCatalogInstall(server, entry, prescribed, {
-      reconcileMissingCompatibilityMode: true,
-    })
-      ? (entry.oauth?.compatibility_mode ?? 'marketplace')
-      : 'strict');
-  const expected = entry.oauth?.compatibility_mode ?? 'marketplace';
-  return actual === expected;
 }
 
 /**
@@ -213,13 +171,6 @@ async function hasCatalogCredentialPolicy(
  * SQLite — but forging it needs database write access, which on a standalone
  * deployment is already game over.
  */
-function hasLiveCallerGrant(server: MCPServer, now: number): boolean {
-  const auth = server.auth;
-  if (!auth?.oauth_access_token) return false;
-  const expiresAt = auth.oauth_token_expires_at;
-  return !(expiresAt && expiresAt <= now);
-}
-
 const RUNTIME_HYDRATED_AUTH_FIELDS = [
   'oauth_access_token',
   'oauth_refresh_token',
@@ -720,60 +671,31 @@ export function createMCPCatalogConnectService(
   ): Promise<ExistingSelection | undefined> => {
     if (prescribed.type !== 'oauth') return undefined;
 
-    const candidates: MCPServer[] = [];
-    for (const server of servers) {
-      if (
-        server.enabled &&
-        isCredentialPeerOf(server, entry, prescribed) &&
-        (await hasCatalogCredentialPolicy(server, entry, prescribed))
-      ) {
-        candidates.push(server);
-      }
-    }
-    candidates.sort((a, b) => (a.mcp_server_id < b.mcp_server_id ? -1 : 1));
-
-    /**
-     * Whether the caller's grant on this row was minted for the resource this
-     * entry names.
-     *
-     * The half {@link isCredentialPeerOf} cannot answer. `oauth_resource_uri`
-     * is what the endpoint declared itself to be when consent happened, so
-     * comparing it to the entry's endpoint catches a row whose URL has been
-     * repointed since — the case where the row says one thing today and the
-     * credential on it was minted for another.
-     *
-     * A grant recording no resource at all is refused rather than waved
-     * through: grants predating the column exist, and "cannot tell" is not
-     * "yes". The cost of being wrong here is one consent screen. A read that
-     * fails outright is the same answer for the same reason.
-     */
-    const grantIsForThisResource = async (server: MCPServer): Promise<boolean> => {
-      try {
-        const resourceUri = await deps.readGrantResourceUri(server.mcp_server_id, params);
-        return sameCatalogEndpoint(resourceUri, entry.remote_url);
-      } catch (error) {
-        console.warn(
-          `[mcp-catalog/connect] Could not read the grant on ${server.mcp_server_id}; not reusing it:`,
-          error instanceof Error ? error.message : error
-        );
-        return false;
-      }
-    };
+    const candidates = await compatibleCatalogOAuthPeers(entry, servers, {
+      readGrantResourceUri: async (serverId) => {
+        try {
+          return await deps.readGrantResourceUri(serverId, params);
+        } catch (error) {
+          console.warn(
+            `[mcp-catalog/connect] Could not read the grant on ${serverId}; not reusing it:`,
+            error instanceof Error ? error.message : error
+          );
+          return undefined;
+        }
+      },
+    });
 
     // Pass one: a grant that is already live costs nothing to confirm, so no
     // refresh is spent while one of those exists anywhere in the list.
     for (const candidate of candidates) {
-      if (!hasLiveCallerGrant(candidate, Date.now())) continue;
-      if (await grantIsForThisResource(candidate)) {
-        return { server: candidate, kind: 'credential_peer' };
-      }
+      if (!hasLiveCallerOAuthGrant(candidate, Date.now())) continue;
+      return { server: candidate, kind: 'credential_peer' };
     }
 
     // Pass two: revive a stale one.
     let attempts = 0;
     for (const candidate of candidates) {
-      if (hasLiveCallerGrant(candidate, Date.now())) continue;
-      if (!(await grantIsForThisResource(candidate))) continue;
+      if (hasLiveCallerOAuthGrant(candidate, Date.now())) continue;
       if (attempts >= MAX_REVIVAL_ATTEMPTS) {
         console.warn(
           '[mcp-catalog/connect] Stopped reviving grants at the cap; installing fresh instead ' +
@@ -802,7 +724,7 @@ export function createMCPCatalogConnectService(
           candidate.mcp_server_id,
           params
         )) as MCPServer;
-        if (hasLiveCallerGrant(revived, Date.now())) {
+        if (hasLiveCallerOAuthGrant(revived, Date.now())) {
           return { server: revived, kind: 'refreshed_credential_peer' };
         }
       } catch {

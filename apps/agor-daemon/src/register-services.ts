@@ -32,6 +32,7 @@ import {
   getCurrentTenantId,
   inArray,
   isPostgresDatabaseHandle,
+  MCPMarketplaceRepository,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   mcpServers,
@@ -178,6 +179,8 @@ import { createKnowledgeSettingsService } from './services/knowledge-settings.js
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
+import { MCPCatalogReadinessService } from './services/mcp-catalog-readiness.js';
+import { MCPMarketplaceService } from './services/mcp-marketplace.js';
 import {
   logMCPOAuthCompatibilityPolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -3135,6 +3138,21 @@ export async function registerMCPServices(
   // Read-only marketplace browse surface. Only find/get are exposed; the
   // catalog is a file in this repository and has no writers at runtime.
   app.use('/mcp-catalog', createMCPCatalogService(), { methods: ['find', 'get'] });
+  app.use(
+    '/mcp-catalog/readiness',
+    new MCPCatalogReadinessService(app, {
+      readGrantResourceUri: async (serverId, params) => {
+        const userId = params.user?.user_id as UserID | undefined;
+        return userId
+          ? new UserMCPOAuthTokenRepository(db).getResourceUri(userId, serverId)
+          : undefined;
+      },
+    }),
+    { methods: ['get'] }
+  );
+  app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
+    methods: ['find'],
+  });
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {
