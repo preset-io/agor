@@ -66,6 +66,21 @@ A delegated executor must receive trusted `{tenant_id}` and `{user_id}` values a
 
 The daemon validates its declared storage contract but cannot prove the external substrate's claims. Use an immutable image, least-privilege service identity, tenant-separated storage, and explicit Stop/orphan cleanup.
 
+If your executors mount the branch workspace but **not** the daemon's `repos/` directory, also turn
+off the clone-mode object borrow:
+
+```yaml
+execution:
+  branch_storage:
+    borrow_base_objects: false
+```
+
+Otherwise clone-mode branches are created with an `alternates` pointer into a base clone the
+executor cannot read, and every git command inside the branch fails with
+`unable to normalize alternate object path`. Declaring
+`execution.executor_storage.base_repository: unavailable` implies the same thing. See
+[Borrowed objects](/guide/branches) for the full explanation.
+
 ## Shared Filesystem Setup
 
 ### Persistence Must Match the Database

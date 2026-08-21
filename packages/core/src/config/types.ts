@@ -852,6 +852,30 @@ export interface AgorBranchStorageSettings {
    * carry complete history.
    */
   allow_shallow_clones?: boolean;
+
+  /**
+   * Whether clone-mode branches may borrow objects from the daemon-managed
+   * base clone via `git clone --reference` (an `alternates` pointer into
+   * `<data_home>/repos/<slug>/.git/objects`). Defaults to `true` — on a
+   * single-mount install this is a large disk win and nothing else changes.
+   *
+   * Set `false` when sessions run somewhere the daemon's `repos/` directory
+   * is not mounted (containerized / templated executors that only bind the
+   * branch workspace). The alternates pointer is baked into the branch at
+   * create time and consumed by every later `git` command, so a branch
+   * created with a borrow it cannot resolve is permanently broken:
+   *
+   * ```
+   * error: unable to normalize alternate object path: /…/.agor/repos/<org>/<repo>/.git/objects
+   * fatal: Failed to traverse parents of commit <sha>
+   * ```
+   *
+   * Disabling costs disk (each branch carries a full object store) and buys
+   * mount-independence. Implied by
+   * `execution.executor_storage.base_repository: 'unavailable'`, which
+   * already asserts that executors cannot see the base checkout.
+   */
+  borrow_base_objects?: boolean;
 }
 
 /** Consistency of the effective user's home across executor invocations. */

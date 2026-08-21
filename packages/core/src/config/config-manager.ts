@@ -831,6 +831,7 @@ function validateConfig(config: AgorConfig): void {
     'default_mode',
     'allowed_modes',
     'allow_shallow_clones',
+    'borrow_base_objects',
   ]);
   only(config.execution?.sandbox, 'execution.sandbox', [
     'enabled',
@@ -899,6 +900,12 @@ function validateConfig(config: AgorConfig): void {
     throw new Error(
       'Config error: execution.branch_storage.allow_shallow_clones must be a boolean'
     );
+  }
+  if (
+    config.execution?.branch_storage?.borrow_base_objects !== undefined &&
+    typeof config.execution.branch_storage.borrow_base_objects !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.branch_storage.borrow_base_objects must be a boolean');
   }
   only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
   only(config.security?.csp, 'security.csp', [

@@ -100,6 +100,9 @@ execution:
       - clone
     # Optional: reject clone_depth and require complete history.
     allow_shallow_clones: false
+    # Optional: stop clone-mode branches from borrowing objects from the
+    # daemon's base clone. See "Borrowed objects" below.
+    borrow_base_objects: false
 ```
 
 If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `worktree` is selected by default and both `worktree` and `clone` are available. When an operator restricts `allowed_modes`, the create-branch UI disables unavailable options and the daemon rejects disallowed API/MCP requests.
@@ -108,6 +111,38 @@ If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `wo
 `clone_depth`; callers must omit the field to create a full clone. This is independent of mount
 topology: both full and shallow clones are self-standing, while a native worktree always requires
 the registered base repository's Git metadata.
+
+### Borrowed objects (`borrow_base_objects`)
+
+By default, clone-mode branches are created with `git clone --reference` against the daemon-managed
+base clone at `<data_home>/repos/<slug>/`. Instead of copying the whole object store, the new branch
+gets an `alternates` pointer into it — per-branch `.git/` drops from "full pack copy" to a few MB.
+Only immutable objects are shared; `.git/config`, remotes, and credentials stay branch-local, so the
+isolation clone mode buys is preserved.
+
+That pointer is baked in at create time and re-read by **every** later git command in the branch.
+It therefore requires the base clone to be readable from wherever **sessions** run — not merely from
+wherever the branch was materialized. If sessions execute in a different mount (a containerized or
+templated executor that only binds the branch workspace and never `repos/`), git in that branch
+fails permanently:
+
+```
+error: unable to normalize alternate object path: /…/.agor/repos/<org>/<repo>/.git/objects
+error: Could not read <sha>
+fatal: Failed to traverse parents of commit <sha>
+```
+
+Set `borrow_base_objects: false` on those deployments. Every clone-mode branch then carries its own
+complete object store: more disk, no cross-mount dependency. The default (`true`) is correct for
+single-mount installs, which is most of them.
+
+Agor also disables the borrow automatically when
+[`execution.executor_storage.base_repository`](/guide/containerized-execution) is `unavailable` —
+that setting is already an operator assertion that executors cannot see the base checkout.
+
+The setting only affects branches created after the change. An existing branch that was cloned with
+a borrow it cannot resolve has to be recreated (or have `.git/objects/info/alternates` removed and
+its objects refetched).
 
 ---
 

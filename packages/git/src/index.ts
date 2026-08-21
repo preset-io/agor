@@ -1201,6 +1201,14 @@ export interface CreateBranchAsCloneOptions {
    * correct. Git rejects shallow reference repositories outright, so this is
    * part of the correctness fallback rather than only an optimization.
    *
+   * That probe only covers *this* process's view. The alternates pointer it
+   * writes is consumed by every later git command in the branch, possibly
+   * from a different mount (a session executor that binds the branch
+   * workspace but not the daemon's `repos/`). Nothing observable here can
+   * predict that, so the cross-mount case is an operator decision instead:
+   * `execution.branch_storage.borrow_base_objects: false` makes the daemon
+   * stop passing a `referencePath` at all.
+   *
    * NEVER paired with `--dissociate`: dissociate copies all reachable
    * objects out of the reference into the new clone (~equivalent to a
    * naïve clone), defeating the purpose. See design doc §5.

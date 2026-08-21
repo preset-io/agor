@@ -499,6 +499,33 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
   });
 
+  it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {
+    // The escape hatch for deployments whose executors cannot see the
+    // daemon's repos/ mount; must survive the strict unknown-key sweep.
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: false\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: { branch_storage: { borrow_base_objects: false } },
+    });
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: "false"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(
+      /execution\.branch_storage\.borrow_base_objects must be a boolean/
+    );
+  });
+
   describe('AGOR_UNKNOWN_CONFIG_KEYS forward-compatibility policy', () => {
     const writeConfigWithFutureKey = async () => {
       const agorDir = path.join(tempDir, '.agor');
