@@ -3,10 +3,12 @@ import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claimMarketplaceOAuthPrompt,
+  consumeMarketplacePromptSuggestion,
   consumePendingMarketplaceOAuthPrompt,
+  discardMarketplacePromptSuggestion,
   readPendingMarketplaceOAuthPrompt,
+  saveMarketplacePromptSuggestion,
   savePendingMarketplaceOAuthPrompt,
-  stageClaimedMarketplaceOAuthPrompt,
 } from './marketplaceOAuthPrompt';
 import { getPromptDraft, savePromptDraft } from './promptDrafts';
 
@@ -27,7 +29,10 @@ const clientWith = (answer: unknown) =>
   }) as unknown as AgorClient;
 
 describe('Marketplace OAuth prompt handoff', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
 
   it('stores only nonsecret authority/routing metadata and consumes by exact attempt once', () => {
     const pending = value();
@@ -69,7 +74,7 @@ describe('Marketplace OAuth prompt handoff', () => {
     expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
   });
 
-  it("never overwrites another tab's draft written while attempt status is awaited", async () => {
+  it("never enters the shared draft keyspace when another tab writes during OAuth's final await", async () => {
     const pending = value();
     savePendingMarketplaceOAuthPrompt(pending);
     let resolveAttempt!: (value: MCPOAuthAttemptResult) => void;
@@ -92,19 +97,45 @@ describe('Marketplace OAuth prompt handoff', () => {
       status: 'succeeded',
     } as MCPOAuthAttemptResult);
     const prompt = await claim;
-    const insertText = vi.fn();
 
     expect(prompt).toBe(pending.prompt);
-    expect(
-      stageClaimedMarketplaceOAuthPrompt({
-        sessionId: pending.sessionId,
-        prompt: prompt!,
-        currentComposerText: '',
-        insertText,
-      })
-    ).toBe(false);
+    const sharedDraftAtFinalBoundary = getPromptDraft(pending.sessionId);
+    saveMarketplacePromptSuggestion({
+      sessionId: pending.sessionId,
+      prompt: prompt!,
+      authority,
+    });
     expect(getPromptDraft(pending.sessionId)).toBe('Draft from another tab');
-    expect(insertText).not.toHaveBeenCalled();
+    expect(getPromptDraft(pending.sessionId)).toBe(sharedDraftAtFinalBoundary);
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBe(pending.prompt);
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBeNull();
+  });
+
+  it('keeps the suggestion tab-local, authority-scoped, and dismissible', () => {
+    const pending = value();
+    saveMarketplacePromptSuggestion({
+      sessionId: pending.sessionId,
+      prompt: pending.prompt,
+      authority,
+    });
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBe(pending.prompt);
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBeNull();
+    saveMarketplacePromptSuggestion({
+      sessionId: pending.sessionId,
+      prompt: pending.prompt,
+      authority,
+    });
+    expect(
+      consumeMarketplacePromptSuggestion(pending.sessionId, { ...authority, userId: 'bob' })
+    ).toBeNull();
+
+    saveMarketplacePromptSuggestion({
+      sessionId: pending.sessionId,
+      prompt: pending.prompt,
+      authority,
+    });
+    discardMarketplacePromptSuggestion(pending.sessionId);
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBeNull();
   });
 
   it('removes cancelled, stale, or wrong-authority handoffs', async () => {

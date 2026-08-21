@@ -1,159 +1,164 @@
 import {
-  createTenantScopedDatabaseProxy,
-  MissingTenantDatabaseScopeError,
+  createDatabaseAsync,
+  eq,
+  MCPServerRepository,
+  mcpServers,
+  runMigrations,
+  setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
-  TenantWriteGateActiveError,
+  UsersRepository,
+  update,
 } from '@agor/core/db';
-import type { MCPServerID } from '@agor/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Conflict, Forbidden } from '@agor/core/feathers';
+import type { MCPServer, UserID } from '@agor/core/types';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  captureMCPDiscoveryAuthority,
+  fingerprintMCPDiscoveryConfiguration,
+  persistDiscoveredMCPCapabilities,
+} from './mcp-discovered-capabilities.js';
 
-/**
- * `/mcp-servers/discover` is registered as a tenant-identity-only service: it
- * makes outbound MCP requests, so it never inherits the request-long tenant
- * transaction that tenant-owned services get. Every database touch inside it
- * has to open its own short unit of work instead.
- *
- * Nothing in the type system says so. Against a scope-requiring handle the
- * only signal is that the guarded proxy throws on first property access, which
- * the endpoint's own try/catch turns into `{ success: false }` — a discovery
- * that reports failure after it already probed the server. So the property is
- * asserted here directly: the helper is called from no scope at all, and the
- * repository underneath it must still find one.
- */
+let db: TenantScopeAwareDatabase;
+let ownerId: UserID;
+let server: MCPServer;
 
-const updateCalls: Array<{
-  serverId: string;
-  updates: Record<string, unknown>;
-  scopeAtCall: { kind?: string; tenantId?: string } | undefined;
-}> = [];
-
-const assertTenantWritable = vi.fn<(db: unknown, tenantId: string) => Promise<void>>();
-
-vi.mock('@agor/core/db', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/db')>();
-  return {
-    ...actual,
-    assertTenantWritable: (db: unknown, tenantId: string) => assertTenantWritable(db, tenantId),
-    MCPServerRepository: class {
-      constructor(private db: TenantScopeAwareDatabase) {}
-      async update(serverId: string, updates: Record<string, unknown>) {
-        // Touch the guarded handle the way the real repository does, so a
-        // missing scope fails here rather than passing silently.
-        (this.db as unknown as { probe(): string }).probe();
-        updateCalls.push({
-          serverId,
-          updates,
-          scopeAtCall: actual.getCurrentTenantDatabaseScope() as
-            | { kind?: string; tenantId?: string }
-            | undefined,
-        });
-        return undefined;
-      }
-    },
-  };
-});
-
-const { persistDiscoveredMCPCapabilities } = await import('./mcp-discovered-capabilities.js');
-
-const SERVER_ID = 'server-1' as MCPServerID;
-
-/**
- * `isPostgresDatabase` keys off the absence of `run`, so the `run` stub is what
- * makes this handle SQLite-shaped and keeps the scope in-process rather than
- * opening a transaction against a fake.
- */
-function guardedDatabase(options: { requireScope?: boolean } = {}): TenantScopeAwareDatabase {
-  const rawDb = { probe: () => 'reached', run: () => undefined };
-  return createTenantScopedDatabaseProxy(rawDb as never, {
-    requireScope: options.requireScope ?? true,
-    label: 'discover capability test DB',
+async function seed(): Promise<void> {
+  db = (await createDatabaseAsync({
+    dialect: 'sqlite',
+    url: ':memory:',
+  })) as TenantScopeAwareDatabase;
+  await runMigrations(db);
+  const owner = await new UsersRepository(db).create({
+    email: 'discovery-owner@example.test',
+    name: 'Discovery owner',
+    role: 'member',
+  });
+  ownerId = owner.user_id as UserID;
+  server = await new MCPServerRepository(db).create({
+    name: 'held-provider',
+    transport: 'http',
+    url: 'https://a.example.test/mcp',
+    headers: { 'X-Tenant': 'one' },
+    auth: { type: 'bearer', token: 'server-secret' },
+    scope: 'session',
+    source: 'user',
+    owner_user_id: ownerId,
+    tool_permissions: { remembered: 'ask' },
   });
 }
 
-describe('persistDiscoveredMCPCapabilities', () => {
-  beforeEach(() => {
-    updateCalls.length = 0;
-    assertTenantWritable.mockReset();
-    assertTenantWritable.mockResolvedValue(undefined);
-  });
+const capabilities = {
+  tools: [{ name: 'search', description: 'Search' }],
+  resources: [{ uri: 'file:///a', name: 'a' }],
+  prompts: [{ name: 'greet', description: 'Greet' }],
+};
 
-  it('opens a tenant unit of work around the capability write', async () => {
-    const db = guardedDatabase();
+describe('discovery authority/configuration CAS (SQLite)', () => {
+  beforeEach(seed);
 
-    // The guard is real: the same access from the endpoint's own call frame,
-    // outside any scope of its own, is refused.
-    expect(() => (db as unknown as { probe(): string }).probe()).toThrow(
-      MissingTenantDatabaseScopeError
+  it('persists only capability paths after an unchanged held network phase', async () => {
+    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    await persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities);
+
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      {
+        url: 'https://a.example.test/mcp',
+        auth: { type: 'bearer', token: 'server-secret' },
+        headers: { 'X-Tenant': 'one' },
+        tools: capabilities.tools,
+        resources: capabilities.resources,
+        prompts: capabilities.prompts,
+        tool_permissions: { remembered: 'ask' },
+      }
     );
-
-    await persistDiscoveredMCPCapabilities(db, 'tenant-a', SERVER_ID, {
-      tools: [{ name: 'search', description: 'Search' }],
-      resources: [],
-      prompts: [],
-    });
-
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].scopeAtCall).toMatchObject({ kind: 'tenant', tenantId: 'tenant-a' });
   });
 
-  it('clears the per-tenant write gate before writing', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
-      tools: [],
-      resources: [],
-      prompts: [],
-    });
+  it('rejects endpoint A to B while provider I/O is held and writes no stale capabilities', async () => {
+    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    let releaseNetwork!: () => void;
+    const network = new Promise<void>((resolve) => (releaseNetwork = resolve));
+    const heldDiscovery = (async () => {
+      await network;
+      await persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities);
+    })();
 
-    expect(assertTenantWritable).toHaveBeenCalledWith(expect.anything(), 'tenant-a');
+    await new MCPServerRepository(db).update(server.mcp_server_id, {
+      url: 'https://b.example.test/mcp',
+    });
+    releaseNetwork();
+
+    await expect(heldDiscovery).rejects.toBeInstanceOf(Conflict);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      {
+        url: 'https://b.example.test/mcp',
+        tools: undefined,
+      }
+    );
   });
 
-  it('writes nothing while the tenant is frozen', async () => {
-    assertTenantWritable.mockRejectedValue(new TenantWriteGateActiveError('tenant-a', 'gen-1'));
+  it('rejects HTTP to stdio before persistence', async () => {
+    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    await new MCPServerRepository(db).update(server.mcp_server_id, {
+      transport: 'stdio',
+      command: 'unsafe-new-command',
+    });
 
     await expect(
-      persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
-        tools: [{ name: 'search', description: 'Search' }],
-        resources: [],
-        prompts: [],
-      })
-    ).rejects.toBeInstanceOf(TenantWriteGateActiveError);
-
-    expect(updateCalls).toHaveLength(0);
-  });
-
-  it('writes every capability list the probe reported', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
-      tools: [{ name: 'search', description: 'Search' }],
-      resources: [{ uri: 'file:///a', name: 'a' }],
-      prompts: [{ name: 'greet', description: 'Greet' }],
-    });
-
-    expect(updateCalls[0].serverId).toBe(SERVER_ID);
-    expect(updateCalls[0].updates).toEqual({
-      tools: [{ name: 'search', description: 'Search' }],
-      resources: [{ uri: 'file:///a', name: 'a' }],
-      prompts: [{ name: 'greet', description: 'Greet' }],
-    });
-  });
-
-  it('carries no ownership field, so a refresh cannot move the row between owners', async () => {
-    await persistDiscoveredMCPCapabilities(guardedDatabase(), 'tenant-a', SERVER_ID, {
-      tools: [],
-      resources: [],
-      prompts: [],
-    });
-
-    expect(Object.keys(updateCalls[0].updates).sort()).toEqual(['prompts', 'resources', 'tools']);
-  });
-
-  it('still writes when there is no tenant to scope to, as on single-tenant SQLite', async () => {
-    await persistDiscoveredMCPCapabilities(
-      guardedDatabase({ requireScope: false }),
-      undefined,
-      SERVER_ID,
-      { tools: [], resources: [], prompts: [] }
+      persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities)
+    ).rejects.toBeInstanceOf(Forbidden);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      {
+        transport: 'stdio',
+        tools: undefined,
+      }
     );
+  });
 
-    expect(updateCalls).toHaveLength(1);
-    expect(assertTenantWritable).not.toHaveBeenCalled();
+  it('rejects role demotion and policy changes made during discovery', async () => {
+    await setMcpMemberPolicy(db, 'allow_private_only', undefined);
+    const roleSnapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    await new UsersRepository(db).update(ownerId, { role: 'viewer' });
+    await expect(
+      persistDiscoveredMCPCapabilities(db, undefined, roleSnapshot, capabilities)
+    ).rejects.toBeInstanceOf(Forbidden);
+
+    await new UsersRepository(db).update(ownerId, { role: 'member' });
+    const policySnapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    await setMcpMemberPolicy(db, 'use_existing_only', undefined);
+    await expect(
+      persistDiscoveredMCPCapabilities(db, undefined, policySnapshot, capabilities)
+    ).rejects.toBeInstanceOf(Conflict);
+  });
+
+  it('rejects an ownership change made while discovery is in flight', async () => {
+    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const replacement = await new UsersRepository(db).create({
+      email: 'replacement-owner@example.test',
+      name: 'Replacement owner',
+      role: 'member',
+    });
+    await update(db, mcpServers)
+      .set({ owner_user_id: replacement.user_id })
+      .where(eq(mcpServers.mcp_server_id, server.mcp_server_id))
+      .run();
+
+    await expect(
+      persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities)
+    ).rejects.toBeInstanceOf(Forbidden);
+  });
+
+  it('binds ownership and every secret-bearing configuration field into an internal-only stamp', () => {
+    expect(
+      fingerprintMCPDiscoveryConfiguration({
+        ...server,
+        owner_user_id: 'another-owner' as UserID,
+      })
+    ).not.toBe(fingerprintMCPDiscoveryConfiguration(server));
+    expect(
+      fingerprintMCPDiscoveryConfiguration({
+        ...server,
+        auth: { type: 'bearer', token: 'rotated-secret' },
+      })
+    ).not.toBe(fingerprintMCPDiscoveryConfiguration(server));
   });
 });

@@ -26,6 +26,137 @@ import type { DatabaseDialect } from './schema-factory';
 import { getCurrentTenantId } from './tenant-context';
 
 /**
+ * Literal in-memory libsql databases have exactly one physical connection.
+ *
+ * The libsql driver's native transaction helper detaches that connection from
+ * the base client, which makes the next base-client query open a different,
+ * empty `:memory:` database. We therefore keep those transactions on the
+ * original handle. A manual BEGIN is only safe if *every* operation using that
+ * handle observes the same ownership boundary, though: otherwise an unrelated
+ * base query can accidentally join, commit, or roll back the open transaction.
+ *
+ * The coordinator is stored on the database handle (and consequently follows
+ * the tenant-scoped proxies that wrap it). It is not process-global: two
+ * databases, including two tenant database handles, never wait on each other.
+ */
+const IN_MEMORY_SQLITE_COORDINATOR = Symbol('agor.db.sqlite.in-memory.coordinator');
+const IN_MEMORY_SQLITE_TRANSACTION_SCOPE = Symbol('agor.db.sqlite.in-memory.transaction-scope');
+
+interface InMemorySQLiteCoordinator {
+  tail: Promise<void>;
+  owner?: symbol;
+  savepointSequence: number;
+}
+
+interface InMemorySQLiteTransactionScope {
+  base: Database;
+  coordinator: InMemorySQLiteCoordinator;
+  owner: symbol;
+}
+
+async function runInMemorySQLiteStatement(db: Database, statement: SQL): Promise<void> {
+  await (db as LibSQLDatabase<typeof sqliteSchema>).run(statement);
+}
+
+function readInMemoryTransactionScope(db: Database): InMemorySQLiteTransactionScope | undefined {
+  return (db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_TRANSACTION_SCOPE] as
+    | InMemorySQLiteTransactionScope
+    | undefined;
+}
+
+function getInMemorySQLiteCoordinator(db: Database): InMemorySQLiteCoordinator | undefined {
+  const scope = readInMemoryTransactionScope(db);
+  if (scope) return scope.coordinator;
+  if ((db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] !== true) {
+    return undefined;
+  }
+
+  const holder = db as unknown as Record<PropertyKey, unknown>;
+  let coordinator = holder[IN_MEMORY_SQLITE_COORDINATOR] as InMemorySQLiteCoordinator | undefined;
+  if (!coordinator) {
+    coordinator = { tail: Promise.resolve(), savepointSequence: 0 };
+    Object.defineProperty(db, IN_MEMORY_SQLITE_COORDINATOR, { value: coordinator });
+  }
+  return coordinator;
+}
+
+async function acquireInMemorySQLiteCoordinator(
+  coordinator: InMemorySQLiteCoordinator
+): Promise<() => void> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = coordinator.tail;
+  coordinator.tail = previous.then(() => gate);
+  await previous;
+  return release;
+}
+
+/** Execute one query without allowing it to cross a literal-memory tx boundary. */
+async function coordinateDatabaseOperation<T>(
+  db: Database,
+  operation: () => Promise<T>
+): Promise<T> {
+  const coordinator = getInMemorySQLiteCoordinator(db);
+  if (!coordinator) return operation();
+
+  const scope = readInMemoryTransactionScope(db);
+  if (scope && scope.owner === coordinator.owner) {
+    // Work using the transaction-scoped handle already owns the connection.
+    // Re-acquiring here would deadlock on its own outer transaction.
+    return operation();
+  }
+
+  const release = await acquireInMemorySQLiteCoordinator(coordinator);
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+function createInMemorySQLiteTransactionHandle(
+  base: Database,
+  coordinator: InMemorySQLiteCoordinator,
+  owner: symbol
+): Database {
+  const scope: InMemorySQLiteTransactionScope = { base, coordinator, owner };
+  return new Proxy(base as object, {
+    get(target, property) {
+      if (property === IN_MEMORY_SQLITE_TRANSACTION_SCOPE) return scope;
+      // Drizzle/libsql methods may use private receiver state. Bind them to the
+      // real database while wrapper execution still sees this scoped handle.
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as Database;
+}
+
+async function runNestedInMemorySQLiteTransaction<T>(
+  db: Database,
+  scope: InMemorySQLiteTransactionScope,
+  work: (tx: Database) => Promise<T>
+): Promise<T> {
+  const savepoint = `agor_nested_${++scope.coordinator.savepointSequence}`;
+  await runInMemorySQLiteStatement(scope.base, sql.raw(`SAVEPOINT ${savepoint}`));
+  try {
+    const result = await work(db);
+    await runInMemorySQLiteStatement(scope.base, sql.raw(`RELEASE SAVEPOINT ${savepoint}`));
+    return result;
+  } catch (error) {
+    try {
+      await runInMemorySQLiteStatement(scope.base, sql.raw(`ROLLBACK TO SAVEPOINT ${savepoint}`));
+      await runInMemorySQLiteStatement(scope.base, sql.raw(`RELEASE SAVEPOINT ${savepoint}`));
+    } catch {
+      // Preserve the operation error; the outer transaction will still own
+      // final rollback if SQLite has made the savepoint unusable.
+    }
+    throw error;
+  }
+}
+
+/**
  * Cast a Drizzle transaction handle to the unified Database type.
  *
  * Drizzle transaction callbacks receive dialect-specific types (LibSQLTransaction / PostgresJsTransaction)
@@ -50,22 +181,35 @@ export async function runDatabaseTransaction<T>(
   // transactions on the original connection so schema and committed rows
   // remain visible after commit. Production file SQLite and PostgreSQL retain
   // their native transaction handles below.
-  if (
-    isSQLiteDatabase(db) &&
-    (db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] === true
-  ) {
-    await db.run(sql.raw(options.sqliteImmediate ? 'BEGIN IMMEDIATE' : 'BEGIN'));
+  const existingMemoryScope = readInMemoryTransactionScope(db);
+  if (existingMemoryScope && existingMemoryScope.owner === existingMemoryScope.coordinator.owner) {
+    return runNestedInMemorySQLiteTransaction(db, existingMemoryScope, work);
+  }
+  const memoryCoordinator = isSQLiteDatabase(db) ? getInMemorySQLiteCoordinator(db) : undefined;
+  if (memoryCoordinator) {
+    const release = await acquireInMemorySQLiteCoordinator(memoryCoordinator);
+    const owner = Symbol('in-memory-sqlite-transaction');
+    const base = existingMemoryScope?.base ?? db;
+    const tx = createInMemorySQLiteTransactionHandle(base, memoryCoordinator, owner);
+    memoryCoordinator.owner = owner;
     try {
-      const result = await work(db);
-      await db.run(sql.raw('COMMIT'));
+      await runInMemorySQLiteStatement(
+        base,
+        sql.raw(options.sqliteImmediate ? 'BEGIN IMMEDIATE' : 'BEGIN')
+      );
+      const result = await work(tx);
+      await runInMemorySQLiteStatement(base, sql.raw('COMMIT'));
       return result;
     } catch (error) {
       try {
-        await db.run(sql.raw('ROLLBACK'));
+        await runInMemorySQLiteStatement(base, sql.raw('ROLLBACK'));
       } catch {
         // Preserve the operation error if SQLite already rolled the unit back.
       }
       throw error;
+    } finally {
+      if (memoryCoordinator.owner === owner) memoryCoordinator.owner = undefined;
+      release();
     }
   }
   const transaction = (
@@ -311,16 +455,23 @@ export function rawRowsAffected(result: unknown): number {
   return Array.isArray(result) ? result.length : 0;
 }
 
+/** Driver-neutral shape used by callers that inspect raw query metadata. */
+export type RawQueryResult = {
+  rows?: unknown[];
+  rowCount?: number;
+};
+
 /**
  * Execute a raw SQL query on any database
  */
-export async function executeRaw(db: Database, query: SQL): Promise<unknown> {
-  if (isSQLiteDatabase(db)) {
-    return db.run(query);
-  } else {
+export async function executeRaw(db: Database, query: SQL): Promise<RawQueryResult> {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await db.run(query)) as RawQueryResult;
+    }
     // PostgreSQL uses execute for raw SQL
-    return db.execute(query);
-  }
+    return (await db.execute(query)) as RawQueryResult;
+  });
 }
 
 /**
@@ -332,25 +483,27 @@ export async function getOne<T extends SQLiteTable | PgTable, TResult = unknown>
   table: T,
   where?: SQL
 ): Promise<TResult | null> {
-  if (isSQLiteDatabase(db)) {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const query = db.select().from(table as any);
-    if (where) {
-      return (await (query as { where: (where: SQL) => { get: () => Promise<unknown> } })
-        .where(where)
-        .get()) as TResult;
-    }
-    return (await (query as { get: () => Promise<unknown> }).get()) as TResult;
-  } else {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const query = (db as any).select().from(table);
-    if (where) {
-      const results = await query.where(where).limit(1);
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+      const query = db.select().from(table as any);
+      if (where) {
+        return (await (query as { where: (where: SQL) => { get: () => Promise<unknown> } })
+          .where(where)
+          .get()) as TResult;
+      }
+      return (await (query as { get: () => Promise<unknown> }).get()) as TResult;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+      const query = (db as any).select().from(table);
+      if (where) {
+        const results = await query.where(where).limit(1);
+        return (results[0] as TResult) || null;
+      }
+      const results = await query.limit(1);
       return (results[0] as TResult) || null;
     }
-    const results = await query.limit(1);
-    return (results[0] as TResult) || null;
-  }
+  });
 }
 
 /**
@@ -367,21 +520,23 @@ export async function insertOne<T extends SQLiteTable | PgTable, TResult = unkno
   table: T,
   values: InsertValues<T>
 ): Promise<TResult> {
-  if (isSQLiteDatabase(db)) {
-    const result = await db
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      const result = await db
+        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
+        .insert(table as any)
+        .values(withTenantInsertValues(values, table) as never)
+        .returning();
+      return result as TResult;
+    } else {
       // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-      .insert(table as any)
-      .values(withTenantInsertValues(values, table) as never)
-      .returning();
-    return result as TResult;
-  } else {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const result = await (db as any)
-      .insert(table)
-      .values(withTenantInsertValues(values, table) as never)
-      .returning();
-    return result[0] as TResult;
-  }
+      const result = await (db as any)
+        .insert(table)
+        .values(withTenantInsertValues(values, table) as never)
+        .returning();
+      return result[0] as TResult;
+    }
+  });
 }
 
 /**
@@ -418,43 +573,46 @@ function wrapQuery(
 ): UnsafeDrizzleAny {
   return {
     ...query,
-    one: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { get: () => Promise<unknown> }).get();
-      } else {
-        // For PostgreSQL, add .limit(1) and execute the query
-        const results = (await (query as { limit: (count: number) => Promise<unknown[]> }).limit(
-          1
-        )) as unknown[];
-        return results[0] || null;
-      }
-    },
-    all: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { all: () => Promise<unknown[]> }).all();
-      } else {
-        // For PostgreSQL, just await the query (it's a promise)
-        return await query;
-      }
-    },
-    run: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { run: () => Promise<unknown> }).run();
-      } else {
-        // For PostgreSQL, execute and return result metadata
-        // PostgreSQL returns an array for SELECT, but has a 'count' property for INSERT/UPDATE/DELETE
-        const result = (await query) as unknown;
-
-        // For DELETE/UPDATE/INSERT, postgres-js returns an array-like object with a 'count' property
-        // For SELECT, it returns a plain array
-        if (Array.isArray(result) && 'count' in result) {
-          return { rowsAffected: (result as { count: number }).count };
+    one: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { get: () => Promise<unknown> }).get();
+        } else {
+          // For PostgreSQL, add .limit(1) and execute the query
+          const results = (await (query as { limit: (count: number) => Promise<unknown[]> }).limit(
+            1
+          )) as unknown[];
+          return results[0] || null;
         }
+      }),
+    all: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { all: () => Promise<unknown[]> }).all();
+        } else {
+          // For PostgreSQL, just await the query (it's a promise)
+          return await query;
+        }
+      }),
+    run: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { run: () => Promise<unknown> }).run();
+        } else {
+          // For PostgreSQL, execute and return result metadata
+          // PostgreSQL returns an array for SELECT, but has a 'count' property for INSERT/UPDATE/DELETE
+          const result = (await query) as unknown;
 
-        // Fallback: treat as array (for queries that return rows)
-        return { rowsAffected: (result as unknown[]).length || 0 };
-      }
-    },
+          // For DELETE/UPDATE/INSERT, postgres-js returns an array-like object with a 'count' property
+          // For SELECT, it returns a plain array
+          if (Array.isArray(result) && 'count' in result) {
+            return { rowsAffected: (result as { count: number }).count };
+          }
+
+          // Fallback: treat as array (for queries that return rows)
+          return { rowsAffected: (result as unknown[]).length || 0 };
+        }
+      }),
     returning: () => wrapReturning((query as { returning: () => DrizzleQuery }).returning(), db),
     // Preserve chainable methods
     where: (...args: unknown[]) =>
@@ -533,22 +691,24 @@ function wrapQuery(
  */
 function wrapReturning(query: DrizzleQuery, db: Database): UnifiedReturning {
   return {
-    one: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { get: () => Promise<unknown> }).get();
-      } else {
-        const results = (await query) as unknown;
-        return (results as unknown[])[0];
-      }
-    },
-    all: async () => {
-      if (isSQLiteDatabase(db)) {
-        return await (query as { all: () => Promise<unknown[]> }).all();
-      } else {
-        const result = (await query) as unknown;
-        return result as unknown[];
-      }
-    },
+    one: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { get: () => Promise<unknown> }).get();
+        } else {
+          const results = (await query) as unknown;
+          return (results as unknown[])[0];
+        }
+      }),
+    all: async () =>
+      coordinateDatabaseOperation(db, async () => {
+        if (isSQLiteDatabase(db)) {
+          return await (query as { all: () => Promise<unknown[]> }).all();
+        } else {
+          const result = (await query) as unknown;
+          return result as unknown[];
+        }
+      }),
   };
 }
 
@@ -608,12 +768,13 @@ export async function executeGet<T = unknown>(
   query: DrizzleQuery,
   db: Database
 ): Promise<T | null> {
-  if (isSQLiteDatabase(db)) {
-    return (await (query as { get: () => Promise<unknown> }).get()) as T;
-  } else {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await (query as { get: () => Promise<unknown> }).get()) as T;
+    }
     const results = await (query as { limit: (count: number) => Promise<unknown[]> }).limit(1);
     return (results[0] as T) || null;
-  }
+  });
 }
 
 /**
@@ -621,12 +782,13 @@ export async function executeGet<T = unknown>(
  * Dialect-aware wrapper for .all()
  */
 export async function executeAll<T = unknown>(query: DrizzleQuery, db: Database): Promise<T[]> {
-  if (isSQLiteDatabase(db)) {
-    return (await (query as { all: () => Promise<unknown[]> }).all()) as T[];
-  } else {
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return (await (query as { all: () => Promise<unknown[]> }).all()) as T[];
+    }
     const result = (await query) as unknown;
     return result as T[];
-  }
+  });
 }
 
 /**
@@ -637,11 +799,13 @@ export async function executeRun(
   query: DrizzleQuery,
   db: Database
 ): Promise<MutationResult | unknown[]> {
-  if (isSQLiteDatabase(db)) {
-    return await (query as { run: () => Promise<MutationResult> }).run();
-  } else {
-    // PostgreSQL: Just execute the query
-    const result = (await query) as unknown;
-    return result as unknown[];
-  }
+  return coordinateDatabaseOperation(db, async () => {
+    if (isSQLiteDatabase(db)) {
+      return await (query as { run: () => Promise<MutationResult> }).run();
+    } else {
+      // PostgreSQL: Just execute the query
+      const result = (await query) as unknown;
+      return result as unknown[];
+    }
+  });
 }

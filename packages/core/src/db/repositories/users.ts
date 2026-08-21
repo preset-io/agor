@@ -81,6 +81,58 @@ export class UsersRepository
 {
   constructor(private db: Database) {}
 
+  private async readDiscoveryAuthorityProjection(
+    userId: UserID | string,
+    lock: boolean
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    const where = eq(users.user_id, userId);
+    if (lock) await lockRowForUpdate(this.db, this.db, users, where);
+    const row = await select(this.db, {
+      user_id: users.user_id,
+      role: users.role,
+      updated_at: users.updated_at,
+      created_at: users.created_at,
+    })
+      .from(users)
+      .where(where)
+      .one();
+    return row
+      ? {
+          user_id: row.user_id as UserID,
+          role: row.role,
+          updated_at: new Date(row.updated_at ?? row.created_at),
+        }
+      : null;
+  }
+
+  /** Nonsecret role/version snapshot captured before an outbound MCP probe. */
+  async getDiscoveryAuthorityProjection(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    try {
+      return await this.readDiscoveryAuthorityProjection(userId, false);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read user discovery authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Transactional counterpart used immediately before capability persistence. */
+  async getDiscoveryAuthorityProjectionForUpdate(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    try {
+      return await this.readDiscoveryAuthorityProjection(userId, true);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to lock user discovery authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /**
    * Explicit nonsecret principal projection for user-targeted invalidations.
    * Tenant scoping is supplied by the repository's current database unit of

@@ -1,7 +1,8 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { message } from 'antd';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MyServersTab } from './MyServersTab';
 
 const overview: MCPMarketplaceOverview = {
@@ -25,6 +26,41 @@ const overview: MCPMarketplaceOverview = {
 };
 
 describe('Marketplace server actions', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('surfaces a discover result failure without success or overview refresh', async () => {
+    const create = vi.fn(async () => ({ success: false, error: 'Provider is unavailable' }));
+    const service = vi.fn((path: string) =>
+      path === 'mcp-member-policy'
+        ? { find: vi.fn(async () => ({ policy: 'allow_private_only', can_configure: true })) }
+        : { create, on: vi.fn(), removeListener: vi.fn() }
+    );
+    const refresh = vi.fn(async () => undefined);
+    const success = vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
+    const error = vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
+    render(
+      <MyServersTab
+        client={{ service } as unknown as AgorClient}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={{ user_id: 'alice', role: 'member' } as never}
+        overview={overview}
+        loading={false}
+        error={null}
+        refresh={refresh}
+      />
+    );
+
+    const button = screen.getByRole('button', { name: 'Refresh tools for GitHub' });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith('Provider is unavailable'));
+    expect(success).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it('uses contextual tool labels and the narrow atomic permission action', async () => {
     const create = vi.fn(async () => ({ permission: 'deny' }));
     const service = vi.fn((path: string) =>

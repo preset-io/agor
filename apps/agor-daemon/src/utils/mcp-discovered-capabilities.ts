@@ -1,6 +1,27 @@
-import { MCPServerRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
-import type { MCPPrompt, MCPResource, MCPServerID, MCPTool } from '@agor/core/types';
-import { runInOAuthTenantWriteScope } from '../oauth-auth-helpers.js';
+import { createHash } from 'node:crypto';
+import {
+  assertTenantWritable,
+  type Database,
+  MCPServerRepository,
+  resolveMcpMemberPolicy,
+  resolveMcpMemberPolicyForUpdate,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+  type TenantScopeAwareDatabase,
+  UsersRepository,
+} from '@agor/core/db';
+import { Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { isAtLeastMemberRole, mayMemberUseMCPTransport } from '@agor/core/mcp/member-policy';
+import type {
+  MCPMemberPolicy,
+  MCPPrompt,
+  MCPResource,
+  MCPServer,
+  MCPServerID,
+  MCPTool,
+  UserID,
+} from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 /** Every list a probe reports, so a missing one cannot be read as an empty one. */
 export interface DiscoveredMCPCapabilities {
@@ -9,58 +30,151 @@ export interface DiscoveredMCPCapabilities {
   prompts: MCPPrompt[];
 }
 
+/** Opaque server-side state captured before any provider-controlled await. */
+export interface MCPDiscoveryAuthoritySnapshot {
+  serverId: MCPServerID;
+  userId: UserID;
+  userRole: string;
+  userUpdatedAt: number;
+  memberPolicy: MCPMemberPolicy;
+  configurationFingerprint: string;
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  if (value instanceof Date) return value.toISOString();
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, canonicalize(nested)])
+  );
+}
+
 /**
- * Persist the capability lists a discovery probe read off an MCP server.
+ * Hash only server-side and never log or return it. Auth/env/header values are
+ * included so a credential or templated endpoint change also invalidates the
+ * provider result, without making any secret part of the service contract.
+ */
+export function fingerprintMCPDiscoveryConfiguration(server: MCPServer): string {
+  const configuration = canonicalize({
+    mcp_server_id: server.mcp_server_id,
+    updated_at: server.updated_at,
+    name: server.name,
+    transport: server.transport,
+    scope: server.scope,
+    enabled: server.enabled,
+    source: server.source,
+    catalog_entry_name: server.catalog_entry_name,
+    owner_user_id: server.owner_user_id,
+    display_name: server.display_name,
+    description: server.description,
+    import_path: server.import_path,
+    command: server.command,
+    args: server.args,
+    url: server.url,
+    headers: server.headers,
+    env: server.env,
+    auth: server.auth,
+  });
+  return createHash('sha256').update(JSON.stringify(configuration)).digest('hex');
+}
+
+function assertMayDiscover(server: MCPServer, userId: UserID, role: string): void {
+  if (!isAtLeastMemberRole(role)) {
+    throw new Forbidden('MCP discovery requires a member role');
+  }
+  if (!mayMemberUseMCPTransport(server.transport)) {
+    throw new Forbidden('Daemon discovery is unavailable for stdio MCP servers');
+  }
+  if (!hasMinimumRole(role, ROLES.ADMIN) && server.owner_user_id !== userId) {
+    throw new Forbidden('Only an admin or the server owner can discover this MCP server');
+  }
+}
+
+/** Capture caller/configuration authority immediately before the network phase. */
+export async function captureMCPDiscoveryAuthority(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  userId: UserID,
+  server: MCPServer
+): Promise<MCPDiscoveryAuthoritySnapshot> {
+  const capture = async (operationDb: Database) => {
+    const freshUser = await new UsersRepository(operationDb).getDiscoveryAuthorityProjection(
+      userId
+    );
+    if (!freshUser) throw new NotAuthenticated('Authentication is no longer current');
+    const memberPolicy = await resolveMcpMemberPolicy(operationDb, userId, tenantId);
+    assertMayDiscover(server, userId, freshUser.role);
+    return {
+      serverId: server.mcp_server_id,
+      userId,
+      userRole: freshUser.role,
+      userUpdatedAt: freshUser.updated_at.getTime(),
+      memberPolicy,
+      configurationFingerprint: fingerprintMCPDiscoveryConfiguration(server),
+    };
+  };
+  return tenantId
+    ? runWithTenantDatabaseScope(db, tenantId, (operationDb) => capture(operationDb))
+    : capture(db);
+}
+
+/**
+ * Reauthorize and persist after provider I/O in one short transaction.
  *
- * This does not go through `app.service('mcp-servers')`, the entry point for
- * configuration CRUD that `authorizeMcpServerWrite` is wired to. That is the
- * decision #2240 documents at `denyDiscoverOfAnotherUsersServer`, and the
- * reason it holds is that the authorizer gates *who* may configure a server,
- * while a refresh configures nothing: the payload is the server's own report
- * of itself, not anything the caller submitted.
- *
- * Routing through it would not be inert, which is the part worth being precise
- * about. Called internally it still enforces nothing — `decidePolicyAndOwnership`
- * returns early on a missing `provider`. Called with the caller's params it
- * would work, and would add two refusals: a `viewer` who still owns a server
- * from before a demotion, and any member under `use_existing_only`. The second
- * is why this stays out. A private server keeps resolving into its owner's
- * sessions no matter what the policy later says (`isMCPServerUsableBy`), so
- * revoking refresh does not stop it being used — it freezes the tool list the
- * agent actually sees. Tightening the policy would make live servers rot.
- *
- * The endpoint's own owner/admin rule is therefore the authorization, and it
- * has already run by the time this is reached. Two structural facts keep that
- * narrow: the update input carries no `owner_user_id`, `url` or `auth`, so a
- * refresh cannot move a row between owners or repoint the server; and those
- * are exactly the fields the OAuth grant-invalidation hook inspects, so
- * routing through the service would take an OAuth grant configuration lock and
- * re-read the row twice to reach an answer that is always "no change".
- *
- * No `mcp-servers` service event is emitted by this repository write. The
- * discover route therefore follows a successful commit with the explicit
- * empty, user-targeted `marketplace:invalidated` control event; keeping that
- * publication beside the route retains the actor/owner and tenant authority
- * that this persistence helper deliberately does not accept.
- *
- * What discovery does still owe the tenant is the database boundary every
- * other write in this endpoint honors. `/mcp-servers/discover` carries tenant
- * identity only — it performs network I/O, so it must not hold an HTTP-long
- * transaction — which means each database touch opens its own short tenant
- * unit of work. Without one, the guarded database handle has no scope to route
- * to and the per-tenant write gate never gets consulted.
+ * The role, policy and server rows are locked before comparison. A role/policy
+ * change or any discovery-relevant server edit therefore orders entirely
+ * before this write (and rejects it) or entirely after its commit. Capability
+ * persistence itself edits only provider-reported JSON paths.
  */
 export async function persistDiscoveredMCPCapabilities(
   db: TenantScopeAwareDatabase,
   tenantId: string | undefined,
-  serverId: MCPServerID,
+  snapshot: MCPDiscoveryAuthoritySnapshot,
   capabilities: DiscoveredMCPCapabilities
 ): Promise<void> {
-  await runInOAuthTenantWriteScope(db, tenantId, async () => {
-    await new MCPServerRepository(db).update(serverId, {
-      tools: capabilities.tools,
-      resources: capabilities.resources,
-      prompts: capabilities.prompts,
-    });
+  await runWithTenantDatabaseTransaction(db, tenantId, async (operationDb) => {
+    if (tenantId) await assertTenantWritable(operationDb, tenantId);
+
+    const freshUser = await new UsersRepository(
+      operationDb
+    ).getDiscoveryAuthorityProjectionForUpdate(snapshot.userId);
+    if (!freshUser) throw new NotAuthenticated('Authentication is no longer current');
+    const currentPolicy = await resolveMcpMemberPolicyForUpdate(
+      operationDb,
+      snapshot.userId,
+      tenantId
+    );
+    const repository = new MCPServerRepository(operationDb);
+    const authority = await repository.getWriteAuthorityProjectionForUpdate(snapshot.serverId);
+    if (!authority) throw new NotFound('MCP server not found');
+    const current = await repository.findById(snapshot.serverId);
+    if (!current) throw new NotFound('MCP server not found');
+
+    // Re-run the current authorization before comparing versions. This keeps a
+    // demotion/ownership/transport refusal authoritative rather than treating
+    // it as an incidental stale result.
+    assertMayDiscover(current, snapshot.userId, freshUser.role);
+    if (
+      freshUser.role !== snapshot.userRole ||
+      freshUser.updated_at.getTime() !== snapshot.userUpdatedAt ||
+      currentPolicy !== snapshot.memberPolicy ||
+      fingerprintMCPDiscoveryConfiguration(current) !== snapshot.configurationFingerprint
+    ) {
+      throw new Conflict(
+        'MCP server authority or configuration changed while tools were being discovered. Retry.'
+      );
+    }
+
+    if (
+      !(await repository.setDiscoveredCapabilitiesInCurrentTransaction(
+        snapshot.serverId,
+        capabilities
+      ))
+    ) {
+      throw new NotFound('MCP server not found');
+    }
   });
 }

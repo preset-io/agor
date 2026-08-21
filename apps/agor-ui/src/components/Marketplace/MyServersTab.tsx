@@ -226,10 +226,17 @@ export const MyServersTab: React.FC<{
                         void mutate(
                           `discover:${server.mcp_server_id}`,
                           canRefresh,
-                          () =>
-                            client!
+                          async () => {
+                            const result = (await client!
                               .service('mcp-servers/discover')
-                              .create({ mcp_server_id: server.mcp_server_id }),
+                              .create({ mcp_server_id: server.mcp_server_id })) as {
+                              success?: boolean;
+                              error?: string;
+                            };
+                            if (result?.success !== true) {
+                              throw new Error(result?.error || 'Tool refresh failed');
+                            }
+                          },
                           'Tools refreshed'
                         )
                       }

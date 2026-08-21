@@ -61,6 +61,16 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).not.toMatch(/\bMCPServerRepository\s*\(/);
   });
 
+  it('captures saved-row authority before provider I/O and presents that stamp at persistence', () => {
+    const capture = discoverBlock.indexOf('captureMCPDiscoveryAuthority(');
+    const firstOutbound = discoverBlock.indexOf('resolveMCPAuthHeaders(');
+    const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
+    expect(capture).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(firstOutbound);
+    expect(persist).toBeGreaterThan(firstOutbound);
+    expect(discoverBlock.slice(persist, persist + 180)).toContain('discoveryAuthority');
+  });
+
   it('emits the user-targeted Marketplace invalidation after durable persistence', () => {
     const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
     const invalidate = discoverBlock.indexOf('emitMarketplaceInvalidation(');

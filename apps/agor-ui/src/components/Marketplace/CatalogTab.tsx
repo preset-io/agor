@@ -22,8 +22,8 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
+import { saveMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
-import { savePromptDraft } from '../../utils/promptDrafts';
 import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -274,19 +274,23 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           return;
         }
         rememberConnectBranchId(currentUser?.user_id, branchId);
-        // A starter prompt is written to exercise the server it ships with, so
-        // it is only worth arming the composer with once that server can answer
-        // it. A new OAuth install with no reusable grant lands without
-        // credentials: staging the prompt there hands the user a loaded
-        // composer whose only outcome is a tool-less answer, turning a
-        // recoverable state into an invitation to hit the failure. The session
-        // says what is missing instead — see the unauthenticated-server notice
-        // above the composer and the warning MCP badge beside it.
+        // Present the starter prompt only once this server can answer it. It is
+        // a tab-local suggestion, not an automatic write into the cross-tab
+        // composer draft. A new OAuth install without a reusable grant instead
+        // lands on the recoverable authentication notice and warning MCP badge.
         if (
           result.starter_prompt &&
           !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
         ) {
-          savePromptDraft(currentUser?.user_id, result.session.session_id, result.starter_prompt);
+          saveMarketplacePromptSuggestion({
+            sessionId: result.session.session_id,
+            prompt: result.starter_prompt,
+            authority: {
+              userId: currentUser!.user_id,
+              role: currentUser!.role,
+              authGeneration,
+            },
+          });
         }
 
         if (mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)) {

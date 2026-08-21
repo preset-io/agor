@@ -772,6 +772,33 @@ export class MCPServerRepository
     return result.rowsAffected > 0;
   }
 
+  /**
+   * Persist exactly the three provider-reported capability lists.
+   *
+   * The caller must already hold the server row lock and must have rechecked
+   * its discovery configuration. Editing the JSON expression in place avoids
+   * replacing auth, endpoint configuration, or a concurrent per-tool rule
+   * with an object captured before the network request.
+   */
+  async setDiscoveredCapabilitiesInCurrentTransaction(
+    id: string,
+    capabilities: Pick<MCPServer, 'tools' | 'resources' | 'prompts'>
+  ): Promise<boolean> {
+    const fullId = await this.resolveId(id);
+    const where = eq(mcpServers.mcp_server_id, fullId);
+    const toolsJson = JSON.stringify(capabilities.tools ?? []);
+    const resourcesJson = JSON.stringify(capabilities.resources ?? []);
+    const promptsJson = JSON.stringify(capabilities.prompts ?? []);
+    const nextData = isPostgresDatabase(this.db)
+      ? sql`jsonb_set(jsonb_set(jsonb_set(${mcpServers.data}, '{tools}'::text[], ${toolsJson}::jsonb, true), '{resources}'::text[], ${resourcesJson}::jsonb, true), '{prompts}'::text[], ${promptsJson}::jsonb, true)`
+      : sql`json_set(${mcpServers.data}, '$.tools', json(${toolsJson}), '$.resources', json(${resourcesJson}), '$.prompts', json(${promptsJson}))`;
+    const result = await update(this.db, mcpServers)
+      .set({ data: nextData, updated_at: new Date() })
+      .where(where)
+      .run();
+    return result.rowsAffected > 0;
+  }
+
   /** Backwards-compatible owner-CAS primitive for trusted repository callers. */
   async setOwnedToolEnabled(
     id: string,

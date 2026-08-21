@@ -1,8 +1,8 @@
 import type { MCPOAuthAttemptResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { savePromptDraftIfEmpty } from './promptDrafts';
 
 const KEY_PREFIX = 'agor-marketplace-oauth-prompt:';
+const SUGGESTION_KEY_PREFIX = 'agor-marketplace-prompt-suggestion:';
 const MAX_AGE_MS = 60 * 60 * 1000;
 
 export interface MarketplaceOAuthHandoffAuthority {
@@ -21,6 +21,7 @@ export interface PendingMarketplaceOAuthPrompt extends MarketplaceOAuthHandoffAu
 }
 
 const key = (sessionId: string) => `${KEY_PREFIX}${sessionId}`;
+const suggestionKey = (sessionId: string) => `${SUGGESTION_KEY_PREFIX}${sessionId}`;
 
 function remove(sessionId: string): void {
   try {
@@ -147,18 +148,71 @@ export async function claimMarketplaceOAuthPrompt(input: {
 }
 
 /**
- * Commit a claimed prompt only if both the mounted composer and the canonical
- * localStorage draft are still empty at this exact moment. The second check is
- * what protects text another tab wrote while OAuth-attempt status was awaited.
+ * A starter prompt is presentation state, never a composer draft.
+ *
+ * `sessionStorage` deliberately scopes it to the tab that initiated Connect.
+ * The shared `localStorage` draft may be written by any open tab and has no
+ * atomic compare-and-set primitive. Keeping Marketplace out of that keyspace
+ * is the fail-closed guarantee: an OAuth completion cannot overwrite text,
+ * even when another tab writes at the exact final read/write boundary.
  */
-export function stageClaimedMarketplaceOAuthPrompt(input: {
+export function saveMarketplacePromptSuggestion(input: {
   sessionId: string;
   prompt: string;
-  currentComposerText: string;
-  insertText: (prompt: string) => void;
-}): boolean {
-  if (!input.prompt.trim() || input.currentComposerText.trim()) return false;
-  if (!savePromptDraftIfEmpty(input.sessionId, input.prompt)) return false;
-  input.insertText(input.prompt);
-  return true;
+  authority: MarketplaceOAuthHandoffAuthority;
+}): void {
+  if (!input.prompt.trim()) return;
+  try {
+    sessionStorage.setItem(
+      suggestionKey(input.sessionId),
+      JSON.stringify({
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        ...input.authority,
+        createdAt: Date.now(),
+      })
+    );
+  } catch {
+    // The session remains usable; only the optional suggestion is skipped.
+  }
+}
+
+export function consumeMarketplacePromptSuggestion(
+  sessionId: string,
+  authority: MarketplaceOAuthHandoffAuthority
+): string | null {
+  try {
+    const raw = sessionStorage.getItem(suggestionKey(sessionId));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PendingMarketplaceOAuthPrompt>;
+    if (
+      value.sessionId !== sessionId ||
+      value.userId !== authority.userId ||
+      value.role !== authority.role ||
+      value.authGeneration !== authority.authGeneration ||
+      typeof value.prompt !== 'string' ||
+      typeof value.createdAt !== 'number' ||
+      Date.now() - value.createdAt > MAX_AGE_MS
+    ) {
+      sessionStorage.removeItem(suggestionKey(sessionId));
+      return null;
+    }
+    sessionStorage.removeItem(suggestionKey(sessionId));
+    return value.prompt;
+  } catch {
+    try {
+      sessionStorage.removeItem(suggestionKey(sessionId));
+    } catch {
+      // ignore unavailable storage
+    }
+    return null;
+  }
+}
+
+export function discardMarketplacePromptSuggestion(sessionId: string): void {
+  try {
+    sessionStorage.removeItem(suggestionKey(sessionId));
+  } catch {
+    // ignore unavailable storage
+  }
 }

@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPromptDraft } from '../../utils/promptDrafts';
+import { consumeMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -201,6 +202,7 @@ beforeEach(() => {
   });
   mockNavigate.mockClear();
   localStorage.clear();
+  sessionStorage.clear();
   vi.spyOn(window, 'open').mockReturnValue({
     opener: null,
     closed: false,
@@ -547,7 +549,7 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('connects by catalog key alone and lands in the new session with the prompt loaded', async () => {
+  it('connects by catalog key alone and lands with a tab-local prompt suggestion', async () => {
     const drawer = await openDrawer();
     const connect = drawer.getByRole('button', { name: /Connect/ });
     fireEvent.click(drawer.getByRole('checkbox'));
@@ -568,7 +570,14 @@ describe('connect', () => {
     await waitFor(() =>
       expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
     );
-    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(
+      consumeMarketplacePromptSuggestion(SESSION_ID, {
+        userId: DEFAULT_ADMIN.user_id,
+        role: DEFAULT_ADMIN.role,
+        authGeneration: 1,
+      })
+    ).toBe(DEEPWIKI.starter_prompt);
     expect(localStorage.getItem(`agor-marketplace-branch:${DEFAULT_ADMIN.user_id}`)).toBe(
       'branch-1'
     );
@@ -576,9 +585,8 @@ describe('connect', () => {
 
   /**
    * A new OAuth install with no reusable grant lands without credentials. A
-   * starter prompt is written to exercise the server it ships with, so arming
-   * the composer with one here means pressing Connect produces a loaded prompt
-   * whose only result is a tool-less answer.
+   * starter prompt is suggested to exercise the server it ships with, so
+   * presenting one here would invite a tool-less answer.
    *
    * These pin the split. The automatic provider popup runs alongside the new,
    * recoverable session. Its notice, warning MCP badge, and server pill remain
@@ -616,7 +624,7 @@ describe('connect', () => {
     expect(connectCalls).toHaveLength(1);
   });
 
-  it('arms the composer when a reused install already holds a live token', async () => {
+  it('suggests the starter prompt when a reused install already holds a live token', async () => {
     // A reused install comes back through `mcp-servers` find, where the daemon
     // injects the caller's token — redacted to a sentinel, but present, which
     // is all "is this finished" needs.
@@ -629,7 +637,14 @@ describe('connect', () => {
       },
     });
 
-    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(
+      consumeMarketplacePromptSuggestion(SESSION_ID, {
+        userId: DEFAULT_ADMIN.user_id,
+        role: DEFAULT_ADMIN.role,
+        authGeneration: 1,
+      })
+    ).toBe(DEEPWIKI.starter_prompt);
   });
 
   it('withholds the prompt when the token the install carries has expired', async () => {

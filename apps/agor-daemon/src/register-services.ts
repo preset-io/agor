@@ -235,7 +235,11 @@ import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
-import { persistDiscoveredMCPCapabilities } from './utils/mcp-discovered-capabilities.js';
+import {
+  captureMCPDiscoveryAuthority,
+  type MCPDiscoveryAuthoritySnapshot,
+  persistDiscoveredMCPCapabilities,
+} from './utils/mcp-discovered-capabilities.js';
 import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
@@ -4804,6 +4808,7 @@ export async function registerMCPServices(
         };
         let serverId: string | undefined;
         let authoritativeServer: MCPServer | undefined;
+        let discoveryAuthority: MCPDiscoveryAuthoritySnapshot | undefined;
 
         if (hasInlineConfig) {
           if (!isTemplated(data.url!)) {
@@ -4895,6 +4900,17 @@ export async function registerMCPServices(
         const userId = params?.user?.user_id as UserID | undefined;
         if (!userId) {
           throw new NotAuthenticated('MCP discover requires an authenticated user');
+        }
+        if (serverId && authoritativeServer) {
+          // Capture the exact authority/configuration used by this probe before
+          // the first provider-controlled await. Persistence re-locks and
+          // compares it after discovery; the request never carries this stamp.
+          discoveryAuthority = await captureMCPDiscoveryAuthority(
+            db,
+            tenantId,
+            userId,
+            authoritativeServer
+          );
         }
 
         const { resolveUserEnvironment } = await import('@agor/core/config');
@@ -5230,9 +5246,9 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
-          if (serverId) {
+          if (serverId && discoveryAuthority) {
             await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
-              persistDiscoveredMCPCapabilities(db, tenantId, serverId as MCPServerID, {
+              persistDiscoveredMCPCapabilities(db, tenantId, discoveryAuthority, {
                 tools: toolsResult.tools.map((t) => ({
                   name: t.name,
                   description: t.description || '',

@@ -66,7 +66,9 @@ import {
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import {
   claimMarketplaceOAuthPrompt,
-  stageClaimedMarketplaceOAuthPrompt,
+  consumeMarketplacePromptSuggestion,
+  discardMarketplacePromptSuggestion,
+  saveMarketplacePromptSuggestion,
 } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -438,11 +440,31 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
+  const [marketplacePromptSuggestion, setMarketplacePromptSuggestion] = React.useState<
+    string | null
+  >(null);
+  const marketplaceSuggestionSessionId = session?.session_id;
 
-  // Marketplace OAuth seeds its starter prompt only after the durable grant
-  // has been observed by the same authoritative store this panel uses. The
-  // handoff is consumed whether or not it can be inserted: text the user has
-  // already typed always wins and is never overwritten later.
+  // Suggestions are tab-local presentation state, intentionally separate from
+  // the cross-tab composer draft. Reading one can never write or clear text.
+  React.useEffect(() => {
+    if (!marketplaceSuggestionSessionId || !currentUserId || !currentRole) {
+      setMarketplacePromptSuggestion(null);
+      return;
+    }
+    setMarketplacePromptSuggestion(
+      consumeMarketplacePromptSuggestion(marketplaceSuggestionSessionId, {
+        userId: currentUserId,
+        role: currentRole,
+        authGeneration,
+      })
+    );
+  }, [authGeneration, currentRole, currentUserId, marketplaceSuggestionSessionId]);
+
+  // Marketplace OAuth presents its starter prompt only after the durable grant
+  // has been observed by the same authoritative store this panel uses. It is
+  // never inserted into the shared draft: another tab's typed text therefore
+  // wins without relying on a nonexistent localStorage compare-and-set.
   React.useEffect(() => {
     const operation = marketplaceHandoffGuard.begin();
     if (!session || !client || !currentUserId || !currentRole || !operation.isCurrent()) return;
@@ -454,12 +476,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isCurrent: operation.isCurrent,
     }).then((prompt) => {
       if (!prompt || !operation.isCurrent()) return;
-      stageClaimedMarketplaceOAuthPrompt({
+      saveMarketplacePromptSuggestion({
         sessionId: session.session_id,
         prompt,
-        currentComposerText: promptRef.current?.getValue() ?? inputValueRef.current,
-        insertText: (value) => promptRef.current?.insertText(value),
+        authority: { userId: currentUserId, role: currentRole, authGeneration },
       });
+      if (operation.isCurrent()) {
+        setMarketplacePromptSuggestion(
+          consumeMarketplacePromptSuggestion(session.session_id, {
+            userId: currentUserId,
+            role: currentRole,
+            authGeneration,
+          })
+        );
+      }
     });
     return operation.cancel;
   }, [
@@ -880,69 +910,92 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (
-      <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
-        onDragActiveChange={setComposerDropActive}
-        onFilesDrop={addComposerAttachments}
-      >
-        {composerAttachmentValidationError && (
+      <>
+        {marketplacePromptSuggestion && (
           <Alert
-            type="error"
+            type="info"
             showIcon
-            message={composerAttachmentValidationError}
-            style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+            closable
+            message="Starter prompt suggestion"
+            description={
+              <Typography.Paragraph
+                copyable
+                style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+              >
+                {marketplacePromptSuggestion}
+              </Typography.Paragraph>
+            }
+            onClose={() => {
+              discardMarketplacePromptSuggestion(session.session_id);
+              setMarketplacePromptSuggestion(null);
+            }}
+            style={{ marginBottom: token.marginXS, borderRadius: token.borderRadius }}
           />
         )}
-        <SessionAttachmentTray
-          attachments={composerAttachments}
+        <SessionComposerDropZone
           disabled={composerAttachmentUploading}
-          onRemove={removeComposerAttachment}
-        />
-        <PromptInput
-          key={composerIdentityKey}
-          ref={promptRef}
-          sessionId={session.session_id}
-          getDraft={getDraft}
-          saveDraft={saveDraft}
-          deleteDraft={deleteDraft}
-          onHasInputChange={handleHasInputChange}
-          inputValueRef={inputValueRef}
-          onSubmit={stableFooterHandlers.onSendPrompt}
-          hasExternalInput={hasComposerAttachments}
-          placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
-          }
-          autoSize={{ minRows: 1, maxRows: 10 }}
-          client={client}
-          userById={userById}
+          onDragActiveChange={setComposerDropActive}
           onFilesDrop={addComposerAttachments}
-          filesDropDisabled={composerAttachmentUploading}
-          showFilesDropOverlay={false}
-          suppressEmptyHighlight={composerDropActive}
-          slashCommands={
-            Array.isArray(sessionCustomContext?.slash_commands)
-              ? sessionCustomContext.slash_commands
-              : undefined
-          }
-          skills={
-            Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
-          }
-        />
-        <input
-          ref={attachmentInputRef}
-          type="file"
-          accept={getComposerUploadAccept()}
-          multiple
-          disabled={composerAttachmentUploading}
-          style={{ display: 'none' }}
-          onChange={(event) => {
-            addComposerAttachments(Array.from(event.target.files ?? []));
-            event.target.value = '';
-          }}
-        />
-      </SessionComposerDropZone>
+        >
+          {composerAttachmentValidationError && (
+            <Alert
+              type="error"
+              showIcon
+              message={composerAttachmentValidationError}
+              style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+            />
+          )}
+          <SessionAttachmentTray
+            attachments={composerAttachments}
+            disabled={composerAttachmentUploading}
+            onRemove={removeComposerAttachment}
+          />
+          <PromptInput
+            key={composerIdentityKey}
+            ref={promptRef}
+            sessionId={session.session_id}
+            getDraft={getDraft}
+            saveDraft={saveDraft}
+            deleteDraft={deleteDraft}
+            onHasInputChange={handleHasInputChange}
+            inputValueRef={inputValueRef}
+            onSubmit={stableFooterHandlers.onSendPrompt}
+            hasExternalInput={hasComposerAttachments}
+            placeholder={
+              isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
+            }
+            autoSize={{ minRows: 1, maxRows: 10 }}
+            client={client}
+            userById={userById}
+            onFilesDrop={addComposerAttachments}
+            filesDropDisabled={composerAttachmentUploading}
+            showFilesDropOverlay={false}
+            suppressEmptyHighlight={composerDropActive}
+            slashCommands={
+              Array.isArray(sessionCustomContext?.slash_commands)
+                ? sessionCustomContext.slash_commands
+                : undefined
+            }
+            skills={
+              Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
+            }
+          />
+          <input
+            ref={attachmentInputRef}
+            type="file"
+            accept={getComposerUploadAccept()}
+            multiple
+            disabled={composerAttachmentUploading}
+            style={{ display: 'none' }}
+            onChange={(event) => {
+              addComposerAttachments(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }}
+          />
+        </SessionComposerDropZone>
+      </>
     );
   }, [
     session,
@@ -964,6 +1017,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     handleHasInputChange,
     stableFooterHandlers,
     token.borderRadius,
+    token.marginXS,
+    marketplacePromptSuggestion,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
