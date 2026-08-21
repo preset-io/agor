@@ -411,7 +411,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(lockBAcquired).toBe(true);
     });
 
-    it('rolls back token persistence when the one-shot success fence is lost', async () => {
+    it('atomically rolls back the real token repository when pending authority loses its success fence', async () => {
       const bound = await seed('success-fence-rollback');
       const context = flowContext(crypto.randomUUID());
       await authorityA.create({
@@ -456,6 +456,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       await expect(
         runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+          new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+            bound.userId,
+            bound.serverId
+          )
+        )
+      ).resolves.toBeNull();
+      // Read from the second daemon/pool as well: this is the real PostgreSQL
+      // repository + pending-flow authority transaction contract, not the
+      // injected control-flow seam used by register-services SQLite tests.
+      await expect(
+        runWithTenantDatabaseScope(dbB, bound.tenantId, (scoped) =>
           new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
             bound.userId,
             bound.serverId

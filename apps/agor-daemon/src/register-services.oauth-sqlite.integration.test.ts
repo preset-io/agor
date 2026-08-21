@@ -722,6 +722,116 @@ describe('SQLite saved-row OAuth authority', () => {
     ).toBeNull();
   });
 
+  it('never sends A bearer credentials after test-oauth callback when the socket becomes B', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const browserReservation = await reserveBrowserEvent(harness, 'test-oauth');
+    const testRequest = harness.app.service('mcp-servers/test-oauth').create(
+      {
+        mcp_url: provider.savedMcpUrl,
+        mcp_server_id: harness.server.mcp_server_id,
+        start_browser_flow: true,
+        oauth_browser_event: browserReservation,
+      },
+      paramsFor(harness)
+    );
+    const authorizationUrl = new URL(await harness.nextAuthorizationUrl());
+    const replacementUserId = '01900000-0000-7000-8000-00000000b00b' as UserID;
+    let authorityReplaced = false;
+    (harness.app.io as { to: () => { emit: (event: string) => void } }).to = () => ({
+      emit: (event) => {
+        if (event !== 'oauth:completed' || authorityReplaced) return;
+        authorityReplaced = true;
+        // Completion is emitted after the token is durably persisted and
+        // immediately before the raw awaitToken promise resolves. Replace the
+        // surviving socket at that exact boundary so the post-await guard —
+        // not an earlier provider/DB guard — must stop the bearer probe.
+        harness.liveSocket.feathers.user = {
+          ...harness.user,
+          user_id: replacementUserId,
+          email: 'replacement-admin@example.test',
+        };
+        harness.liveSocket.feathers.authentication = {
+          strategy: 'jwt',
+          accessToken: 'replacement-admin-authority-token',
+        };
+      },
+    });
+
+    await expect(
+      harness.callback(authorizationUrl.searchParams.get('state')!)
+    ).resolves.toMatchObject({ status: 200 });
+    expect(authorityReplaced).toBe(true);
+
+    await expect(testRequest).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/attempt|authority/i),
+    });
+    expect(
+      provider.requests.filter((request) => request.authorization === 'Bearer sqlite-access-token')
+    ).toEqual([]);
+
+    // Callback persistence is intentionally bound to the server-issued A
+    // attempt/user/tenant, not to socket lifetime. Only use in the surviving
+    // request is socket-bound, so B can neither receive nor send A's token.
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        replacementUserId,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toBeNull();
+  });
+
+  it('uses attempt-bound live authority after browser emit instead of the reservation TTL', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    databases.push(harness.rawDb);
+    const issuedAt = Date.now();
+    const browserReservation = await reserveBrowserEvent(harness, 'test-oauth');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    try {
+      const testRequest = harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_url: provider.savedMcpUrl,
+          mcp_server_id: harness.server.mcp_server_id,
+          start_browser_flow: true,
+          oauth_browser_event: browserReservation,
+        },
+        paramsFor(harness)
+      );
+      const authorizationUrl = new URL(await harness.nextAuthorizationUrl());
+
+      // The pre-browser reservation has done its job. The callback wait is
+      // bounded separately and remains usable only by the same live socket,
+      // caller, role, tenant, token fingerprint, and server-issued attempt.
+      clock.mockReturnValue(issuedAt + 60_001);
+      await expect(
+        harness.callback(authorizationUrl.searchParams.get('state')!)
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(testRequest).resolves.toMatchObject({
+        success: true,
+        tokenValid: true,
+        mcpStatus: 200,
+      });
+      expect(
+        provider.requests.filter(
+          (request) => request.authorization === 'Bearer sqlite-access-token'
+        )
+      ).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('consumes reservations once and rejects caller/socket/tenant replacement before provider work', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -1098,6 +1208,11 @@ describe('SQLite saved-row OAuth authority', () => {
   );
 
   it('gives expiry precedence when PostgreSQL grant locking rejects after discovery', async () => {
+    // This injects the PostgreSQL-only control-flow boundaries into the real
+    // registered service while retaining SQLite storage. It proves request
+    // continuation ordering, not database rollback. The actual repository +
+    // pending-authority rollback contract lives in
+    // mcp-oauth-pending-flow-authority.postgres.test.ts.
     const provider = await createTestProvider();
     providers.push(provider);
     const lockStarted = deferred<void>();
@@ -1146,6 +1261,8 @@ describe('SQLite saved-row OAuth authority', () => {
   });
 
   it('gives socket replacement precedence when PostgreSQL durable-flow creation rejects', async () => {
+    // As above, this is a production service control-flow seam. It is kept
+    // explicitly distinct from the live-PostgreSQL atomicity test.
     const provider = await createTestProvider();
     providers.push(provider);
     const createStarted = deferred<void>();

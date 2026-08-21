@@ -182,6 +182,44 @@ describe('safe OAuth outbound URL policy', () => {
     expect(targetReached).toBe(true);
   });
 
+  it('rechecks authority between redirect hops and never dispatches the next request', async () => {
+    let releaseFirstHop!: () => void;
+    const firstHopHeld = new Promise<void>((resolve) => {
+      releaseFirstHop = resolve;
+    });
+    let firstHopReached!: () => void;
+    const firstHopStarted = new Promise<void>((resolve) => {
+      firstHopReached = resolve;
+    });
+    let targetReached = false;
+    const target = await listen((_request, response) => {
+      targetReached = true;
+      response.writeHead(200);
+      response.end('must not be reached');
+    });
+    const source = await listen(async (_request, response) => {
+      firstHopReached();
+      await firstHopHeld;
+      response.writeHead(302, { location: `${target.url}/metadata` });
+      response.end();
+    });
+    let current = true;
+    const request = safeOutboundFetch(source.url, {
+      redirect: 'follow',
+      allowLocalhostHttp: true,
+      assertCurrent: () => {
+        if (!current) throw new Error('request authority replaced');
+      },
+    });
+
+    await firstHopStarted;
+    current = false;
+    releaseFirstHop();
+
+    await expect(request).rejects.toThrow('request authority replaced');
+    expect(targetReached).toBe(false);
+  });
+
   it('bounds response bodies before parsing provider-controlled content', async () => {
     const { url } = await listen((_request, response) => {
       response.writeHead(200);

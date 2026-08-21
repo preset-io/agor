@@ -63,6 +63,11 @@ export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' |
   maxResponseBytes?: number;
   /** Exact localhost/loopback HTTP exception for standalone development. */
   allowLocalhostHttp?: boolean;
+  /**
+   * Optional caller-owned authority fence for credential-bearing requests.
+   * Checked around every physical dispatch, response/error, and redirect hop.
+   */
+  assertCurrent?: () => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -223,6 +228,10 @@ async function requestOnce(
   const maxBytes = options.maxResponseBytes ?? 1024 * 1024;
   const pinnedLookup = createPinnedLookup(pinned);
 
+  // DNS validation may itself have awaited. Re-ask immediately before opening
+  // the socket so a caller cannot lose authority during lookup and still send
+  // the captured headers/body.
+  options.assertCurrent?.();
   return new Promise<Response>((resolve, reject) => {
     let settled = false;
     let responseStream: http.IncomingMessage | undefined;
@@ -315,7 +324,20 @@ export async function safeOutboundFetch(
     const redirectMode = options.redirect ?? 'error';
     const maxRedirects = options.maxRedirects ?? 3;
     for (let hop = 0; ; hop += 1) {
-      const response = await requestOnce(url, options, deadline.signal);
+      // This assertion is intentionally per hop rather than only around the
+      // aggregate fetch. Redirect handling is an internal request loop, and
+      // each destination is a distinct external side effect.
+      options.assertCurrent?.();
+      let response: Response;
+      try {
+        response = await requestOnce(url, options, deadline.signal);
+      } catch (error) {
+        // Authority/expiry wins over a simultaneous network error and prevents
+        // callers from treating it as a retryable provider failure.
+        options.assertCurrent?.();
+        throw error;
+      }
+      options.assertCurrent?.();
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       if (redirectMode !== 'follow' || hop >= maxRedirects) {
         throw new UnsafeOutboundUrlError('Outbound OAuth redirect is not allowed');

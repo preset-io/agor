@@ -207,6 +207,7 @@ export async function discoverResourceMetadataUrl(
         redirect: 'follow',
         timeoutMs: 10_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
     } catch {
       // Keep the authority/deadline check outside the provider-error catch:
@@ -330,6 +331,7 @@ export async function discoverAuthorizationServerFromMcpOrigin(
         redirect: 'follow',
         timeoutMs: 10_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
     } catch {
       options.assertCurrent?.();
@@ -450,6 +452,7 @@ async function fetchResourceMetadata(
       redirect: 'follow',
       timeoutMs: 15_000,
       allowLocalhostHttp: options.allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
     });
   } catch (error) {
     options.assertCurrent?.();
@@ -617,6 +620,7 @@ async function registerDynamicClient(
       timeoutMs: 15_000,
       maxResponseBytes: MAX_DCR_RESPONSE_BYTES,
       allowLocalhostHttp,
+      assertCurrent,
     });
   } catch (error) {
     assertCurrent?.();
@@ -796,6 +800,7 @@ export async function fetchAuthorizationServerMetadata(
         redirect: 'follow',
         timeoutMs: 15_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
     } catch {
       options.assertCurrent?.();

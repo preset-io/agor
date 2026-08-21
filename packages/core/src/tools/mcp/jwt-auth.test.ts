@@ -55,6 +55,46 @@ describe('resolveMCPAuthHeaders OAuth authority', () => {
       )
     ).resolves.toEqual({ Authorization: 'Bearer bound-token' });
   });
+
+  it('propagates authority loss during client-credential fetch instead of falling back', async () => {
+    let signalRequest!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      signalRequest = resolve;
+    });
+    let releaseResponse!: () => void;
+    const responseReleased = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    const tokenUrl = await listen(async (_request, response) => {
+      signalRequest();
+      await responseReleased;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"access_token":"must-not-return","token_type":"bearer"}');
+    });
+    let current = true;
+    const resolving = resolveMCPAuthHeaders(
+      {
+        type: 'oauth',
+        oauth_token_url: tokenUrl,
+        oauth_client_id: 'client',
+        oauth_client_secret: 'secret',
+      },
+      'http://127.0.0.1/mcp',
+      {
+        allowLocalhostHttp: true,
+        disableProcessTokenCache: true,
+        assertCurrent: () => {
+          if (!current) throw new Error('request authority replaced');
+        },
+      }
+    );
+
+    await requestStarted;
+    current = false;
+    releaseResponse();
+
+    await expect(resolving).rejects.toThrow('request authority replaced');
+  });
 });
 
 describe('JWT discovery authentication outbound policy', () => {

@@ -24,6 +24,8 @@ export interface OAuthConfig {
   cacheNamespace?: string;
   /** Durable daemon paths disable this process-local bearer cache. */
   cache?: boolean;
+  /** Optional live request authority for secret-bearing provider work. */
+  assertCurrent?: () => void;
 }
 
 export interface OAuthTokenResponse {
@@ -139,6 +141,7 @@ export async function fetchOAuthToken(
   config: OAuthConfig,
   debug: boolean = false
 ): Promise<{ token: string; debugInfo?: OAuthDebugInfo }> {
+  config.assertCurrent?.();
   const debugSteps: OAuthDebugStep[] = [];
   const startTime = Date.now();
 
@@ -191,6 +194,7 @@ export async function fetchOAuthToken(
   const cached = cacheEnabled ? oauthTokenCache.get(cacheKey) : undefined;
 
   if (cached && cached.expiresAt > Date.now()) {
+    config.assertCurrent?.();
     const ttlRemaining = Math.floor((cached.expiresAt - Date.now()) / 1000);
     addDebugStep('check_cache', 'success', `Cache hit! Token still valid for ${ttlRemaining}s`, {
       fetchedAt: new Date(cached.fetchedAt).toISOString(),
@@ -260,6 +264,7 @@ export async function fetchOAuthToken(
       redirect: 'error',
       timeoutMs: 15_000,
       allowLocalhostHttp: config.allowLocalhostHttp,
+      assertCurrent: config.assertCurrent,
     });
 
     addDebugStep('fetch_token', 'info', `Received response with status ${response.status}`, {
@@ -270,6 +275,9 @@ export async function fetchOAuthToken(
       },
     });
   } catch (error: unknown) {
+    // Preserve caller authority errors rather than wrapping them as a generic
+    // provider failure that an outer compatibility layer may swallow.
+    config.assertCurrent?.();
     const errorMessage = error instanceof Error ? error.message : String(error);
     addDebugStep('fetch_token', 'error', `Network error: ${errorMessage}`, {
       error: errorMessage,
@@ -304,6 +312,7 @@ export async function fetchOAuthToken(
   let data: OAuthTokenResponse;
   try {
     data = (await response.json()) as OAuthTokenResponse;
+    config.assertCurrent?.();
     addDebugStep('parse_response', 'success', 'Successfully parsed OAuth response', {
       token_type: data.token_type,
       expires_in: data.expires_in,
@@ -311,6 +320,7 @@ export async function fetchOAuthToken(
       scope: data.scope,
     });
   } catch (error: unknown) {
+    config.assertCurrent?.();
     const errorMessage = error instanceof Error ? error.message : String(error);
     addDebugStep('parse_response', 'error', `Failed to parse JSON response: ${errorMessage}`);
     throw new Error(`OAuth response is not valid JSON: ${errorMessage}`);

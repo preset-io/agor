@@ -30,6 +30,8 @@ export interface JWTTokenFetchOptions {
   cacheNamespace?: string;
   /** PostgreSQL/hosted callers disable process-local bearer caching. */
   cache?: boolean;
+  /** Optional live request authority for secret-bearing provider work. */
+  assertCurrent?: () => void;
 }
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
@@ -63,6 +65,7 @@ export async function fetchJWTToken(
   config: JWTConfig,
   options: JWTTokenFetchOptions = {}
 ): Promise<string> {
+  options.assertCurrent?.();
   const { api_url, api_token, api_secret } = config;
   const shouldCache = options.cache !== false;
   const cacheKey = getCacheKey(config, options.cacheNamespace ?? '<standalone>');
@@ -70,6 +73,7 @@ export async function fetchJWTToken(
   // Check cache first
   const cached = shouldCache ? tokenCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) {
+    options.assertCurrent?.();
     return cached.token;
   }
 
@@ -87,6 +91,7 @@ export async function fetchJWTToken(
       name: api_token,
       secret: api_secret,
     }),
+    assertCurrent: options.assertCurrent,
   });
 
   if (!response.ok) {
@@ -99,8 +104,10 @@ export async function fetchJWTToken(
   try {
     data = (await response.json()) as typeof data;
   } catch {
+    options.assertCurrent?.();
     throw new Error('JWT token fetch failed (invalid_response)');
   }
+  options.assertCurrent?.();
 
   // Handle different response formats
   const token = data.access_token || data.payload?.access_token;
@@ -182,8 +189,11 @@ export async function resolveMCPAuthHeaders(
     allowLocalhostHttp?: boolean;
     cacheNamespace?: string;
     disableProcessTokenCache?: boolean;
+    /** Optional live request authority for provider/token use. */
+    assertCurrent?: () => void;
   } = {}
 ): Promise<Record<string, string> | undefined> {
+  options.assertCurrent?.();
   if (!auth || auth.type === 'none') {
     return undefined;
   }
@@ -216,6 +226,7 @@ export async function resolveMCPAuthHeaders(
         allowLocalhostHttp: options.allowLocalhostHttp ?? true,
         cacheNamespace: options.cacheNamespace,
         cache: options.disableProcessTokenCache !== true,
+        assertCurrent: options.assertCurrent,
       }
     );
 
@@ -269,12 +280,16 @@ export async function resolveMCPAuthHeaders(
         allowLocalhostHttp: options.allowLocalhostHttp ?? true,
         cacheNamespace: options.cacheNamespace,
         cache: options.disableProcessTokenCache !== true,
+        assertCurrent: options.assertCurrent,
       });
 
       return {
         Authorization: `Bearer ${token}`,
       };
     } catch (error) {
+      // Never downgrade identity/authority loss into an unauthenticated MCP
+      // fallback after client credentials crossed the provider boundary.
+      options.assertCurrent?.();
       console.warn('[OAuth] Token fetch failed:', error instanceof Error ? error.message : error);
       return undefined;
     }
