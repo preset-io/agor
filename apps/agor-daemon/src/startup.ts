@@ -31,6 +31,7 @@ import type { Application, SessionsServiceImpl, TasksServiceImpl } from './decla
 import { containAllTrackedExecutors } from './executor-tracking.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
+import { GatewayMessageDeliveryWorker } from './services/gateway-message-delivery-worker.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
 import { SchedulerService } from './services/scheduler.js';
@@ -817,7 +818,18 @@ export async function startup(ctx: StartupContext): Promise<void> {
     });
   }
 
-  // 10. Graceful shutdown handler
+  // 10. Start final Discord delivery independently from listener ownership and
+  // inbound Task processing. Claims and provider effects are recoverable across
+  // daemon replicas; this loop is deliberately a separate lifecycle.
+  const gatewayMessageDeliveryWorker = new GatewayMessageDeliveryWorker(db, {
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+  });
+  app.set('gatewayMessageDeliveryWorker', gatewayMessageDeliveryWorker);
+  gatewayMessageDeliveryWorker.start();
+  console.log('📨 Gateway message delivery worker started');
+
+  // 11. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
 
@@ -868,6 +880,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
       }
 
       // Stop gateway listeners
+      console.log('📨 Stopping gateway message delivery worker...');
+      gatewayMessageDeliveryWorker.stop();
+
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();

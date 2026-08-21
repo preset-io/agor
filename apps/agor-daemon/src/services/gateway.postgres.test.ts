@@ -19,7 +19,7 @@ import {
 } from '@agor/core/db';
 import { getConnector } from '@agor/core/gateway';
 import type { Session, TaskID, TenantID, User } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { DEFAULT_DISCORD_CATCH_UP, TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import { GatewayService } from './gateway.js';
@@ -59,6 +59,8 @@ const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 
 const authorId = '444444444444444444';
 const botId = '111111111111111111';
+let activeBotId = botId;
+let botInstallationCounter = 0n;
 const guildId = '222222222222222222';
 const channelId = '333333333333333333';
 const seedThreadId = `discord:message:${channelId}:555555555555555555`;
@@ -84,7 +86,7 @@ function discordInboundData(
     metadata: {
       discord_guild_id: guildId,
       discord_author_id: authorId,
-      discord_bot_user_id: botId,
+      discord_bot_user_id: activeBotId,
       discord_channel_id: channelId,
       discord_message_id: messageId,
       discord_role_ids: [],
@@ -102,6 +104,7 @@ async function seedGateway(db: Database, tenantId: TenantID) {
     const branches = new BranchRepository(scoped);
     const channels = new GatewayChannelRepository(scoped);
     const outbound = new GatewayOutboundMessageRepository(scoped);
+    activeBotId = (BigInt(botId) + botInstallationCounter++).toString();
 
     const user = await users.create({
       user_id: generateId(),
@@ -138,12 +141,19 @@ async function seedGateway(db: Database, tenantId: TenantID) {
       created_by: user.user_id,
       config: {
         bot_token: 'discord-test-token',
-        application_id: botId,
+        application_id: activeBotId,
         guild_id: guildId,
         allowed_channel_ids: [channelId],
         allowed_user_ids: [authorId],
         allowed_role_ids: [],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        align_discord_users: false,
+        catch_up: { ...DEFAULT_DISCORD_CATCH_UP },
+        files: false,
+        agent_tools: [],
       },
+      provider_installation_id: activeBotId,
     });
     const seed = await outbound.create({
       gateway_channel_id: channel.id,

@@ -2014,7 +2014,11 @@ export const gatewayChannels = pgTable(
     target_branch_id: varchar('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
-    agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
+    agor_user_id: varchar('agor_user_id', { length: 36 }),
+    // Discord installation identity is verified from the token-owned
+    // application and is globally unique only while a channel is enabled.
+    provider_installation_id: text('provider_installation_id'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
     channel_key: text('channel_key').notNull(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
@@ -2051,6 +2055,11 @@ export const gatewayChannels = pgTable(
       table.tenant_id,
       table.channel_key
     ),
+    discordInstallationUnique: uniqueIndex('gateway_channels_discord_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(
+        sql`${table.channel_type} = 'discord' AND ${table.enabled} = true AND ${table.provider_installation_id} IS NOT NULL`
+      ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.tenant_id,
@@ -2142,6 +2151,9 @@ export const threadSessionMap = pgTable(
 
     // JSON blob for extra metadata
     metadata: t.json<Record<string, unknown>>('metadata'),
+
+    // Durable Discord catch-up cursor. Provider history itself is never stored.
+    last_admitted_provider_cursor: text('last_admitted_provider_cursor'),
   },
   (table) => ({
     tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),
@@ -2153,6 +2165,67 @@ export const threadSessionMap = pgTable(
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
     threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/**
+ * Narrow durable final-delivery intent for mapped Discord assistant messages.
+ * The message body is intentionally absent: workers reload canonical Messages
+ * and checkpoint only bounded provider receipts and aliases.
+ */
+export const gatewayMessageDeliveries = pgTable(
+  'gateway_message_deliveries',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    delivery_id: varchar('delivery_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    message_id: varchar('message_id', { length: 36 })
+      .notNull()
+      .references(() => messages.message_id, { onDelete: 'cascade' }),
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_session_map_id: varchar('thread_session_map_id', { length: 36 })
+      .notNull()
+      .references(() => threadSessionMap.id, { onDelete: 'cascade' }),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'canceled', 'dead_letter'],
+    })
+      .notNull()
+      .default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    claim_token: text('claim_token'),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    chunk_receipts: t
+      .json<import('../types/gateway').GatewayMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .notNull(),
+    reply_aliases: t.json<string[]>('reply_aliases').notNull(),
+    last_error_code: text('last_error_code'),
+    completed_at: t.timestamp('completed_at'),
+    canceled_at: t.timestamp('canceled_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+  },
+  (table) => ({
+    tenantIdx: index('gateway_message_deliveries_tenant_id_idx').on(table.tenant_id),
+    messageUnique: uniqueIndex('gateway_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('gateway_message_deliveries_due_idx').on(
+      table.tenant_id,
+      table.status,
+      table.next_attempt_at,
+      table.delivery_id
+    ),
+    claimIdx: index('gateway_message_deliveries_claim_idx').on(
+      table.tenant_id,
+      table.status,
+      table.claim_expires_at,
+      table.delivery_id
+    ),
   })
 );
 
@@ -2771,6 +2844,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type GatewayMessageDeliveryRow = typeof gatewayMessageDeliveries.$inferSelect;
+export type GatewayMessageDeliveryInsert = typeof gatewayMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

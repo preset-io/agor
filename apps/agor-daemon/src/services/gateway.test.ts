@@ -272,6 +272,11 @@ function makeGatewayHarness(args: {
       return mapping;
     }),
     findById: vi.fn(async () => mapping),
+    advanceLastAdmittedProviderCursor: vi.fn(async (_id: string, cursor: string) => {
+      if (mapping)
+        mapping = { ...mapping, last_admitted_provider_cursor: cursor } as ThreadSessionMap;
+      return true;
+    }),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = makeMapping({
         ...data,
@@ -1317,6 +1322,96 @@ describe('GatewayService durable listener delivery fences', () => {
     );
   });
 
+  it('reconciles a Discord Task crash by advancing only the cursor, not by refetching or duplicating', async () => {
+    const eventId = '01927f9d-0000-7000-8000-000000000199';
+    const taskId = '01927f9d-0000-7000-8000-000000000198';
+    const channel = {
+      ...slackChannel,
+      id: 'chan-discord-crash',
+      channel_type: 'discord',
+      channel_key: 'discord-crash-key',
+      config: {
+        bot_token: 'discord-token',
+        application_id: '123456789012345678',
+        guild_id: '223456789012345678',
+        allowed_channel_ids: ['323456789012345678'],
+        allowed_user_ids: ['423456789012345678'],
+        allowed_role_ids: [],
+      },
+    } as unknown as GatewayChannel;
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: '723456789012345678',
+      metadata: {
+        discord_thread: {
+          guild_id: '223456789012345678',
+          parent_channel_id: '323456789012345678',
+          thread_channel_id: '723456789012345678',
+          starter_message_id: '723456789012345678',
+        },
+      },
+    });
+    const history = vi.fn();
+    const harness = makeGatewayHarness({
+      channel,
+      existingMapping: mapping,
+      connector: { history },
+    });
+    Object.assign(harness.service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      taskRepo: {
+        findById: vi.fn(async () => ({
+          task_id: taskId,
+          session_id: mapping.session_id,
+          metadata: { gateway_inbound_event_id: eventId },
+        })),
+      },
+      sessionRepo: {
+        findById: vi.fn(async () => ({
+          session_id: mapping.session_id,
+          branch_id: channel.target_branch_id,
+          custom_context: { gateway_source: { channel_id: channel.id } },
+        })),
+      },
+    });
+
+    await expect(
+      harness.service.create({
+        channel_key: channel.channel_key,
+        thread_id: mapping.thread_id,
+        text: 'retry',
+        user_name: '423456789012345678',
+        gateway_inbound_event_id: eventId as never,
+        idempotency_task_id: taskId as never,
+        idempotency_session_id: mapping.session_id,
+        listener_claim_token: 'opaque-owner',
+        listener_channel_id: channel.id,
+        metadata: {
+          discord_guild_id: '223456789012345678',
+          discord_channel_id: '723456789012345678',
+          discord_message_id: '923456789012345678',
+          discord_author_id: '423456789012345678',
+          discord_role_ids: [],
+          discord_bot_user_id: '123456789012345678',
+          discord_is_thread: true,
+          discord_parent_channel_id: '323456789012345678',
+          discord_has_mention: true,
+          discord_thread_id: '723456789012345678',
+          discord_thread: mapping.metadata?.discord_thread,
+          discord_thread_type: 11,
+          discord_thread_accessible: true,
+          discord_starter_message_accessible: true,
+        },
+      })
+    ).resolves.toMatchObject({ success: true, taskId });
+    expect(history).not.toHaveBeenCalled();
+    expect(harness.promptCreate).not.toHaveBeenCalled();
+    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).toHaveBeenCalledWith(
+      mapping.id,
+      '923456789012345678'
+    );
+  });
+
   it('prepares and routes one duplicate provider occurrence only once', async () => {
     const service = new GatewayService(
       { run: vi.fn() } as never,
@@ -1984,6 +2079,258 @@ describe('GatewayService Discord beta routing', () => {
     }
   );
 
+  it('writes a new Discord mapping with the verified provider thread Snowflake', async () => {
+    const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_thread_id: '723456789012345678',
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: '723456789012345678',
+        starter_message_id: '523456789012345678',
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({
+      success: true,
+      created: true,
+    });
+    expect(harness.threadMapRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ thread_id: '723456789012345678' })
+    );
+    expect(harness.threadMapRepo.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread_id: 'discord:message:323456789012345678:523456789012345678',
+      })
+    );
+  });
+
+  it('does not send transient creation or queue progress to Discord', async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const harness = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: null,
+      connector: { sendMessage },
+    });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_thread_id: '723456789012345678',
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: '723456789012345678',
+        starter_message_id: '523456789012345678',
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+    await harness.service.create(inbound);
+    expect(
+      sendMessage.mock.calls.map(([request]) => String((request as { text?: unknown }).text))
+    ).not.toEqual(expect.arrayContaining([expect.stringMatching(/Creating new|message queued/i)]));
+
+    sendMessage.mockClear();
+    const queued = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: makeMapping({
+        channel_id: discordChannel.id,
+        thread_id: inbound.thread_id,
+        metadata: {},
+      }),
+      connector: { sendMessage },
+    });
+    queued.promptCreate.mockResolvedValueOnce({
+      task_id: 'task-queued',
+      session_id: 'sess-1',
+      status: 'queued',
+      queue_position: 2,
+    });
+    await queued.service.create(inbound);
+    expect(
+      sendMessage.mock.calls.map(([request]) => String((request as { text?: unknown }).text))
+    ).not.toEqual(expect.arrayContaining([expect.stringMatching(/message queued/i)]));
+  });
+
+  it('admits one complete Discord interval before advancing the mapping cursor', async () => {
+    const connector = {
+      sendMessage: vi.fn(async () => undefined),
+      fetchProviderHistory: vi.fn(async (request: { throughProviderCursor: string }) => ({
+        threadId: '723456789012345678',
+        complete: true,
+        messages: [
+          {
+            providerMessageId: '823456789012345678',
+            timestamp: '2026-08-20T12:00:00.000Z',
+            actorLabel: 'human',
+            text: 'ambient context',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: false,
+            isMention: false,
+          },
+          {
+            providerMessageId: request.throughProviderCursor,
+            timestamp: '2026-08-20T12:01:00.000Z',
+            actorLabel: 'summoner',
+            text: 'live summon',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: true,
+            isMention: true,
+          },
+        ],
+      })),
+    };
+    const harness = makeGatewayHarness({ channel: discordChannel, connector });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_message_id: '923456789012345678',
+      discord_channel_id: '723456789012345678',
+      discord_parent_channel_id: '323456789012345678',
+      discord_is_thread: true,
+      discord_thread_id: '723456789012345678',
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: '723456789012345678',
+        starter_message_id: '723456789012345678',
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({ success: true });
+    const prompt = harness.promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('ambient context');
+    expect(prompt).toContain('hello');
+    expect(harness.promptCreate).toHaveBeenCalledOnce();
+    const persistedMapping = await harness.threadMapRepo.findById('map-new');
+    expect(JSON.stringify(persistedMapping?.metadata)).not.toContain('ambient context');
+    expect(JSON.stringify(persistedMapping?.metadata)).not.toContain('live summon');
+    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).toHaveBeenCalledWith(
+      'map-new',
+      '923456789012345678'
+    );
+    expect(harness.promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.threadMapRepo.advanceLastAdmittedProviderCursor.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('uses the starter/live boundary for a newly materialized Discord summon thread', async () => {
+    const connector = {
+      sendMessage: vi.fn(async () => undefined),
+      fetchProviderHistory: vi.fn(
+        async (request: { afterProviderCursor?: string; throughProviderCursor: string }) => ({
+          threadId: '723456789012345678',
+          complete: true,
+          messages: [
+            {
+              providerMessageId: request.throughProviderCursor,
+              timestamp: '2026-08-20T12:01:00.000Z',
+              actorLabel: 'summoner',
+              text: 'live summon',
+              isBot: false,
+              isSystem: false,
+              isRich: false,
+              isTrigger: true,
+              isMention: true,
+            },
+          ],
+        })
+      ),
+    };
+    const harness = makeGatewayHarness({ channel: discordChannel, connector });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_message_id: '523456789012345678',
+      discord_thread_id: '723456789012345678',
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: '723456789012345678',
+        starter_message_id: '523456789012345678',
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({ success: true });
+    expect(connector.fetchProviderHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: '723456789012345678',
+        afterProviderCursor: '523456789012345678',
+        throughProviderCursor: '523456789012345678',
+      })
+    );
+  });
+
+  it('rejects an incomplete Discord history interval without a Task or cursor advance', async () => {
+    const connector = {
+      sendMessage: vi.fn(async () => undefined),
+      fetchProviderHistory: vi.fn(async () => {
+        throw new Error('history coverage unavailable');
+      }),
+    };
+    vi.mocked(getConnector).mockReturnValue(connector as never);
+    const mapping = makeMapping({
+      channel_id: discordChannel.id,
+      thread_id: '723456789012345678',
+      metadata: {
+        discord_thread: {
+          guild_id: '223456789012345678',
+          parent_channel_id: '323456789012345678',
+          thread_channel_id: '723456789012345678',
+          starter_message_id: '723456789012345678',
+        },
+      },
+    });
+    const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: mapping });
+    (harness.service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership =
+      true;
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_channel_id: '723456789012345678',
+      discord_message_id: '923456789012345678',
+      discord_is_thread: true,
+      discord_parent_channel_id: '323456789012345678',
+      discord_thread_id: '723456789012345678',
+      discord_thread: mapping.metadata?.discord_thread,
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(
+      harness.service.create({
+        ...inbound,
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000299' as never,
+        listener_claim_token: 'opaque-owner',
+        listener_channel_id: discordChannel.id,
+      })
+    ).rejects.toThrow('history coverage unavailable');
+    expect(harness.promptCreate).not.toHaveBeenCalled();
+    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).not.toHaveBeenCalled();
+  });
+
   it('labels a proactive Discord seed with Discord context in the initial prompt', async () => {
     const seed = {
       id: 'discord-seed-context',
@@ -2409,6 +2756,90 @@ describe('GatewayService Discord beta routing', () => {
       'message',
       '623456789012345678'
     );
+  });
+
+  it('suppresses the legacy after-hook send when a durable Discord intent exists', async () => {
+    const sendMessage = vi.fn(async () => '623456789012345678');
+    const mapping = makeMapping({
+      channel_id: discordChannel.id,
+      thread_id: 'discord:message:323456789012345678:523456789012345678',
+      metadata: {},
+    });
+    const { service } = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: mapping,
+      connector: { sendMessage },
+    });
+    const findByMessageId = vi.fn(async () => ({ delivery_id: 'durable-delivery' }));
+    (
+      service as unknown as { deliveryRepo: { findByMessageId: typeof findByMessageId } }
+    ).deliveryRepo = { findByMessageId };
+
+    await expect(
+      service.routeMessage({
+        session_id: mapping.session_id,
+        message_id: 'assistant-message-1',
+        message: 'reply from the agent',
+      })
+    ).resolves.toEqual({ routed: true, channelType: 'discord' });
+
+    expect(findByMessageId).toHaveBeenCalledWith('assistant-message-1');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy Slack, unmapped, and proactive-seed routing outside the Discord fence', async () => {
+    const slackSend = vi.fn(async () => '104.000000');
+    const slack = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage: slackSend },
+    });
+    (
+      slack.service as unknown as { deliveryRepo: { findByMessageId: () => Promise<null> } }
+    ).deliveryRepo = { findByMessageId: async () => null };
+    await expect(
+      runWithTenantContext('tenant-channel', () =>
+        slack.service.routeMessage({ session_id: 'sess-1', message: 'slack' })
+      )
+    ).resolves.toEqual({ routed: true, channelType: 'slack' });
+    expect(slackSend).toHaveBeenCalledOnce();
+
+    const unmappedSend = vi.fn(async () => 'never');
+    const unmapped = makeGatewayHarness({
+      existingMapping: null,
+      connector: { sendMessage: unmappedSend },
+    });
+    (
+      unmapped.service as unknown as { deliveryRepo: { findByMessageId: () => Promise<null> } }
+    ).deliveryRepo = { findByMessageId: async () => null };
+    await expect(
+      runWithTenantContext('tenant-channel', () =>
+        unmapped.service.routeMessage({ session_id: 'sess-1', message: 'no-op' })
+      )
+    ).resolves.toEqual({ routed: false });
+    expect(unmappedSend).not.toHaveBeenCalled();
+
+    const proactiveSend = vi.fn(async () => '623456789012345678');
+    const proactive = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: makeMapping({
+        channel_id: discordChannel.id,
+        thread_id: 'discord:message:323456789012345678:523456789012345678',
+        metadata: { outbound_seed_id: 'seed-1' },
+      }),
+      connector: { sendMessage: proactiveSend },
+    });
+    (
+      proactive.service as unknown as { deliveryRepo: { findByMessageId: () => Promise<null> } }
+    ).deliveryRepo = { findByMessageId: async () => null };
+    await expect(
+      runWithTenantContext('tenant-channel', () =>
+        proactive.service.routeMessage({
+          session_id: 'sess-1',
+          message: 'follow-up to seed',
+        })
+      )
+    ).resolves.toEqual({ routed: true, channelType: 'discord' });
+    expect(proactiveSend).toHaveBeenCalledOnce();
   });
 
   it('keeps the first Discord response chunk routable after more than one hundred aliases', async () => {

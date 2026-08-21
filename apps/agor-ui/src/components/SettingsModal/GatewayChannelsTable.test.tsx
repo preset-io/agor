@@ -943,7 +943,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
   }, 30_000);
 });
 
-describe('GatewayChannelsTable Discord beta create wizard', () => {
+describe('GatewayChannelsTable Discord create wizard', () => {
   it('follows Channel → Create app → Access → Token & test navigation', async () => {
     const { client } = makeClient();
     renderTable(client);
@@ -954,13 +954,14 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
       target: { value: 'My Discord' },
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
     await flush();
 
-    expect(screen.getByText('Discord beta setup')).toBeInTheDocument();
+    expect(screen.getByText('Discord setup')).toBeInTheDocument();
     expect(screen.getByLabelText('Application ID')).toBeInTheDocument();
     expect(screen.getByLabelText('Guild ID')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Message Content/)).toBeInTheDocument();
+    expect(screen.getByText('Public thread per summon')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Application ID'), {
       target: { value: '123456789012345678' },
     });
@@ -976,6 +977,7 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
     const channelInput = channelField.querySelector('input') ?? channelField;
     fireEvent.change(channelInput, { target: { value: '323456789012345678' } });
     fireEvent.keyDown(channelInput, { key: 'Enter', code: 'Enter' });
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
     await flush();
 
@@ -991,7 +993,13 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
         {
           channelId: '323456789012345678',
           ok: true,
-          permissions: { view: true, send: true, readHistory: true, sendInThreads: false },
+          permissions: {
+            view: true,
+            send: true,
+            readHistory: true,
+            createPublicThreads: true,
+            sendInThreads: false,
+          },
         },
       ],
       failures: [],
@@ -1004,7 +1012,6 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
       target: { value: 'My Discord' },
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
     await flush();
 
@@ -1029,14 +1036,15 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
     addTag('Allowed public text channel IDs', '323456789012345678');
     addTag('Allowed user IDs', '423456789012345678');
     addTag('Allowed role IDs', '523456789012345678');
+    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
     await flush();
 
     const token = 'discord-token-for-wizard';
     fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: token } });
     clickButton(/Test Discord connection/);
-    await waitFor(() => expect(screen.getByText(/threads no/)).toBeInTheDocument());
-    expect(screen.getByText(/view ok, send ok, history ok, threads no/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/public threads ok/)).toBeInTheDocument());
+    expect(screen.getByText(/view ok, send ok, history ok, public threads ok/)).toBeInTheDocument();
 
     clickButton(/^Back$/);
     await flush();
@@ -1058,6 +1066,20 @@ describe('GatewayChannelsTable Discord beta create wizard', () => {
         allowed_channel_ids: ['323456789012345678'],
         allowed_user_ids: ['423456789012345678'],
         allowed_role_ids: ['523456789012345678'],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        thread_auto_archive_minutes: 1440,
+        align_discord_users: false,
+        catch_up: {
+          max_pages: 5,
+          max_messages: 200,
+          max_prompt_bytes: 32768,
+          request_timeout_ms: 30000,
+          rate_limit_max_retries: 2,
+          rate_limit_max_total_delay_ms: 10000,
+        },
+        files: false,
+        agent_tools: [],
       },
     });
     expect(JSON.stringify(channelCreate.mock.calls[0][0])).not.toContain('••••••••');

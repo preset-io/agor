@@ -18,6 +18,7 @@ export * from './environment-health';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';
 export * from './gateway-inbound-events';
+export * from './gateway-message-deliveries';
 export * from './gateway-outbound-messages';
 export * from './github-install-states';
 export * from './groups';

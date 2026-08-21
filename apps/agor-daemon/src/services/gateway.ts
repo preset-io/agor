@@ -22,6 +22,7 @@ import {
   type GatewayListenerDiscoveryCursor,
   GatewayListenerDiscoveryRepository,
   type GatewayListenerLease,
+  GatewayMessageDeliveryRepository,
   GatewayOutboundMessageRepository,
   generateId,
   getCurrentTenantId,
@@ -87,7 +88,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
+  isDiscordSnowflake,
+  isDiscordThreadCoordinates,
   ROLES,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -103,6 +107,11 @@ import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
+import {
+  discordStarterCursor,
+  fetchGatewayCatchUp,
+  GatewayCatchUpError,
+} from '../utils/gateway-catch-up.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import type { SessionParams } from './sessions.js';
 
@@ -227,6 +236,22 @@ interface SlackHistoryConnector extends GatewayConnector {
   fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult>;
 }
 
+function discordInboundCursor(metadata?: Record<string, unknown>): string | undefined {
+  const cursor = metadata?.discord_message_id;
+  return typeof cursor === 'string' && isDiscordSnowflake(cursor) ? cursor : undefined;
+}
+
+function discordCatchUpMaxPromptBytes(config: Record<string, unknown>): number {
+  const raw = config.catch_up;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes;
+  }
+  const value = (raw as Record<string, unknown>).max_prompt_bytes;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes;
+}
+
 export type GatewayProgressState = 'queued' | 'working' | 'done' | 'failed';
 
 export interface GatewayProgressData {
@@ -275,8 +300,8 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
       return !!config.api_token;
     case 'discord':
       return (
-        typeof channel.agor_user_id === 'string' &&
-        channel.agor_user_id.trim() !== '' &&
+        typeof channel.provider_installation_id === 'string' &&
+        channel.provider_installation_id === config.application_id &&
         typeof config.bot_token === 'string' &&
         validateDiscordConfig(config, { requireBotToken: true }).ok
       );
@@ -293,8 +318,7 @@ function discordInboundMetadataIsAuthoritative(
   const config = channel.config as Record<string, unknown>;
   if (channel.channel_type !== 'discord') return true;
   if (!metadata) return false;
-  const snowflake = (value: unknown): value is string =>
-    typeof value === 'string' && /^\d{17,20}$/.test(value);
+  const snowflake = isDiscordSnowflake;
   const guildId = config.guild_id;
   const allowedChannels = config.allowed_channel_ids;
   const authorId = metadata.discord_author_id;
@@ -304,8 +328,11 @@ function discordInboundMetadataIsAuthoritative(
   const isThread = metadata.discord_is_thread;
   const parentChannelId = metadata.discord_parent_channel_id;
   const roles = metadata.discord_role_ids;
-  const userAllowlist = config.allowed_user_ids;
-  const roleAllowlist = config.allowed_role_ids;
+  const providerThreadId = metadata.discord_thread_id;
+  const providerThread = metadata.discord_thread;
+  const verifiedProviderThread = isDiscordThreadCoordinates(providerThread) ? providerThread : null;
+  const userAllowlist = Array.isArray(config.allowed_user_ids) ? config.allowed_user_ids : [];
+  const roleAllowlist = Array.isArray(config.allowed_role_ids) ? config.allowed_role_ids : [];
   if (
     !snowflake(guildId) ||
     !Array.isArray(allowedChannels) ||
@@ -316,15 +343,14 @@ function discordInboundMetadataIsAuthoritative(
     !snowflake(authorId) ||
     !snowflake(botUserId) ||
     botUserId !== config.application_id ||
+    authorId === botUserId ||
     typeof data.user_name !== 'string' ||
     data.user_name !== authorId ||
     !snowflake(channelId) ||
     !snowflake(messageId) ||
     !Array.isArray(roles) ||
     roles.some((role) => !snowflake(role)) ||
-    !Array.isArray(userAllowlist) ||
     userAllowlist.some((id) => !snowflake(id)) ||
-    !Array.isArray(roleAllowlist) ||
     roleAllowlist.some((id) => !snowflake(id)) ||
     metadata.discord_has_mention !== true ||
     typeof isThread !== 'boolean'
@@ -337,15 +363,75 @@ function discordInboundMetadataIsAuthoritative(
   if (isThread) {
     if (!snowflake(parentChannelId) || !allowedChannels.includes(parentChannelId)) return false;
     if (allowedChannels.includes(channelId)) return false;
-    if (data.thread_id !== `discord:thread:${parentChannelId}:${channelId}`) return false;
+    if (providerThreadId !== undefined) {
+      if (
+        !snowflake(providerThreadId) ||
+        providerThreadId !== channelId ||
+        data.thread_id !== providerThreadId ||
+        !verifiedProviderThread ||
+        verifiedProviderThread.guild_id !== guildId ||
+        verifiedProviderThread.parent_channel_id !== parentChannelId ||
+        verifiedProviderThread.thread_channel_id !== channelId ||
+        verifiedProviderThread.starter_message_id !== channelId ||
+        ![10, 11].includes(metadata.discord_thread_type as number) ||
+        metadata.discord_thread_accessible !== true ||
+        metadata.discord_starter_message_accessible !== true
+      ) {
+        return false;
+      }
+    } else if (data.thread_id !== `discord:thread:${parentChannelId}:${channelId}`) {
+      return false;
+    }
   } else {
     if (!allowedChannels.includes(channelId) || parentChannelId !== undefined) return false;
     const replyTo = metadata.discord_reply_to_message_id;
     if (replyTo !== undefined && !snowflake(replyTo)) return false;
-    const expectedMessage = snowflake(replyTo) ? replyTo : messageId;
-    if (data.thread_id !== `discord:message:${channelId}:${expectedMessage}`) return false;
+    if (providerThreadId !== undefined) {
+      if (
+        !snowflake(providerThreadId) ||
+        providerThreadId === channelId ||
+        data.thread_id !== providerThreadId ||
+        !verifiedProviderThread ||
+        verifiedProviderThread.guild_id !== guildId ||
+        verifiedProviderThread.parent_channel_id !== channelId ||
+        verifiedProviderThread.thread_channel_id !== providerThreadId ||
+        verifiedProviderThread.starter_message_id !== messageId ||
+        ![10, 11].includes(metadata.discord_thread_type as number) ||
+        metadata.discord_thread_accessible !== true ||
+        metadata.discord_starter_message_accessible !== true
+      ) {
+        return false;
+      }
+    } else {
+      const expectedMessage = snowflake(replyTo) ? replyTo : messageId;
+      if (data.thread_id !== `discord:message:${channelId}:${expectedMessage}`) return false;
+    }
   }
   return true;
+}
+
+function discordCanonicalThreadId(data: PostMessageData): string {
+  const candidate = data.metadata?.discord_thread_id;
+  return typeof candidate === 'string' ? candidate : data.thread_id;
+}
+
+/** Legacy composite lookup retained only to adopt mappings written by DG-01. */
+function discordLegacyThreadId(data: PostMessageData): string | undefined {
+  if (data.metadata?.discord_is_thread === true) {
+    const parent = data.metadata.discord_parent_channel_id;
+    const channel = data.metadata.discord_channel_id;
+    return typeof parent === 'string' && typeof channel === 'string'
+      ? `discord:thread:${parent}:${channel}`
+      : undefined;
+  }
+  if (data.metadata?.discord_is_thread === false) {
+    const channel = data.metadata.discord_channel_id;
+    const message = data.metadata.discord_reply_to_message_id ?? data.metadata.discord_message_id;
+    return typeof channel === 'string' && typeof message === 'string'
+      ? `discord:message:${channel}:${message}`
+      : undefined;
+  }
+  return undefined;
 }
 
 export function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
@@ -746,6 +832,7 @@ export class GatewayService {
   private usersRepo: UsersRepository;
   private messagesRepo: MessagesRepository;
   private inboundEventRepo: GatewayInboundEventRepository;
+  private deliveryRepo: GatewayMessageDeliveryRepository;
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
@@ -824,6 +911,10 @@ export class GatewayService {
     this.inboundEventRepo = bindRepositoryToTenantUnitOfWork(
       db,
       new GatewayInboundEventRepository(db)
+    );
+    this.deliveryRepo = bindRepositoryToTenantUnitOfWork(
+      db,
+      new GatewayMessageDeliveryRepository(db)
     );
 
     this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
@@ -915,7 +1006,7 @@ export class GatewayService {
     channel: GatewayChannel,
     threadId: string,
     text: string,
-    opts?: { suppressSlack?: boolean }
+    opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
   ): void {
     // GitHub and Shortcut have their own editable ack comment (the connector's
     // "Processing" / "👀 on it" comment that becomes the final reply), so they
@@ -924,6 +1015,7 @@ export class GatewayService {
     // like "creating session" and queued/status rows via suppressSlack.
     if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') return;
     if (channel.channel_type === 'slack' && opts?.suppressSlack) return;
+    if (channel.channel_type === 'discord' && opts?.suppressDiscord) return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
@@ -1953,16 +2045,31 @@ export class GatewayService {
       return { success: false, sessionId: '', created: false };
     }
 
-    // 2. Look up existing thread mapping
+    // 2. Look up existing thread mapping. New Discord admissions use the raw
+    // provider thread Snowflake; a legacy composite is consulted only to
+    // adopt mappings written before DG-02.
+    const canonicalThreadId =
+      channel.channel_type === 'discord' ? discordCanonicalThreadId(data) : data.thread_id;
+    const legacyDiscordThread =
+      channel.channel_type === 'discord' ? discordLegacyThreadId(data) : undefined;
     let existingMapping = await this.threadMapRepo.findByChannelAndThread(
       channel.id,
-      data.thread_id
+      canonicalThreadId
     );
+    if (!existingMapping && legacyDiscordThread && legacyDiscordThread !== canonicalThreadId) {
+      existingMapping = await this.threadMapRepo.findByChannelAndThread(
+        channel.id,
+        legacyDiscordThread
+      );
+    }
     if (
       !existingMapping &&
       (channel.channel_type === 'slack' || channel.channel_type === 'discord')
     ) {
-      existingMapping = await this.findGatewayReplyAliasMapping(channel.id, data.thread_id);
+      existingMapping = await this.findGatewayReplyAliasMapping(channel.id, canonicalThreadId);
+      if (!existingMapping && legacyDiscordThread && legacyDiscordThread !== canonicalThreadId) {
+        existingMapping = await this.findGatewayReplyAliasMapping(channel.id, legacyDiscordThread);
+      }
       if (existingMapping) {
         console.log(
           `[gateway] Found ${channel.channel_type} reply alias: ${data.thread_id} → ${existingMapping.thread_id}`
@@ -2003,6 +2110,22 @@ export class GatewayService {
           gatewaySource?.channel_id !== channel.id
         ) {
           throw new Error('Gateway provider event Task identity is already in use');
+        }
+        const mappingMetadata = (existingMapping.metadata as Record<string, unknown> | null) ?? {};
+        const ordinaryDiscordCatchUp =
+          channel.channel_type === 'discord' &&
+          typeof mappingMetadata.outbound_seed_id !== 'string';
+        const liveDiscordCursor = ordinaryDiscordCatchUp
+          ? discordInboundCursor(data.metadata)
+          : undefined;
+        if (liveDiscordCursor) {
+          // The stable Task is the admission fence. A retry after a process
+          // crash repairs only the cursor; it never fetches history or creates
+          // another prompt.
+          await this.threadMapRepo.advanceLastAdmittedProviderCursor(
+            existingMapping.id,
+            liveDiscordCursor
+          );
         }
         await this.markSeedInitialPromptAdmitted(
           existingMapping,
@@ -2108,12 +2231,14 @@ export class GatewayService {
       channelConfig.align_github_users === true || data.metadata?.align_github_users === true;
     const alignShortcutUsers =
       channelConfig.align_shortcut_users === true || data.metadata?.align_shortcut_users === true;
+    const alignDiscordUsers =
+      channel.channel_type === 'discord' && channelConfig.align_discord_users === true;
 
     // Only fetch and use channel owner when NO alignment is active.
     // When alignment is ON, agor_user_id may be empty (the "Post messages as"
     // field is hidden in the UI), so we must not fetch it unconditionally.
     let user: User = null as unknown as User;
-    if (!alignSlackUsers && !alignGitHubUsers && !alignShortcutUsers) {
+    if (!alignSlackUsers && !alignGitHubUsers && !alignShortcutUsers && !alignDiscordUsers) {
       if (!channel.agor_user_id) {
         const errMsg =
           'Channel configuration error: no "Post messages as" user set. An admin needs to edit the channel and select a user, or enable user alignment.';
@@ -2141,6 +2266,25 @@ export class GatewayService {
         };
       }
       user = await usersService.get(channel.agor_user_id);
+    }
+
+    // --- Discord user alignment ---
+    // Discord does not expose an email to the bot.  The explicit user_map is
+    // therefore the only aligned identity source; absence is a rejection, not
+    // permission to borrow the channel owner's execution context.
+    if (alignDiscordUsers && !alignSlackUsers && !alignGitHubUsers && !alignShortcutUsers) {
+      const matchedUser = await this.resolveAlignedUser({
+        platform: 'Discord',
+        externalId: data.metadata?.discord_author_id as string | undefined,
+        email: undefined,
+        userMap: channelConfig.user_map as Record<string, string> | undefined,
+      });
+      if (matchedUser) {
+        user = await usersService.get(matchedUser.user_id);
+      } else {
+        console.log('[gateway] Discord user alignment failed: result=agor_user_not_found');
+        return { success: false, sessionId: '', created: false };
+      }
     }
 
     // --- Slack user alignment ---
@@ -2362,6 +2506,7 @@ export class GatewayService {
       channel.channel_type === 'discord' &&
       !existingMapping &&
       !outboundAdmission &&
+      data.metadata?.discord_thread_id === undefined &&
       data.metadata?.discord_is_thread === false &&
       typeof data.metadata.discord_channel_id === 'string' &&
       typeof data.metadata.discord_message_id === 'string'
@@ -2469,7 +2614,7 @@ export class GatewayService {
         channel,
         data.thread_id,
         `Creating new ${agenticTool} session (${permissionMode} mode)...`,
-        { suppressSlack: true }
+        { suppressSlack: true, suppressDiscord: true }
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
@@ -2828,6 +2973,48 @@ export class GatewayService {
       // are picked up here the next time the bot is summoned.
       let promptText = data.text;
       let slackCursorTsToWrite: string | undefined;
+      let discordCursorToWrite: string | undefined;
+      if (channel.channel_type === 'discord' && !outboundSeed) {
+        const connector =
+          this.getActiveListener(channel.id) ??
+          getConnector(channel.channel_type as ChannelType, channel.config);
+        if (connector?.fetchProviderHistory) {
+          const liveCursor = discordInboundCursor(data.metadata);
+          if (!liveCursor) {
+            throw new GatewayCatchUpError(
+              'malformed',
+              'Discord mention had no canonical provider cursor'
+            );
+          }
+          const mappingMetadata =
+            (mappingForCursor?.metadata as Record<string, unknown> | null) ?? data.metadata ?? {};
+          const afterCursor =
+            mappingForCursor?.last_admitted_provider_cursor ??
+            discordStarterCursor(mappingMetadata);
+          if (!afterCursor) {
+            throw new GatewayCatchUpError(
+              'incomplete',
+              'Discord history bootstrap lacked a verified public-thread starter'
+            );
+          }
+          const catchUp = await fetchGatewayCatchUp({
+            connector,
+            request: {
+              threadId: mappingForCursor?.thread_id ?? data.thread_id,
+              afterProviderCursor: afterCursor,
+              throughProviderCursor: liveCursor,
+              triggerProviderCursor: liveCursor,
+            },
+            provider: 'Discord',
+            currentText: data.text,
+            maxPromptBytes: discordCatchUpMaxPromptBytes(channel.config),
+          });
+          promptText = catchUp.prompt;
+          discordCursorToWrite = catchUp.cursor;
+        } else if (durableListenerOwnership) {
+          throw new GatewayCatchUpError('unsupported', 'Discord history is unavailable');
+        }
+      }
       if (channel.channel_type === 'slack' && !outboundSeed) {
         const currentTs = getSlackMessageTs(data.metadata);
         const mappingMetadata = ((mappingForCursor?.metadata as Record<string, unknown>) ?? {}) as
@@ -2917,7 +3104,7 @@ export class GatewayService {
             tenantId: requireCurrentTenantId() as TenantID,
             sessionId,
             branchId: channel.target_branch_id,
-            createdBy: channel.agor_user_id,
+            createdBy: channel.agor_user_id ?? user.user_id,
           });
           const stagedUploads = ingestion.uploads;
           const { failed } = ingestion;
@@ -3012,6 +3199,17 @@ export class GatewayService {
         );
       }
 
+      // Task admission is the durable happens-before edge for Discord
+      // catch-up. A failure here leaves the provider event retryable; the
+      // stable Task reconciliation above advances the cursor without a second
+      // prompt.
+      if (channel.channel_type === 'discord' && discordCursorToWrite && mappingForCursor) {
+        await this.threadMapRepo.advanceLastAdmittedProviderCursor(
+          mappingForCursor.id,
+          discordCursorToWrite
+        );
+      }
+
       if (channel.channel_type === 'slack' && slackCursorTsToWrite && mappingForCursor) {
         const latestMapping = await this.threadMapRepo.findById(mappingForCursor.id);
         const latestMetadata = ((latestMapping?.metadata as Record<string, unknown>) ??
@@ -3037,7 +3235,7 @@ export class GatewayService {
           channel,
           data.thread_id,
           `Session is busy, message queued at position ${task.queue_position}`,
-          { suppressSlack: true }
+          { suppressSlack: true, suppressDiscord: true }
         );
         this.updateProgressAfterCommit({
           session_id: sessionId,
@@ -3085,6 +3283,13 @@ export class GatewayService {
    * returns a cheap no-op. Uses platform connectors to send messages.
    */
   async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
+    // Mapped Discord assistant Messages now have a durable intent inserted in
+    // the Message transaction. The independent delivery worker owns those
+    // rows; never send them through the legacy after-hook path as well.
+    if (data.message_id && (await this.deliveryRepo.findByMessageId(data.message_id))) {
+      return { routed: true, channelType: 'discord' };
+    }
+
     // Fast path: skip DB lookup entirely when no channels are configured
     if (!(await this.shouldQueryGatewayRouting())) {
       return { routed: false };
@@ -3752,10 +3957,11 @@ export class GatewayService {
         const callback = (msg: InboundMessage) =>
           this.handleListenerInboundMessage(channel, listenerTenantId, msg, lease);
 
+        const isDiscord = channel.channel_type === 'discord';
         await connector.startListening(callback, {
-          checkpoint: lease?.checkpoint,
+          ...(isDiscord ? {} : { checkpoint: lease?.checkpoint }),
           durableEventIdempotency: !!lease,
-          ...(lease
+          ...(lease && !isDiscord
             ? {
                 saveCheckpoint: (checkpoint: Record<string, unknown>) =>
                   this.runWithListenerTenantIdentity(listenerTenantId, () =>
@@ -4008,8 +4214,39 @@ export class GatewayService {
           ) {
             throw new Error('Gateway listener ownership lost before provider acknowledgement');
           }
+          let skipProviderThreadMaterialization = false;
+          if (
+            channel.channel_type === 'discord' &&
+            msg.metadata?.discord_is_thread === false &&
+            typeof msg.metadata.discord_channel_id === 'string' &&
+            typeof msg.metadata.discord_reply_to_message_id === 'string'
+          ) {
+            // A proactive Discord seed is intentionally a legacy top-level
+            // message.  Resolve it before the connector's provider-side
+            // preparation so the first human reply does not create a second
+            // public thread.
+            const seedThreadId = `discord:message:${msg.metadata.discord_channel_id}:${msg.metadata.discord_reply_to_message_id}`;
+            // Reserve the existing seed admission here as a read-before-
+            // preparation gate. The create path repeats the same atomic
+            // admission and receives the reserved identity.
+            skipProviderThreadMaterialization = Boolean(
+              await this.outboundRepo.admitReplySession(channel.id, seedThreadId)
+            );
+          }
           if (!deliveryMetadata) {
-            const prepared = await msg.prepareDelivery?.();
+            // Keep the daemon source compatible with an already-installed
+            // @agor/core declaration while watch mode refreshes its package
+            // output after the connector contract changes.
+            const prepareDelivery = msg.prepareDelivery as
+              | ((context?: {
+                  skipProviderThreadMaterialization?: boolean;
+                }) => Promise<Record<string, unknown> | undefined>)
+              | undefined;
+            const prepared = await prepareDelivery?.({
+              ...(skipProviderThreadMaterialization
+                ? { skipProviderThreadMaterialization: true }
+                : {}),
+            });
             if (prepared) {
               if (eventId && lease) {
                 const recorded = await this.inboundEventRepo.recordDeliveryMetadata({
@@ -4038,7 +4275,10 @@ export class GatewayService {
 
           const result = await this.create({
             channel_key: channel.channel_key,
-            thread_id: msg.threadId,
+            thread_id:
+              channel.channel_type === 'discord' && typeof metadata?.discord_thread_id === 'string'
+                ? metadata.discord_thread_id
+                : msg.threadId,
             text: msg.text,
             user_name: msg.userId,
             ...(msg.files ? { files: msg.files } : {}),

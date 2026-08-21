@@ -31,6 +31,7 @@ import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '
  */
 const SUPPORTED_CHANNEL_TYPES = [
   'slack',
+  'discord',
   'github',
   'teams',
 ] as const satisfies readonly ChannelType[];
@@ -262,6 +263,12 @@ interface GatewayChannelsService {
     data: { config: Record<string, string>; enabled: boolean },
     params: { user: { user_id: UserID; role: string | undefined } }
   ): Promise<unknown>;
+  patchWithVerifiedDiscordInstallation(
+    id: string,
+    data: { config: Record<string, string>; enabled: boolean },
+    providerInstallationId: string,
+    params: { user: { user_id: UserID; role: string | undefined } }
+  ): Promise<unknown>;
 }
 
 interface GatewayChannelsTestService {
@@ -348,17 +355,45 @@ async function applyGatewayTokenSubmit(
   // app_token (getRequiredSecretFields asked for it). Outbound-only channels
   // omit it, so the probe's unavoidable app_token failure must not block enable.
   const appTokenExpected = params.fields.includes('app_token');
-  const { enable, status, summary } = classifyGatewayTokenTest(testResult, appTokenExpected);
+  let { enable, status, summary } = classifyGatewayTokenTest(testResult, appTokenExpected);
+  const verifiedInstallationId =
+    channel.channel_type === 'discord'
+      ? testResult.verifiedInstallationId
+      : (testResult.verifiedInstallationId ?? testResult.bot?.userId ?? undefined);
+  if (channel.channel_type === 'discord') {
+    const messageContentFailure = testResult.failures.find(
+      (failure) => failure.capability === 'message_content'
+    );
+    if (messageContentFailure) {
+      enable = false;
+      status = 'failed';
+      summary = messageContentFailure.reason;
+    } else if (!enable || !verifiedInstallationId) {
+      enable = false;
+      status = 'failed';
+      summary = 'Discord application identity could not be verified';
+    }
+  }
 
   // Single internal patch → encryption + sentinel-preserve +
   // refreshGatewayChannelState (starts the Socket-Mode listener when enabled).
   // Submitter identity is threaded for audit; no `provider` so the internal
   // path runs.
-  await channelsService.patch(
-    params.gatewayChannelId,
-    { config: submit.tokens, enabled: enable },
-    { user: { user_id: ctx.submitterUserId, role: ctx.submitterRole } }
-  );
+  const patchParams = { user: { user_id: ctx.submitterUserId, role: ctx.submitterRole } };
+  if (channel.channel_type === 'discord' && verifiedInstallationId && enable) {
+    await channelsService.patchWithVerifiedDiscordInstallation(
+      params.gatewayChannelId,
+      { config: submit.tokens, enabled: enable },
+      verifiedInstallationId,
+      patchParams
+    );
+  } else {
+    await channelsService.patch(
+      params.gatewayChannelId,
+      { config: submit.tokens, enabled: enable },
+      patchParams
+    );
+  }
 
   submitOutcomes.set(submit, {
     channelId: channel.id,

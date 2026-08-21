@@ -11,35 +11,51 @@
 import { REST } from '@discordjs/rest';
 import { WebSocketManager, WebSocketShardEvents } from '@discordjs/ws';
 import {
+  ApplicationFlags,
+  GatewayCloseCodes,
   GatewayDispatchEvents,
   type GatewayDispatchPayload,
   GatewayIntentBits,
+  PermissionFlagsBits,
   Routes,
 } from 'discord-api-types/v10';
 import type {
   ChannelType,
   DiscordGatewayConfig,
+  DiscordThreadCoordinates,
   GatewayConnectionTestResult,
 } from '../../types/gateway';
-import { validateDiscordConfig } from '../../types/gateway';
+import {
+  isDiscordSnowflake,
+  isDiscordThreadCoordinates,
+  validateDiscordConfig,
+} from '../../types/gateway';
 import type {
   GatewayConnector,
   GatewayInboundCallback,
   GatewayListenerOptions,
+  GatewayProviderHistoryRequest,
+  GatewayProviderHistoryResult,
   GatewaySendReceipt,
   InboundMessage,
 } from '../connector';
 import { GatewayListenerError } from '../listener-error';
 import { sanitizeGatewayProviderError } from '../provider-error';
+import { fetchDiscordProviderHistory } from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_TEXT_CHANNEL_TYPE = 0;
 const DISCORD_PUBLIC_THREAD_TYPES = new Set([10, 11]);
 const DISCORD_TEXT_MESSAGE_TYPES = new Set([0, 19]);
-const DISCORD_VIEW_CHANNEL_PERMISSION = 1n << 10n;
-const DISCORD_SEND_MESSAGES_PERMISSION = 1n << 11n;
-const DISCORD_READ_MESSAGE_HISTORY_PERMISSION = 1n << 16n;
-const DISCORD_SEND_MESSAGES_IN_THREADS_PERMISSION = 1n << 38n;
+const DISCORD_NONCE_RECOVERY_WINDOW_MS = 5 * 60_000;
+const DISCORD_VIEW_CHANNEL_PERMISSION = PermissionFlagsBits.ViewChannel;
+const DISCORD_SEND_MESSAGES_PERMISSION = PermissionFlagsBits.SendMessages;
+const DISCORD_READ_MESSAGE_HISTORY_PERMISSION = PermissionFlagsBits.ReadMessageHistory;
+const DISCORD_CREATE_PUBLIC_THREADS_PERMISSION = PermissionFlagsBits.CreatePublicThreads;
+const DISCORD_SEND_MESSAGES_IN_THREADS_PERMISSION = PermissionFlagsBits.SendMessagesInThreads;
+const DISCORD_MESSAGE_CONTENT_FLAGS =
+  BigInt(ApplicationFlags.GatewayMessageContent) |
+  BigInt(ApplicationFlags.GatewayMessageContentLimited);
 
 interface DiscordRestTransport {
   get(route: string): Promise<unknown>;
@@ -50,6 +66,14 @@ interface DiscordGatewayTransport {
   on(
     event: WebSocketShardEvents.Dispatch,
     listener: (payload: GatewayDispatchPayload, shardId: number) => void | Promise<void>
+  ): unknown;
+  on(
+    event: WebSocketShardEvents.Error | WebSocketShardEvents.SocketError,
+    listener: (error: Error, shardId: number) => void | Promise<void>
+  ): unknown;
+  on(
+    event: WebSocketShardEvents.Closed,
+    listener: (code: number, shardId: number) => void | Promise<void>
   ): unknown;
   connect(): Promise<void>;
   destroy(): Promise<void>;
@@ -63,31 +87,24 @@ interface DiscordTransport {
   }): DiscordGatewayTransport;
 }
 
+interface VerifiedDiscordThread {
+  coordinates: DiscordThreadCoordinates;
+  type: number;
+}
+
 function defaultDiscordTransport(token: string): DiscordTransport {
   const rest = new REST({ version: '10' }).setToken(token);
   return {
     rest,
-    createGateway: ({ checkpoint, onSessionInfo }) =>
+    createGateway: ({ onSessionInfo }) =>
       new WebSocketManager({
         token,
         rest,
-        intents: GatewayIntentBits.Guilds | GatewayIntentBits.GuildMessages,
+        intents:
+          GatewayIntentBits.Guilds |
+          GatewayIntentBits.GuildMessages |
+          GatewayIntentBits.MessageContent,
         shardCount: 1,
-        ...(typeof checkpoint?.session_id === 'string' &&
-        typeof checkpoint.sequence === 'number' &&
-        typeof checkpoint.resume_url === 'string' &&
-        typeof checkpoint.shard_count === 'number' &&
-        typeof checkpoint.shard_id === 'number'
-          ? {
-              retrieveSessionInfo: async () => ({
-                sessionId: checkpoint.session_id as string,
-                sequence: checkpoint.sequence as number,
-                resumeURL: checkpoint.resume_url as string,
-                shardCount: checkpoint.shard_count as number,
-                shardId: checkpoint.shard_id as number,
-              }),
-            }
-          : {}),
         updateSessionInfo: async (shardId, sessionInfo) => {
           if (sessionInfo) await onSessionInfo(sessionInfo);
           void shardId;
@@ -102,8 +119,93 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Keep only numeric retry metadata when sanitizing a provider error. */
+function withDeliveryErrorMetadata(error: unknown, message: string): Error {
+  const wrapped = new Error(message);
+  const record = asRecord(error);
+  if (!record) return wrapped;
+  const status = record.status ?? record.statusCode ?? record.code;
+  if (typeof status === 'number') {
+    (wrapped as Error & { status: number }).status = status;
+  }
+  const retryAfter =
+    record.retry_after_ms ??
+    record.retryAfterMs ??
+    record.retry_after ??
+    record.retryAfter ??
+    asRecord(record.rawError)?.retry_after;
+  if (typeof retryAfter === 'number' && Number.isFinite(retryAfter)) {
+    if (record.retry_after_ms !== undefined || record.retryAfterMs !== undefined) {
+      (wrapped as Error & { retry_after_ms: number }).retry_after_ms = retryAfter;
+    } else {
+      (wrapped as Error & { retry_after: number }).retry_after = retryAfter;
+    }
+  }
+  return wrapped;
+}
+
 function snowflake(value: unknown): string | undefined {
-  return typeof value === 'string' && /^\d{17,20}$/.test(value) ? value : undefined;
+  return isDiscordSnowflake(value) ? value : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function discordMentionRanges(text: string, botUserId: string): Array<[number, number]> {
+  const mention = new RegExp(`<@!?${escapeRegExp(botUserId)}>`, 'g');
+  const ranges: Array<[number, number]> = [];
+  for (const match of text.matchAll(mention)) {
+    if (match.index !== undefined) ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+/** True when a character offset is inside an inline or fenced Markdown code span. */
+function isDiscordCodeOffset(text: string, offset: number): boolean {
+  let fenced = false;
+  let inline = false;
+  for (let index = 0; index < text.length && index < offset; index += 1) {
+    if (text.startsWith('```', index)) {
+      if (!inline) fenced = !fenced;
+      index += 2;
+      continue;
+    }
+    if (text[index] === '`' && !fenced) inline = !inline;
+  }
+  return fenced || inline;
+}
+
+/**
+ * Discord's structured `mentions` list is the authority for a bot mention;
+ * content matching alone would admit look-alike text.  The content scan then
+ * excludes mentions embedded in inline or fenced code.
+ */
+export function hasStructuredDiscordBotMention(
+  message: Record<string, unknown>,
+  botUserId: string
+): boolean {
+  const mentions = Array.isArray(message.mentions) ? message.mentions.map(asRecord) : [];
+  if (!mentions.some((mention) => mention?.id === botUserId)) return false;
+  const content = typeof message.content === 'string' ? message.content : '';
+  return discordMentionRanges(content, botUserId).some(
+    ([start]) => !isDiscordCodeOffset(content, start)
+  );
+}
+
+/** Remove only structured bot mentions that are outside code spans. */
+function stripStructuredDiscordBotMention(text: string, botUserId: string): string {
+  const ranges = discordMentionRanges(text, botUserId).filter(
+    ([start]) => !isDiscordCodeOffset(text, start)
+  );
+  if (ranges.length === 0) return text.trim();
+  let output = '';
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    output += text.slice(cursor, start);
+    cursor = end;
+  }
+  return `${output}${text.slice(cursor)}`.replace(/^\s+|\s+$/g, '');
 }
 
 function configuredString(config: DiscordGatewayConfig, key: keyof DiscordGatewayConfig): string {
@@ -130,6 +232,7 @@ function parseThreadId(threadId: string): {
   messageId?: string;
   parentChannelId?: string;
   existingThread: boolean;
+  providerThread: boolean;
 } {
   const threadMatch = /^discord:thread:(\d{17,20}):(\d{17,20})$/.exec(threadId);
   if (threadMatch) {
@@ -137,11 +240,20 @@ function parseThreadId(threadId: string): {
       channelId: threadMatch[2],
       parentChannelId: threadMatch[1],
       existingThread: true,
+      providerThread: false,
     };
   }
   const messageMatch = /^discord:message:(\d{17,20}):(\d{17,20})$/.exec(threadId);
   if (messageMatch) {
-    return { channelId: messageMatch[1], messageId: messageMatch[2], existingThread: false };
+    return {
+      channelId: messageMatch[1],
+      messageId: messageMatch[2],
+      existingThread: false,
+      providerThread: false,
+    };
+  }
+  if (isDiscordSnowflake(threadId)) {
+    return { channelId: threadId, existingThread: true, providerThread: true };
   }
   throw new Error(`Invalid Discord thread ID: ${threadId}`);
 }
@@ -338,6 +450,23 @@ function permissionBits(value: unknown): bigint {
   }
 }
 
+function messageContentCapability(
+  application: Record<string, unknown> | null
+): boolean | undefined {
+  const rawFlags = application?.flags;
+  let flags: bigint;
+  try {
+    if (typeof rawFlags === 'bigint') flags = rawFlags;
+    else if (typeof rawFlags === 'number' && Number.isSafeInteger(rawFlags))
+      flags = BigInt(rawFlags);
+    else if (typeof rawFlags === 'string' && /^\d+$/.test(rawFlags)) flags = BigInt(rawFlags);
+    else return undefined;
+  } catch {
+    return undefined;
+  }
+  return (flags & DISCORD_MESSAGE_CONTENT_FLAGS) !== 0n;
+}
+
 function effectiveChannelPermissions(
   guild: Record<string, unknown> | null,
   member: Record<string, unknown> | null,
@@ -397,7 +526,6 @@ export class DiscordConnector implements GatewayConnector {
   private botUserId: string | null = null;
   private readonly channelInfoCache = new Map<string, Record<string, unknown>>();
   private lastSequence = -1;
-  private lastCheckpointSave: Promise<boolean> = Promise.resolve(true);
   private dispatchChain: Promise<void> = Promise.resolve();
   private stopped = false;
 
@@ -427,14 +555,202 @@ export class DiscordConnector implements GatewayConnector {
     }
   }
 
+  /**
+   * Discord exposes the approved message-content capability on the
+   * application resource when that REST surface includes flags.  Missing or
+   * unparseable flags remain unknown; this probe does not claim to prove
+   * Developer Portal state or gateway delivery.
+   */
+  private async readMessageContentCapability(): Promise<boolean | undefined> {
+    try {
+      return messageContentCapability(
+        await this.getProviderRecord(Routes.oauth2CurrentApplication())
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async requireMessageContentCapability(): Promise<void> {
+    if ((await this.readMessageContentCapability()) === false) {
+      throw new GatewayListenerError(
+        'discord_message_content_unavailable',
+        'permanent',
+        'Discord application flags do not report the Message Content intent capability.'
+      );
+    }
+  }
+
+  private providerStatus(error: unknown): number | undefined {
+    const record = asRecord(error);
+    const status = record?.status ?? record?.statusCode;
+    return typeof status === 'number' ? status : undefined;
+  }
+
+  private async getProviderRecord(route: string): Promise<Record<string, unknown> | null> {
+    try {
+      return asRecord(await this.transport.rest.get(route));
+    } catch (error) {
+      if (this.providerStatus(error) === 404) return null;
+      throw error;
+    }
+  }
+
+  private async verifyPublicThread(
+    rawThread: unknown,
+    parentChannelId: string,
+    starterMessageId: string
+  ): Promise<VerifiedDiscordThread> {
+    const candidate = asRecord(rawThread);
+    const threadId = snowflake(candidate?.id);
+    if (!threadId) throw new Error('Discord thread response has an invalid thread id');
+
+    const thread = await this.getProviderRecord(Routes.channel(threadId));
+    const coordinates = {
+      guild_id: thread?.guild_id,
+      parent_channel_id: thread?.parent_id,
+      thread_channel_id: thread?.id,
+      starter_message_id: starterMessageId,
+    };
+    if (
+      !isDiscordThreadCoordinates(coordinates) ||
+      coordinates.guild_id !== configuredString(this.config, 'guild_id') ||
+      coordinates.parent_channel_id !== parentChannelId ||
+      !DISCORD_PUBLIC_THREAD_TYPES.has(thread?.type as number)
+    ) {
+      throw new Error(
+        'Discord provider thread is not a verified public child of the configured parent'
+      );
+    }
+
+    // A successful starter lookup is the accessibility proof used by the
+    // listener.  For a thread event Discord exposes the starter under the
+    // thread channel; for a top-level summon the parent-message lookup below
+    // is the authoritative starter proof.
+    return { coordinates, type: thread?.type as number };
+  }
+
+  private async lookupThreadForStarter(
+    parentChannelId: string,
+    starterMessageId: string
+  ): Promise<VerifiedDiscordThread | null> {
+    const starter = await this.getProviderRecord(
+      Routes.channelMessage(parentChannelId, starterMessageId)
+    );
+    if (!starter || starter.id !== starterMessageId || starter.channel_id !== parentChannelId) {
+      throw new Error('Discord summon starter message is inaccessible or malformed');
+    }
+    const existingThread = asRecord(starter.thread);
+    if (!existingThread) return null;
+    return this.verifyPublicThread(existingThread, parentChannelId, starterMessageId);
+  }
+
+  private async reconcilePublicSummonThread(
+    parentChannelId: string,
+    starterMessageId: string
+  ): Promise<VerifiedDiscordThread> {
+    // The starter lookup is intentionally before the one conditional create.
+    // After a daemon crash, Discord's starter message is the durable provider
+    // identity that lets a replacement owner recover without another thread.
+    const existing = await this.lookupThreadForStarter(parentChannelId, starterMessageId);
+    if (existing) return existing;
+
+    const body = {
+      name: `Agor request ${starterMessageId.slice(-8)}`,
+      auto_archive_duration: this.config.thread_auto_archive_minutes ?? 1440,
+    };
+    let created: unknown;
+    try {
+      created = await this.transport.rest.post(Routes.threads(parentChannelId, starterMessageId), {
+        body,
+      });
+    } catch (error) {
+      // Discord may have committed the thread while the request was lost, or
+      // may report a conflict after another owner won.  Always reconcile by
+      // starter identity before surfacing the failure; never blindly retry a
+      // provider create.
+      const afterConflict = await this.lookupThreadForStarter(parentChannelId, starterMessageId);
+      if (afterConflict) return afterConflict;
+      throw new Error(
+        `Discord public thread creation failed: ${sanitizeGatewayProviderError(error)}`
+      );
+    }
+
+    const createdRecord = asRecord(created);
+    if (!createdRecord?.id) {
+      const afterAmbiguousResult = await this.lookupThreadForStarter(
+        parentChannelId,
+        starterMessageId
+      );
+      if (afterAmbiguousResult) return afterAmbiguousResult;
+      throw new Error('Discord public thread creation returned malformed coordinates');
+    }
+    try {
+      return await this.verifyPublicThread(createdRecord, parentChannelId, starterMessageId);
+    } catch (error) {
+      const afterAmbiguousResult = await this.lookupThreadForStarter(
+        parentChannelId,
+        starterMessageId
+      );
+      if (afterAmbiguousResult) return afterAmbiguousResult;
+      throw error;
+    }
+  }
+
+  private async verifyExistingPublicThread(
+    threadChannelId: string,
+    parentChannelId: string,
+    starterMessageId: string
+  ): Promise<VerifiedDiscordThread> {
+    const thread = await this.getProviderRecord(Routes.channel(threadChannelId));
+    if (!thread) throw new Error('Discord public thread is inaccessible');
+    const verified = await this.verifyPublicThread(thread, parentChannelId, starterMessageId);
+    const starter = await this.getProviderRecord(
+      Routes.channelMessage(threadChannelId, starterMessageId)
+    );
+    if (!starter || starter.id !== starterMessageId) {
+      throw new Error('Discord public thread starter message is inaccessible or malformed');
+    }
+    return verified;
+  }
+
+  private async prepareInboundDelivery(
+    prepared: {
+      channelId: string;
+      messageId: string;
+      isThread: boolean;
+      parentChannelId?: string;
+    },
+    context?: { skipProviderThreadMaterialization?: boolean }
+  ): Promise<Record<string, unknown>> {
+    if (context?.skipProviderThreadMaterialization) return {};
+
+    const verified = prepared.isThread
+      ? await this.verifyExistingPublicThread(
+          prepared.channelId,
+          prepared.parentChannelId!,
+          prepared.channelId
+        )
+      : await this.reconcilePublicSummonThread(prepared.channelId, prepared.messageId);
+    return {
+      discord_thread_id: verified.coordinates.thread_channel_id,
+      discord_thread: verified.coordinates,
+      discord_thread_type: verified.type,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+  }
+
   private async sendChunk(
     channelId: string,
     content: string,
-    replyToMessageId?: string
+    replyToMessageId?: string,
+    delivery?: { nonce: string; enforceNonce: true }
   ): Promise<{ id: string }> {
     const body = {
       content,
       allowed_mentions: { parse: [] },
+      ...(delivery ? { nonce: delivery.nonce, enforce_nonce: true } : {}),
       ...(replyToMessageId
         ? {
             message_reference: {
@@ -449,7 +765,10 @@ export class DiscordConnector implements GatewayConnector {
     try {
       raw = asRecord(await this.transport.rest.post(Routes.channelMessages(channelId), { body }));
     } catch (error) {
-      throw new Error(`Discord API failure: ${sanitizeGatewayProviderError(error)}`);
+      throw withDeliveryErrorMetadata(
+        error,
+        `Discord API failure: ${sanitizeGatewayProviderError(error)}`
+      );
     }
     const id = snowflake(raw?.id);
     if (!id) throw new Error('Discord API response did not include a message id');
@@ -487,7 +806,19 @@ export class DiscordConnector implements GatewayConnector {
   }): Promise<GatewaySendReceipt> {
     this.validate();
     const parsed = parseThreadId(req.threadId);
-    const parentChannelId = parsed.parentChannelId ?? parsed.channelId;
+    let parentChannelId = parsed.parentChannelId ?? parsed.channelId;
+    if (parsed.providerThread) {
+      const thread = await this.getProviderRecord(Routes.channel(parsed.channelId));
+      if (
+        !thread ||
+        thread.id !== parsed.channelId ||
+        thread.guild_id !== configuredString(this.config, 'guild_id') ||
+        !DISCORD_PUBLIC_THREAD_TYPES.has(thread.type as number)
+      ) {
+        throw new Error('Discord reply target is not an accessible public thread');
+      }
+      parentChannelId = snowflake(thread.parent_id) ?? '';
+    }
     if (!configuredChannelIds(this.config).includes(parentChannelId)) {
       throw new Error('Discord replies must remain in an allowed channel');
     }
@@ -497,10 +828,57 @@ export class DiscordConnector implements GatewayConnector {
         : undefined;
     const replyTo = explicitReply ?? parsed.messageId;
     const ids: string[] = [];
-    for (const chunk of chunkDiscordMessage(req.text)) {
-      ids.push((await this.sendChunk(parsed.channelId, chunk, replyTo)).id);
+    const chunks = chunkDiscordMessage(req.text);
+    const deliveryNonce = req.metadata?.discord_delivery_nonce;
+    const enforceNonce = req.metadata?.discord_enforce_nonce === true;
+    if (enforceNonce && (typeof deliveryNonce !== 'string' || chunks.length !== 1)) {
+      throw new Error('Discord delivery nonce requires exactly one bounded message chunk');
+    }
+    for (const chunk of chunks) {
+      ids.push(
+        (
+          await this.sendChunk(
+            parsed.channelId,
+            chunk,
+            parsed.providerThread ? undefined : replyTo,
+            enforceNonce ? { nonce: deliveryNonce as string, enforceNonce: true } : undefined
+          )
+        ).id
+      );
     }
     return this.receipt(parsed.channelId, req.threadId, ids);
+  }
+
+  async recoverMessageByNonce(req: {
+    threadId: string;
+    nonce: string;
+  }): Promise<GatewaySendReceipt | null> {
+    this.validate();
+    const parsed = parseThreadId(req.threadId);
+    const channelId = parsed.channelId;
+    const raw = await this.transport.rest.get(`${Routes.channelMessages(channelId)}?limit=100`);
+    if (!Array.isArray(raw)) return null;
+    const found = raw
+      .map(asRecord)
+      .find(
+        (candidate) =>
+          candidate?.channel_id === channelId &&
+          String(candidate.nonce ?? '') === req.nonce &&
+          typeof candidate.timestamp === 'string' &&
+          !Number.isNaN(Date.parse(candidate.timestamp)) &&
+          Date.now() - Date.parse(candidate.timestamp) >= -60_000 &&
+          Date.now() - Date.parse(candidate.timestamp) <= DISCORD_NONCE_RECOVERY_WINDOW_MS
+      );
+    const messageId = snowflake(found?.id);
+    return messageId ? this.receipt(channelId, req.threadId, [messageId]) : null;
+  }
+
+  /** Read one bounded, verified Discord history interval for daemon catch-up. */
+  async fetchProviderHistory(
+    req: GatewayProviderHistoryRequest
+  ): Promise<GatewayProviderHistoryResult> {
+    this.validate();
+    return fetchDiscordProviderHistory(this.transport.rest, this.config, req);
   }
 
   async sendDirectMessage(req: {
@@ -530,22 +908,12 @@ export class DiscordConnector implements GatewayConnector {
     return markdown;
   }
 
-  private async saveCheckpoint(
-    options: GatewayListenerOptions,
-    checkpoint: Record<string, unknown>
-  ): Promise<boolean> {
-    if (!options.saveCheckpoint) return true;
-    this.lastCheckpointSave = this.lastCheckpointSave.then(() =>
-      options.saveCheckpoint!(checkpoint)
-    );
-    return this.lastCheckpointSave;
-  }
-
   private async isAllowedMessage(message: Record<string, unknown>): Promise<{
     accepted: boolean;
     threadId?: string;
     metadata?: Record<string, unknown>;
     text?: string;
+    prepareDelivery?: InboundMessage['prepareDelivery'];
   }> {
     const author = asRecord(message.author);
     const member = asRecord(message.member);
@@ -587,7 +955,7 @@ export class DiscordConnector implements GatewayConnector {
     }
 
     const rawContent = typeof message.content === 'string' ? message.content : '';
-    const mentioned = new RegExp(`<@!?${botUserId}>`).test(rawContent);
+    const mentioned = hasStructuredDiscordBotMention(message, botUserId);
     if (!mentioned) return { accepted: false };
     if (
       (Array.isArray(message.attachments) && message.attachments.length > 0) ||
@@ -598,7 +966,7 @@ export class DiscordConnector implements GatewayConnector {
     ) {
       return { accepted: false };
     }
-    const text = stripDiscordBotMention(rawContent, botUserId);
+    const text = stripStructuredDiscordBotMention(rawContent, botUserId);
     if (!text) return { accepted: false };
 
     const configuredChannelIdsList = configuredChannelIds(this.config);
@@ -643,6 +1011,16 @@ export class DiscordConnector implements GatewayConnector {
         ...(referencedMessageId ? { discord_reply_to_message_id: referencedMessageId } : {}),
         discord_has_mention: true,
       },
+      prepareDelivery: async (context) =>
+        this.prepareInboundDelivery(
+          {
+            channelId,
+            messageId,
+            isThread,
+            ...(parentId ? { parentChannelId: parentId } : {}),
+          },
+          context
+        ),
     };
   }
 
@@ -663,6 +1041,7 @@ export class DiscordConnector implements GatewayConnector {
       userId: String(asRecord(message.author)?.id ?? ''),
       timestamp: toIsoTimestamp(message.timestamp),
       metadata: result.metadata,
+      prepareDelivery: result.prepareDelivery,
     };
     await callback(inbound);
     return { messageId };
@@ -675,7 +1054,6 @@ export class DiscordConnector implements GatewayConnector {
     this.validateForListener();
     this.stopped = false;
     this.dispatchChain = Promise.resolve();
-    this.lastCheckpointSave = Promise.resolve(true);
     const bot = asRecord(await this.transport.rest.get(Routes.user('@me')));
     const botUserId = snowflake(bot?.id);
     if (!botUserId) {
@@ -685,6 +1063,7 @@ export class DiscordConnector implements GatewayConnector {
         'The Discord bot token did not return a bot user identity.'
       );
     }
+    await this.requireMessageContentCapability();
     this.botUserId = botUserId;
     if (botUserId !== configuredString(this.config, 'application_id')) {
       throw new GatewayListenerError(
@@ -728,75 +1107,79 @@ export class DiscordConnector implements GatewayConnector {
     configuredChannels.forEach((channel, index) => {
       if (channel) this.channelInfoCache.set(allowedChannelIds[index], channel);
     });
-    this.lastSequence =
-      typeof options.checkpoint?.sequence === 'number' ? options.checkpoint.sequence : -1;
-    let sessionInfo = options.checkpoint ?? undefined;
+    // Discord transport resume is deliberately process-local. Listener
+    // ownership and event idempotency remain durable, but transport session
+    // state is not written to gateway_channels.
+    this.lastSequence = -1;
 
     this.gateway = this.transport.createGateway({
-      checkpoint: options.checkpoint,
-      onSessionInfo: async (nextSessionInfo) => {
-        const record = asRecord(nextSessionInfo);
-        if (!record) return;
-        sessionInfo = record;
-      },
+      checkpoint: undefined,
+      onSessionInfo: async () => undefined,
     });
+    const failListener = async (error: unknown): Promise<void> => {
+      if (this.stopped) return;
+      this.stopped = true;
+      const gateway = this.gateway;
+      this.gateway = null;
+      try {
+        if (gateway) await gateway.destroy();
+      } finally {
+        try {
+          await options.onError?.(error);
+        } catch (notifyError) {
+          console.warn(
+            '[discord] Listener failure notification failed:',
+            providerError(notifyError)
+          );
+        }
+      }
+    };
     this.gateway.on(WebSocketShardEvents.Dispatch, (payload) => {
       const processDispatch = this.dispatchChain.then(async () => {
         if (this.stopped) return;
         const sequence = typeof payload.s === 'number' ? payload.s : undefined;
         if (sequence !== undefined && sequence <= this.lastSequence) return;
-        const delivered = await this.dispatchMessage(payload, callback);
+        await this.dispatchMessage(payload, callback);
         if (sequence !== undefined) this.lastSequence = sequence;
-        const checkpoint: Record<string, unknown> = {
-          ...(typeof sessionInfo?.sessionId === 'string'
-            ? { session_id: sessionInfo.sessionId }
-            : typeof sessionInfo?.session_id === 'string'
-              ? { session_id: sessionInfo.session_id }
-              : {}),
-          ...(typeof sessionInfo?.resumeURL === 'string'
-            ? { resume_url: sessionInfo.resumeURL }
-            : typeof sessionInfo?.resume_url === 'string'
-              ? { resume_url: sessionInfo.resume_url }
-              : {}),
-          ...(typeof sessionInfo?.shardCount === 'number'
-            ? { shard_count: sessionInfo.shardCount }
-            : typeof sessionInfo?.shard_count === 'number'
-              ? { shard_count: sessionInfo.shard_count }
-              : {}),
-          ...(typeof sessionInfo?.shardId === 'number'
-            ? { shard_id: sessionInfo.shardId }
-            : typeof sessionInfo?.shard_id === 'number'
-              ? { shard_id: sessionInfo.shard_id }
-              : {}),
-          ...(sequence !== undefined ? { sequence } : {}),
-          ...(delivered.messageId ? { last_message_id: delivered.messageId } : {}),
-        };
-        const saved = await this.saveCheckpoint(options, checkpoint);
-        if (!saved) {
-          throw new GatewayListenerError(
-            'gateway_listener_lease_lost',
-            'transient',
-            'The Discord listener lost its durable owner lease; Agor will retry automatically.'
-          );
-        }
       });
       this.dispatchChain = processDispatch.catch(async (error) => {
         if (this.stopped) return;
         console.warn('[discord] Dispatch processing failed:', providerError(error));
-        this.stopped = true;
-        try {
-          await this.stopListening();
-        } finally {
-          try {
-            await options.onError?.(error);
-          } catch (notifyError) {
-            console.warn(
-              '[discord] Listener failure notification failed:',
-              providerError(notifyError)
-            );
-          }
-        }
+        await failListener(error);
       });
+    });
+    this.gateway.on(WebSocketShardEvents.Error, (error) => {
+      void failListener(
+        new GatewayListenerError(
+          'discord_gateway_error',
+          'transient',
+          `Discord gateway error: ${providerError(error)}`
+        )
+      );
+    });
+    this.gateway.on(WebSocketShardEvents.SocketError, (error) => {
+      void failListener(
+        new GatewayListenerError(
+          'discord_gateway_socket_error',
+          'transient',
+          `Discord gateway socket error: ${providerError(error)}`
+        )
+      );
+    });
+    this.gateway.on(WebSocketShardEvents.Closed, (code) => {
+      const failure =
+        code === GatewayCloseCodes.DisallowedIntents
+          ? new GatewayListenerError(
+              'discord_message_content_unavailable',
+              'permanent',
+              'Enable the privileged Message Content intent for this Discord application, then refresh the channel.'
+            )
+          : new GatewayListenerError(
+              'discord_gateway_closed',
+              'transient',
+              `Discord gateway closed unexpectedly (code ${code}).`
+            );
+      void failListener(failure);
     });
     await this.gateway.connect();
   }
@@ -825,6 +1208,7 @@ export class DiscordConnector implements GatewayConnector {
         asRecord(await this.transport.rest.get(Routes.guild(this.config.guild_id!))),
         asRecord(await this.transport.rest.get(Routes.gatewayBot())),
       ]);
+      const messageContent = await this.readMessageContentCapability();
       const botOk = bot?.id === configuredString(this.config, 'application_id');
       const guildOk = guild?.id === configuredString(this.config, 'guild_id');
       const shardCount = typeof gatewayBot?.shards === 'number' ? gatewayBot.shards : 0;
@@ -858,6 +1242,7 @@ export class DiscordConnector implements GatewayConnector {
           DISCORD_VIEW_CHANNEL_PERMISSION |
           DISCORD_SEND_MESSAGES_PERMISSION |
           DISCORD_READ_MESSAGE_HISTORY_PERMISSION |
+          DISCORD_CREATE_PUBLIC_THREADS_PERMISSION |
           DISCORD_SEND_MESSAGES_IN_THREADS_PERMISSION;
         return {
           channelId,
@@ -866,6 +1251,7 @@ export class DiscordConnector implements GatewayConnector {
             view: (permissions & DISCORD_VIEW_CHANNEL_PERMISSION) !== 0n,
             send: (permissions & DISCORD_SEND_MESSAGES_PERMISSION) !== 0n,
             readHistory: (permissions & DISCORD_READ_MESSAGE_HISTORY_PERMISSION) !== 0n,
+            createPublicThreads: (permissions & DISCORD_CREATE_PUBLIC_THREADS_PERMISSION) !== 0n,
             sendInThreads: (permissions & DISCORD_SEND_MESSAGES_IN_THREADS_PERMISSION) !== 0n,
           },
         };
@@ -894,9 +1280,18 @@ export class DiscordConnector implements GatewayConnector {
               {
                 capability: 'channel_access',
                 reason:
-                  'One or more allowed channels is not public text or lacks view, send, history, or thread-reply permission.',
+                  'One or more allowed channels is not public text or lacks view, send, history, public-thread creation, or thread-reply permission.',
               },
             ]),
+        ...(messageContent === false
+          ? [
+              {
+                capability: 'message_content',
+                reason:
+                  'Discord application flags do not report the Message Content intent capability.',
+              },
+            ]
+          : []),
       ];
       return {
         ok: failures.length === 0,
@@ -904,15 +1299,20 @@ export class DiscordConnector implements GatewayConnector {
           userId: String(bot?.id ?? ''),
           name: String(bot?.username ?? bot?.global_name ?? ''),
         },
+        ...(botOk && botUserId ? { verifiedInstallationId: botUserId } : {}),
         team: { id: String(guild?.id ?? this.config.guild_id), name: String(guild?.name ?? '') },
         channelAccess,
         failures,
         notVerifiable: [
-          'End-to-end send/reply permission for every configured channel and thread cannot be proven by this REST-only probe; sampled view, send, history, and thread-reply bits are reported in channelAccess.',
+          'End-to-end send/reply permission for every configured channel and thread cannot be proven by this REST-only probe; sampled view, send, history, public-thread creation, and thread-reply bits are reported in channelAccess.',
           'Whether the bot can receive MESSAGE_CREATE events end to end; the probe does not open a listener or use live credentials beyond these REST calls.',
           'Whether every configured allowlisted user or role can currently see the channel and is role-matchable at delivery time.',
           'Whether a Discord message creates or reuses the intended Agor session after gateway filtering, mapping ownership, and prompt admission.',
-          'Whether the Developer Portal preserves the GUILDS and GUILD_MESSAGES intents; privileged Message Content is not requested by this beta.',
+          ...(messageContent === undefined
+            ? [
+                'Whether Discord application flags include the approved Message Content capability; the REST application resource did not expose a parseable flags value, so portal approval and gateway delivery remain unproven.',
+              ]
+            : []),
         ],
       };
     } catch (error) {

@@ -66,6 +66,7 @@ export class GatewayChannelsService extends DrizzleService<
   PersistedGatewayChannelWriteData
 > {
   private db: TenantScopeAwareDatabase;
+  private readonly channelRepo: GatewayChannelRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
     const repo = new GatewayChannelRepository(db);
@@ -78,6 +79,7 @@ export class GatewayChannelsService extends DrizzleService<
       },
     });
     this.db = db;
+    this.channelRepo = repo;
   }
 
   private hasStableExecutionOwner(
@@ -88,7 +90,8 @@ export class GatewayChannelsService extends DrizzleService<
       channel.agor_user_id &&
         config.align_slack_users !== true &&
         config.align_github_users !== true &&
-        config.align_shortcut_users !== true
+        config.align_shortcut_users !== true &&
+        config.align_discord_users !== true
     );
   }
 
@@ -162,6 +165,25 @@ export class GatewayChannelsService extends DrizzleService<
   }
 
   async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
+    return this.patchInternal(id, data, params);
+  }
+
+  /** Internal token-widget seam; provider identity is never a public write field. */
+  async patchWithVerifiedDiscordInstallation(
+    id: string,
+    data: GatewayChannelPatchData,
+    providerInstallationId: string,
+    params?: Params
+  ) {
+    return this.patchInternal(id, data, params, providerInstallationId);
+  }
+
+  private async patchInternal(
+    id: NullableId,
+    data: GatewayChannelPatchData,
+    params?: Params,
+    verifiedProviderInstallationId?: string
+  ) {
     const rawData = data as Record<string, unknown>;
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
@@ -185,6 +207,16 @@ export class GatewayChannelsService extends DrizzleService<
         data.agentic_config === undefined
       );
       persistedData = { ...data, agentic_config: materializedAgenticConfig };
+    }
+    if (verifiedProviderInstallationId !== undefined) {
+      if (id === null || Array.isArray(id)) {
+        throw new BadRequest('Discord installation verification requires one channel');
+      }
+      return this.channelRepo.updateWithVerifiedDiscordInstallation(
+        String(id),
+        persistedData,
+        verifiedProviderInstallationId
+      );
     }
     return super.patch(id, persistedData, params);
   }

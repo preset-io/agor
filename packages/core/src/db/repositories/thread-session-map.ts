@@ -18,6 +18,7 @@ import type {
 import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -64,6 +65,7 @@ export class ThreadSessionMapRepository
       last_message_at: new Date(row.last_message_at).toISOString(),
       status: row.status as ThreadStatus,
       metadata: (row.metadata as Record<string, unknown>) ?? null,
+      last_admitted_provider_cursor: row.last_admitted_provider_cursor ?? null,
     };
   }
 
@@ -84,6 +86,7 @@ export class ThreadSessionMapRepository
       branch_id: data.branch_id ?? '',
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
+      last_admitted_provider_cursor: data.last_admitted_provider_cursor ?? null,
     };
   }
 
@@ -205,6 +208,7 @@ export class ThreadSessionMapRepository
           status: insertData.status,
           last_message_at: insertData.last_message_at,
           metadata: insertData.metadata,
+          last_admitted_provider_cursor: insertData.last_admitted_provider_cursor,
         })
         .where(eq(threadSessionMap.id, fullId))
         .run();
@@ -370,6 +374,40 @@ export class ThreadSessionMapRepository
         error
       );
     }
+  }
+
+  /**
+   * Advance the canonical Discord history cursor only after Task admission.
+   * The row lock makes retries and concurrent listener owners monotonic; a
+   * lower/equal Snowflake is a harmless no-op.
+   */
+  async advanceLastAdmittedProviderCursor(
+    id: ThreadSessionMapID,
+    cursor: string
+  ): Promise<boolean> {
+    if (!isDiscordSnowflake(cursor)) {
+      throw new RepositoryError('Invalid Discord provider cursor');
+    }
+
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const previous = row.last_admitted_provider_cursor;
+        if (previous && compareDiscordSnowflakes(cursor, previous) <= 0) return false;
+        await update(txDb, threadSessionMap)
+          .set({ last_admitted_provider_cursor: cursor })
+          .where(eq(threadSessionMap.id, id))
+          .run();
+        return true;
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /** Merge metadata under a short row lock without overwriting concurrent fields. */

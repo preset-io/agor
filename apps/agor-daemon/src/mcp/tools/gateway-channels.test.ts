@@ -218,6 +218,81 @@ afterEach(() => {
 });
 
 describe('agor_gateway_channels MCP tools', () => {
+  it('rejects daemon-owned and unrecognized Discord configuration', async () => {
+    const tools = await captureTools();
+    const createSchema = tools.agor_gateway_channels_create.cfg.inputSchema;
+    const updateSchema = tools.agor_gateway_channels_update.cfg.inputSchema;
+
+    for (const key of [
+      'provider_installation_id',
+      'provider_config_generation',
+      'listener_checkpoint',
+      'last_admitted_provider_cursor',
+      'delivery_status',
+      'repair',
+      'redrive',
+      'history',
+      'provider_actions',
+    ]) {
+      const input = {
+        name: 'Discord',
+        targetBranchId: 'branch-1',
+        channelType: 'discord',
+        enabled: false,
+        config: { [key]: 'not-operator-config' },
+      };
+      expect(createSchema.safeParse(input).success, key).toBe(false);
+      expect(
+        updateSchema.safeParse({
+          gatewayChannelId: 'gateway-1',
+          channelType: 'discord',
+          config: { [key]: 'not-operator-config' },
+        }).success,
+        key
+      ).toBe(false);
+    }
+
+    expect(
+      createSchema.safeParse({
+        name: 'Discord',
+        targetBranchId: 'branch-1',
+        channelType: 'discord',
+        enabled: false,
+        config: { unsupported_provider_option: true },
+      }).success
+    ).toBe(false);
+  });
+
+  it('projects runtime provider identity out of list responses', async () => {
+    const app = makeFakeApp({
+      'gateway-channels': {
+        find: async () => ({
+          total: 1,
+          data: [
+            {
+              ...slackChannel,
+              provider_installation_id: 'application-snowflake',
+              provider_config_generation: 7,
+              config: {
+                bot_token: 'xoxb-secret',
+                listener_checkpoint: 'transport-sequence',
+              },
+            },
+          ],
+        }),
+      },
+    });
+    const tools = await captureTools('admin', app);
+    const result = await tools.agor_gateway_channels_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+    const channel = payload.gateway_channels[0];
+
+    expect(channel).not.toHaveProperty('provider_installation_id');
+    expect(channel).not.toHaveProperty('provider_config_generation');
+    expect(channel.config).not.toHaveProperty('listener_checkpoint');
+    expect(channel.config.bot_token).toBe('••••••••');
+  });
+
   it('validates Slack Socket Mode config on create', async () => {
     const tools = await captureTools();
     const missingBot = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
@@ -2387,7 +2462,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
   });
 
-  it('exposes a maintainer-only, secret-free Discord beta setup guide', async () => {
+  it('exposes a secret-free Discord setup guide', async () => {
     const tools = await captureTools('admin');
     expect(tools.agor_gateway_discord_setup.cfg.annotations).toMatchObject({
       readOnlyHint: true,
@@ -2408,6 +2483,20 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       allowed_channel_ids: ['333333333333333333'],
       allowed_user_ids: ['444444444444444444'],
       allowed_role_ids: [],
+      message_content_enabled: true,
+      thread_mode: 'public_thread_per_summon',
+      thread_auto_archive_minutes: 1440,
+      align_discord_users: false,
+      catch_up: {
+        max_pages: 5,
+        max_messages: 200,
+        max_prompt_bytes: 32768,
+        request_timeout_ms: 30000,
+        rate_limit_max_retries: 2,
+        rate_limit_max_total_delay_ms: 10000,
+      },
+      files: false,
+      agent_tools: [],
       outbound_enabled: true,
       default_outbound_target: 'channel:333333333333333333',
     });
@@ -2442,6 +2531,40 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         },
       }).success
     ).toBe(true);
+  });
+
+  it('exposes bounded Discord catch-up settings without internal state', async () => {
+    const tools = await captureTools('admin');
+    const setupSchema = tools.agor_gateway_discord_setup.cfg.inputSchema;
+    const base = {
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      allowedChannelIds: ['333333333333333333'],
+    };
+    expect(setupSchema.safeParse({ ...base, catchUp: { maxPages: 11 } }).success).toBe(false);
+
+    const result = await tools.agor_gateway_discord_setup.handler({
+      ...base,
+      catchUp: {
+        maxPages: 10,
+        maxMessages: 500,
+        maxPromptBytes: 131072,
+        requestTimeoutMs: 60000,
+        rateLimitMaxRetries: 5,
+        rateLimitMaxTotalDelayMs: 30000,
+      },
+    });
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.config_hint.catch_up).toEqual({
+      max_pages: 10,
+      max_messages: 500,
+      max_prompt_bytes: 131072,
+      request_timeout_ms: 60000,
+      rate_limit_max_retries: 5,
+      rate_limit_max_total_delay_ms: 30000,
+    });
+    expect(payload.config_hint).not.toHaveProperty('provider_installation_id');
+    expect(payload.config_hint).not.toHaveProperty('listener_checkpoint');
   });
 
   it('generates a DM-only manifest matching the core generator', async () => {

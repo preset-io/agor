@@ -8,7 +8,7 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { ChannelType, GatewayChannelID, TenantID } from '../types';
 import { createDatabase, type Database } from './client';
@@ -67,6 +67,7 @@ async function seedChannel(
       target_branch_id: branch.branch_id,
       channel_key: generateId(),
       enabled: true,
+      ...(channelType === 'discord' ? { provider_installation_id: '111111111111111111' } : {}),
       config:
         channelType === 'slack'
           ? { bot_token: 'xoxb-test', app_token: 'xapp-test' }
@@ -77,6 +78,20 @@ async function seedChannel(
                 guild_id: '222222222222222222',
                 allowed_channel_ids: ['333333333333333333'],
                 allowed_user_ids: ['444444444444444444'],
+                allowed_role_ids: [],
+                message_content_enabled: true,
+                thread_mode: 'public_thread_per_summon',
+                align_discord_users: false,
+                catch_up: {
+                  max_pages: 5,
+                  max_messages: 200,
+                  max_prompt_bytes: 32768,
+                  request_timeout_ms: 30000,
+                  rate_limit_max_retries: 2,
+                  rate_limit_max_total_delay_ms: 10000,
+                },
+                files: false,
+                agent_tools: [],
               }
             : {},
     });
@@ -347,126 +362,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     });
   });
 
-  it('suppresses every member of a pre-existing duplicate Discord application group', async () => {
-    const tenantId = `gateway-duplicate-${generateId()}` as TenantID;
-    const { channel, user, branch } = await seedChannel(db, tenantId, {
-      channelType: 'discord',
-    });
-
-    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-      const repo = new GatewayChannelRepository(scoped);
-      const duplicate = await repo.create({
-        id: generateId() as GatewayChannelID,
-        name: 'Legacy duplicate Discord row',
-        channel_type: 'discord',
-        created_by: user.user_id,
-        agor_user_id: user.user_id,
-        target_branch_id: branch.branch_id,
-        channel_key: generateId(),
-        enabled: false,
-      });
-      await update(scoped, gatewayChannels)
-        .set({
-          enabled: true,
-          config: {
-            bot_token: 'intentionally-not-encrypted',
-            application_id: '111111111111111111',
-            guild_id: '222222222222222222',
-            allowed_channel_ids: ['333333333333333333'],
-            allowed_user_ids: ['444444444444444444'],
-          },
-        })
-        .where(eq(gatewayChannels.id, duplicate.id))
-        .run();
-    });
-
-    const selectedColumns: string[][] = [];
-    const decryptErrors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const refs = await runWithSystemDatabaseScope(
-      db,
-      'duplicate Discord discovery proof',
-      (systemDb) => {
-        const observedSystemDb = new Proxy(systemDb as object, {
-          get(target, property, receiver) {
-            if (property === 'select') {
-              return (columns: Record<string, unknown>) => {
-                selectedColumns.push(Object.keys(columns));
-                return (target as { select: (fields: Record<string, unknown>) => unknown }).select(
-                  columns
-                );
-              };
-            }
-            return Reflect.get(target, property, receiver);
-          },
-        });
-        return new GatewayListenerDiscoveryRepository(
-          observedSystemDb as never
-        ).findEnabledTenantRefs({ limit: 1_000 });
-      },
-      { capability: 'gateway_listener_discovery' }
-    );
-    expect(selectedColumns).toEqual([
-      ['channel_id', 'tenant_id', 'application_id'],
-      ['channel_id', 'tenant_id'],
-    ]);
-    expect(
-      decryptErrors.mock.calls.some(([message]) => String(message).includes('Failed to decrypt'))
-    ).toBe(false);
-    decryptErrors.mockRestore();
-    expect(refs.some((ref) => ref.channel_id === channel.id)).toBe(false);
-    expect(refs.some((ref) => ref.tenant_id === tenantId)).toBe(false);
-  });
-
-  it('advances past a duplicate batch and discovers a valid Discord row in another tenant', async () => {
-    const duplicateTenant = `aaa-gateway-duplicate-${generateId()}` as TenantID;
-    const laterTenant = `zzz-gateway-valid-${generateId()}` as TenantID;
-    const { channel, user, branch } = await seedChannel(db, duplicateTenant, {
-      channelType: 'discord',
-    });
-
-    await runWithTenantDatabaseScope(db, duplicateTenant, async (scoped) => {
-      const repo = new GatewayChannelRepository(scoped);
-      for (let index = 0; index < 24; index += 1) {
-        const duplicate = await repo.create({
-          id: generateId() as GatewayChannelID,
-          name: `Legacy duplicate Discord row ${index}`,
-          channel_type: 'discord',
-          created_by: user.user_id,
-          agor_user_id: user.user_id,
-          target_branch_id: branch.branch_id,
-          channel_key: generateId(),
-          enabled: false,
-        });
-        await update(scoped, gatewayChannels)
-          .set({
-            enabled: true,
-            config: {
-              application_id: '111111111111111111',
-              guild_id: '222222222222222222',
-              allowed_channel_ids: ['333333333333333333'],
-              allowed_user_ids: ['444444444444444444'],
-            },
-          })
-          .where(eq(gatewayChannels.id, duplicate.id))
-          .run();
-      }
-    });
-
-    const valid = await seedChannel(db, laterTenant, { channelType: 'discord' });
-    const refs = await runWithSystemDatabaseScope(
-      db,
-      'duplicate Discord batch-boundary discovery proof',
-      (systemDb) =>
-        new GatewayListenerDiscoveryRepository(systemDb).findEnabledTenantRefs({ limit: 25 }),
-      { capability: 'gateway_listener_discovery' }
-    );
-
-    expect(refs).toContainEqual({ channel_id: valid.channel.id, tenant_id: laterTenant });
-    expect(refs.some((ref) => ref.tenant_id === duplicateTenant)).toBe(false);
-    expect(refs.some((ref) => ref.channel_id === channel.id)).toBe(false);
-  });
-
-  it('serializes concurrent enabled Discord application admission per tenant', async () => {
+  it('uses the global unique index for concurrent Discord application admission', async () => {
     const tenantId = `gateway-admission-${generateId()}` as TenantID;
     const { user, branch } = await seedChannel(db, tenantId, { channelType: 'slack' });
     const config = {
@@ -475,6 +371,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
       guild_id: '888888888888888888',
       allowed_channel_ids: ['999999999999999999'],
       allowed_user_ids: ['444444444444444444'],
+      allowed_role_ids: [],
+      message_content_enabled: true,
+      thread_mode: 'public_thread_per_summon',
+      align_discord_users: false,
+      catch_up: {
+        max_pages: 5,
+        max_messages: 200,
+        max_prompt_bytes: 32768,
+        request_timeout_ms: 30000,
+        rate_limit_max_retries: 2,
+        rate_limit_max_total_delay_ms: 10000,
+      },
+      files: false,
+      agent_tools: [],
     };
     const results = await Promise.allSettled(
       [0, 1].map((index) =>
@@ -488,6 +398,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
             target_branch_id: branch.branch_id,
             channel_key: generateId(),
             enabled: true,
+            provider_installation_id: config.application_id,
             config,
           })
         )

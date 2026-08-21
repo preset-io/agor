@@ -7,10 +7,14 @@
 
 export type {
   GatewayConnector,
+  GatewayProviderHistoryMessage,
+  GatewayProviderHistoryRequest,
+  GatewayProviderHistoryResult,
   GatewaySendReceipt,
   GatewaySendResult,
   InboundFile,
   InboundMessage,
+  InboundPreparationContext,
   OutboundPayload,
 } from './connector';
 export { normalizeOutbound, normalizeSendReceipt } from './connector';
@@ -20,6 +24,14 @@ export {
   DiscordConnector,
   stripDiscordBotMention,
 } from './connectors/discord';
+export type {
+  DiscordHistoryFailureKind,
+  DiscordHistoryRestTransport,
+} from './connectors/discord-history';
+export {
+  DiscordHistoryError,
+  fetchDiscordProviderHistory,
+} from './connectors/discord-history';
 export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
 export {
   buildThreadId as buildShortcutThreadId,

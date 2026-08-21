@@ -25,6 +25,7 @@ import {
   BranchRepository,
   eq,
   GatewayChannelRepository,
+  GatewayMessageDeliveryRepository,
   generateId,
   getCurrentTenantId,
   inArray,
@@ -326,7 +327,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
-  const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+  const deliveryRepository = new GatewayMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, (tx, message) =>
+    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+  ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },

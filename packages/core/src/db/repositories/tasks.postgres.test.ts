@@ -108,7 +108,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
     expect(second).toEqual({ task: first?.task, transitioned: false });
     expect(first?.task.last_executor_heartbeat_at).toBe(first?.task.executor_connected_at);
     const connectedAt = Date.parse(first!.task.executor_connected_at!);
-    expect(connectedAt).toBeGreaterThanOrEqual(beforeClaim);
+    // PostgreSQL retains microseconds while the driver exposes JavaScript
+    // milliseconds; flooring that round-trip can land one millisecond before
+    // the client-side wall-clock sample taken immediately before the claim.
+    expect(connectedAt).toBeGreaterThanOrEqual(beforeClaim - 1);
     expect(connectedAt).toBeLessThanOrEqual(afterClaim);
 
     await Promise.allSettled([

@@ -39,6 +39,8 @@ import type {
   GatewayConnector,
   GatewayInboundCallback,
   GatewayListenerOptions,
+  GatewayProviderHistoryRequest,
+  GatewayProviderHistoryResult,
   InboundFile,
   OutboundPayload,
 } from '../connector';
@@ -264,6 +266,15 @@ function slackTsToIso(ts: string): string {
   const seconds = Number(ts.split('.')[0]);
   if (!Number.isFinite(seconds)) return new Date().toISOString();
   return new Date(seconds * 1000).toISOString();
+}
+
+function compareSlackHistoryCursor(a: string, b: string): number {
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) {
+    return left === right ? 0 : left < right ? -1 : 1;
+  }
+  return a.localeCompare(b);
 }
 
 interface Segment {
@@ -1842,6 +1853,47 @@ export class SlackConnector implements GatewayConnector {
       thread_ts,
       messages,
       has_more: hasMore,
+    };
+  }
+
+  /**
+   * Optional provider-neutral adapter for the gateway catch-up seam. Keep the
+   * established Slack method above untouched: MCP history tools and the legacy
+   * Slack prompt policy continue to use its exact result shape and limits.
+   */
+  async fetchProviderHistory(
+    req: GatewayProviderHistoryRequest
+  ): Promise<GatewayProviderHistoryResult> {
+    const history = await this.fetchThreadHistory({
+      threadId: req.threadId,
+      ...(req.afterProviderCursor ? { oldestTs: req.afterProviderCursor } : {}),
+      latestTs: req.throughProviderCursor,
+      inclusive: true,
+      limit: 200,
+      // Preserve the established Slack mention catch-up policy: bot messages
+      // are not added to the provider-neutral adapter either.
+      includeBotMessages: false,
+      triggerTs: req.triggerProviderCursor,
+    });
+    const messages = req.afterProviderCursor
+      ? history.messages.filter(
+          (message) => compareSlackHistoryCursor(message.ts, req.afterProviderCursor!) > 0
+        )
+      : history.messages;
+    return {
+      threadId: history.threadId,
+      complete: history.has_more !== true,
+      messages: messages.map((message) => ({
+        providerMessageId: message.ts,
+        timestamp: message.iso_time,
+        actorLabel: message.actor_label,
+        text: message.text,
+        isBot: message.is_bot,
+        isSystem: false,
+        isRich: (message.files?.length ?? 0) > 0,
+        isTrigger: message.is_trigger,
+        isMention: message.is_mention,
+      })),
     };
   }
 

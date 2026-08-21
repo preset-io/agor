@@ -761,6 +761,12 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
         version: 0.109.0(zod@4.4.3)
+      '@discordjs/rest':
+        specifier: ^2.6.3
+        version: 2.6.3
+      '@discordjs/ws':
+        specifier: ^2.0.4
+        version: 2.0.4
       '@feathersjs/authentication':
         specifier: ^5.0.46
         version: 5.0.46(typescript@6.0.3)
@@ -851,6 +857,9 @@ importers:
       diff:
         specifier: '>=8.0.3 <9'
         version: 8.0.3
+      discord-api-types:
+        specifier: ^0.38.53
+        version: 0.38.53
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2

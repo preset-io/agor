@@ -53,11 +53,16 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       : opts.channel;
   const session = opts.session ?? { branch_id: 'wt-1' };
   const patchSpy = vi.fn(async () => ({}));
+  const verifiedPatchSpy = vi.fn(async () => ({}));
   const testCreateSpy = vi.fn(async () => opts.testResult ?? PASS_RESULT);
   const app = {
     service(name: string) {
       if (name === 'gateway-channels') {
-        return { get: vi.fn(async () => channel ?? undefined), patch: patchSpy };
+        return {
+          get: vi.fn(async () => channel ?? undefined),
+          patch: patchSpy,
+          patchWithVerifiedDiscordInstallation: verifiedPatchSpy,
+        };
       }
       if (name === 'gateway-channels/test') {
         return { create: testCreateSpy };
@@ -77,6 +82,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       sessionCreatorUserId: 'user-creator' as UserID,
     },
     patchSpy,
+    verifiedPatchSpy,
     testCreateSpy,
   };
 }
@@ -172,6 +178,72 @@ describe('gateway_token widget — applySubmit admin guard', () => {
     await gatewayTokenWidget.applySubmit(ctx, defaultSubmit, defaultParams);
     expect(patchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('materializes a verified Discord application identity through the internal seam', async () => {
+    const { ctx, patchSpy, verifiedPatchSpy, testCreateSpy } = makeCtx({
+      channel: {
+        id: 'chan-1',
+        name: 'Eng Discord',
+        channel_type: 'discord',
+        target_branch_id: 'wt-1',
+      },
+      testResult: {
+        ok: true,
+        verifiedInstallationId: '666666666666666666',
+        failures: [],
+        notVerifiable: [],
+      } as SlackTestResult,
+    });
+    const params = {
+      ...defaultParams,
+      channelType: 'discord' as const,
+      fields: ['bot_token'] as const,
+    };
+    const submit = { tokens: { bot_token: 'discord-secret' } };
+    await gatewayTokenWidget.applySubmit(ctx, submit, params);
+    expect(testCreateSpy).toHaveBeenCalledOnce();
+    expect(patchSpy).not.toHaveBeenCalled();
+    expect(verifiedPatchSpy).toHaveBeenCalledWith(
+      'chan-1',
+      { config: submit.tokens, enabled: true },
+      '666666666666666666',
+      expect.anything()
+    );
+  });
+
+  it('does not enable Discord when the connection probe reports Message Content unavailable', async () => {
+    const { ctx, patchSpy, verifiedPatchSpy } = makeCtx({
+      channel: {
+        id: 'chan-1',
+        name: 'Eng Discord',
+        channel_type: 'discord',
+        target_branch_id: 'wt-1',
+      },
+      testResult: {
+        ok: false,
+        verifiedInstallationId: '666666666666666666',
+        failures: [
+          {
+            capability: 'message_content',
+            reason: 'Discord application flags do not report the capability.',
+          },
+        ],
+        notVerifiable: [],
+      } as SlackTestResult,
+    });
+    const params = {
+      ...defaultParams,
+      channelType: 'discord' as const,
+      fields: ['bot_token'] as const,
+    };
+    await gatewayTokenWidget.applySubmit(ctx, { tokens: { bot_token: 'discord-secret' } }, params);
+    expect(patchSpy).toHaveBeenCalledWith(
+      'chan-1',
+      { config: { bot_token: 'discord-secret' }, enabled: false },
+      expect.anything()
+    );
+    expect(verifiedPatchSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('gateway_token widget — authorizeDismiss (admin-only dismissal)', () => {
@@ -212,12 +284,12 @@ describe('gateway_token widget — channel-binding validation', () => {
 
   it('rejects an unsupported channel type', async () => {
     const { ctx, patchSpy } = makeCtx({
-      channel: { id: 'chan-1', name: 'Eng', channel_type: 'discord', target_branch_id: 'wt-1' },
+      channel: { id: 'chan-1', name: 'Eng', channel_type: 'whatsapp', target_branch_id: 'wt-1' },
     });
     await expect(
       gatewayTokenWidget.applySubmit(ctx, defaultSubmit, {
         ...defaultParams,
-        channelType: 'discord' as never,
+        channelType: 'whatsapp' as never,
       })
     ).rejects.toThrow(/does not support/i);
     expect(patchSpy).not.toHaveBeenCalled();

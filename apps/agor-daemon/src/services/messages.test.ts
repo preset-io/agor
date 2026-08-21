@@ -236,6 +236,33 @@ describe('MessagesService.find pagination', () => {
 });
 
 describe('MessagesService.create boundary', () => {
+  dbTest(
+    'runs the durable-delivery hook once and rolls back the Message on hook failure',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const createdMessage = message(sessionId, 0);
+      const onCreateInTransaction = vi.fn(async () => {
+        throw new Error('durable delivery insert failed');
+      });
+
+      await expect(
+        createMessagesService(db, onCreateInTransaction).create(createdMessage)
+      ).rejects.toThrow('durable delivery insert failed');
+
+      expect(onCreateInTransaction).toHaveBeenCalledOnce();
+      expect(await new MessagesRepository(db).findById(createdMessage.message_id)).toBeNull();
+    }
+  );
+
+  dbTest('does not duplicate the transaction hook through service create', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const onCreateInTransaction = vi.fn(async () => undefined);
+
+    await createMessagesService(db, onCreateInTransaction).create(message(sessionId, 0));
+
+    expect(onCreateInTransaction).toHaveBeenCalledOnce();
+  });
+
   dbTest('accepts the canonical DTO and generates an omitted message_id', async ({ db }) => {
     const sessionId = await createTestSession(db);
     const { message_id: _messageId, ...input } = message(sessionId, 0);

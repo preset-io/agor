@@ -22,16 +22,16 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
+  isDiscordSnowflake,
   validateDiscordConfig,
+  withDiscordConfigDefaults,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
 import {
   deleteFrom,
-  executeRaw,
   insert,
   isPostgresDatabase,
-  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -39,7 +39,6 @@ import {
 } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
-import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -82,25 +81,6 @@ export interface GatewayListenerClaimInput {
   bootId: string;
 }
 
-function duplicateDiscordChannelIds(
-  rows: Array<{
-    channel_id?: string;
-    tenant_id?: unknown;
-    application_id?: unknown;
-  }>
-): Set<string> {
-  const groups = new Map<string, string[]>();
-  for (const row of rows) {
-    const applicationId = row.application_id;
-    if (typeof applicationId !== 'string' || applicationId.length === 0) continue;
-    const channelId = row.channel_id;
-    if (!channelId) continue;
-    const key = `${String(row.tenant_id ?? 'default')}:${applicationId}`;
-    groups.set(key, [...(groups.get(key) ?? []), channelId]);
-  }
-  return new Set([...groups.values()].filter((ids) => ids.length > 1).flat());
-}
-
 /**
  * Capability-specific repository for process-wide listener discovery.
  *
@@ -131,22 +111,8 @@ export class GatewayListenerDiscoveryRepository {
       isNull(gatewayChannels.listener_lease_expires_at),
       lte(gatewayChannels.listener_lease_expires_at, sql`CURRENT_TIMESTAMP`)
     );
-    // Do not derive duplicate status from the bounded page: a duplicate peer
-    // may sort outside this page. Every member of every enabled tenant-local
-    // duplicate group must stay inert, regardless of discovery pagination.
-    const allDiscordRows = await select(this.db, {
-      channel_id: gatewayChannels.id,
-      tenant_id: tenantColumn,
-      application_id: jsonExtract(this.db, gatewayChannels.config, 'application_id'),
-    })
-      .from(gatewayChannels)
-      .where(and(eq(gatewayChannels.enabled, true), eq(gatewayChannels.channel_type, 'discord')))
-      .all();
-    const duplicateIds = duplicateDiscordChannelIds(allDiscordRows);
-
-    // The raw page cursor must advance past rows that are filtered locally.
-    // Otherwise a page made entirely of fail-closed duplicate Discord rows
-    // can starve every valid candidate after it, including another tenant.
+    // The raw page cursor is tenant/channel ordered so discovery can resume
+    // without decrypting provider configuration or crossing tenant scope.
     const refs: EnabledGatewayChannelRef[] = [];
     let rawAfter = after;
     while (refs.length < limit) {
@@ -174,7 +140,6 @@ export class GatewayListenerDiscoveryRepository {
         .all()) as Array<{ channel_id: string; tenant_id?: unknown }>;
 
       for (const row of rows) {
-        if (duplicateIds.has(row.channel_id)) continue;
         if (typeof row.tenant_id !== 'string' || row.tenant_id.length === 0) {
           throw new RepositoryError(
             `Gateway listener discovery returned channel ${row.channel_id} without a tenant identity`
@@ -537,14 +502,6 @@ export class GatewayChannelRepository
     const auditedProvider = isPostgresDatabase(this.db)
       ? inArray(gatewayChannels.channel_type, [...DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES])
       : undefined;
-    const allDiscordRows = await select(this.db, {
-      channel_id: gatewayChannels.id,
-      application_id: jsonExtract(this.db, gatewayChannels.config, 'application_id'),
-    })
-      .from(gatewayChannels)
-      .where(and(eq(gatewayChannels.enabled, true), eq(gatewayChannels.channel_type, 'discord')))
-      .all();
-    const duplicateIds = duplicateDiscordChannelIds(allDiscordRows);
     const candidates: GatewayChannel[] = [];
     let rawAfterId = afterId;
     while (candidates.length < limit) {
@@ -563,7 +520,6 @@ export class GatewayChannelRepository
         .all();
 
       for (const row of rows as GatewayChannelRow[]) {
-        if (duplicateIds.has(row.id)) continue;
         candidates.push(this.rowToChannel(row));
         if (candidates.length === limit) break;
       }
@@ -592,7 +548,9 @@ export class GatewayChannelRepository
         name: row.name,
         channel_type: row.channel_type as ChannelType,
         target_branch_id: row.target_branch_id as UUID,
-        agor_user_id: row.agor_user_id as UUID,
+        agor_user_id: (row.agor_user_id as UUID | null) ?? null,
+        provider_installation_id: row.provider_installation_id ?? null,
+        provider_config_generation: row.provider_config_generation ?? 1,
         channel_key: row.channel_key,
         config: decryptConfig(config),
         agentic_config: agenticConfig
@@ -646,7 +604,9 @@ export class GatewayChannelRepository
       name: data.name ?? 'Untitled Channel',
       channel_type: data.channel_type ?? 'slack',
       target_branch_id: data.target_branch_id ?? '',
-      agor_user_id: data.agor_user_id ?? '',
+      agor_user_id: data.agor_user_id ?? null,
+      provider_installation_id: data.provider_installation_id ?? null,
+      provider_config_generation: data.provider_config_generation ?? 1,
       channel_key: data.channel_key ?? generateId(),
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
@@ -685,15 +645,31 @@ export class GatewayChannelRepository
     }
 
     if (channelType === 'discord') {
-      if (typeof channel.agor_user_id !== 'string' || channel.agor_user_id.trim() === '') {
-        throw new RepositoryError(
-          'Cannot enable Discord gateway channel: a fixed agor_user_id is required'
-        );
-      }
       const validation = validateDiscordConfig(config, { requireBotToken: false });
       if (!validation.ok) {
         throw new RepositoryError(
           `Cannot enable Discord gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+      const applicationId = config.application_id;
+      if (
+        typeof channel.provider_installation_id !== 'string' ||
+        !isDiscordSnowflake(channel.provider_installation_id) ||
+        channel.provider_installation_id !== applicationId
+      ) {
+        throw new RepositoryError(
+          'Cannot enable Discord gateway channel: a verified Discord application binding is required'
+        );
+      }
+      if (config.align_discord_users === true) {
+        if (channel.agor_user_id !== null && channel.agor_user_id !== undefined) {
+          throw new RepositoryError(
+            'Cannot enable Discord gateway channel: aligned identity cannot use a fixed agor_user_id'
+          );
+        }
+      } else if (typeof channel.agor_user_id !== 'string' || channel.agor_user_id.trim() === '') {
+        throw new RepositoryError(
+          'Cannot enable Discord gateway channel: fixed identity requires agor_user_id'
         );
       }
     }
@@ -701,50 +677,41 @@ export class GatewayChannelRepository
 
   /**
    * Discord's gateway manager is process-local and cannot safely share one
-   * application identity across enabled rows in the same tenant. The tenant
-   * scoped database wrapper is the authority for this check; other tenants are
-   * never visible here (including under PostgreSQL RLS).
+   * application identity across enabled rows. The partial global index is the
+   * authority; this repository only translates its generic constraint error.
    */
-  private async assertDiscordApplicationIdUnique(
-    db: Database,
-    channel: Partial<GatewayChannel>
-  ): Promise<void> {
-    if (channel.channel_type !== 'discord' || channel.enabled === false) return;
-    const applicationId = channel.config?.application_id;
-    if (typeof applicationId !== 'string' || applicationId.length === 0) return;
-    const rows = await select(db)
-      .from(gatewayChannels)
-      .where(and(eq(gatewayChannels.channel_type, 'discord'), eq(gatewayChannels.enabled, true)))
-      .all();
-    const duplicate = rows.find(
-      (row: GatewayChannelRow) =>
-        row.id !== channel.id &&
-        (this.rowToChannel(row).config.application_id as unknown) === applicationId
-    );
-    if (duplicate) {
-      throw new RepositoryError(
-        `Cannot enable Discord gateway channel: application_id ${applicationId} is already used by another enabled channel`
-      );
-    }
+  private normalizeConfig(
+    channelType: ChannelType,
+    config: Record<string, unknown>,
+    enabled = true
+  ) {
+    return channelType === 'discord' && enabled !== false
+      ? withDiscordConfigDefaults(config)
+      : config;
   }
 
-  /** Serialize the admission check so two first writers cannot both pass it. */
-  private async lockDiscordApplicationAdmission(txDb: Database): Promise<void> {
-    if (!isPostgresDatabase(this.db)) return;
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) {
-      throw new RepositoryError(
-        'Discord application admission requires an active tenant database scope'
-      );
+  private isDiscordInstallationConflict(error: unknown): boolean {
+    const messages: string[] = [];
+    let current: unknown = error;
+    for (let depth = 0; depth < 4 && current; depth += 1) {
+      messages.push(current instanceof Error ? current.message : String(current));
+      current =
+        typeof current === 'object' && current !== null && 'cause' in current
+          ? (current as { cause?: unknown }).cause
+          : undefined;
     }
-    await executeRaw(
-      txDb,
-      sql`SELECT pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended(
-          ${`agor:gateway-discord-application-admission:${tenantId}`},
-          0
-        )
-      )`
+    const message = messages.join('\n');
+    return (
+      message.includes('gateway_channels_discord_installation_unique') ||
+      (message.toLowerCase().includes('unique') &&
+        message.includes('provider_installation_id') &&
+        message.includes('channel_type'))
+    );
+  }
+
+  private duplicateDiscordInstallationError(): RepositoryError {
+    return new RepositoryError(
+      'Cannot enable Discord gateway channel: this Discord application is already enabled'
     );
   }
 
@@ -783,21 +750,24 @@ export class GatewayChannelRepository
    */
   async create(data: Partial<GatewayChannel>): Promise<GatewayChannel> {
     try {
-      const insertData = this.channelToInsert({
+      const channelType = data.channel_type ?? 'slack';
+      const prepared = {
         ...data,
+        config: this.normalizeConfig(channelType, data.config ?? {}, data.enabled ?? true),
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
+      };
+      const insertData = this.channelToInsert({
+        ...prepared,
       });
 
-      this.assertRequiredSecretsWhenEnabled(data);
+      this.assertRequiredSecretsWhenEnabled({
+        ...prepared,
+        provider_installation_id: insertData.provider_installation_id,
+      });
       const row = await runDatabaseTransaction(
         this.db,
         async (txDb) => {
-          await this.lockDiscordApplicationAdmission(txDb);
-          await this.assertDiscordApplicationIdUnique(txDb, {
-            ...data,
-            id: insertData.id as GatewayChannelID,
-          });
           await insert(txDb, gatewayChannels).values(insertData).run();
           return select(txDb)
             .from(gatewayChannels)
@@ -813,6 +783,9 @@ export class GatewayChannelRepository
 
       return this.rowToChannel(row);
     } catch (error) {
+      if (this.isDiscordInstallationConflict(error)) {
+        throw this.duplicateDiscordInstallationError();
+      }
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to create gateway channel: ${error instanceof Error ? error.message : String(error)}`,
@@ -862,13 +835,36 @@ export class GatewayChannelRepository
    * Update gateway channel by ID
    */
   async update(id: string, updates: Partial<GatewayChannel>): Promise<GatewayChannel> {
+    return this.updateInternal(id, updates);
+  }
+
+  /**
+   * Materialize a provider identity only after a connector has verified the
+   * token-owned application. This method is intentionally not part of the
+   * public gateway write DTO or MCP transport surface.
+   */
+  async updateWithVerifiedDiscordInstallation(
+    id: string,
+    updates: Partial<GatewayChannel>,
+    providerInstallationId: string
+  ): Promise<GatewayChannel> {
+    if (!isDiscordSnowflake(providerInstallationId)) {
+      throw new RepositoryError('Verified Discord application identity is invalid');
+    }
+    return this.updateInternal(id, updates, providerInstallationId);
+  }
+
+  private async updateInternal(
+    id: string,
+    updates: Partial<GatewayChannel>,
+    verifiedProviderInstallationId?: string
+  ): Promise<GatewayChannel> {
     try {
       const fullId = await this.resolveId(id);
 
       const updated = await runDatabaseTransaction(
         this.db,
         async (txDb) => {
-          await this.lockDiscordApplicationAdmission(txDb);
           const currentRow = await select(txDb)
             .from(gatewayChannels)
             .where(eq(gatewayChannels.id, fullId))
@@ -889,8 +885,43 @@ export class GatewayChannelRepository
             }
             merged.config = mergedConfig;
           }
+          merged.config = this.normalizeConfig(
+            merged.channel_type,
+            merged.config,
+            merged.enabled !== false
+          );
+
+          const tokenChanged =
+            updates.config !== undefined && current.config.bot_token !== merged.config.bot_token;
+          const applicationChanged =
+            updates.config !== undefined &&
+            current.config.application_id !== merged.config.application_id;
+          if (merged.channel_type !== 'discord' || tokenChanged || applicationChanged) {
+            merged.provider_installation_id = null;
+          }
+          if (verifiedProviderInstallationId !== undefined) {
+            if (merged.channel_type !== 'discord') {
+              throw new RepositoryError(
+                'Verified Discord application identity requires a Discord gateway channel'
+              );
+            }
+            if (merged.config.application_id !== verifiedProviderInstallationId) {
+              throw new RepositoryError(
+                'Verified Discord application identity does not match the configured application'
+              );
+            }
+            merged.provider_installation_id = verifiedProviderInstallationId;
+          }
+
+          const authorityChanged =
+            updates.enabled !== undefined ||
+            updates.config !== undefined ||
+            updates.channel_type !== undefined ||
+            updates.agor_user_id !== undefined;
+          merged.provider_config_generation = authorityChanged
+            ? current.provider_config_generation + 1
+            : current.provider_config_generation;
           this.assertRequiredSecretsWhenEnabled(merged);
-          await this.assertDiscordApplicationIdUnique(txDb, merged);
           const insertData = this.channelToInsert(merged);
           await update(txDb, gatewayChannels)
             .set({
@@ -898,6 +929,8 @@ export class GatewayChannelRepository
               channel_type: insertData.channel_type,
               target_branch_id: insertData.target_branch_id,
               agor_user_id: insertData.agor_user_id,
+              provider_installation_id: insertData.provider_installation_id,
+              provider_config_generation: insertData.provider_config_generation,
               enabled: insertData.enabled,
               config: insertData.config,
               agentic_config: insertData.agentic_config,
@@ -926,8 +959,11 @@ export class GatewayChannelRepository
 
       return this.rowToChannel(updated);
     } catch (error) {
-      if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;
+      if (this.isDiscordInstallationConflict(error)) {
+        throw this.duplicateDiscordInstallationError();
+      }
+      if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`,
         error

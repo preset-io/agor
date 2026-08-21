@@ -33,6 +33,9 @@ export type GatewayOutboundMessageID = UUID;
 /** Durable identity for one provider-delivered inbound gateway event. */
 export type GatewayInboundEventID = UUID;
 
+/** Durable identity for one assistant-message delivery attempt. */
+export type GatewayMessageDeliveryID = UUID;
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -60,6 +63,46 @@ export type ThreadStatus = 'active' | 'archived' | 'paused';
 
 /** Internal processing state for a provider event idempotency occurrence. */
 export type GatewayInboundEventStatus = 'processing' | 'completed';
+
+export type GatewayMessageDeliveryStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'canceled'
+  | 'dead_letter';
+
+/** Bounded, content-free receipt for one Discord delivery chunk. */
+export interface GatewayMessageDeliveryChunkReceipt {
+  chunk_index: number;
+  nonce: string;
+  provider_message_id: string;
+  reply_aliases: string[];
+}
+
+export interface GatewayMessageDelivery {
+  delivery_id: GatewayMessageDeliveryID;
+  message_id: UUID;
+  gateway_channel_id: GatewayChannelID;
+  thread_session_map_id: ThreadSessionMapID;
+  provider_installation_id: string;
+  provider_config_generation: number;
+  status: GatewayMessageDeliveryStatus;
+  attempt_count: number;
+  next_attempt_at: string;
+  claim_token: string | null;
+  claim_expires_at: string | null;
+  claim_generation: number;
+  /** Chunk whose provider effect may have started but lacks a durable receipt. */
+  ambiguous_chunk_index: number | null;
+  chunk_receipts: GatewayMessageDeliveryChunkReceipt[];
+  reply_aliases: string[];
+  last_error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  canceled_at: string | null;
+  dead_lettered_at: string | null;
+}
 
 /** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
 export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
@@ -128,9 +171,79 @@ export interface DiscordGatewayConfig {
   allowed_channel_ids?: string[];
   allowed_user_ids?: string[];
   allowed_role_ids?: string[];
+  message_content_enabled?: boolean;
+  thread_mode?: 'public_thread_per_summon';
+  thread_auto_archive_minutes?: 60 | 1440 | 4320 | 10080;
+  align_discord_users?: boolean;
+  user_map?: Record<string, string>;
+  catch_up?: DiscordCatchUpConfig;
+  files?: false;
+  agent_tools?: never[];
   outbound_enabled?: boolean;
   default_outbound_target?: string | null;
 }
+
+/**
+ * Provider coordinates for a verified Discord public thread.
+ *
+ * These are deliberately structured instead of being encoded into the
+ * legacy `discord:thread:<parent>:<thread>` mapping identity.  The provider
+ * thread Snowflake remains the canonical mapping key; this object is the
+ * durable proof that the key belongs to the configured public surface.
+ */
+export interface DiscordThreadCoordinates {
+  guild_id: string;
+  parent_channel_id: string;
+  thread_channel_id: string;
+  starter_message_id: string;
+}
+
+export function isDiscordThreadCoordinates(value: unknown): value is DiscordThreadCoordinates {
+  if (!isRecord(value)) return false;
+  return (
+    isDiscordSnowflake(value.guild_id) &&
+    isDiscordSnowflake(value.parent_channel_id) &&
+    isDiscordSnowflake(value.thread_channel_id) &&
+    isDiscordSnowflake(value.starter_message_id)
+  );
+}
+
+/** Bounded, provider-independent controls for a future Discord catch-up pass. */
+export interface DiscordCatchUpConfig {
+  max_pages: number;
+  max_messages: number;
+  max_prompt_bytes: number;
+  request_timeout_ms: number;
+  rate_limit_max_retries: number;
+  rate_limit_max_total_delay_ms: number;
+}
+
+export const DEFAULT_DISCORD_CATCH_UP: DiscordCatchUpConfig = {
+  max_pages: 5,
+  max_messages: 200,
+  max_prompt_bytes: 32 * 1024,
+  request_timeout_ms: 30_000,
+  rate_limit_max_retries: 2,
+  rate_limit_max_total_delay_ms: 10_000,
+};
+
+export const MIN_DISCORD_CATCH_UP: DiscordCatchUpConfig = {
+  max_pages: 1,
+  max_messages: 1,
+  max_prompt_bytes: 1,
+  request_timeout_ms: 1,
+  rate_limit_max_retries: 0,
+  rate_limit_max_total_delay_ms: 0,
+};
+
+export const MAX_DISCORD_CATCH_UP: DiscordCatchUpConfig = {
+  max_pages: 10,
+  max_messages: 500,
+  max_prompt_bytes: 128 * 1024,
+  request_timeout_ms: 60_000,
+  rate_limit_max_retries: 5,
+  rate_limit_max_total_delay_ms: 30_000,
+};
 
 export interface DiscordConfigValidationResult {
   ok: boolean;
@@ -138,6 +251,66 @@ export interface DiscordConfigValidationResult {
 }
 
 const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
+const MAX_DISCORD_SNOWFLAKE = 18_446_744_073_709_551_615n;
+
+/** Discord snowflakes are unsigned 64-bit decimal identifiers. */
+export function isDiscordSnowflake(value: unknown): value is string {
+  if (typeof value !== 'string' || !DISCORD_SNOWFLAKE_RE.test(value)) return false;
+  if (value.startsWith('0')) return false;
+  try {
+    return BigInt(value) <= MAX_DISCORD_SNOWFLAKE;
+  } catch {
+    return false;
+  }
+}
+
+/** Compare two already-validated Discord Snowflakes without losing precision. */
+export function compareDiscordSnowflakes(a: string, b: string): number {
+  if (!isDiscordSnowflake(a) || !isDiscordSnowflake(b)) {
+    throw new Error('Discord Snowflake comparison requires canonical Snowflakes');
+  }
+  const left = BigInt(a);
+  const right = BigInt(b);
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateCatchUpConfig(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return;
+  if (!isRecord(raw)) {
+    errors.push('catch_up must be an object');
+    return;
+  }
+  for (const key of Object.keys(DEFAULT_DISCORD_CATCH_UP) as Array<keyof DiscordCatchUpConfig>) {
+    const value = raw[key];
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < MIN_DISCORD_CATCH_UP[key] ||
+      value > MAX_DISCORD_CATCH_UP[key]
+    ) {
+      errors.push(
+        `catch_up.${key} must be an integer between ${MIN_DISCORD_CATCH_UP[key]} and ${MAX_DISCORD_CATCH_UP[key]}`
+      );
+    }
+  }
+}
+
+/** Fill only non-authority defaults; Message Content and identity stay explicit. */
+export function withDiscordConfigDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+  const catchUp = isRecord(raw.catch_up)
+    ? { ...DEFAULT_DISCORD_CATCH_UP, ...raw.catch_up }
+    : { ...DEFAULT_DISCORD_CATCH_UP };
+  return {
+    ...raw,
+    catch_up: catchUp,
+    files: raw.files ?? false,
+    agent_tools: raw.agent_tools ?? [],
+  };
+}
 
 /**
  * Validate the non-secret Discord beta configuration without importing any
@@ -154,7 +327,7 @@ export function validateDiscordConfig(
     ['guild_id', raw.guild_id],
   ];
   for (const [field, value] of requiredSnowflakes) {
-    if (typeof value !== 'string' || !DISCORD_SNOWFLAKE_RE.test(value)) {
+    if (!isDiscordSnowflake(value)) {
       errors.push(`${field} must be a Discord snowflake`);
     }
   }
@@ -166,9 +339,7 @@ export function validateDiscordConfig(
   if (
     !Array.isArray(rawAllowedChannelIds) ||
     allowedChannelIds.length === 0 ||
-    rawAllowedChannelIds.some(
-      (item) => typeof item !== 'string' || !DISCORD_SNOWFLAKE_RE.test(item)
-    )
+    rawAllowedChannelIds.some((item) => !isDiscordSnowflake(item))
   ) {
     errors.push('allowed_channel_ids must contain one or more Discord snowflakes');
   }
@@ -191,7 +362,7 @@ export function validateDiscordConfig(
       return;
     }
     if (value.length === 0) return;
-    if (value.some((item) => typeof item !== 'string' || !DISCORD_SNOWFLAKE_RE.test(item))) {
+    if (value.some((item) => !isDiscordSnowflake(item))) {
       errors.push(`${field} must contain only Discord snowflakes`);
     }
   };
@@ -203,6 +374,54 @@ export function validateDiscordConfig(
     errors.push('at least one allowed_user_ids or allowed_role_ids entry is required');
   }
 
+  if (raw.message_content_enabled !== true) {
+    errors.push('message_content_enabled must be true');
+  }
+  if (raw.thread_mode !== 'public_thread_per_summon') {
+    errors.push('thread_mode must be public_thread_per_summon');
+  }
+  if (
+    raw.thread_auto_archive_minutes !== undefined &&
+    ![60, 1440, 4320, 10080].includes(raw.thread_auto_archive_minutes as number)
+  ) {
+    errors.push('thread_auto_archive_minutes must be one of 60, 1440, 4320, or 10080');
+  }
+  if (typeof raw.align_discord_users !== 'boolean') {
+    errors.push('align_discord_users must be a boolean');
+  }
+  if (raw.user_map !== undefined) {
+    if (!isRecord(raw.user_map)) {
+      errors.push('user_map must map Discord user snowflakes to Agor emails');
+    } else {
+      const entries = Object.entries(raw.user_map);
+      if (raw.align_discord_users === true && entries.length === 0) {
+        errors.push('user_map must contain at least one entry when align_discord_users is true');
+      }
+      for (const [discordUserId, email] of entries) {
+        if (!isDiscordSnowflake(discordUserId) || typeof email !== 'string' || !email.trim()) {
+          errors.push('user_map must map Discord user snowflakes to nonempty Agor emails');
+          break;
+        }
+      }
+      if (raw.align_discord_users === false) {
+        errors.push('user_map is only allowed when align_discord_users is true');
+      }
+    }
+  } else if (raw.align_discord_users === true) {
+    errors.push('user_map must contain at least one entry when align_discord_users is true');
+  }
+
+  validateCatchUpConfig(raw.catch_up, errors);
+  if (raw.files !== undefined && raw.files !== false) {
+    errors.push('files must be false');
+  }
+  if (
+    raw.agent_tools !== undefined &&
+    (!Array.isArray(raw.agent_tools) || raw.agent_tools.length > 0)
+  ) {
+    errors.push('agent_tools must be an empty array');
+  }
+
   if (raw.outbound_enabled !== undefined && typeof raw.outbound_enabled !== 'boolean') {
     errors.push('outbound_enabled must be a boolean');
   }
@@ -211,7 +430,7 @@ export function validateDiscordConfig(
       errors.push('default_outbound_target must be channel:<snowflake>');
     } else {
       const match = /^channel:(\d{17,20})$/.exec(raw.default_outbound_target.trim());
-      if (!match || !allowedChannelIds.includes(match[1])) {
+      if (!match || !isDiscordSnowflake(match[1]) || !allowedChannelIds.includes(match[1])) {
         errors.push('default_outbound_target must target an allowed channel');
       }
     }
@@ -315,6 +534,7 @@ export interface GatewayConnectionTestPermissionDetails {
   view: boolean;
   send: boolean;
   readHistory: boolean;
+  createPublicThreads: boolean;
   sendInThreads: boolean;
 }
 
@@ -336,6 +556,8 @@ export interface GatewayConnectionTestResult {
   ok: boolean;
   team?: { id: string; name: string };
   bot?: { userId: string; name: string };
+  /** Provider-owned identity verified by the connector; never client supplied. */
+  verifiedInstallationId?: string;
   appTokenValid?: boolean;
   channelAccess?: GatewayConnectionTestChannelAccess[];
   failures: GatewayConnectionTestFailure[];
@@ -447,7 +669,12 @@ export interface GatewayChannel {
   name: string;
   channel_type: ChannelType;
   target_branch_id: BranchID;
-  agor_user_id: UserID;
+  /** Nullable for explicitly aligned Discord identity mode. */
+  agor_user_id: UserID | null;
+  /** Verified token-owned provider identity, materialized server-side. */
+  provider_installation_id: string | null;
+  /** Authority-bearing provider config generation. */
+  provider_config_generation: number;
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   agentic_config: PersistedGatewayAgenticConfig | null; // Session creation settings
@@ -470,7 +697,7 @@ export interface GatewayChannelCreateData {
   name: string;
   channel_type: ChannelType;
   target_branch_id: BranchID;
-  agor_user_id?: UserID;
+  agor_user_id?: UserID | null;
   config: Record<string, unknown>;
   agentic_config?: GatewayAgenticConfig | null;
   mcp_server_ids?: string[];
@@ -516,6 +743,8 @@ export interface ThreadSessionMap {
   last_message_at: string;
   status: ThreadStatus;
   metadata: Record<string, unknown> | null;
+  /** Last Discord provider cursor whose mention Task was durably admitted. */
+  last_admitted_provider_cursor: string | null;
 }
 
 /**
