@@ -774,6 +774,9 @@ function AppContent() {
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
       goals: result.goals,
+      // Template persona and MCP agency for the first-session opener.
+      templateId: result.templateId,
+      canManageIntegrations: canManageMcp,
       user: {
         name: currentUser.name,
         email: currentUser.email,

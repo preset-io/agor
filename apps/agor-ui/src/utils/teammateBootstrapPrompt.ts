@@ -3,6 +3,7 @@ import {
   findOnboardingGoal,
   type OnboardingIntegrationRecommendation,
 } from './onboardingGoals';
+import { BLANK_TEMPLATE_ID, getTeammateTemplate } from './teammateTemplates';
 
 export interface TeammateBootstrapPromptInput {
   displayName: string;
@@ -16,8 +17,19 @@ export interface TeammateBootstrapPromptInput {
    * teammates; omit entirely for teammates created outside onboarding.
    */
   goals?: string[] | null;
+  /**
+   * Gallery template id (persona) the teammate was created from, if any. A real
+   * (non-blank) template's title is surfaced as context and switches the opener
+   * to the personal, persona-led path even when no goal was picked.
+   */
+  templateId?: string | null;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[] | null;
+  /**
+   * Whether the acting user can connect MCP servers themselves (admin+). Drives
+   * whether the opener offers to set a connection up, or defers to an admin.
+   */
+  canManageIntegrations?: boolean | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -33,7 +45,11 @@ export interface TeammateBootstrapPromptContext {
   /** Goal-driven guidance lines; present when goals were supplied. */
   goalGuidance?: string[];
   hasPrimaryGoal?: boolean;
+  /** Chosen template's title; present only when a real (non-blank) template resolved. */
+  templateTitle?: string;
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
+  /** True when the acting user can connect MCP servers themselves. */
+  canManageIntegrations?: boolean;
   firstSession: true;
 }
 
@@ -54,6 +70,10 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   if (context.teammate.description) {
     lines.push(`- AI teammate description: ${context.teammate.description}`);
+  }
+
+  if (context.templateTitle) {
+    lines.push(`- Created from the ${context.templateTitle} template.`);
   }
 
   if (context.user?.name) {
@@ -83,39 +103,45 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     'Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user using the supplied context and live Agor state.'
   );
   lines.push('');
-  lines.push('Canonical opening strategy:');
+  lines.push('Open the first session well:');
   lines.push(
-    context.hasPrimaryGoal
-      ? '- Start on the primary goal. If live context is sufficient, perform one concrete first-win action now and report the result. If essential context is missing, ask exactly one specific question, then act immediately on the answer. Do not conduct an interview.'
-      : '- Do not assume a goal. Ask exactly one specific question about what the user is working on now, then take the first concrete action their answer enables. Do not conduct an interview.'
+    'Your first message sets the working relationship. Make it personal and easy to scan: a short intro, then the value, then one real step. No wall of text, and no generic "what do you want to do?" interview.'
   );
-  if (context.suggestedIntegrations?.length) {
-    // The route is part of each recommendation because these capabilities do
-    // not all live in Marketplace. Never invent a catalog install for a custom
-    // MCP endpoint or for Agor's native repository support.
+
+  // A picked goal OR a template persona is enough to open personally; only the
+  // no-goal, no-template case falls back to the single-question opener.
+  const personalOpen = context.hasPrimaryGoal || Boolean(context.templateTitle);
+  const userName = context.user?.name;
+  if (personalOpen) {
+    const helpTarget = userName ?? 'them';
     lines.push(
-      'When one of these would unlock the first win, name it, explain what it unlocks, and use only its setup route below. Do not wait to be asked:'
+      `- Open as yourself: one warm line, in your persona's voice, naming who you are and that you're set up to help ${helpTarget} with what they picked (see "What the user wants" above). If your template persona and the user's goal diverge, lead with the user's goal.`
     );
-    for (const integration of context.suggestedIntegrations) {
-      switch (integration.setup.surface) {
-        case 'marketplace':
-          lines.push(
-            `- ${integration.name}: direct the user to Marketplace. If workspace policy prevents them from connecting it, explain that an admin must change the MCP member policy or install it.`
-          );
-          break;
-        case 'mcp-settings':
-          lines.push(
-            `- ${integration.name}: direct the user to Settings → MCP Servers and use the official endpoint ${integration.setup.endpoint}. Do not call this a Marketplace entry; gateway channels are a separate prompt/notification surface.`
-          );
-          break;
-        case 'connected-repository':
-          lines.push(
-            `- ${integration.name}: use the repository already connected to Agor, or ask which repository to add. Do not describe this as an MCP or Marketplace install.`
-          );
-          break;
-      }
-    }
+    lines.push(
+      "- Then 2-3 short bullets on how you'll help, specific to that goal: concrete capabilities, not a catalog."
+    );
+    lines.push(
+      '- Then act: take one concrete first-win step now and show the result. If one essential fact blocks you, make one specific offer or ask one specific question, never a generic one.'
+    );
+    lines.push('- End with a single clear next step.');
+  } else {
+    const workingTarget = userName ?? 'the user';
+    lines.push(
+      `- Open as yourself in one line, then ask exactly one specific question about what ${workingTarget} is working on right now, and act on the answer immediately. Do not interview.`
+    );
   }
+
+  if (context.suggestedIntegrations?.length) {
+    lines.push(
+      context.canManageIntegrations
+        ? "When a connection would unlock the win, say in one plain line what it unlocks, then offer to set it up for them yourself: register and connect it through the MCP tools or a secure credential flow, never asking for a secret in chat. Tell them they can review or disable it anytime under Settings -> MCP. Don't just point at the settings screen, and don't wait to be asked."
+        : "When a connection would unlock the win, name it and what it unlocks, but explain a workspace admin has to connect it. Don't send this user to the admin-only MCP settings screen."
+    );
+  }
+
+  lines.push(
+    'When a relevant doc exists (check Agor Knowledge, or a "Further reading" pointer in your ONBOARDING.md), link the single most relevant one instead of pasting a how-to.'
+  );
 
   return lines.join('\n');
 }
@@ -127,13 +153,20 @@ export function buildTeammateBootstrapPromptContext({
   userName,
   userEmail,
   goals,
+  templateId,
   suggestedIntegrations,
+  canManageIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
   const normalizedIntegrations = suggestedIntegrations?.filter(
     (integration) => integration.name.trim().length > 0
   );
+  // The blank starter is "no template" — never surface it as a persona.
+  const templateTitle =
+    templateId && templateId !== BLANK_TEMPLATE_ID
+      ? getTeammateTemplate(templateId)?.title
+      : undefined;
 
   return {
     teammate: {
@@ -155,7 +188,9 @@ export function buildTeammateBootstrapPromptContext({
     // Only lead with the primary-goal opener when a goal actually resolves — an
     // empty (skip) or all-unknown goals array has no primary goal to act on.
     ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
+    ...(templateTitle ? { templateTitle } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
+    ...(canManageIntegrations ? { canManageIntegrations: true } : {}),
     firstSession: true,
   };
 }

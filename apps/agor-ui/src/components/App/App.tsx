@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, PermissionScope } from '@agor-live/client';
+import { hasMinimumRole, PermissionScope, ROLES } from '@agor-live/client';
 import { Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -73,6 +73,7 @@ import {
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { getTemplateBySourceBranch } from '../../utils/teammateTemplates';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -1037,6 +1038,10 @@ export const App: React.FC<AppProps> = ({
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
+        // Recover the persona from the branch the teammate was cut from so the
+        // opener adopts it here too (this path carries no explicit template id).
+        templateId: getTemplateBySourceBranch(result.sourceBranch)?.id,
+        canManageIntegrations: hasMinimumRole(user?.role, ROLES.ADMIN),
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,

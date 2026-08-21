@@ -155,6 +155,30 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
+  it('threads the template persona and admin MCP agency into the first-session prompt', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+
+    const { input } = setup({
+      goals: [],
+      templateId: 'legal-analyst',
+      canManageIntegrations: true,
+    });
+    await seedOnboardingTeammate(input);
+
+    const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
+    const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
+    // Template persona surfaces in context and drives the personal opener even
+    // though no goal was picked.
+    expect(initialPrompt).toContain('- Created from the Legal Analyst template.');
+    expect(initialPrompt).toMatch(/Open as yourself: one warm line/);
+    // Admin gets the "set it up yourself" MCP agency line.
+    expect(initialPrompt).toMatch(/offer to set it up for them yourself/i);
+  });
+
   it('forwards the template source branch to createTeammateBranch', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',

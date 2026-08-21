@@ -205,6 +205,22 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
 }
 
 /**
+ * The template a teammate was cut from, matched by its `sourceBranch`.
+ *
+ * Inverse of `resolveTemplateSourceBranch`: given the branch a teammate now
+ * lives on, recover the template (and its persona) it came from. A blank or
+ * `main` source branch is the framework repo default, not a real template, so
+ * it resolves to undefined. Pure and side-effect-free.
+ */
+export function getTemplateBySourceBranch(
+  sourceBranch?: string | null
+): TeammateTemplate | undefined {
+  const branch = sourceBranch?.trim();
+  if (!branch || branch === BLANK_TEMPLATE.sourceBranch) return undefined;
+  return TEAMMATE_TEMPLATES.find((template) => template.sourceBranch === branch);
+}
+
+/**
  * Authoritative goal → recommended template mapping, in priority order. Goal
  * ids come from ONBOARDING_GOALS (onboardingGoals.ts). A goal that maps to no
  * template lists []. This is the single source of truth for recommendations.

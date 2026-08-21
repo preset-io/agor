@@ -6,6 +6,7 @@ import {
   galleryCardsForFilter,
   getCategoryColor,
   getTeammateTemplate,
+  getTemplateBySourceBranch,
   recommendedTemplateIds,
   resolveTemplateSourceBranch,
   TEAMMATE_GALLERY_CARDS,
@@ -133,6 +134,30 @@ describe('resolveTemplateSourceBranch', () => {
     expect(resolveTemplateSourceBranch(BLANK_TEMPLATE_ID)).toBeUndefined();
     expect(resolveTemplateSourceBranch(null)).toBeUndefined();
     expect(() => resolveTemplateSourceBranch('nope')).toThrow('Unknown teammate template id: nope');
+  });
+});
+
+describe('getTemplateBySourceBranch', () => {
+  it('recovers the template from its contract source branch', () => {
+    expect(getTemplateBySourceBranch('template/legal-analyst')?.id).toBe('legal-analyst');
+    expect(getTemplateBySourceBranch('template/deal-desk-revops-analyst')?.id).toBe('deal-desk');
+    // Round-trips with resolveTemplateSourceBranch for every real template.
+    for (const template of TEAMMATE_TEMPLATES) {
+      expect(getTemplateBySourceBranch(template.sourceBranch)?.id).toBe(template.id);
+    }
+  });
+
+  it('treats blank/main and empty input as "no template"', () => {
+    expect(getTemplateBySourceBranch(BLANK_TEMPLATE.sourceBranch)).toBeUndefined(); // 'main'
+    expect(getTemplateBySourceBranch('main')).toBeUndefined();
+    expect(getTemplateBySourceBranch('  ')).toBeUndefined();
+    expect(getTemplateBySourceBranch('')).toBeUndefined();
+    expect(getTemplateBySourceBranch(null)).toBeUndefined();
+    expect(getTemplateBySourceBranch(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for an unrecognized branch', () => {
+    expect(getTemplateBySourceBranch('feature/whatever')).toBeUndefined();
   });
 });
 
