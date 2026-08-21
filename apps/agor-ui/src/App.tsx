@@ -1015,9 +1015,10 @@ function AppContent() {
   }
 
   // Handle session creation. The browser owns only the multipart upload gap;
-  // required session configuration and prompt admission are one daemon-side
-  // tenant unit of work. A failure leaves a usable blank session and seeds the
-  // normal composer rather than retaining a second recovery state machine.
+  // the daemon commits required session configuration, then uses its ordinary
+  // prompt-admission lifecycle. A prompt failure leaves a usable configured
+  // blank session and seeds the normal composer rather than retaining a second
+  // recovery state machine.
   const handleCreateSession = async (
     config: NewSessionConfig,
     _boardId: string

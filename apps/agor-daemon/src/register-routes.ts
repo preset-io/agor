@@ -4510,7 +4510,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const tenantId = getCurrentTenantId();
         if (!tenantId) throw new Error('Missing active tenant context for session initialization');
 
-        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
+        const session = await inCurrentTenantDatabaseScope(() =>
+          authorizeAndLoadSessionForMcpConfig(id, params)
+        );
         let configuredMcpServerIds: MCPServerID[] | undefined;
         let configuredEnvVarNames: string[] | undefined;
 
