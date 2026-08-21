@@ -6,6 +6,7 @@ import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
+import { markMarketplacePromptAttempt } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -151,6 +152,20 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
       attachedServers.filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
     [attachedServers, userAuthenticatedMcpServerIds]
   );
+  const markNewOAuthAttempt = React.useCallback(
+    (attemptId: string) => {
+      if (!currentUserId || !role) return;
+      markMarketplacePromptAttempt({
+        sessionId,
+        attemptId,
+        userId: currentUserId,
+        role,
+        authGeneration,
+        createdAt: Date.now(),
+      });
+    },
+    [authGeneration, currentUserId, role, sessionId]
+  );
 
   const badgeTitle =
     unauthedServers.length === 1
@@ -205,6 +220,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
                     ? 'Reconnect to the Agor daemon before changing OAuth credentials.'
                     : 'Your account can no longer change OAuth credentials.'
                 }
+                onOAuthAttemptStarted={markNewOAuthAttempt}
                 onEdit={handleEditServer}
               />
             ))}

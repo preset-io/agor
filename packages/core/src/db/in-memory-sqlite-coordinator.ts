@@ -39,6 +39,8 @@ interface DrizzleNestedTransactionScope {
   tail: Promise<void>;
 }
 
+const IN_MEMORY_SQLITE_COORDINATOR = Symbol('agor.db.sqlite.in-memory.coordinator');
+
 async function acquire(coordinator: Coordinator): Promise<() => void> {
   if (coordinator.poisoned) throw coordinator.poisoned;
   if (!coordinator.locked) {
@@ -128,6 +130,7 @@ async function finishTransaction(
   release: () => void,
   command: 'COMMIT' | 'ROLLBACK'
 ): Promise<void> {
+  if (coordinator.poisoned) throw coordinator.poisoned;
   if (state.phase === 'closed') return;
   if (state.finishing) return state.finishing;
   // Close the admission gate synchronously. Anything accepted before this
@@ -182,6 +185,7 @@ function createOwnedTransaction(
   const state: OwnedTransactionState = { phase: 'open', tail: Promise.resolve() };
 
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (coordinator.poisoned) return Promise.reject(coordinator.poisoned);
     if (state.phase !== 'open') {
       return Promise.reject(
         new Error(
@@ -269,22 +273,25 @@ type DrizzleTransactionMethod = (
   config?: unknown
 ) => Promise<unknown>;
 
-function coordinateDrizzleTransactionHandle<T extends object>(raw: T): T {
+function coordinateDrizzleTransactionHandle<T extends object>(raw: T, coordinator: Coordinator): T {
   const scope: DrizzleNestedTransactionScope = { tail: Promise.resolve() };
   return new Proxy(raw, {
     get(target, property) {
       if (property === 'transaction') {
         const transaction = Reflect.get(target, property, target) as DrizzleTransactionMethod;
         return async (callback: DrizzleTransactionCallback, config?: unknown) => {
+          if (coordinator.poisoned) throw coordinator.poisoned;
           // Drizzle uses a savepoint name derived only from nesting depth. Two
           // sibling callbacks therefore both use `sp0`; serialize the complete
           // callbacks so one sibling's rollback can never erase another one's
           // successful release.
           const release = await acquireNestedScope(scope);
           try {
+            if (coordinator.poisoned) throw coordinator.poisoned;
             return await transaction.call(
               target,
-              (nested) => callback(coordinateDrizzleTransactionHandle(nested as object)),
+              (nested) =>
+                callback(coordinateDrizzleTransactionHandle(nested as object, coordinator)),
               config
             );
           } finally {
@@ -305,17 +312,25 @@ function coordinateDrizzleTransactionHandle<T extends object>(raw: T): T {
  * serializes sibling savepoints for callers of Drizzle's direct transaction
  * method too.
  */
-export function coordinateInMemorySQLiteDatabase<T extends object>(raw: T): T {
+export function coordinateInMemorySQLiteDatabase<T extends object>(raw: T, client: Client): T {
+  const coordinator = (client as unknown as Record<PropertyKey, unknown>)[
+    IN_MEMORY_SQLITE_COORDINATOR
+  ] as Coordinator;
+  if (!coordinator) {
+    throw new Error('Literal-memory SQLite database requires its coordinated client');
+  }
   return new Proxy(raw, {
     get(target, property) {
       if (property === 'transaction') {
         const transaction = Reflect.get(target, property, target) as DrizzleTransactionMethod;
         return (callback: DrizzleTransactionCallback, config?: unknown) =>
-          transaction.call(
-            target,
-            (tx) => callback(coordinateDrizzleTransactionHandle(tx as object)),
-            config
-          );
+          coordinator.poisoned
+            ? Promise.reject(coordinator.poisoned)
+            : transaction.call(
+                target,
+                (tx) => callback(coordinateDrizzleTransactionHandle(tx as object, coordinator)),
+                config
+              );
       }
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;
@@ -338,6 +353,7 @@ export function coordinateInMemorySQLiteClient(raw: Client): Client {
 
   return new Proxy(raw, {
     get(target, property) {
+      if (property === IN_MEMORY_SQLITE_COORDINATOR) return coordinator;
       switch (property) {
         case 'execute':
           return (statement: InStatement | string, args?: InArgs) =>
@@ -352,12 +368,44 @@ export function coordinateInMemorySQLiteClient(raw: Client): Client {
         case 'migrate':
           return (statements: InStatement[]) =>
             coordinated(async () => {
-              await target.execute('PRAGMA foreign_keys = OFF');
               try {
-                return await runBatch(target, coordinator, statements, 'deferred');
-              } finally {
-                await target.execute('PRAGMA foreign_keys = ON');
+                await target.execute('PRAGMA foreign_keys = OFF');
+              } catch (error) {
+                // The statement may have reached SQLite even when the client
+                // reported failure. Never admit work on a handle whose FK
+                // enforcement state cannot be proven.
+                throw poisonCoordinator(coordinator, error);
               }
+              let outcome: { ok: true; value: ResultSet[] } | { ok: false; error: unknown };
+              try {
+                outcome = {
+                  ok: true,
+                  value: await runBatch(target, coordinator, statements, 'deferred'),
+                };
+              } catch (error) {
+                outcome = { ok: false, error };
+              }
+
+              // A poison means terminal recovery could not prove the raw
+              // connection clean. Do not dispatch even a cleanup PRAGMA on
+              // that handle, and preserve the one stable poison identity.
+              if (coordinator.poisoned) throw coordinator.poisoned;
+              try {
+                await target.execute('PRAGMA foreign_keys = ON');
+              } catch (error) {
+                if (coordinator.poisoned) throw coordinator.poisoned;
+                throw poisonCoordinator(
+                  coordinator,
+                  outcome.ok
+                    ? error
+                    : new AggregateError(
+                        [outcome.error, error],
+                        'SQLite migration and foreign-key cleanup both failed'
+                      )
+                );
+              }
+              if (!outcome.ok) throw outcome.error;
+              return outcome.value;
             });
         case 'executeMultiple':
           return (source: string) => coordinated(() => target.executeMultiple(source));

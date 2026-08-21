@@ -1,5 +1,10 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  claimMarketplaceOAuthPrompt,
+  readPendingMarketplaceOAuthPrompt,
+  savePendingMarketplaceOAuthPrompt,
+} from '../utils/marketplaceOAuthPrompt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../utils/tokenRefresh';
 import { useAuth } from './useAuth';
@@ -51,6 +56,7 @@ vi.mock('@agor-live/client', async (importOriginal) => {
 describe('useAuth launch-code fallback', () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     authenticate.mockReset();
     launchCreate.mockReset();
     refreshCreate.mockReset();
@@ -62,6 +68,7 @@ describe('useAuth launch-code fallback', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
     window.history.replaceState({}, '', '/ui/');
   });
 
@@ -92,6 +99,122 @@ describe('useAuth launch-code fallback', () => {
     } finally {
       window.removeEventListener(TOKENS_REFRESHED_EVENT, listener);
     }
+  });
+
+  it('cleans a held Marketplace handoff on logout without a SessionPanel mounted', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'alice-access',
+            refreshToken: 'alice-refresh',
+            user: { user_id: 'alice', email: 'alice@example.test', role: 'member' },
+          },
+        })
+      );
+    });
+    await waitFor(() => expect(result.current.user?.user_id).toBe('alice'));
+
+    const pending = {
+      sessionId: 'session-logout',
+      serverId: 'server-logout',
+      attemptId: 'attempt-logout',
+      popupOperationId: 'popup-logout',
+      prompt: 'Try it',
+      createdAt: Date.now(),
+      userId: 'alice',
+      role: 'member',
+      authGeneration: 9,
+    };
+    savePendingMarketplaceOAuthPrompt(pending);
+    const bobPending = {
+      ...pending,
+      sessionId: 'session-bob',
+      attemptId: 'attempt-bob',
+      popupOperationId: 'popup-bob',
+      userId: 'bob',
+    };
+    savePendingMarketplaceOAuthPrompt(bobPending);
+    let rejectAttempt!: (error: Error) => void;
+    const heldStatus = new Promise<never>((_, reject) => {
+      rejectAttempt = reject;
+    });
+    const claim = claimMarketplaceOAuthPrompt({
+      client: {
+        service: () => ({ get: () => heldStatus }),
+      } as never,
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set(),
+      authority: pending,
+      isCurrent: () => result.current.user?.user_id === 'alice',
+    });
+
+    await act(async () => {
+      await result.current.logout();
+    });
+    rejectAttempt(new Error('offline after logout'));
+    await expect(claim).resolves.toBeNull();
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
+    expect(readPendingMarketplaceOAuthPrompt(bobPending.sessionId)).toEqual(bobPending);
+  });
+
+  it('cleans only the departing identity on central auth replacement', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'alice-access',
+            refreshToken: 'alice-refresh',
+            user: { user_id: 'alice', email: 'alice@example.test', role: 'member' },
+          },
+        })
+      );
+    });
+    await waitFor(() => expect(result.current.user?.user_id).toBe('alice'));
+
+    const alicePending = {
+      sessionId: 'session-alice-transition',
+      serverId: 'server-alice',
+      attemptId: 'attempt-alice',
+      popupOperationId: 'popup-alice',
+      prompt: 'Alice prompt',
+      createdAt: Date.now(),
+      userId: 'alice',
+      role: 'member',
+      authGeneration: 3,
+    };
+    const bobPending = {
+      ...alicePending,
+      sessionId: 'session-bob-transition',
+      attemptId: 'attempt-bob',
+      popupOperationId: 'popup-bob',
+      userId: 'bob',
+    };
+    savePendingMarketplaceOAuthPrompt(alicePending);
+    savePendingMarketplaceOAuthPrompt(bobPending);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'bob-access',
+            refreshToken: 'bob-refresh',
+            user: { user_id: 'bob', email: 'bob@example.test', role: 'member' },
+          },
+        })
+      );
+    });
+    await waitFor(() => expect(result.current.user?.user_id).toBe('bob'));
+
+    expect(readPendingMarketplaceOAuthPrompt(alicePending.sessionId)).toBeNull();
+    expect(readPendingMarketplaceOAuthPrompt(bobPending.sessionId)).toEqual(bobPending);
   });
 
   it('preserves stored tokens and restores the normal session when launch sign-in fails', async () => {

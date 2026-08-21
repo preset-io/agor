@@ -40,10 +40,10 @@ function isInMemorySQLiteUrl(url: string): boolean {
   );
 }
 
-function markInMemorySQLiteDatabase<T extends object>(db: T, url: string): T {
+function markInMemorySQLiteDatabase<T extends object>(db: T, url: string, client: Client): T {
   if (isInMemorySQLiteUrl(url)) {
     Object.defineProperty(db, IN_MEMORY_SQLITE_DATABASE, { value: true });
-    return coordinateInMemorySQLiteDatabase(db);
+    return coordinateInMemorySQLiteDatabase(db, client);
   }
   return db;
 }
@@ -289,7 +289,8 @@ function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSch
   const client = createLibSQLClient(config);
   const db = markInMemorySQLiteDatabase(
     drizzleSQLite(client, { schema: sqliteSchema }),
-    config.url
+    config.url,
+    client
   );
 
   // Configure SQLite pragmas asynchronously (fire-and-forget)
@@ -327,7 +328,8 @@ export async function createDatabaseAsync(config: DbConfig): Promise<RawDatabase
   const client = createLibSQLClient(config);
   const db = markInMemorySQLiteDatabase(
     drizzleSQLite(client, { schema: sqliteSchema }),
-    config.url
+    config.url,
+    client
   );
   await configureSQLitePragmas(client);
   return db as unknown as RawDatabase;

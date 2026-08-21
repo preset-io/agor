@@ -62,4 +62,20 @@ describe('MarketplacePromptSuggestion', () => {
     );
     expect(screen.getByRole('status')).toBeVisible();
   });
+
+  it('blocks copy when the authority/attempt fence is no longer current', () => {
+    const onInsert = vi.fn();
+    render(
+      <MarketplacePromptSuggestion
+        prompt="Try search"
+        onInsert={onInsert}
+        onDismiss={vi.fn()}
+        isCurrent={() => false}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Copy starter prompt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert starter prompt in composer' }));
+    expect(copyToClipboard).not.toHaveBeenCalled();
+    expect(onInsert).not.toHaveBeenCalled();
+  });
 });

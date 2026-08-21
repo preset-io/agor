@@ -7,7 +7,7 @@
 
 import type { User, UserID } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
@@ -16,6 +16,7 @@ import {
   getLaunchCodeFromSearch,
   removeLaunchCodeFromCurrentUrl,
 } from '../utils/launchAuth';
+import { discardMarketplaceOAuthStateForAuthority } from '../utils/marketplaceOAuthPrompt';
 import {
   dispatchTokensRefreshed,
   RefreshUnrecoverableError,
@@ -127,6 +128,7 @@ export function useAuth(): UseAuthReturn {
   });
   const authStateRef = useRef(state);
   authStateRef.current = state;
+  const previousMarketplaceAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
   // Only the latest local-login attempt may install credentials or own the
   // global loading bit. Other auth establishments explicitly supersede it.
   const localLoginAttemptRef = useRef<object | null>(null);
@@ -169,6 +171,19 @@ export function useAuth(): UseAuthReturn {
       authenticationGenerationRef.current === generation,
     []
   );
+
+  // Identity replacement can also happen through token refresh/reconnect,
+  // without an explicit logout and without any SessionPanel mounted. Clear
+  // only the departing authority's tab-local Marketplace state before child
+  // layout effects can observe the replacement identity.
+  useLayoutEffect(() => {
+    const next = state.user ? { userId: state.user.user_id, role: state.user.role } : null;
+    const previous = previousMarketplaceAuthorityRef.current;
+    if (previous && (!next || previous.userId !== next.userId || previous.role !== next.role)) {
+      discardMarketplaceOAuthStateForAuthority(previous);
+    }
+    previousMarketplaceAuthorityRef.current = next;
+  }, [state.user]);
 
   /**
    * Re-authenticate using stored token (with automatic refresh)
@@ -760,6 +775,13 @@ export function useAuth(): UseAuthReturn {
   };
 
   const logout = async () => {
+    const currentUser = authStateRef.current.user;
+    if (currentUser) {
+      discardMarketplaceOAuthStateForAuthority({
+        userId: currentUser.user_id,
+        role: currentUser.role,
+      });
+    }
     localLoginAttemptRef.current = null;
     invalidateAuthentication();
     clearTokens();
@@ -782,6 +804,10 @@ export function useAuth(): UseAuthReturn {
     // Token clearing and the React authority update are synchronous together;
     // no await boundary exists where a replacement identity can slip between
     // the guard and the mutation.
+    discardMarketplaceOAuthStateForAuthority({
+      userId: authorityCycle.userId,
+      role: authorityCycle.role,
+    });
     localLoginAttemptRef.current = null;
     clearTokens();
     const nextState: AuthState = {

@@ -232,6 +232,7 @@ describe('useMCPServerOAuthStart', () => {
         attempt_id: 'attempt-1',
       });
       const client = oauthClient(startOAuth);
+      const onOAuthAttemptStarted = vi.fn();
       const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
       const { result, rerender } = renderHook(
         ({ authorityKey, startAllowed }: { authorityKey: string | null; startAllowed: boolean }) =>
@@ -239,6 +240,7 @@ describe('useMCPServerOAuthStart', () => {
             client,
             authorityKey,
             onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+            onOAuthAttemptStarted,
             showError,
             showInfo,
             showSuccess,
@@ -248,6 +250,8 @@ describe('useMCPServerOAuthStart', () => {
       );
 
       await act(async () => result.current.handleStartOAuthFlow());
+      expect(onOAuthAttemptStarted).toHaveBeenCalledOnce();
+      expect(onOAuthAttemptStarted).toHaveBeenCalledWith('attempt-1', 'server-1');
       await waitFor(() => expect(oauthAttempt.refetch).toHaveBeenCalledOnce());
       const shouldApply = oauthAttempt.refetch.mock.calls[0]?.[2] as () => boolean;
       expect(shouldApply()).toBe(true);

@@ -40,19 +40,20 @@ export async function launchMarketplaceOAuth(
     popup.close();
     return false;
   }
-  if (result.starter_prompt) {
-    savePendingMarketplaceOAuthPrompt({
-      sessionId: result.session.session_id,
-      serverId: result.mcp_server.mcp_server_id,
-      attemptId: started.attempt_id,
-      prompt: result.starter_prompt,
-      createdAt: Date.now(),
-      userId: options.authority.userId,
-      role: options.authority.role,
-      authGeneration: options.authority.authGeneration,
-      popupOperationId: popup.operationId,
-    });
-  }
+  // Record every newer Marketplace attempt, even when this catalog entry has
+  // no starter prompt. The attempt marker synchronously fences any suggestion
+  // from an earlier flow for the same session/authority.
+  savePendingMarketplaceOAuthPrompt({
+    sessionId: result.session.session_id,
+    serverId: result.mcp_server.mcp_server_id,
+    attemptId: started.attempt_id,
+    prompt: result.starter_prompt ?? '',
+    createdAt: Date.now(),
+    userId: options.authority.userId,
+    role: options.authority.role,
+    authGeneration: options.authority.authGeneration,
+    popupOperationId: popup.operationId,
+  });
   // Guard once more inside the launch helper immediately before handing the
   // third-party URL to the pre-opened window.
   try {

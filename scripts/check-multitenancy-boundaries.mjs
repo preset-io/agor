@@ -191,6 +191,11 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
+      // Test-only security harness deliberately invokes every direct libsql
+      // and Drizzle transaction surface to prove the literal-memory client
+      // coordinator cannot be bypassed. No application database access lives
+      // in this file.
+      'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,

@@ -2,6 +2,10 @@ import type { MCPCatalogConnectResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  consumeMarketplacePromptSuggestionState,
+  saveMarketplacePromptSuggestion,
+} from '../../utils/marketplaceOAuthPrompt';
+import {
   launchMarketplaceOAuth,
   MarketplaceOAuthPopupNavigationError,
 } from './marketplaceOAuthLaunch';
@@ -62,6 +66,42 @@ describe('Marketplace OAuth launch', () => {
       authGeneration: 3,
       popupOperationId: 'popup-1',
     });
+  });
+
+  it('fences an older suggestion when a newer OAuth attempt has no starter prompt', async () => {
+    const authority = { userId: 'alice', role: 'member', authGeneration: 3 };
+    const earlier = saveMarketplacePromptSuggestion({
+      sessionId: result.session.session_id,
+      attemptId: 'attempt-earlier',
+      prompt: 'Old suggestion',
+      authority,
+    });
+    const { client } = clientWith({
+      success: true,
+      authorizationUrl: 'https://accounts.example.test/authorize',
+      attempt_id: 'attempt-newer',
+    });
+    const popup = {
+      operationId: 'popup-newer',
+      navigate: vi.fn(() => true),
+      close: vi.fn(),
+    };
+
+    await expect(
+      launchMarketplaceOAuth(client, { ...result, starter_prompt: undefined }, popup, {
+        authority,
+        isCurrent: () => true,
+      })
+    ).resolves.toBe(true);
+    expect(earlier).not.toBeNull();
+    expect(
+      consumeMarketplacePromptSuggestionState(result.session.session_id, authority)
+    ).toBeNull();
+    expect(
+      JSON.parse(
+        sessionStorage.getItem(`agor-marketplace-oauth-prompt:${result.session.session_id}`)!
+      )
+    ).toMatchObject({ attemptId: 'attempt-newer', prompt: '' });
   });
 
   it('closes the pre-opened window when OAuth start is refused', async () => {

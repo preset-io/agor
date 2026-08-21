@@ -21,6 +21,7 @@ interface MCPServerPillProps {
   /** Current server-side role/connection floor for OAuth mutations. */
   actionAllowed: boolean;
   actionBlockedReason: string;
+  onOAuthAttemptStarted?: (attemptId: string, serverId: string) => void;
   /** Lets an overlay owner open an editor without nesting its lifecycle in this pill. */
   onEdit?: (server: MCPServer) => void;
 }
@@ -86,6 +87,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   authorityKey,
   actionAllowed,
   actionBlockedReason,
+  onOAuthAttemptStarted,
   onEdit,
 }) => {
   const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
@@ -113,6 +115,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
     client,
     authorityKey,
     onPrepareOAuthStart: async () => server.mcp_server_id,
+    onOAuthAttemptStarted,
     onOAuthSucceeded: () => showSuccess(`${server.display_name || server.name} authenticated!`),
     showError,
     showInfo,

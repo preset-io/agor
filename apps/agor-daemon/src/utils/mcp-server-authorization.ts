@@ -26,6 +26,7 @@ import {
   MCPServerRepository,
   resolveMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
@@ -73,6 +74,8 @@ export interface McpServerWriteDecision {
   /** The catalog provenance to persist, which only the install path may name. */
   catalog_entry_name?: string;
 }
+
+type McpServerWriteAuthorizationDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 /**
  * The extra params the marketplace connect service sets on its own
@@ -432,7 +435,7 @@ function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: bool
  * learns that rather than which fields are service-controlled.
  */
 export async function authorizeMcpServerWrite(
-  db: TenantScopeAwareDatabase,
+  db: McpServerWriteAuthorizationDatabase,
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
@@ -448,7 +451,7 @@ export async function authorizeMcpServerWrite(
 }
 
 async function decidePolicyAndOwnership(
-  db: TenantScopeAwareDatabase,
+  db: McpServerWriteAuthorizationDatabase,
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {

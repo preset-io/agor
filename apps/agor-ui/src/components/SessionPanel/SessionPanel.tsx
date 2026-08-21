@@ -69,7 +69,10 @@ import {
   consumeMarketplacePromptSuggestionState,
   discardMarketplaceOAuthAuthorityState,
   discardMarketplacePromptSuggestion,
+  getMarketplacePromptStateRevision,
+  isMarketplacePromptSuggestionCurrent,
   type MarketplacePromptSuggestionState,
+  subscribeMarketplacePromptState,
 } from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -444,6 +447,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [marketplacePromptSuggestion, setMarketplacePromptSuggestion] =
     React.useState<MarketplacePromptSuggestionState | null>(null);
   const marketplaceSuggestionSessionId = session?.session_id;
+  const marketplaceHandoffAuthorityRef = React.useRef({
+    sessionId: marketplaceSuggestionSessionId,
+    userId: currentUserId,
+    role: currentRole,
+    authGeneration,
+  });
+  marketplaceHandoffAuthorityRef.current = {
+    sessionId: marketplaceSuggestionSessionId,
+    userId: currentUserId,
+    role: currentRole,
+    authGeneration,
+  };
+  React.useSyncExternalStore(
+    subscribeMarketplacePromptState,
+    getMarketplacePromptStateRevision,
+    getMarketplacePromptStateRevision
+  );
 
   // Suggestions are tab-local presentation state, intentionally separate from
   // the cross-tab composer draft. Reading one can never write or clear text.
@@ -473,7 +493,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     marketplacePromptSuggestion.sessionId === marketplaceSuggestionSessionId &&
     marketplacePromptSuggestion.userId === currentUserId &&
     marketplacePromptSuggestion.role === currentRole &&
-    marketplacePromptSuggestion.authGeneration === authGeneration
+    marketplacePromptSuggestion.authGeneration === authGeneration &&
+    isMarketplacePromptSuggestionCurrent(marketplacePromptSuggestion)
       ? marketplacePromptSuggestion
       : null;
 
@@ -491,21 +512,36 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       !operation.isCurrent()
     )
       return;
+    const capturedAuthority = {
+      sessionId: marketplaceSuggestionSessionId,
+      userId: currentUserId,
+      role: currentRole,
+      authGeneration,
+    };
     void claimMarketplaceOAuthPrompt({
       client,
       sessionId: marketplaceSuggestionSessionId,
       authenticatedServerIds: userAuthenticatedMcpServerIds,
       authority: { userId: currentUserId, role: currentRole, authGeneration },
       isCurrent: operation.isCurrent,
-    }).then((prompt) => {
+      isAuthorityCurrent: () => {
+        const current = marketplaceHandoffAuthorityRef.current;
+        return (
+          current.sessionId === capturedAuthority.sessionId &&
+          current.userId === capturedAuthority.userId &&
+          current.role === capturedAuthority.role &&
+          current.authGeneration === capturedAuthority.authGeneration
+        );
+      },
+    }).then((suggestion) => {
       if (operation.isCurrent()) {
         const staged = consumeMarketplacePromptSuggestionState(marketplaceSuggestionSessionId, {
           userId: currentUserId,
           role: currentRole,
           authGeneration,
         });
-        if (!staged && !prompt) return;
-        setMarketplacePromptSuggestion(staged ?? prompt);
+        if (!staged && !suggestion) return;
+        setMarketplacePromptSuggestion(staged ?? suggestion);
       }
     });
     return operation.cancel;
@@ -521,13 +557,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const dismissMarketplacePromptSuggestion = React.useCallback(() => {
     if (marketplaceSuggestionSessionId) {
-      discardMarketplacePromptSuggestion(marketplaceSuggestionSessionId);
+      discardMarketplacePromptSuggestion(
+        marketplaceSuggestionSessionId,
+        undefined,
+        marketplacePromptSuggestion?.attemptId
+      );
     }
     setMarketplacePromptSuggestion(null);
-  }, [marketplaceSuggestionSessionId]);
+  }, [marketplacePromptSuggestion?.attemptId, marketplaceSuggestionSessionId]);
 
   const insertMarketplacePromptSuggestion = React.useCallback(() => {
-    if (!visibleMarketplaceSuggestion || !promptRef.current) return;
+    if (
+      !visibleMarketplaceSuggestion ||
+      !isMarketplacePromptSuggestionCurrent(visibleMarketplaceSuggestion) ||
+      !promptRef.current
+    )
+      return;
     // PromptInput.insertText appends to (and never replaces) the current
     // composer value. This mutation occurs only from this explicit click.
     promptRef.current.insertText(visibleMarketplaceSuggestion.prompt);
@@ -946,6 +991,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {visibleMarketplaceSuggestion && (
           <MarketplacePromptSuggestion
             prompt={visibleMarketplaceSuggestion.prompt}
+            isCurrent={() =>
+              isMarketplacePromptSuggestionCurrent(visibleMarketplaceSuggestion) &&
+              visibleMarketplaceSuggestion.sessionId === marketplaceSuggestionSessionId &&
+              visibleMarketplaceSuggestion.userId === currentUserId &&
+              visibleMarketplaceSuggestion.role === currentRole &&
+              visibleMarketplaceSuggestion.authGeneration === authGeneration
+            }
             onInsert={insertMarketplacePromptSuggestion}
             onDismiss={dismissMarketplacePromptSuggestion}
             style={{ marginBottom: token.marginXS, borderRadius: token.borderRadius }}
@@ -1038,6 +1090,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     token.borderRadius,
     token.marginXS,
     visibleMarketplaceSuggestion,
+    marketplaceSuggestionSessionId,
+    currentUserId,
+    currentRole,
+    authGeneration,
     dismissMarketplacePromptSuggestion,
     insertMarketplacePromptSuggestion,
   ]);

@@ -6,6 +6,7 @@ export interface MarketplacePromptSuggestionProps {
   prompt: string;
   onInsert: () => void;
   onDismiss: () => void;
+  isCurrent?: () => boolean;
   style?: React.CSSProperties;
 }
 
@@ -18,13 +19,19 @@ export function MarketplacePromptSuggestion({
   prompt,
   onInsert,
   onDismiss,
+  isCurrent = () => true,
   style,
 }: MarketplacePromptSuggestionProps) {
   const [copyStatus, setCopyStatus] = React.useState('');
   const handleCopy = React.useCallback(async () => {
+    if (!isCurrent()) return;
     const copied = await copyToClipboard(prompt);
+    if (!isCurrent()) return;
     setCopyStatus(copied ? 'Starter prompt copied' : 'Could not copy starter prompt');
-  }, [prompt]);
+  }, [isCurrent, prompt]);
+  const handleInsert = React.useCallback(() => {
+    if (isCurrent()) onInsert();
+  }, [isCurrent, onInsert]);
 
   return (
     <Alert
@@ -44,7 +51,7 @@ export function MarketplacePromptSuggestion({
               type="primary"
               size="small"
               aria-label="Insert starter prompt in composer"
-              onClick={onInsert}
+              onClick={handleInsert}
             >
               Insert in composer
             </Button>

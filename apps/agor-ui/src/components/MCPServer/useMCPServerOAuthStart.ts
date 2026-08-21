@@ -25,6 +25,7 @@ interface UseMCPServerOAuthStartOptions {
   /** Opaque identity + role + successful-auth generation, null while disconnected. */
   authorityKey: string | null;
   onPrepareOAuthStart: () => Promise<string | null>;
+  onOAuthAttemptStarted?: (attemptId: string, serverId: string) => void;
   onOAuthSucceeded?: () => void;
   showError: (message: string) => void;
   showInfo: (message: string) => void;
@@ -38,6 +39,7 @@ export function useMCPServerOAuthStart({
   client,
   authorityKey,
   onPrepareOAuthStart,
+  onOAuthAttemptStarted,
   onOAuthSucceeded,
   showError,
   showInfo,
@@ -138,6 +140,13 @@ export function useMCPServerOAuthStart({
 
       if (data.success && data.authorizationUrl && data.attempt_id) {
         if (!isCurrentStart()) return;
+        try {
+          onOAuthAttemptStarted?.(data.attempt_id, targetServerId);
+        } catch {
+          // Attempt fencing is presentation-only. The durable OAuth attempt
+          // remains authoritative and must still open for recovery.
+        }
+        if (!isCurrentStart()) return;
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         setOauthCallbackModalVisible(true);
         showInfo('Authenticating... complete sign-in in the new tab.');
@@ -204,6 +213,7 @@ export function useMCPServerOAuthStart({
   }, [
     client,
     onOAuthSucceeded,
+    onOAuthAttemptStarted,
     onPrepareOAuthStart,
     operationGuard,
     showError,
