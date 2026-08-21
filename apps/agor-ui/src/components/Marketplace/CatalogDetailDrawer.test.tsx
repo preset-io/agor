@@ -10,10 +10,11 @@
  */
 
 import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
+import { getLastConnectBranchId, rememberConnectBranchId } from './useConnectTargets';
 
 const ALLOWED: MCPServerCapabilityContext = {
   connectionReady: true,
@@ -100,6 +101,108 @@ const connectButton = () => {
   if (!match) throw new Error('Connect button not found');
   return match.closest('button')!;
 };
+
+function branchCombobox(): HTMLElement {
+  const item = screen.getByText('Branch').closest('.ant-form-item');
+  const input = item?.querySelector('[role="combobox"]');
+  if (!(input instanceof HTMLElement)) throw new Error('Branch selector not found');
+  return input;
+}
+
+function renderBranchDrawer({
+  branches,
+  defaultBranchId,
+  loading = false,
+}: {
+  branches: Branch[];
+  defaultBranchId: string | null;
+  loading?: boolean;
+}) {
+  return render(
+    <CatalogDetailDrawer
+      identityKey="user-admin"
+      entry={DEEPWIKI}
+      open
+      onClose={vi.fn()}
+      branches={branches}
+      branchesLoading={loading}
+      branchesError={null}
+      defaultBranchId={defaultBranchId}
+      connecting={false}
+      connectError={null}
+      connectCapability={ALLOWED}
+      policyPending={false}
+      policyPendingHint={POLICY_LOADING_HINT}
+      onConnect={vi.fn()}
+    />
+  );
+}
+
+describe('CatalogDetailDrawer branch destination', () => {
+  const TWO_BRANCHES = [
+    { branch_id: 'branch-1', name: 'First branch' },
+    { branch_id: 'branch-2', name: 'Remembered branch' },
+  ] as unknown as Branch[];
+
+  it('selects the caller-persisted branch by default', async () => {
+    localStorage.clear();
+    rememberConnectBranchId('user-admin', 'branch-2');
+    renderBranchDrawer({
+      branches: TWO_BRANCHES,
+      defaultBranchId: getLastConnectBranchId('user-admin'),
+    });
+
+    await waitFor(() =>
+      expect(branchCombobox().parentElement).toHaveTextContent('Remembered branch')
+    );
+  });
+
+  it('falls back to the first accessible branch when the preference is stale', async () => {
+    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'no-longer-visible' });
+
+    await waitFor(() => expect(branchCombobox().parentElement).toHaveTextContent('First branch'));
+    expect(branchCombobox().parentElement).not.toHaveTextContent('Remembered branch');
+  });
+
+  it('distinguishes a loading branch list from no accessible branches', async () => {
+    const view = renderBranchDrawer({ branches: [], defaultBranchId: null, loading: true });
+    expect(screen.getAllByText('Loading branches…').length).toBeGreaterThan(0);
+    expect(connectButton()).toBeDisabled();
+
+    view.rerender(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={DEEPWIKI}
+        open
+        onClose={vi.fn()}
+        branches={[]}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId={null}
+        connecting={false}
+        connectError={null}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        onConnect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Select a branch')).toBeVisible();
+    fireEvent.mouseDown(branchCombobox());
+    expect(await screen.findByText('No branches yet')).toBeInTheDocument();
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('uses a fixed desktop target width that Ant Drawer can constrain to the viewport', () => {
+    renderBranchDrawer({
+      branches: TWO_BRANCHES,
+      defaultBranchId: 'branch-1',
+    });
+
+    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '480px' });
+  });
+});
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {

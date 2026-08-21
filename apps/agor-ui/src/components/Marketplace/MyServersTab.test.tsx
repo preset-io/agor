@@ -28,6 +28,55 @@ const overview: MCPMarketplaceOverview = {
 describe('Marketplace server actions', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('renders a dedicated empty state when the caller owns no servers', () => {
+    render(
+      <MyServersTab
+        client={null}
+        connected={false}
+        connecting={false}
+        authGeneration={0}
+        currentUser={null}
+        overview={{ ...overview, servers: [] }}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect(screen.getByText('You have no MCP servers yet')).toBeVisible();
+    expect(
+      screen.queryByText('Tool controls apply to future MCP configuration')
+    ).not.toBeInTheDocument();
+  });
+
+  it('allows the server header and actions to wrap at narrow widths', async () => {
+    const service = vi.fn((path: string) =>
+      path === 'mcp-member-policy'
+        ? { find: vi.fn(async () => ({ policy: 'allow_private_only', can_configure: true })) }
+        : { create: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+    );
+    render(
+      <MyServersTab
+        client={{ service } as unknown as AgorClient}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={{ user_id: 'alice', role: 'member' } as never}
+        overview={overview}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    const title = screen.getByRole('heading', { name: 'GitHub' });
+    const header = title.parentElement?.parentElement;
+    expect(header).toHaveClass('ant-flex-wrap-wrap');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Refresh tools for GitHub' })).toBeEnabled()
+    );
+  });
+
   it('surfaces a discover result failure without success or overview refresh', async () => {
     const create = vi.fn(async () => ({ success: false, error: 'Provider is unavailable' }));
     const service = vi.fn((path: string) =>

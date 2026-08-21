@@ -38,6 +38,42 @@ const overview: MCPMarketplaceOverview = {
 };
 
 describe('Marketplace session attachments', () => {
+  it('renders a dedicated empty state when no visible session uses a server', () => {
+    render(
+      <MemoryRouter>
+        <SessionsTab
+          client={null}
+          authorityKey={null}
+          overview={{ ...overview, attachments: [] }}
+          loading={false}
+          error={null}
+          refresh={vi.fn(async () => undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('No sessions use your MCP servers')).toBeVisible();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('keeps attachment columns in a horizontally scrollable table', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <SessionsTab
+          client={null}
+          authorityKey={null}
+          overview={overview}
+          loading={false}
+          error={null}
+          refresh={vi.fn(async () => undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(container.querySelector('table')).toHaveStyle({ width: 'max-content' });
+    expect(container.querySelector('.ant-table-content')).toHaveStyle({ overflowX: 'auto' });
+  });
+
   it('uses a contextual label and requires confirmation before detach', async () => {
     const remove = vi.fn(async () => ({ mcp_server_id: 'server-1' }));
     const client = { service: vi.fn(() => ({ remove })) } as unknown as AgorClient;

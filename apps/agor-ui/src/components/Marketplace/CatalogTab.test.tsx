@@ -182,6 +182,18 @@ async function findDrawer() {
   return within(screen.getByRole('dialog'));
 }
 
+function chooseSelectOption(inputLabel: string, optionLabel: string): void {
+  const input = document.querySelector(`input[aria-label="${inputLabel}"]`);
+  if (!(input instanceof HTMLElement)) throw new Error(`${inputLabel} select not found`);
+  fireEvent.mouseDown(input);
+  fireEvent.change(input, { target: { value: optionLabel } });
+  const option = Array.from(document.querySelectorAll('.ant-select-item-option-content')).find(
+    (node) => node.textContent === optionLabel
+  );
+  if (!(option instanceof HTMLElement)) throw new Error(`${optionLabel} option not found`);
+  fireEvent.click(option);
+}
+
 beforeEach(() => {
   catalogReads = [];
   catalogRows = [DEEPWIKI, LINEAR];
@@ -223,6 +235,16 @@ describe('catalog browsing', () => {
     // query rather than one per attempt.
     expect(screen.getByRole('button', { name: 'Open DeepWiki' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Linear' })).toBeInTheDocument();
+  });
+
+  it('keeps the catalog grid responsive from one to four columns', async () => {
+    renderTab();
+    const column = (await findCard('DeepWiki')).closest('.ant-col');
+
+    expect(column).toHaveClass('ant-col-xs-24');
+    expect(column).toHaveClass('ant-col-sm-12');
+    expect(column).toHaveClass('ant-col-lg-8');
+    expect(column).toHaveClass('ant-col-xxl-6');
   });
 
   it('reads nothing until the socket can answer, and never calls that an empty catalog', async () => {
@@ -416,6 +438,47 @@ describe('catalog browsing', () => {
     fireEvent.change(input, { target: { value: 'DEEPW' } });
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
+  });
+
+  it('combines category and capability filters over the catalog already loaded', async () => {
+    catalogRows = [
+      { ...DEEPWIKI, capabilities: ['docs', 'code-search'] },
+      {
+        ...LINEAR,
+        category: 'productivity',
+        capabilities: ['projects', 'issues'],
+      },
+      {
+        ...DEEPWIKI,
+        name: 'com.logs/mcp',
+        title: 'Logs',
+        category: 'observability',
+        capabilities: ['logs', 'alerts'],
+      },
+      {
+        ...DEEPWIKI,
+        name: 'com.metrics/mcp',
+        title: 'Metrics',
+        category: 'observability',
+        capabilities: ['metrics', 'alerts'],
+      },
+    ] as typeof catalogRows;
+    renderTab();
+    await findCard('DeepWiki');
+    const before = catalogReads.length;
+
+    fireEvent.click(screen.getByText('Observability').closest('label')!);
+    await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
+    expect(queryCard('Logs')).toBeInTheDocument();
+    expect(queryCard('Metrics')).toBeInTheDocument();
+    expect(screen.getByText('2 of 4 servers match')).toBeVisible();
+
+    chooseSelectOption('Filter by capability', 'Logs');
+
+    await waitFor(() => expect(queryCard('Metrics')).not.toBeInTheDocument());
+    expect(queryCard('Logs')).toBeInTheDocument();
+    expect(screen.getByText('1 of 4 servers match')).toBeVisible();
+    expect(catalogReads).toHaveLength(before);
   });
 
   it('pages the entries it holds without reading again', async () => {
