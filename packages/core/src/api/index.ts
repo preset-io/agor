@@ -56,6 +56,7 @@ import type {
   SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionID,
   SessionUpdate,
   Task,
   TeammateWelcomeNoteRequest,
@@ -131,7 +132,8 @@ export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt
 /** Required setup for an already-created session, applied before its first prompt. */
 export interface SessionInitializationRequest {
   /** Fence delayed calls to the identity that created the session. */
-  expectedUserId: string;
+  expectedUserId: UserID;
+  /** Validated and branded after crossing the daemon trust boundary. */
   mcpServerIds?: string[];
   envVarNames?: string[];
   prompt?: string;
@@ -143,7 +145,7 @@ export interface SessionInitializationOptions extends SessionInitializationReque
 }
 
 export interface SessionInitializationResult {
-  session: Session;
+  sessionId: SessionID;
   task?: Task;
 }
 

@@ -129,6 +129,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         />
       </div>
       <MobilePromptInput
+        key={`${currentUser?.user_id ?? 'anonymous'}:${sessionId}`}
         onSend={handleSendPrompt}
         disabled={session.status === 'running'}
         placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}

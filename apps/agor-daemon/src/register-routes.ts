@@ -29,6 +29,7 @@ import {
   MessagesRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   ScheduleRepository,
   type SessionRepository,
   setMcpMemberPolicy,
@@ -4479,25 +4480,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Session initialization
   //
   // Session creation and browser file upload remain separate because uploads
-  // are multipart and require a durable session id. Everything that must be
-  // true before the first task starts belongs here, inside one tenant unit of
-  // work: MCP selection, environment selection, then prompt admission.
+  // are multipart and require a durable session id. This route owns the
+  // remaining orchestration: commit MCP/environment setup atomically, then use
+  // the normal prompt admission path. If admission fails, the configured blank
+  // session remains usable and the browser can put the prompt in its ordinary
+  // composer without retaining a second retry protocol.
   // ============================================================================
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/sessions/:id/initialize',
     {
       async create(data: SessionInitializationRequest, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
+        if (!data || typeof data !== 'object') {
+          throw new BadRequest('Session initialization data required');
+        }
+        if (typeof data.expectedUserId !== 'string' || !data.expectedUserId) {
+          throw new BadRequest('expectedUserId required');
+        }
+        if (data.prompt !== undefined && typeof data.prompt !== 'string') {
+          throw new BadRequest('prompt must be a string');
+        }
         const callerId = params.user?.user_id;
         if (!callerId || data?.expectedUserId !== callerId) {
           throw new Forbidden('Session initialization caller changed');
         }
         const tenantId = getCurrentTenantId();
         if (!tenantId) throw new Error('Missing active tenant context for session initialization');
-        await assertTenantWritable(db, tenantId);
 
         const session = await authorizeAndLoadSessionForMcpConfig(id, params);
         let configuredMcpServerIds: MCPServerID[] | undefined;
@@ -4511,28 +4522,55 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw new BadRequest('mcpServerIds must contain non-empty strings');
           }
           configuredMcpServerIds = [...new Set(data.mcpServerIds)] as MCPServerID[];
-          try {
-            await sessionMCPServersService.setServers(
-              session.session_id,
-              configuredMcpServerIds,
-              params
-            );
-          } catch (error) {
-            if (error instanceof MCPServerNotUsableError) {
-              throw new Forbidden('An MCP server is private to another user');
-            }
-            throw error;
-          }
         }
 
         if (data.envVarNames !== undefined) {
           configuredEnvVarNames = normalizeEnvVarNames(data.envVarNames);
-          await sessionEnvSelectionsService.setAll(
-            session.session_id,
-            configuredEnvVarNames,
-            params
-          );
         }
+
+        await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
+          await assertTenantWritable(tenantDb, tenantId);
+          if (configuredMcpServerIds) {
+            try {
+              await sessionMCPServersService.setServers(
+                session.session_id,
+                configuredMcpServerIds,
+                params
+              );
+            } catch (error) {
+              if (error instanceof MCPServerNotUsableError) {
+                throw new Forbidden('An MCP server is private to another user');
+              }
+              throw error;
+            }
+          }
+          if (configuredEnvVarNames) {
+            await sessionEnvSelectionsService.setAll(
+              session.session_id,
+              configuredEnvVarNames,
+              params
+            );
+          }
+
+          // emitServiceEvent queues these until the explicit transaction has
+          // committed on both SQLite and PostgreSQL.
+          if (configuredMcpServerIds) {
+            emitServiceEvent(app, {
+              path: 'session-mcp-servers',
+              event: 'patched',
+              data: { session_id: session.session_id, mcp_server_ids: configuredMcpServerIds },
+              params,
+            });
+          }
+          if (configuredEnvVarNames) {
+            emitServiceEvent(app, {
+              path: 'session-env-selections',
+              event: 'patched',
+              data: { session_id: session.session_id, env_var_names: configuredEnvVarNames },
+              params,
+            });
+          }
+        });
 
         const prompt = data.prompt?.trim();
         const task = prompt
@@ -4545,27 +4583,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             )
           : undefined;
 
-        // Publish relationship replacements only once every required stage has
-        // succeeded. If prompt admission throws, the outer tenant transaction
-        // rolls the setup back without broadcasting ghost configuration.
-        if (configuredMcpServerIds) {
-          emitServiceEvent(app, {
-            path: 'session-mcp-servers',
-            event: 'patched',
-            data: { session_id: session.session_id, mcp_server_ids: configuredMcpServerIds },
-            params,
-          });
-        }
-        if (configuredEnvVarNames) {
-          emitServiceEvent(app, {
-            path: 'session-env-selections',
-            event: 'patched',
-            data: { session_id: session.session_id, env_var_names: configuredEnvVarNames },
-            params,
-          });
-        }
-
-        return { session, task };
+        return { sessionId: session.session_id, task };
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,

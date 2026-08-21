@@ -63,25 +63,24 @@ describe('prompt and widget transaction scopes', () => {
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
 
-  it('initializes required session configuration before first prompt in one tenant write scope', () => {
+  it('commits required session configuration before using ordinary prompt admission', () => {
     const start = source.indexOf("'/sessions/:id/initialize'");
     const end = source.indexOf('// Health endpoint', start);
     const initialization = source.slice(start - 100, end);
 
     expect(start).toBeGreaterThan(0);
-    expect(initialization).toContain('registerAuthenticatedRoute(');
+    expect(initialization).toContain('registerLongAuthenticatedRoute(');
     expect(initialization).toContain('data?.expectedUserId !== callerId');
-    expect(initialization).toContain('await assertTenantWritable(db, tenantId)');
+    expect(initialization).toContain('runWithTenantDatabaseTransaction(db, tenantId');
+    expect(initialization).toContain('await assertTenantWritable(tenantDb, tenantId)');
     const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
     const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
     const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");
     expect(mcpSetup).toBeGreaterThan(0);
     expect(envSetup).toBeGreaterThan(mcpSetup);
     expect(promptAdmission).toBeGreaterThan(envSetup);
-    expect(initialization.indexOf("path: 'session-mcp-servers'")).toBeGreaterThan(promptAdmission);
-    expect(initialization.indexOf("path: 'session-env-selections'")).toBeGreaterThan(
-      promptAdmission
-    );
+    expect(initialization.indexOf("path: 'session-mcp-servers'")).toBeLessThan(promptAdmission);
+    expect(initialization.indexOf("path: 'session-env-selections'")).toBeLessThan(promptAdmission);
   });
 
   it('restores the queued user before hooked Session recovery under branch RBAC', () => {

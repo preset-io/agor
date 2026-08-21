@@ -314,6 +314,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: `${NO_CONSUMER} The task arrives as tasks.created/queued.`,
   },
+  'sessions/:id/initialize': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Setup and task changes arrive through their owning services.`,
+  },
   'sessions/:id/spawn-prompt': { audience: 'none', why: NO_CONSUMER },
   'sessions/:id/stop': { audience: 'none', why: `${NO_CONSUMER} Stop lands as tasks.patched.` },
   'sessions/:id/archive': { audience: 'none', why: `${NO_CONSUMER} Lands as sessions.patched.` },

@@ -86,7 +86,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     valid: true,
   });
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
-    useComposerAttachments({ sessionId: null, showError, uploadPolicy });
+    useComposerAttachments({
+      sessionId: null,
+      scopeKey: `new-session:${currentUser?.user_id ?? 'anonymous'}:${branchId ?? 'none'}`,
+      showError,
+      uploadPolicy,
+    });
 
   // Stable callback so the chip row's reporting effect doesn't loop.
   const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {

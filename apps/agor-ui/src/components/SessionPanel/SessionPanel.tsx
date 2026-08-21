@@ -171,7 +171,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
-    const prevHasInput = React.useRef(!!value.trim());
+    const prevHasInput = React.useRef<boolean | null>(null);
     React.useEffect(() => {
       const has = !!value.trim();
       if (has !== prevHasInput.current) {
@@ -505,19 +505,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     goPrev,
   } = useSessionSearch(conversationRef);
   const composerSessionIdentityRef = React.useRef<{
+    ownerId: string | null;
     sessionId: SessionID | null;
     generation: number;
+    ownerGeneration: number;
   }>({
+    ownerId: currentUserId ?? null,
     sessionId: session?.session_id ?? null,
     generation: 0,
+    ownerGeneration: 0,
   });
+  const currentComposerOwnerId = currentUserId ?? null;
   const currentComposerSessionId = session?.session_id ?? null;
-  if (composerSessionIdentityRef.current.sessionId !== currentComposerSessionId) {
+  if (
+    composerSessionIdentityRef.current.ownerId !== currentComposerOwnerId ||
+    composerSessionIdentityRef.current.sessionId !== currentComposerSessionId
+  ) {
     composerSessionIdentityRef.current = {
+      ownerId: currentComposerOwnerId,
       sessionId: currentComposerSessionId,
       generation: composerSessionIdentityRef.current.generation + 1,
+      ownerGeneration:
+        composerSessionIdentityRef.current.ownerId === currentComposerOwnerId
+          ? composerSessionIdentityRef.current.ownerGeneration
+          : composerSessionIdentityRef.current.ownerGeneration + 1,
     };
   }
+  const composerIdentityKey = `${currentComposerOwnerId ?? 'anonymous'}:${composerSessionIdentityRef.current.generation}:${currentComposerSessionId ?? 'none'}`;
   const {
     attachments: composerAttachments,
     attachmentsRef: composerAttachmentsRef,
@@ -532,10 +546,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setValidationError: setComposerAttachmentValidationError,
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
+    scopeKey: composerIdentityKey,
     showError,
     uploadPolicy,
   });
-  const composerSendInFlightRef = React.useRef(false);
+  const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
+    null
+  );
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -837,6 +854,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onRemove={removeComposerAttachment}
         />
         <PromptInput
+          key={composerIdentityKey}
           ref={promptRef}
           sessionId={session.session_id}
           getDraft={getDraft}
@@ -888,6 +906,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerAttachmentValidationError,
     composerAttachments,
     composerDropActive,
+    composerIdentityKey,
     hasComposerAttachments,
     isRunning,
     client,
@@ -1006,18 +1025,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleSendPrompt = async () => {
+    const sendStartComposerIdentity = composerSessionIdentityRef.current;
     if (
-      composerSendInFlightRef.current ||
+      composerSendInFlightRef.current === sendStartComposerIdentity ||
       composerAttachmentUploadingRef.current ||
       connectionDisabled
     ) {
       return;
     }
 
-    composerSendInFlightRef.current = true;
+    composerSendInFlightRef.current = sendStartComposerIdentity;
     try {
       const sendStartSessionId = session.session_id;
-      const sendStartComposerIdentity = composerSessionIdentityRef.current;
       const value = promptRef.current?.getValue() ?? '';
       const attachmentsAtSendStart = composerAttachmentsRef.current;
       const hasAttachments = attachmentsAtSendStart.length > 0;
@@ -1040,10 +1059,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
+      const currentComposerIdentity = composerSessionIdentityRef.current;
+      if (
+        currentComposerIdentity.ownerId !== sendStartComposerIdentity.ownerId ||
+        currentComposerIdentity.ownerGeneration !== sendStartComposerIdentity.ownerGeneration
+      ) {
+        return;
+      }
       const promptAttachments = uploadedFiles;
       const composerStillOwnsSend =
-        composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
-        composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
       // Re-read from the imperative textarea handle after upload only if the
       // same composer instance still owns this send. When the user switches
       // sessions during a delayed upload, promptRef points at the newly active
@@ -1084,10 +1109,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // function ConversationView exposed via onScrollRef.
       if (composerStillOwnsSend) scrollToBottom?.();
     } catch (error) {
+      if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
       console.error('Composer send failed — keeping prompt and files in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
-      composerSendInFlightRef.current = false;
+      if (composerSendInFlightRef.current === sendStartComposerIdentity) {
+        composerSendInFlightRef.current = null;
+      }
     }
   };
 

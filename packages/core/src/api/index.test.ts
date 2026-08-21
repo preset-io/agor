@@ -5,7 +5,7 @@
  * Does NOT test FeathersJS internals, Socket.io, or HTTP libraries.
  */
 
-import type { AuthenticationResult, Session, Task } from '@agor/core/types';
+import type { AuthenticationResult, Session, Task, UserID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import authClient from '@feathersjs/authentication-client';
 import type { Socket } from 'socket.io-client';
@@ -936,11 +936,11 @@ describe('createClient', () => {
       const client = createClient();
       const routeService = client.service('sessions/session-123/initialize');
       const createMock = routeService.create as unknown as MockedFunction<any>;
-      const resultValue = { session: { session_id: 'session-123' }, task: { task_id: 'task-1' } };
+      const resultValue = { sessionId: 'session-123', task: { task_id: 'task-1' } };
       createMock.mockResolvedValue(resultValue);
 
       const result = await client.sessions.initialize('session-123', {
-        expectedUserId: 'user-123',
+        expectedUserId: 'user-123' as UserID,
         mcpServerIds: ['mcp-1'],
         envVarNames: ['TOKEN'],
         prompt: 'Start here',

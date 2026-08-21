@@ -1087,9 +1087,9 @@ function AppContent() {
       if (currentUserIdRef.current !== operationUserId) return null;
       savePromptDraft(operationUserId, session.session_id, prompt);
       showError(
-        `Session created, but setup did not finish: ${
+        `Session created, but it did not start: ${
           error instanceof Error ? error.message : String(error)
-        }. Open the session to review setup and retry the prompt.`
+        }. Open the session to review its setup and retry the prompt.`
       );
       return { sessionId: session.session_id };
     }

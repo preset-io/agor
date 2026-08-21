@@ -31,6 +31,21 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
   );
   const promptRef = useRef(prompt);
   promptRef.current = prompt;
+  const composerIdentityRef = useRef({
+    ownerId: currentUserId ?? null,
+    sessionId,
+    generation: 0,
+  });
+  if (
+    composerIdentityRef.current.ownerId !== (currentUserId ?? null) ||
+    composerIdentityRef.current.sessionId !== sessionId
+  ) {
+    composerIdentityRef.current = {
+      ownerId: currentUserId ?? null,
+      sessionId,
+      generation: composerIdentityRef.current.generation + 1,
+    };
+  }
 
   useEffect(() => {
     setPrompt(sessionId ? getPromptDraft(currentUserId, sessionId) : '');
@@ -43,11 +58,13 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
   }, [currentUserId, prompt, sessionId]);
 
   const handleSend = async () => {
+    const sendIdentity = composerIdentityRef.current;
     const draftText = prompt;
     const sentText = draftText.trim();
     if (!sentText || disabled || !sessionId) return;
     const result = await onSend(sentText);
     if (result === false) return;
+    if (composerIdentityRef.current !== sendIdentity) return;
     if (promptRef.current === draftText) setPrompt('');
     deletePromptDraft(currentUserId, sessionId, draftText);
   };

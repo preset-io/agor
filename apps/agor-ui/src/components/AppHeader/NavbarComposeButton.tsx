@@ -121,7 +121,11 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   );
   const [hintDismissed, setHintDismissed] = useLocalStorage<boolean>(HINT_DISMISSED_KEY, false);
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
-    useComposerAttachments({ sessionId: null, showError: (msg) => message.error(msg) });
+    useComposerAttachments({
+      sessionId: null,
+      scopeKey: `navbar:${currentUser?.user_id ?? 'anonymous'}`,
+      showError: (msg) => message.error(msg),
+    });
   const mcpEditedRef = useRef(false);
   const mcpInitializedBranchIdRef = useRef<string | null>(null);
 
