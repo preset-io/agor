@@ -184,6 +184,9 @@ describe('BranchSessionSections', () => {
 
     expect(screen.getByText('Investigate crash')).toBeInTheDocument();
     expect(screen.getByLabelText('Latest task failed')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Open session Investigate crash; latest task failed')
+    ).toBeInTheDocument();
   });
 
   it('does not mark idle sessions as failures', () => {
@@ -279,7 +282,9 @@ describe('BranchSessionSections', () => {
     expect(screen.queryByText('Remote child')).not.toBeInTheDocument();
 
     fireEvent.click(getSessionTreeToggle('Older gateway'));
-    const remoteChildButton = await screen.findByLabelText('Open session Remote child');
+    const remoteChildButton = await screen.findByLabelText(
+      'Open session Remote child; remote session; opens in its own branch'
+    );
     expect(remoteChildButton.tagName).toBe('BUTTON');
     remoteChildButton.focus();
     expect(remoteChildButton).toHaveFocus();

@@ -80,6 +80,23 @@ const NO_MOTION_THEME = { token: { motion: false } };
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
 
+const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
+
+function getSessionRowAccessibleLabel(session: Session): string {
+  const details = [
+    `Open session ${getSessionDisplayTitle(session, { includeAgentFallback: true })}`,
+  ];
+
+  if (session.remote_surrogate) {
+    details.push('remote session', 'opens in its own branch');
+  }
+  if (isSessionFailed(session)) {
+    details.push('latest task failed');
+  }
+
+  return details.join('; ');
+}
+
 export type BranchSessionSectionsMode = 'card' | 'panel';
 type CollapseKey = string | number;
 type RemoteRelationshipRef = {
@@ -621,8 +638,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isCreating = branch.filesystem_status === 'creating';
   const isFailed = branch.filesystem_status === 'failed';
 
-  const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
-
   // Parent sessions default to expanded; only collapsed exceptions are kept in
   // the collapsedBranchNodes store. Deriving the expanded set means sessions
   // that newly gain children start expanded, while stored exceptions survive
@@ -790,7 +805,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           type="button"
           style={sessionRowStyle(session)}
           data-session-id={session.session_id}
-          aria-label={`Open session ${titleText}`}
+          aria-label={getSessionRowAccessibleLabel(session)}
           onClick={() => onSessionClick?.(session.session_id)}
         >
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
@@ -884,7 +899,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     const remoteParentId = getRemoteParentId(session);
     const gatewaySource = getGatewaySource(session);
     const isGateway = isGatewaySession(session);
-    const sessionTitle = getSessionDisplayTitle(session, { includeAgentFallback: true });
 
     return (
       <SessionItemWithActions
@@ -914,7 +928,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           type="button"
           style={sessionRowStyle(session)}
           data-session-id={session.session_id}
-          aria-label={`Open session ${sessionTitle}`}
+          aria-label={getSessionRowAccessibleLabel(session)}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
             if (onForkSession || onSpawnSession) {
@@ -1064,9 +1078,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <button
               type="button"
               style={sessionRowStyle(session)}
-              aria-label={`Open session ${getSessionDisplayTitle(session, {
-                includeAgentFallback: true,
-              })}`}
+              aria-label={getSessionRowAccessibleLabel(session)}
               onClick={() => onSessionClick?.(session.session_id)}
             >
               <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
