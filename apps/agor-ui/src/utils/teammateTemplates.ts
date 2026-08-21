@@ -210,7 +210,7 @@ export const GOAL_TEMPLATE_RECS: Record<string, string[]> = {
 /**
  * Templates to badge "Recommended" for the selected goals (max 2).
  *
- * Mirrors the primary-then-secondary/dedup approach of mergeGoalMcpRecs:
+ * Mirrors the primary-then-secondary/dedup approach of mergeGoalIntegrationRecs:
  * - 0 goals (or none mapping to a template) → [].
  * - 1 goal → that goal's recommended templates, capped at 2.
  * - 2 goals → the primary goal's top rec then the secondary goal's top rec,

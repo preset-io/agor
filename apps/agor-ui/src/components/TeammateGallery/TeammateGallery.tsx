@@ -49,7 +49,7 @@ function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => v
   const toggle = () => (selected ? onClear() : onSelect());
   return {
     onClick: toggle,
-    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
       event.preventDefault();
       toggle();
@@ -92,8 +92,8 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
   return (
     <Card
       hoverable
-      role="radio"
-      aria-checked={selected}
+      role="button"
+      aria-pressed={selected}
       aria-label={template.title}
       tabIndex={0}
       {...toggleHandlers}
@@ -179,8 +179,8 @@ const BlankCard: React.FC<{
   return (
     <Card
       hoverable
-      role="radio"
-      aria-checked={selected}
+      role="button"
+      aria-pressed={selected}
       aria-label={template.title}
       tabIndex={0}
       {...toggleHandlers}
@@ -226,10 +226,10 @@ const BlankCard: React.FC<{
 };
 
 /**
- * Responsive 2-column grid of teammate starter templates plus a blank card,
+ * Responsive 3-column grid of teammate starter templates plus a blank card,
  * with category filter chips above it.
  *
- * Single-select via a single-click toggle (like the step-1 goal cards): clicking
+ * Optional single-select via pressed buttons (like the step-1 goal cards): clicking
  * an unselected card selects it and reports its id (blank included); clicking the
  * already-selected card — or pressing Enter/Space on it — clears the pick
  * (`onChange(null)`), since selecting a template is optional. Cards matching
@@ -374,8 +374,7 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
         }}
         style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
       >
-        <div
-          role="radiogroup"
+        <fieldset
           aria-label="Teammate template"
           style={{
             display: 'grid',
@@ -389,6 +388,9 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
             gap: token.marginXS,
             // Room for card focus rings at the grid edges.
             padding: token.paddingXXS,
+            border: 0,
+            margin: 0,
+            minWidth: 0,
           }}
         >
           {cards.map((template) =>
@@ -411,7 +413,7 @@ export const TeammateGallery: React.FC<TeammateGalleryProps> = ({
               />
             )
           )}
-        </div>
+        </fieldset>
       </div>
     </Flex>
   );

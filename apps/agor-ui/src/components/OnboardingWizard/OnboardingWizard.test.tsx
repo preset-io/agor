@@ -1,7 +1,7 @@
 /**
  * Tests for the redesigned 4-step OnboardingWizard (goals → workspace [name +
- * template gallery] → llm → done). The in-wizard MCP-recommendations step was
- * dropped; the goal→MCP suggestions still flow through onComplete.
+ * template gallery] → llm → done). The in-wizard recommendations step was
+ * dropped; routed goal-tailored suggestions still flow through onComplete.
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
  * or offers "continue without key" / codex-cli-auth / provider-combobox affordances
@@ -30,6 +30,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
 vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
@@ -75,14 +76,22 @@ function renderWizard(
     ...EMPTY_MAPS,
     ...(boardById ? { boardById } : {}),
   });
+  const effectiveUser = componentOverrides.user ?? makeUser();
 
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
     patch: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
   };
+  const usersService = {
+    get: vi.fn(async () => effectiveUser),
+  };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
-    service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    service: vi.fn((name: string) => {
+      if (name === 'boards') return boardsService;
+      if (name === 'users') return usersService;
+      return {};
+    }),
   };
   const onCreateRepo = vi.fn(async () => undefined);
   const onCreateBranch = vi.fn(async () => null);
@@ -90,7 +99,7 @@ function renderWizard(
   const props = {
     open: true,
     onComplete: vi.fn(),
-    user: makeUser(),
+    user: effectiveUser,
     client,
     onCreateRepo,
     onCreateLocalRepo: vi.fn(),
@@ -105,6 +114,7 @@ function renderWizard(
     props,
     client,
     boardsService,
+    usersService,
     onCreateRepo,
     onCreateBranch,
     onCreateSession,
@@ -279,7 +289,10 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({
           goals: ['dig-into-anything', 'ship-without-busywork'],
           // Merge: first two of primary (dig) then first two of secondary (ship).
-          suggestedIntegrations: ['Amplitude', 'HubSpot', 'GitHub', 'Sentry'],
+          suggestedIntegrations: mergeGoalIntegrationRecs([
+            'dig-into-anything',
+            'ship-without-busywork',
+          ]),
         })
       )
     );
@@ -299,7 +312,7 @@ describe('OnboardingWizard', () => {
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
         goals: [],
-        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        suggestedIntegrations: mergeGoalIntegrationRecs([]),
       })
     );
   });
@@ -335,7 +348,7 @@ describe('OnboardingWizard', () => {
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
           goals: [],
-          suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+          suggestedIntegrations: mergeGoalIntegrationRecs([]),
         })
       )
     );
@@ -521,7 +534,7 @@ describe('OnboardingWizard', () => {
     clickButton(/meet rusty/i);
 
     expect(await screen.findByText('slug already exists')).toBeInTheDocument();
-    expect(screen.getByText('Rusty is ready.')).toBeInTheDocument();
+    expect(screen.getByText('Rusty needs one more try.')).toBeInTheDocument();
   });
 
   it('workspace step renders the template gallery below the name field', () => {
@@ -544,7 +557,7 @@ describe('OnboardingWizard', () => {
     // browser (the guarantee is the DOM structure, not sticky/z-index).
     renderWizard({ initialStep: 'workspace' });
 
-    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const grid = screen.getByRole('group', { name: 'Teammate template' });
     const scrollRegion = grid.parentElement as HTMLElement;
     expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
 
@@ -567,8 +580,8 @@ describe('OnboardingWizard', () => {
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     // Picking a template sets the default avatar (emoji) but never the name.
-    // Gallery cards are role="radio" divs, not buttons — click the card directly.
-    const legalCard = screen.getByText('Legal Analyst').closest('[role="radio"]');
+    // Gallery cards are role="button" divs, not buttons — click the card directly.
+    const legalCard = screen.getByText('Legal Analyst').closest('[role="button"]');
     fireEvent.click(legalCard as HTMLElement);
     expect(screen.getByLabelText('Teammate name')).toHaveValue('Rusty');
 
@@ -583,6 +596,29 @@ describe('OnboardingWizard', () => {
           teammateName: 'Rusty',
           teammateEmoji: '⚖️',
           sourceBranch: 'template/legal-analyst',
+          templateId: 'legal-analyst',
+        })
+      )
+    );
+  });
+
+  it('treats workspace Skip as authoritative after typing a name and choosing a template', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'workspace' });
+
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
+    clickButton(/skip for now/i);
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton(/open my board/i);
+
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          teammateName: undefined,
+          teammateEmoji: '🤖',
+          sourceBranch: undefined,
+          templateId: null,
         })
       )
     );
@@ -653,12 +689,12 @@ describe('OnboardingWizard', () => {
         teammateName: 'Rusty',
         teammateEmoji: '🤖',
         sourceBranch: undefined,
+        templateId: null,
         agent: 'claude-code',
         // Goals were skipped → the default MCP suggestion set flows through, and
         // the goals threaded to the completion handler are empty.
-        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        suggestedIntegrations: mergeGoalIntegrationRecs([]),
         goals: [],
-        canManageIntegrations: false,
       })
     );
     // The teammate branch/session is created by the app shell on completion, not
@@ -678,7 +714,7 @@ describe('OnboardingWizard', () => {
     // workspace — name + template (Product Manager → role pill + its avatar emoji)
     expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    const templateCard = screen.getByText('Product Manager').closest('[role="radio"]');
+    const templateCard = screen.getByText('Product Manager').closest('[role="button"]');
     fireEvent.click(templateCard as HTMLElement);
     clickButton(/^continue →/i);
 
@@ -723,7 +759,7 @@ describe('OnboardingWizard', () => {
     // old skip-hint checklist is gone entirely.
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     expect(
-      screen.getByText("Your board's ready. Jump into a chat and tell your teammate what you need.")
+      screen.getByText("Your board is ready. Open it and start whenever you're ready.")
     ).toBeInTheDocument();
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/Skipped —/)).not.toBeInTheDocument();
@@ -760,10 +796,10 @@ describe('OnboardingWizard', () => {
         teammateName: undefined,
         teammateEmoji: '🤖',
         sourceBranch: undefined,
+        templateId: null,
         agent: null,
-        suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+        suggestedIntegrations: mergeGoalIntegrationRecs([]),
         goals: [],
-        canManageIntegrations: false,
       })
     );
   });
@@ -790,6 +826,71 @@ describe('OnboardingWizard', () => {
     // Resolving completion lets the flow finish (parent closes the modal).
     resolveComplete();
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('reuses the board when completion fails and the user retries', async () => {
+    const onComplete = vi
+      .fn<NonNullable<ComponentProps<typeof OnboardingWizard>['onComplete']>>()
+      .mockRejectedValueOnce(new Error('Preference write failed'))
+      .mockResolvedValueOnce(undefined);
+    const { boardsService } = renderWizard({ onComplete, initialStep: 'done' });
+
+    clickButton(/open my board/i);
+    expect(await screen.findByText('Setup needs one more try.')).toBeInTheDocument();
+    expect(screen.getByText('Preference write failed')).toBeInTheDocument();
+
+    clickButton(/^try again →$/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[1][0].boardId).toBe('board-1');
+  });
+
+  it('resumes an incomplete setup from its saved, still-visible board', async () => {
+    const onComplete = vi.fn();
+    const resumedBoard = makeBoard({ board_id: 'board-resume', name: 'Rusty', icon: '⚖️' });
+    const user = makeUser({
+      preferences: {
+        onboarding: {
+          boardId: 'board-resume',
+          goals: ['ship-without-busywork'],
+          teammateDisplayName: 'Rusty',
+          teammateEmoji: '⚖️',
+          teammateTemplateId: 'legal-analyst',
+        },
+      },
+    });
+    const { boardsService } = renderWizard({
+      onComplete,
+      user,
+      boardById: new Map([[resumedBoard.board_id, resumedBoard]]),
+    });
+
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    clickButton(/meet rusty/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boardId: 'board-resume',
+        teammateName: 'Rusty',
+        templateId: 'legal-analyst',
+        sourceBranch: 'template/legal-analyst',
+      })
+    );
+  });
+
+  it('exposes progress semantics and moves focus to the new step heading', async () => {
+    renderWizard({ initialStep: 'goals' });
+
+    const progress = screen.getByRole('list', { name: 'Onboarding progress' });
+    expect(progress).toHaveTextContent('Step 1 of 4: Goals. Current step.');
+    expect(progress.querySelector('[aria-current="step"]')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/what do you want to get done/i)).toHaveFocus());
+
+    clickButton(/skip for now/i);
+    const heading = await screen.findByText('Build your teammate');
+    await waitFor(() => expect(heading).toHaveFocus());
   });
 
   it('Back navigates to the previous step and preserves prior selections', async () => {

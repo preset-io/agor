@@ -41,7 +41,7 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { OnboardingBanners } from './components/OnboardingBanners';
-import { OnboardingWizard } from './components/OnboardingWizard';
+import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
@@ -515,6 +515,10 @@ function AppContent() {
   // Members reach the MCP settings tab without it, to read the policy that
   // governs them.
   const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Onboarding provisions boards, repos, branches and sessions. A viewer is a
+  // read-only role, so its first login must enter the workspace without opening
+  // a flow the daemon will correctly refuse at every write boundary.
+  const canRunOnboarding = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -530,6 +534,16 @@ function AppContent() {
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
+  const onboardingSeedResultRef = useRef(
+    new Map<string, { branchId?: string; sessionId?: string }>()
+  );
+  const onboardingSeedOwnerRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (onboardingSeedOwnerRef.current === currentUser?.user_id) return;
+    onboardingSeedOwnerRef.current = currentUser?.user_id;
+    onboardingSeedResultRef.current.clear();
+  }, [currentUser?.user_id]);
 
   // Clone a repository (framework repo, GitHub repos, etc.). Defined here —
   // above the early returns and the onboarding auto-clone hook below — so it can
@@ -683,13 +697,18 @@ function AppContent() {
     [handleCreateRepo]
   );
   useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
-    enabled: onboardingWizardOpen,
+    enabled: onboardingWizardOpen && canRunOnboarding,
   });
 
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
+    if (currentUser && !canRunOnboarding) {
+      setOnboardingWizardOpen(false);
+      return;
+    }
     if (
       currentUser &&
+      canRunOnboarding &&
       currentUser.onboarding_completed === false &&
       !currentUser.must_change_password &&
       connected &&
@@ -701,6 +720,7 @@ function AppContent() {
     }
   }, [
     currentUser,
+    canRunOnboarding,
     connected,
     workspaceSurfaceShouldRun,
     currentSurface.startsWorkspaceRuntime,
@@ -708,42 +728,12 @@ function AppContent() {
   ]);
 
   // Handle wizard completion
-  const handleOnboardingComplete = async (result: {
-    branchId: string;
-    sessionId: string;
-    boardId: string;
-    path: 'teammate' | 'own-repo';
-    teammateName?: string;
-    teammateEmoji?: string;
-    sourceBranch?: string;
-    agent?: AgenticToolName | null;
-    suggestedIntegrations?: string[];
-    canManageIntegrations?: boolean;
-    goals?: string[];
-  }) => {
+  const handleOnboardingComplete = async (result: OnboardingCompletionResult) => {
     // The wizard awaits this and stays open in a loading state until it
     // resolves, so we do the teammate creation + navigation FIRST and only
     // close the modal at the very end — otherwise the user stares at a blank
     // homepage while the async work runs.
-    if (!currentUser) {
-      setOnboardingWizardOpen(false);
-      return;
-    }
-
-    // Persist completion authoritatively before starting best-effort teammate
-    // setup. Read the latest store snapshot to minimize whole-preferences lost
-    // updates, and always write goals — including [] for an explicit Skip.
-    const latestPreferences =
-      agorStore.getState().userById.get(currentUser.user_id)?.preferences ??
-      currentUser.preferences;
-    await handleUpdateUser(
-      currentUser.user_id,
-      {
-        onboarding_completed: true,
-        preferences: buildCompletedOnboardingPreferences(latestPreferences, result),
-      },
-      { silent: true }
-    );
+    if (!currentUser || !client) throw new Error('Not connected - try again when Agor reconnects.');
 
     // Seed the user's first AI teammate on the board they just named. The
     // framework repo has been cloning in the background since the wizard opened
@@ -772,7 +762,7 @@ function AppContent() {
       readyFrameworkRepo = await waitForFrameworkRepoReady(client, 20_000);
     }
 
-    let sessionId = result.sessionId;
+    const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
@@ -781,7 +771,6 @@ function AppContent() {
       sourceBranch: result.sourceBranch,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
-      canManageIntegrations: result.canManageIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
       goals: result.goals,
@@ -791,22 +780,48 @@ function AppContent() {
       },
       client,
       repoById: agorStore.getState().repoById,
+      branchById: agorStore.getState().branchById,
+      sessionById: agorStore.getState().sessionById,
+      existingBranchId: retainedSeed?.branchId || result.branchId || undefined,
+      existingSessionId: retainedSeed?.sessionId || result.sessionId || undefined,
       onCreateBranch: handleCreateBranch,
       onUpdateBranch: (branchId, updates) =>
         handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
       onCreateSession: handleCreateSession,
       onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
     });
-    if (seeded.sessionId) sessionId = seeded.sessionId;
+    const branchId = seeded.branchId ?? retainedSeed?.branchId ?? result.branchId;
+    const sessionId = seeded.sessionId ?? retainedSeed?.sessionId ?? result.sessionId;
+    onboardingSeedResultRef.current.set(result.boardId, {
+      ...(branchId ? { branchId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    });
+
+    // Completion is the commit point of the client-side saga. Do it only after
+    // durable teammate work has either succeeded or reached its documented
+    // best-effort fallback, so closing/reloading during provisioning leaves an
+    // incomplete wizard that can resume instead of a falsely completed user.
+    // Fetch immediately before the whole-preferences patch to preserve any
+    // unrelated setting changed while the wizard was open.
+    const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
+    const completionResult = { ...result, branchId, sessionId };
+    await handleUpdateUser(
+      currentUser.user_id,
+      {
+        onboarding_completed: true,
+        preferences: buildCompletedOnboardingPreferences(latestUser.preferences, completionResult),
+      },
+      { silent: true }
+    );
 
     // Always land the user on a board — never the homepage. Prefer the seeded
     // session, then the board the wizard created, then the user's main board,
-    // then any existing board. With the workspace step now required a board
-    // always exists, so the later fallbacks are belt-and-suspenders. Use the
+    // then any existing board. The final wizard action always creates/resumes a
+    // board, so the later fallbacks are belt-and-suspenders. Use the
     // centralized path builders — the old `/b/<board>/<session>/` shape was
     // removed when we flattened entity URLs.
     const boardById = agorStore.getState().boardById;
-    const mainBoardId = currentUser.preferences?.mainBoardId;
+    const mainBoardId = latestUser.preferences?.mainBoardId;
     const targetBoardId =
       result.boardId ||
       (mainBoardId && boardById.has(mainBoardId) ? mainBoardId : undefined) ||
@@ -1244,7 +1259,7 @@ function AppContent() {
   };
 
   const handleRestartOnboarding = async () => {
-    if (!currentUser) return;
+    if (!currentUser || !canRunOnboarding) return;
 
     const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
     delete preferences.onboarding;
@@ -1915,7 +1930,7 @@ function AppContent() {
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}
-      onRestartOnboarding={handleRestartOnboarding}
+      onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
     />
   );
 
@@ -1944,7 +1959,7 @@ function AppContent() {
           client={client}
           onUpdateUser={handleUpdateUser}
           onRefreshCurrentUser={reAuthenticate}
-          onRestartOnboarding={handleRestartOnboarding}
+          onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
           initialTab={userSettingsInitialTab}
         />
       )}

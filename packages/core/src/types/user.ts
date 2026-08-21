@@ -448,6 +448,8 @@ export interface OnboardingState {
   assistantDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
+  /** Starter-template id selected for the first teammate (for resumable setup). */
+  teammateTemplateId?: string;
   /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
   assistantEmoji?: string;
 }

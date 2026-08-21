@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findOnboardingGoal } from './onboardingGoals';
+import { findOnboardingGoal, ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateBootstrapPromptContext,
@@ -60,40 +60,46 @@ describe('buildTeammateBootstrapPrompt', () => {
   });
 
   it('renders capability-aware suggested-integration guidance (CP-11)', () => {
-    const forAdmin = buildTeammateBootstrapPrompt({
+    const prompt = buildTeammateBootstrapPrompt({
       displayName: 'Board Bot',
-      suggestedIntegrations: ['Slack', 'GitHub', 'Sentry'],
-      canManageIntegrations: true,
+      suggestedIntegrations: [
+        ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
+        ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
+        ONBOARDING_INTEGRATION_RECOMMENDATIONS.sentry,
+      ],
     });
-    expect(forAdmin).toContain('- Suggested integrations: Slack, GitHub, Sentry');
+    expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub, Sentry');
     // The integrations are not just listed — the teammate is told to propose them.
-    expect(forAdmin).toMatch(/when a suggested integration would unlock that win/i);
-    expect(forAdmin).toContain('Marketplace');
-
-    const forMember = buildTeammateBootstrapPrompt({
-      displayName: 'Board Bot',
-      suggestedIntegrations: ['Slack'],
-      canManageIntegrations: false,
-    });
-    expect(forMember).toMatch(/workspace admin must connect it/i);
-    expect(forMember).not.toContain('Marketplace');
+    expect(prompt).toMatch(/when one of these would unlock the first win/i);
+    expect(prompt).toContain('Sentry: direct the user to Marketplace');
+    expect(prompt).toContain(
+      'Slack: direct the user to Settings → MCP Servers and use the official endpoint https://mcp.slack.com/mcp'
+    );
+    expect(prompt).toContain('Do not call this a Marketplace entry');
+    expect(prompt).toContain('GitHub: use the repository already connected to Agor');
+    expect(prompt).toContain('Do not describe this as an MCP or Marketplace install');
 
     // Empty / whitespace-only lists drop the line AND the proposal instruction.
     const emptyList = buildTeammateBootstrapPrompt({
       displayName: 'Board Bot',
       suggestedIntegrations: [],
     });
-    expect(emptyList).not.toContain('Suggested integrations');
+    expect(emptyList).not.toContain('Suggested tools and connections');
     expect(emptyList).not.toMatch(/when a suggested integration would unlock that win/i);
 
     const whitespaceOnly = buildTeammateBootstrapPrompt({
       displayName: 'Board Bot',
-      suggestedIntegrations: ['  ', ''],
+      suggestedIntegrations: [
+        {
+          ...ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear,
+          name: '  ',
+        },
+      ],
     });
-    expect(whitespaceOnly).not.toContain('Suggested integrations');
+    expect(whitespaceOnly).not.toContain('Suggested tools and connections');
 
     const absent = buildTeammateBootstrapPrompt({ displayName: 'Board Bot' });
-    expect(absent).not.toContain('Suggested integrations');
+    expect(absent).not.toContain('Suggested tools and connections');
   });
 
   it('renders goal-driven guidance for a single goal', () => {

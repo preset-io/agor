@@ -4,13 +4,13 @@ import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 
 /**
- * Real-browser (Playwright + system Chrome) config, used only for tests that
+ * Real-browser (Playwright + Chromium) config, used only for tests that
  * must observe true layout/scroll/stacking behavior that jsdom can't model
  * (e.g. `position: sticky` paint order). Run with:
  *   pnpm vitest run --config vitest.browser.config.ts
  *
- * Uses the OS-installed Chrome (channel: 'chrome') so no browser download is
- * required.
+ * CI installs the pinned Playwright Chromium build before this suite; local
+ * contributors can run `pnpm --filter agor-ui exec playwright install chromium`.
  */
 export default defineConfig({
   plugins: [react()],
@@ -29,8 +29,19 @@ export default defineConfig({
       headless: true,
       instances: [
         {
+          name: 'desktop',
           browser: 'chromium',
           viewport: { width: 1000, height: 900 },
+        },
+        {
+          name: 'phone',
+          browser: 'chromium',
+          viewport: { width: 320, height: 568 },
+        },
+        {
+          name: 'short-landscape',
+          browser: 'chromium',
+          viewport: { width: 844, height: 390 },
         },
       ],
     },

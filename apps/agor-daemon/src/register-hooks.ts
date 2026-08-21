@@ -635,7 +635,11 @@ export function authorizeUsersGet(context: HookContext): HookContext {
     return context;
   }
 
-  ensureMinimumRole(params, ROLES.MEMBER, 'view users');
+  // The user directory is a tenant-owned read model used by every workspace
+  // surface for attribution. Viewers already receive its redacted realtime
+  // events tenant-wide, so the initial find/get must use the same read floor or
+  // a legitimate read-only login can never hydrate the application.
+  ensureMinimumRole(params, ROLES.VIEWER, 'view users');
   return context;
 }
 
@@ -1196,11 +1200,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   safeService('board-objects')?.hooks({
     before: {
-      all: [
-        typedValidateQuery(boardObjectQueryValidator),
-        requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'manage board objects'),
-      ],
+      all: [typedValidateQuery(boardObjectQueryValidator), requireAuth],
       // Board-objects may reference a branch or may be loose board/card/layout
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
@@ -1208,6 +1208,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       find: [
         ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create board objects')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete board objects')],
     },
   });
 
@@ -2338,7 +2342,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           }
 
           if (params.user) {
-            ensureMinimumRole(params, ROLES.MEMBER, 'list users');
+            // Viewers need the same redacted tenant directory that realtime
+            // publishes for attribution. Tenant scoping remains owned by the
+            // shared users service hook/RLS path; this only aligns the role
+            // floor with the rest of the read-only workspace surface.
+            ensureMinimumRole(params, ROLES.VIEWER, 'list users');
             return context;
           }
 

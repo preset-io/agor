@@ -1,4 +1,8 @@
-import { buildGoalBootstrapGuidance, findOnboardingGoal } from './onboardingGoals';
+import {
+  buildGoalBootstrapGuidance,
+  findOnboardingGoal,
+  type OnboardingIntegrationRecommendation,
+} from './onboardingGoals';
 
 export interface TeammateBootstrapPromptInput {
   displayName: string;
@@ -12,10 +16,8 @@ export interface TeammateBootstrapPromptInput {
    * teammates; omit entirely for teammates created outside onboarding.
    */
   goals?: string[] | null;
-  /** Goal-tailored MCP integration names surfaced in the onboarding wizard. */
-  suggestedIntegrations?: string[] | null;
-  /** Whether this user can manage workspace MCP integrations. */
-  canManageIntegrations?: boolean;
+  /** Goal-tailored tools/connections with their real Agor setup surface. */
+  suggestedIntegrations?: OnboardingIntegrationRecommendation[] | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -31,8 +33,7 @@ export interface TeammateBootstrapPromptContext {
   /** Goal-driven guidance lines; present when goals were supplied. */
   goalGuidance?: string[];
   hasPrimaryGoal?: boolean;
-  canManageIntegrations?: boolean;
-  suggestedIntegrations?: string[];
+  suggestedIntegrations?: OnboardingIntegrationRecommendation[];
   firstSession: true;
 }
 
@@ -64,7 +65,9 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
   }
 
   if (context.suggestedIntegrations?.length) {
-    lines.push(`- Suggested integrations: ${context.suggestedIntegrations.join(', ')}`);
+    lines.push(
+      `- Suggested tools and connections: ${context.suggestedIntegrations.map((item) => item.name).join(', ')}`
+    );
   }
 
   if (context.goalGuidance?.length) {
@@ -87,13 +90,31 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
       : '- Do not assume a goal. Ask exactly one specific question about what the user is working on now, then take the first concrete action their answer enables. Do not conduct an interview.'
   );
   if (context.suggestedIntegrations?.length) {
-    // CP-11: the recommended integrations must be actively proposed, not just
-    // listed as context, or the teammate silently ignores them.
+    // The route is part of each recommendation because these capabilities do
+    // not all live in Marketplace. Never invent a catalog install for a custom
+    // MCP endpoint or for Agor's native repository support.
     lines.push(
-      context.canManageIntegrations
-        ? 'When a suggested integration would unlock that win, name it, say what it unlocks, and direct the user to Marketplace to connect it. Do not wait to be asked.'
-        : 'When a suggested integration would unlock that win, name it and say what it unlocks, but explain that a workspace admin must connect it. Do not direct this user to an admin-only setup screen.'
+      'When one of these would unlock the first win, name it, explain what it unlocks, and use only its setup route below. Do not wait to be asked:'
     );
+    for (const integration of context.suggestedIntegrations) {
+      switch (integration.setup.surface) {
+        case 'marketplace':
+          lines.push(
+            `- ${integration.name}: direct the user to Marketplace. If workspace policy prevents them from connecting it, explain that an admin must change the MCP member policy or install it.`
+          );
+          break;
+        case 'mcp-settings':
+          lines.push(
+            `- ${integration.name}: direct the user to Settings → MCP Servers and use the official endpoint ${integration.setup.endpoint}. Do not call this a Marketplace entry; gateway channels are a separate prompt/notification surface.`
+          );
+          break;
+        case 'connected-repository':
+          lines.push(
+            `- ${integration.name}: use the repository already connected to Agor, or ask which repository to add. Do not describe this as an MCP or Marketplace install.`
+          );
+          break;
+      }
+    }
   }
 
   return lines.join('\n');
@@ -107,13 +128,12 @@ export function buildTeammateBootstrapPromptContext({
   userEmail,
   goals,
   suggestedIntegrations,
-  canManageIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
-  const normalizedIntegrations = suggestedIntegrations
-    ?.map((name) => name.trim())
-    .filter((name) => name.length > 0);
+  const normalizedIntegrations = suggestedIntegrations?.filter(
+    (integration) => integration.name.trim().length > 0
+  );
 
   return {
     teammate: {
@@ -135,7 +155,6 @@ export function buildTeammateBootstrapPromptContext({
     // Only lead with the primary-goal opener when a goal actually resolves — an
     // empty (skip) or all-unknown goals array has no primary goal to act on.
     ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
-    ...(canManageIntegrations !== undefined ? { canManageIntegrations } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };

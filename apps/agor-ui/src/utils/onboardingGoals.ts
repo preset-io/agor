@@ -13,17 +13,24 @@ import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
  * Canonical onboarding goal cards.
  *
  * Onboarding asks what the user wants done (outcome), not who they are (role).
- * Each goal is the single source of truth for its card copy, its recommended MCP
- * integrations, and the one bootstrap line that primes the first teammate
+ * Each goal is the single source of truth for its card copy, its recommended
+ * tools/connections, and the one bootstrap line that primes the first teammate
  * session. Goal `id`s are the stable values persisted to
  * `user.preferences.onboarding.goals` (order-preserving, max 2).
  */
 
-export interface McpRecommendation {
+export type IntegrationSetup =
+  | { surface: 'marketplace'; catalogEntryName: string }
+  | { surface: 'mcp-settings'; endpoint: string }
+  | { surface: 'connected-repository' };
+
+export interface OnboardingIntegrationRecommendation {
   id: string;
   name: string;
   emoji: string;
   description: string;
+  /** The real Agor surface that can provide this capability today. */
+  setup: IntegrationSetup;
   /** Set on the top recommendation of a rendered list, not stored per-entry. */
   featured?: boolean;
 }
@@ -34,26 +41,37 @@ export interface OnboardingGoal {
   description: string;
   /** antd icon rendered as the goal card's subtle accent tile (no category color). */
   icon: React.ComponentType<Partial<AntdIconProps>>;
-  /** Recommended MCP integration ids, in priority order (see MCP_RECOMMENDATIONS). */
-  mcpRecs: string[];
+  /** Recommended tool/connection ids, in priority order. */
+  integrationRecs: string[];
   /** One line telling the first teammate session what this user wants and how to open. */
   bootstrapLine: string;
 }
 
-/** MCP integrations referenced by goals + the skip fallback, keyed by id. */
-export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
+/**
+ * Tools and connections referenced by goals + the skip fallback, keyed by id.
+ *
+ * Keep every setup route explicit. Marketplace entries must name a currently
+ * curated catalog identity; custom MCP endpoints and Agor-native repository
+ * access must never be described as Marketplace installs.
+ */
+export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
+  string,
+  OnboardingIntegrationRecommendation
+> = {
   slack: {
     id: 'slack',
     name: 'Slack',
     emoji: '💬',
     description:
       'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
+    setup: { surface: 'mcp-settings', endpoint: 'https://mcp.slack.com/mcp' },
   },
   github: {
     id: 'github',
     name: 'GitHub',
     emoji: '🐙',
     description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
+    setup: { surface: 'connected-repository' },
   },
   linear: {
     id: 'linear',
@@ -61,61 +79,65 @@ export const MCP_RECOMMENDATIONS: Record<string, McpRecommendation> = {
     emoji: '🎯',
     description:
       "See what's in progress, what's blocked, and what shipped, without chasing updates.",
+    setup: { surface: 'marketplace', catalogEntryName: 'app.linear/linear' },
   },
-  shortcut: {
-    id: 'shortcut',
-    name: 'Shortcut / Jira',
+  atlassian: {
+    id: 'atlassian',
+    name: 'Atlassian',
     emoji: '🎫',
     description:
-      'Pull tickets into context and keep their status moving without leaving your session.',
-  },
-  calendar: {
-    id: 'calendar',
-    name: 'Calendar',
-    emoji: '📅',
-    description:
-      'Your AI reads your schedule, preps for meetings, and turns discussions into action items.',
+      'Pull Jira work into context and keep its status moving without leaving your session.',
+    setup: {
+      surface: 'marketplace',
+      catalogEntryName: 'com.atlassian/atlassian-mcp-server',
+    },
   },
   sentry: {
     id: 'sentry',
     name: 'Sentry',
     emoji: '🚨',
     description: 'Let your AI read error traces and fix bugs straight from the issue.',
+    setup: { surface: 'marketplace', catalogEntryName: 'io.sentry/mcp' },
   },
   datadog: {
     id: 'datadog',
     name: 'Datadog',
     emoji: '🐕',
     description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
-  },
-  hubspot: {
-    id: 'hubspot',
-    name: 'HubSpot',
-    emoji: '🟠',
-    description: "Pull customer context into sessions, so your AI knows who you're building for.",
+    setup: { surface: 'marketplace', catalogEntryName: 'com.datadoghq/mcp' },
   },
   figma: {
     id: 'figma',
     name: 'Figma',
     emoji: '🎨',
     description: 'Read design files and turn them into working UI without switching tabs.',
+    setup: { surface: 'marketplace', catalogEntryName: 'com.figma.mcp/mcp' },
   },
   amplitude: {
     id: 'amplitude',
     name: 'Amplitude',
     emoji: '📈',
     description: 'Ask your AI what the data says without writing a single query.',
+    setup: { surface: 'marketplace', catalogEntryName: 'com.amplitude/mcp-server' },
   },
   notion: {
     id: 'notion',
     name: 'Notion',
     emoji: '📝',
     description: 'Write and update docs as your AI works.',
+    setup: { surface: 'marketplace', catalogEntryName: 'com.notion/mcp' },
+  },
+  firecrawl: {
+    id: 'firecrawl',
+    name: 'Firecrawl',
+    emoji: '🔥',
+    description: 'Gather current web sources for evidence-backed research.',
+    setup: { surface: 'marketplace', catalogEntryName: 'com.firecrawl/mcp' },
   },
 };
 
 /** Rec set shown when onboarding is skipped / no goal is picked. */
-export const DEFAULT_MCP_REC_IDS = ['slack', 'github', 'linear', 'notion'];
+export const DEFAULT_INTEGRATION_REC_IDS = ['slack', 'github', 'linear', 'notion'];
 
 /**
  * The six onboarding goal cards. Card copy is locked product copy — do not
@@ -130,7 +152,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'Get a personal teammate',
     description: 'Keeps up with Slack so you don’t have to.',
     icon: UserOutlined,
-    mcpRecs: ['slack'],
+    integrationRecs: ['slack'],
     bootstrapLine:
       'Desired outcome: a useful recurring brief from connected sources. A first win is a Slack digest based on the channels they care about.',
   },
@@ -139,7 +161,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'Never chase an update',
     description: 'Meeting notes and status, drafted for you.',
     icon: FileTextOutlined,
-    mcpRecs: ['linear', 'shortcut', 'slack', 'calendar'],
+    integrationRecs: ['linear', 'atlassian', 'notion', 'slack'],
     bootstrapLine:
       'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
   },
@@ -148,7 +170,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'Ship without the busywork',
     description: 'PRs, bug triage, and release notes, all handled.',
     icon: RocketOutlined,
-    mcpRecs: ['github', 'sentry', 'datadog'],
+    integrationRecs: ['github', 'sentry', 'datadog'],
     bootstrapLine:
       'Desired outcome: less shipping busywork. A first win is scanning the relevant repo for an actionable issue or pull request.',
   },
@@ -157,7 +179,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'A teammate for the team',
     description: "Knows the whole team's Slack, docs, and boards.",
     icon: TeamOutlined,
-    mcpRecs: ['slack', 'hubspot', 'linear', 'datadog'],
+    integrationRecs: ['slack', 'notion', 'linear', 'datadog'],
     bootstrapLine:
       'Desired outcome: a shared teammate for repeated team work. A first win is identifying one repeated workflow to run from the team board.',
   },
@@ -166,7 +188,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'Build me an app',
     description: 'A working app or dashboard on a live test env.',
     icon: BuildOutlined,
-    mcpRecs: ['github', 'figma'],
+    integrationRecs: ['github', 'figma'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
   },
@@ -175,7 +197,7 @@ export const ONBOARDING_GOALS: OnboardingGoal[] = [
     title: 'Dig into anything',
     description: 'Ask a question, get real research back.',
     icon: SearchOutlined,
-    mcpRecs: ['amplitude', 'hubspot'],
+    integrationRecs: ['amplitude', 'firecrawl'],
     bootstrapLine:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
   },
@@ -189,6 +211,9 @@ export interface CompletedOnboardingPreferencesInput {
   branchId: string;
   path: 'teammate' | 'own-repo';
   goals?: string[];
+  teammateName?: string;
+  teammateEmoji?: string;
+  templateId?: string | null;
 }
 
 /**
@@ -200,15 +225,26 @@ export function buildCompletedOnboardingPreferences(
   latest: UserPreferences | undefined,
   result: CompletedOnboardingPreferencesInput
 ): UserPreferences {
+  const retainedOnboarding = { ...(latest?.onboarding ?? {}) };
+  delete retainedOnboarding.teammateDisplayName;
+  delete retainedOnboarding.teammateEmoji;
+  delete retainedOnboarding.teammateTemplateId;
   return {
     ...latest,
     mainBoardId: result.boardId || latest?.mainBoardId,
     onboarding: {
-      ...latest?.onboarding,
+      ...retainedOnboarding,
       path: result.path,
       branchId: result.branchId,
       boardId: result.boardId,
       goals: result.goals ?? [],
+      ...(result.teammateName ? { teammateDisplayName: result.teammateName } : {}),
+      ...(result.teammateName && result.teammateEmoji
+        ? { teammateEmoji: result.teammateEmoji }
+        : {}),
+      ...(result.teammateName && result.templateId
+        ? { teammateTemplateId: result.templateId }
+        : {}),
     },
   };
 }
@@ -217,12 +253,14 @@ export function findOnboardingGoal(id?: string | null): OnboardingGoal | undefin
   return id ? ONBOARDING_GOALS.find((goal) => goal.id === id) : undefined;
 }
 
-function resolveRecs(ids: string[]): McpRecommendation[] {
-  return ids.map((id) => MCP_RECOMMENDATIONS[id]).filter((rec): rec is McpRecommendation => !!rec);
+function resolveRecs(ids: string[]): OnboardingIntegrationRecommendation[] {
+  return ids
+    .map((id) => ONBOARDING_INTEGRATION_RECOMMENDATIONS[id])
+    .filter((rec): rec is OnboardingIntegrationRecommendation => !!rec);
 }
 
 /**
- * Build the MCP recommendations to show for the selected goals.
+ * Build the routed tool/connection recommendations for the selected goals.
  *
  * - 0 goals: the generic default set.
  * - 1 goal: that goal's full rec list.
@@ -232,16 +270,16 @@ function resolveRecs(ids: string[]): McpRecommendation[] {
  *
  * The first returned rec is flagged `featured` as the top pick.
  */
-export function mergeGoalMcpRecs(goalIds: string[]): McpRecommendation[] {
+export function mergeGoalIntegrationRecs(goalIds: string[]): OnboardingIntegrationRecommendation[] {
   const goals = goalIds
     .map((id) => findOnboardingGoal(id))
     .filter((goal): goal is OnboardingGoal => !!goal);
 
   let mergedIds: string[];
   if (goals.length === 0) {
-    mergedIds = DEFAULT_MCP_REC_IDS;
+    mergedIds = DEFAULT_INTEGRATION_REC_IDS;
   } else if (goals.length === 1) {
-    mergedIds = goals[0].mcpRecs;
+    mergedIds = goals[0].integrationRecs;
   } else {
     const [primary, secondary] = goals;
     const seen = new Set<string>();
@@ -251,10 +289,10 @@ export function mergeGoalMcpRecs(goalIds: string[]): McpRecommendation[] {
       seen.add(id);
       ordered.push(id);
     };
-    primary.mcpRecs.slice(0, 2).forEach(add);
-    secondary.mcpRecs.slice(0, 2).forEach(add);
-    primary.mcpRecs.slice(2).forEach(add);
-    secondary.mcpRecs.slice(2).forEach(add);
+    primary.integrationRecs.slice(0, 2).forEach(add);
+    secondary.integrationRecs.slice(0, 2).forEach(add);
+    primary.integrationRecs.slice(2).forEach(add);
+    secondary.integrationRecs.slice(2).forEach(add);
     mergedIds = ordered;
   }
 

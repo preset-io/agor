@@ -1,6 +1,7 @@
-import type { Branch, Repo } from '@agor-live/client';
+import type { Branch, Repo, Session } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
+import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
@@ -18,18 +19,31 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
   const onCreateBranch = vi.fn();
   const onUpdateBranch = vi.fn();
   const onCreateSession = vi.fn(async () => 'session-1');
+  const client = {
+    service: vi.fn((name: string) => {
+      if (name === 'branches' || name === 'sessions') {
+        return { find: vi.fn(async () => ({ data: [] })) };
+      }
+      if (name === 'boards') return { setPrimaryTeammate: vi.fn(async () => undefined) };
+      return {};
+    }),
+  } as unknown as SeedOnboardingTeammateInput['client'];
   const input: SeedOnboardingTeammateInput = {
     frameworkRepo: { repo_id: 'repo-fw', slug: 'preset-io/agor-teammate' } as Repo,
     boardId: 'board-1',
     teammateName: 'Rusty',
     teammateEmoji: '🤖',
     agent: 'claude-code',
-    suggestedIntegrations: ['Slack', 'GitHub'],
-    canManageIntegrations: true,
+    suggestedIntegrations: [
+      ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
+      ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
+    ],
     goals: ['ship-without-busywork'],
     user: { name: 'Ada', email: 'ada@example.com' },
-    client: {} as SeedOnboardingTeammateInput['client'],
+    client,
     repoById: new Map(),
+    branchById: new Map(),
+    sessionById: new Map(),
     onCreateBranch,
     onUpdateBranch,
     onCreateSession,
@@ -82,11 +96,11 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('Rusty');
     // The selected goal's bootstrap line is threaded into the first-session prompt.
     expect(initialPrompt).toContain('Desired outcome: less shipping busywork');
-    expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
+    expect(initialPrompt).toContain('- Suggested tools and connections: Slack, GitHub');
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
-    expect(result).toEqual({ sessionId: 'session-1' });
+    expect(result).toEqual({ branchId: 'branch-1', sessionId: 'session-1' });
     expect(onWarn).not.toHaveBeenCalled();
   });
 
@@ -137,7 +151,7 @@ describe('seedOnboardingTeammate', () => {
       expect.objectContaining({ repoId: 'repo-fw', createdViaOnboarding: true }),
       expect.anything()
     );
-    expect(result).toEqual({ sessionId: 'session-1' });
+    expect(result).toEqual({ branchId: 'branch-1', sessionId: 'session-1' });
     expect(onWarn).not.toHaveBeenCalled();
   });
 
@@ -188,7 +202,7 @@ describe('seedOnboardingTeammate', () => {
       // ...but nothing is prompted, and no claude-code default sneaks in.
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
       expect(onCreateSession).not.toHaveBeenCalled();
-      expect(result).toEqual({});
+      expect(result).toEqual({ branchId: 'branch-1' });
 
       // The user is told why there's no session waiting for them.
       expect(onWarn).toHaveBeenCalledTimes(1);
@@ -203,5 +217,87 @@ describe('seedOnboardingTeammate', () => {
     expect(createTeammateBranchMock).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
     expect(result).toEqual({});
+  });
+
+  it('reuses a durable onboarding branch and session on completion retry', async () => {
+    const existingBranch = {
+      branch_id: 'branch-existing',
+      board_id: 'board-1',
+      custom_context: {
+        teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+      },
+    } as Branch;
+    const existingSession = {
+      session_id: 'session-existing',
+      branch_id: 'branch-existing',
+    } as Session;
+    const setPrimaryTeammate = vi.fn(async () => undefined);
+    const { input, onWarn } = setup({
+      frameworkRepo: undefined,
+      branchById: new Map([[existingBranch.branch_id, existingBranch]]),
+      sessionById: new Map([[existingSession.session_id, existingSession]]),
+      client: {
+        service: vi.fn(() => ({ setPrimaryTeammate })),
+      } as unknown as SeedOnboardingTeammateInput['client'],
+    });
+
+    const result = await seedOnboardingTeammate(input);
+
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(setPrimaryTeammate).toHaveBeenCalledWith({
+      boardId: 'board-1',
+      branchId: 'branch-existing',
+    });
+    expect(result).toEqual({
+      branchId: 'branch-existing',
+      sessionId: 'session-existing',
+    });
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('discovers durable branch/session state from the API before maps hydrate after reload', async () => {
+    const existingBranch = {
+      branch_id: 'branch-existing',
+      board_id: 'board-1',
+      custom_context: {
+        teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+      },
+    } as Branch;
+    const existingSession = {
+      session_id: 'session-existing',
+      branch_id: 'branch-existing',
+    } as Session;
+    const setPrimaryTeammate = vi.fn(async () => undefined);
+    const branchFind = vi.fn(async () => ({ data: [existingBranch] }));
+    const sessionFind = vi.fn(async () => ({ data: [existingSession] }));
+    const service = vi.fn((name: string) => {
+      if (name === 'branches') return { find: branchFind };
+      if (name === 'sessions') return { find: sessionFind };
+      if (name === 'boards') return { setPrimaryTeammate };
+      return {};
+    });
+    const { input, onWarn } = setup({
+      frameworkRepo: undefined,
+      branchById: new Map(),
+      sessionById: new Map(),
+      client: { service } as unknown as SeedOnboardingTeammateInput['client'],
+    });
+
+    const result = await seedOnboardingTeammate(input);
+
+    expect(branchFind).toHaveBeenCalledWith({
+      query: { board_id: 'board-1', archived: false, $limit: 100 },
+    });
+    expect(sessionFind).toHaveBeenCalledWith({
+      query: { branch_id: 'branch-existing', archived: false, $limit: 1 },
+    });
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      branchId: 'branch-existing',
+      sessionId: 'session-existing',
+    });
+    expect(onWarn).not.toHaveBeenCalled();
   });
 });

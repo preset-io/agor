@@ -80,6 +80,12 @@ jobs:
       # a separate turbo invocation to preserve that filter.
       - run: pnpm turbo run test --filter=agor-ui --filter=@agor/daemon --filter=@agor/core --filter=@agor/executor --filter=agor-live
 
+      # Onboarding has responsive/focus/layout contracts that jsdom cannot
+      # observe. Keep its small real-browser suite required at the phone,
+      # short-landscape and desktop viewports it explicitly supports.
+      - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
+      - run: pnpm --filter agor-ui test:browser
+
       # CLI init tests spawn real child processes and pseudo-terminals. Keep
       # them required, but outside Turbo's CPU-heavy parallel test fanout.
       - run: pnpm --filter @agor/cli test

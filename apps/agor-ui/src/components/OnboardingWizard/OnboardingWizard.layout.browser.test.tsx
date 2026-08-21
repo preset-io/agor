@@ -1,5 +1,5 @@
 /**
- * Real-browser (Playwright + system Chrome) layout regressions for the widened
+ * Real-browser (Playwright + Chromium) layout regressions for the widened
  * onboarding modal. jsdom can't resolve `grid-template-columns` to real track
  * pixels or measure wrapped text height, so these must run in an actual browser:
  *
@@ -48,15 +48,20 @@ function renderWizardAt(initialStep: WizardStep) {
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
   };
+  const user = makeUser();
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
-    service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+    service: vi.fn((name: string) => {
+      if (name === 'boards') return boardsService;
+      if (name === 'users') return { get: vi.fn(async () => user) };
+      return {};
+    }),
   };
   const props = {
     open: true,
     initialStep,
     onComplete: vi.fn(),
-    user: makeUser(),
+    user,
     client,
     onCreateRepo: vi.fn(async () => undefined),
     onCreateLocalRepo: vi.fn(),
@@ -84,20 +89,22 @@ describe('OnboardingWizard layout (real browser)', () => {
     await wait(300);
 
     const grid = document.querySelector(
-      '[role="radiogroup"][aria-label="Teammate template"]'
+      'fieldset[aria-label="Teammate template"]'
     ) as HTMLElement | null;
     expect(grid, 'the card grid should exist').toBeTruthy();
     if (!grid) return;
 
-    // getComputedStyle resolves the auto-fit template to explicit pixel tracks;
-    // the count of tracks is the real rendered column count.
-    const tracks = getComputedStyle(grid)
-      .gridTemplateColumns.split(' ')
-      .filter((track) => track.trim().length > 0);
+    // Chromium can preserve `repeat(auto-fit, minmax(...))` in computed style
+    // at narrow viewports. Count the cards sharing the first rendered row
+    // instead; this observes the layout result rather than its CSS spelling.
+    const cardRects = Array.from(grid.children, (card) => card.getBoundingClientRect());
+    const firstTop = cardRects[0]?.top;
+    const renderedColumns = cardRects.filter((rect) => Math.abs(rect.top - firstTop) < 1).length;
+    const expectedColumns = window.innerWidth <= 480 ? 1 : 3;
     expect(
-      tracks.length,
-      `expected 3 gallery columns at the widened modal, got ${tracks.length}: "${getComputedStyle(grid).gridTemplateColumns}"`
-    ).toBe(3);
+      renderedColumns,
+      `expected ${expectedColumns} gallery columns at ${window.innerWidth}px, got ${renderedColumns}: "${getComputedStyle(grid).gridTemplateColumns}"`
+    ).toBe(expectedColumns);
   });
 
   it('renders every step-1 goal card title on a single line', async () => {
@@ -124,6 +131,7 @@ describe('OnboardingWizard layout (real browser)', () => {
   });
 
   it('fits all six step-1 goal cards without internal scroll, clear of the footer', async () => {
+    if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('goals');
     await wait(300);
 
@@ -155,13 +163,16 @@ describe('OnboardingWizard layout (real browser)', () => {
   });
 
   it('collapses the step-2 title + intro on scroll and restores it at the top', async () => {
+    // Short/mobile layouts deliberately hide the intro so the useful controls
+    // get the available height. The collapse animation is a desktop contract.
+    if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('workspace');
     await wait(300);
 
     const collapsible = document.querySelector('[data-collapsible-header]') as HTMLElement | null;
     expect(collapsible, 'the collapsible title+intro block should exist').toBeTruthy();
     const grid = document.querySelector(
-      '[role="radiogroup"][aria-label="Teammate template"]'
+      'fieldset[aria-label="Teammate template"]'
     ) as HTMLElement | null;
     const scroller = grid?.parentElement as HTMLElement | null;
     expect(scroller, 'the card scroll region should exist').toBeTruthy();
@@ -179,7 +190,7 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     // Scroll the card region past the threshold → title + intro collapse away.
     scroller.scrollTop = 120;
-    scroller.dispatchEvent(new Event('scroll'));
+    fireEvent.scroll(scroller);
     await wait(350); // let the max-height/opacity transition finish
 
     expect(getComputedStyle(collapsible).opacity).toBe('0');
@@ -190,7 +201,7 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     // Scroll back to the top → title + intro reappear.
     scroller.scrollTop = 0;
-    scroller.dispatchEvent(new Event('scroll'));
+    fireEvent.scroll(scroller);
     await wait(350);
     expect(getComputedStyle(collapsible).opacity).toBe('1');
     expect(collapsible.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -207,7 +218,7 @@ describe('OnboardingWizard layout (real browser)', () => {
       'input[aria-label="Teammate name"]'
     ) as HTMLElement | null;
     const grid = document.querySelector(
-      '[role="radiogroup"][aria-label="Teammate template"]'
+      'fieldset[aria-label="Teammate template"]'
     ) as HTMLElement | null;
     const scroller = grid?.parentElement as HTMLElement | null;
     expect(
@@ -260,6 +271,7 @@ describe('OnboardingWizard layout (real browser)', () => {
   });
 
   it('renders the success screen vertically centered, with no recap line and a celebratory hero', async () => {
+    if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('goals');
     await wait(300);
 
@@ -270,7 +282,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     // workspace → name + Product Manager template → continue
     await screen.findByText('Build your teammate');
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    fireEvent.click(screen.getByText('Product Manager').closest('[role="radio"]') as HTMLElement);
+    fireEvent.click(screen.getByText('Product Manager').closest('[role="button"]') as HTMLElement);
     fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // llm → connect Claude with a valid key
@@ -306,5 +318,29 @@ describe('OnboardingWizard layout (real browser)', () => {
       Math.abs(topGap - bottomGap),
       `success content should be vertically centered (topGap=${topGap}, bottomGap=${bottomGap})`
     ).toBeLessThan(48);
+  });
+
+  it('keeps the modal and primary action inside every configured viewport', async () => {
+    renderWizardAt('goals');
+    await wait(300);
+
+    const modal = document.querySelector('.ant-modal') as HTMLElement | null;
+    const primary = Array.from(document.querySelectorAll('button')).find((button) =>
+      /continue/i.test(button.textContent ?? '')
+    );
+    expect(modal, 'the modal should exist').toBeTruthy();
+    expect(primary, 'the primary footer action should exist').toBeTruthy();
+    if (!modal || !primary) return;
+
+    const modalRect = modal.getBoundingClientRect();
+    const primaryRect = primary.getBoundingClientRect();
+    expect(modalRect.top).toBeGreaterThanOrEqual(0);
+    expect(modalRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(modalRect.left).toBeGreaterThanOrEqual(0);
+    expect(modalRect.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(primaryRect.top).toBeGreaterThanOrEqual(0);
+    expect(primaryRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(primaryRect.left).toBeGreaterThanOrEqual(0);
+    expect(primaryRect.right).toBeLessThanOrEqual(window.innerWidth);
   });
 });

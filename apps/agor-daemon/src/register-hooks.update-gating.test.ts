@@ -233,6 +233,10 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
   const captured = captureRegisteredHooks(branchRbacEnabled);
 
   it.each([
+    ['users', 'find'],
+    ['users', 'get'],
+    ['board-objects', 'find'],
+    ['board-objects', 'get'],
     ['repos', 'find'],
     ['repos', 'get'],
     ['branches', 'find'],
@@ -260,6 +264,9 @@ describe.each(RBAC_MODES)('viewer read access ($name)', ({ branchRbacEnabled }) 
   }
 
   it.each([
+    ['board-objects', 'create'],
+    ['board-objects', 'patch'],
+    ['board-objects', 'remove'],
     ['repos', 'create'],
     ['repos', 'patch'],
     ['repos', 'remove'],

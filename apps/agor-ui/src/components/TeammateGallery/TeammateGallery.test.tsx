@@ -1,7 +1,7 @@
 /**
  * Query style mirrors OnboardingWizard.test.tsx: antd `Tag` + jsdom `cssstyle`
  * crash on accessible-name computation, so this file uses text queries +
- * `closest('[role="radio"]')` instead of `getByRole`.
+ * `closest('[role="button"]')` instead of `getByRole`.
  */
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -9,15 +9,15 @@ import { getCategoryColor } from '../../utils/teammateTemplates';
 import { TeammateGallery } from './TeammateGallery';
 
 function cardFor(title: string): HTMLElement {
-  const card = screen.getByText(title).closest('[role="radio"]');
+  const card = screen.getByText(title).closest('[role="button"]');
   if (!card) throw new Error(`No card found for "${title}"`);
   return card as HTMLElement;
 }
 
 /** Card titles in DOM order (skips the blank starter unless present). */
 function cardOrder(): string[] {
-  const group = screen.getByRole('radiogroup', { name: 'Teammate template' });
-  return Array.from(group.querySelectorAll('[role="radio"]')).map(
+  const group = screen.getByRole('group', { name: 'Teammate template' });
+  return Array.from(group.querySelectorAll('[role="button"]')).map(
     (card) => card.getAttribute('aria-label') ?? ''
   );
 }
@@ -35,10 +35,10 @@ function rgbOf(hex: string): string {
 }
 
 describe('TeammateGallery', () => {
-  it('renders all eight templates plus the blank starter as a single-select radiogroup', () => {
+  it('renders all eight templates plus the blank starter as an optional single-select button group', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
 
-    expect(screen.getByRole('radiogroup', { name: 'Teammate template' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Teammate template' })).toBeInTheDocument();
     for (const title of [
       'Competitive Analyst',
       'Product Manager',
@@ -56,7 +56,7 @@ describe('TeammateGallery', () => {
 
   it('lays the cards out in a responsive multi-column grid', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    const group = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const group = screen.getByRole('group', { name: 'Teammate template' });
     expect(group).toHaveStyle({ display: 'grid' });
     // Three columns at the widened modal, stepping down to two/one as it narrows.
     expect(group).toHaveStyle({ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' });
@@ -84,8 +84,8 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith('blank');
 
     rerender(<TeammateGallery value="legal-analyst" onChange={onChange} />);
-    expect(cardFor('Legal Analyst')).toHaveAttribute('aria-checked', 'true');
-    expect(cardFor('Product Manager')).toHaveAttribute('aria-checked', 'false');
+    expect(cardFor('Legal Analyst')).toHaveAttribute('aria-pressed', 'true');
+    expect(cardFor('Product Manager')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('selects via keyboard (Enter / Space)', () => {
@@ -146,7 +146,7 @@ describe('TeammateGallery', () => {
     // The card grid lives inside its OWN overflow-y:auto scroll container — the
     // structural guarantee that cards are clipped to it and can never paint over
     // the header (replacing the old, engine-dependent position:sticky approach).
-    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const grid = screen.getByRole('group', { name: 'Teammate template' });
     const scrollRegion = grid.parentElement as HTMLElement;
     expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
 
@@ -175,7 +175,7 @@ describe('TeammateGallery', () => {
     const wrapper = screen
       .getByText('TITLE BLOCK')
       .closest('[data-collapsible-header]') as HTMLElement;
-    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const grid = screen.getByRole('group', { name: 'Teammate template' });
     const scrollRegion = grid.parentElement as HTMLElement;
 
     // At the top: title/intro expanded (opaque, not aria-hidden, non-zero cap).
@@ -203,7 +203,7 @@ describe('TeammateGallery', () => {
 
     // dig-into-anything → competitive + financial analyst. Scope to the grid so
     // the "Recommended" filter chip isn't counted as a badge.
-    const grid = screen.getByRole('radiogroup', { name: 'Teammate template' });
+    const grid = screen.getByRole('group', { name: 'Teammate template' });
     expect(within(grid).getAllByText('Recommended')).toHaveLength(2);
     expect(cardFor('Competitive Analyst')).toHaveTextContent('Recommended');
     expect(cardFor('Financial Analyst')).toHaveTextContent('Recommended');
