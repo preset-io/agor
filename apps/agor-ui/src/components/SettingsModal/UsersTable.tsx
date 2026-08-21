@@ -30,7 +30,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import {
   passwordPolicyHelp,
@@ -39,6 +39,7 @@ import {
 } from '@/utils/passwordPolicy';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
@@ -76,6 +77,16 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const operationGuard = useAuthorityOperationGuard(
+    currentUser ? [currentUser.user_id, currentUser.role, client] : null
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authenticated identity and role intentionally erase password-bearing forms
+  useLayoutEffect(() => {
+    form.resetFields();
+    setCreateModalOpen(false);
+    setEditingUser(null);
+  }, [currentUser?.role, currentUser?.user_id, form]);
   const externallyManaged =
     authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
   const canCreateUsers =
@@ -101,26 +112,31 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     hasRoleAuthorityOver(currentUser.role, target.role);
 
   const loadGroups = useCallback(async () => {
+    const operation = operationGuard.begin();
     if (!client || !isAdmin) {
       setGroups([]);
       setMemberships([]);
       return;
     }
-    const [nextGroups, nextMemberships] = await Promise.all([
-      client.service('groups').findAll({ query: { archived: false } }),
-      client.service('group-memberships').findAll({}),
-    ]);
-    setGroups(nextGroups as Group[]);
-    setMemberships(nextMemberships as GroupMembership[]);
-  }, [client, isAdmin]);
-
-  useEffect(() => {
-    loadGroups().catch((error) =>
+    try {
+      const [nextGroups, nextMemberships] = await Promise.all([
+        client.service('groups').findAll({ query: { archived: false } }),
+        client.service('group-memberships').findAll({}),
+      ]);
+      if (!operation.isCurrent()) return;
+      setGroups(nextGroups as Group[]);
+      setMemberships(nextMemberships as GroupMembership[]);
+    } catch (error) {
+      if (!operation.isCurrent()) return;
       showError(
         `Failed to load user groups: ${error instanceof Error ? error.message : String(error)}`
-      )
-    );
-  }, [loadGroups, showError]);
+      );
+    }
+  }, [client, isAdmin, operationGuard, showError]);
+
+  useEffect(() => {
+    void loadGroups();
+  }, [loadGroups]);
 
   const groupsByUser = useMemo(() => {
     const map = new Map<string, Group['group_id'][]>();
@@ -159,8 +175,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   };
 
   const handleCreate = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     try {
       const values = await form.validateFields();
+      if (!operation.isCurrent()) return;
       await onCreate?.({
         email: values.email,
         password: values.password,
@@ -169,9 +188,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         unix_username: values.unix_username,
         must_change_password: values.must_change_password || false,
       });
+      if (!operation.isCurrent()) return;
       form.resetFields();
       setCreateModalOpen(false);
     } catch (error) {
+      if (!operation.isCurrent()) return;
       const code = (error as { data?: { code?: unknown } } | undefined)?.data?.code;
       if (typeof code === 'string' && code.startsWith('PASSWORD_')) {
         form.setFields([
@@ -441,7 +462,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                 key: 'avatars',
                 label: 'Avatars',
                 children: (
-                  <UserAvatarsTab client={client} gatewayChannelById={gatewayChannelById} />
+                  <UserAvatarsTab
+                    client={client}
+                    gatewayChannelById={gatewayChannelById}
+                    authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+                  />
                 ),
               },
             ]

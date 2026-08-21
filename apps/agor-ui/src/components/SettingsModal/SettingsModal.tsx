@@ -429,6 +429,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <ReposTable
             repoById={repoById}
+            authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
             onCreate={onCreateRepo}
             onCreateLocal={onCreateLocalRepo}
             onUpdate={onUpdateRepo}
@@ -500,7 +501,12 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           />
         );
       case 'agentic-tools':
-        return <AgenticToolsSection client={client} />;
+        return (
+          <AgenticToolsSection
+            client={client}
+            authorityKey={currentUser ? `${currentUser.user_id}:${currentUser.role}` : null}
+          />
+        );
       case 'gateway':
         return (
           <GatewayChannelsTable

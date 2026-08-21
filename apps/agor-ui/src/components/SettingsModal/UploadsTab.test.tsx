@@ -52,7 +52,7 @@ describe('UploadsTab', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<UploadsTab />);
+    render(<UploadsTab authorityKey="user-a:member" />);
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('http://daemon.test:3030/uploads', {
@@ -73,7 +73,7 @@ describe('UploadsTab', () => {
       vi.fn().mockResolvedValue(new Response('<!doctype html>', { status: 200 }))
     );
 
-    render(<UploadsTab />);
+    render(<UploadsTab authorityKey="user-a:member" />);
 
     await waitFor(() => expect(showError).toHaveBeenCalledOnce());
     expect(showError.mock.calls[0]?.[0]).toMatch(/Unexpected token|JSON/);

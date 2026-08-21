@@ -4,6 +4,7 @@ import { ApiOutlined } from '@ant-design/icons';
 import { Tag as AntTag, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -68,13 +69,9 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   const [open, setOpen] = React.useState(false);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
   const [editModalOpen, setEditModalOpen] = React.useState(false);
-  const identityActiveRef = React.useRef(true);
-  React.useEffect(() => {
-    identityActiveRef.current = true;
-    return () => {
-      identityActiveRef.current = false;
-    };
-  }, []);
+  const operationGuard = useAuthorityOperationGuard(
+    durableAuthorityKey ? [durableAuthorityKey, client, editMutationAllowed] : null
+  );
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const popupRef = React.useRef<HTMLDivElement>(null);
@@ -164,19 +161,20 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   const badgeAccessibleName = `MCP servers. ${badgeTitle}`;
 
   const handleChange = async (nextIds: string[]) => {
-    if (!client || !identityActiveRef.current) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     setSaving(true);
     try {
       await updateSessionMcpServers(client, sessionId, sessionMcpServerIds, nextIds);
-      if (!identityActiveRef.current) return;
+      if (!operation.isCurrent()) return;
       showSuccess('Session MCP servers updated');
     } catch (err) {
-      if (!identityActiveRef.current) return;
+      if (!operation.isCurrent()) return;
       showError(
         `Failed to update MCP servers: ${err instanceof Error ? err.message : String(err)}`
       );
     } finally {
-      if (identityActiveRef.current) setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
     }
   };
 
@@ -331,6 +329,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           open={editModalOpen}
           client={client}
           identityKey={currentUserId ?? null}
+          authGeneration={authGeneration}
           authorityKey={durableAuthorityKey}
           mutationAllowed={editMutationAllowed}
           mutationBlockedReason={

@@ -1,8 +1,9 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
@@ -13,6 +14,7 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
+  authorityKey: string | null;
   onCreate?: (data: CreateRepoRequest) => void;
   onCreateLocal?: (data: CreateLocalRepoRequest) => void;
   onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
@@ -21,6 +23,7 @@ interface ReposTableProps {
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
+  authorityKey,
   onCreate,
   onCreateLocal,
   onUpdate,
@@ -37,6 +40,17 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const [repoForm] = Form.useForm();
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
+  const operationGuard = useAuthorityOperationGuard(authorityKey ? [authorityKey] : null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the selected caller-private row
+  useLayoutEffect(() => {
+    repoForm.resetFields();
+    setRepoModalOpen(false);
+    setEditingRepo(null);
+    setRepoMode('remote');
+    setDeleteModalOpen(false);
+    setRepoToDelete(null);
+  }, [authorityKey, repoForm]);
 
   const isEditing = !!editingRepo;
   const filteredRepos = useMemo(
@@ -86,7 +100,10 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   };
 
   const handleSaveRepo = () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     repoForm.validateFields().then((values) => {
+      if (!operation.isCurrent()) return;
       if (isEditing && editingRepo) {
         const updates: Partial<Repo> = {
           slug: values.slug,

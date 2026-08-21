@@ -30,7 +30,7 @@ describe('AgenticToolsSection deployment availability', () => {
       service: vi.fn(() => ({ find: vi.fn().mockResolvedValue(settings) })),
     } as unknown as AgorClient;
 
-    render(<AgenticToolsSection client={client} />);
+    render(<AgenticToolsSection client={client} authorityKey="admin-a:admin" />);
 
     expect(await screen.findByText('Not installed by this deployment')).toBeInTheDocument();
     expect(

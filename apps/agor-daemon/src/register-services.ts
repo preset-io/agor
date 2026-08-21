@@ -52,7 +52,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
@@ -64,6 +64,7 @@ import type {
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthBrowserEventRequest,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
@@ -1682,6 +1683,32 @@ export async function registerMCPServices(
     return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
   }
 
+  const readOAuthBrowserEventRequest = (
+    value: unknown
+  ): MCPOAuthBrowserEventRequest | undefined => {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== 'object') {
+      throw new BadRequest('oauth_browser_event must be an object');
+    }
+    const candidate = value as Partial<MCPOAuthBrowserEventRequest>;
+    if (
+      typeof candidate.operation_id !== 'string' ||
+      !/^[A-Za-z0-9_-]{16,128}$/.test(candidate.operation_id)
+    ) {
+      throw new BadRequest('oauth_browser_event.operation_id is invalid');
+    }
+    if (
+      !Number.isSafeInteger(candidate.auth_generation) ||
+      (candidate.auth_generation as number) < 0
+    ) {
+      throw new BadRequest('oauth_browser_event.auth_generation is invalid');
+    }
+    return {
+      operation_id: candidate.operation_id,
+      auth_generation: candidate.auth_generation as number,
+    };
+  };
+
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
     wwwAuthenticate: string;
@@ -1710,6 +1737,7 @@ export async function registerMCPServices(
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
+    browserEvent?: MCPOAuthBrowserEventRequest;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -2044,7 +2072,7 @@ export async function registerMCPServices(
       });
     }
 
-    if (awaitToken && opts.socketId && app.io) {
+    if (awaitToken && opts.socketId && opts.userId && opts.browserEvent && app.io) {
       // Compatibility hint for blocking discover/test callers, which cannot
       // return the URL before their callback arrives. Target the exact
       // authenticated initiating socket only — never a user/tenant/global
@@ -2052,6 +2080,9 @@ export async function registerMCPServices(
       app.io.local.to(opts.socketId).emit('oauth:open_browser', {
         authUrl: context.authorizationUrl,
         attempt_id: attemptId,
+        operation_id: opts.browserEvent.operation_id,
+        auth_generation: opts.browserEvent.auth_generation,
+        caller_user_id: opts.userId,
       });
     }
 
@@ -2735,12 +2766,14 @@ export async function registerMCPServices(
         scope?: string;
         grant_type?: string;
         start_browser_flow?: boolean;
+        oauth_browser_event?: MCPOAuthBrowserEventRequest;
         compatibility_mode?: 'strict' | 'legacy';
         dcr_mode?: MCPOAuthDCRMode;
       },
       params?: AuthenticatedParams & { connection?: { id?: string } }
     ) {
       try {
+        const browserEvent = readOAuthBrowserEventRequest(data.oauth_browser_event);
         assertPublicMCPOAuthCompatibilityMode({
           oauth_compatibility_mode: data.compatibility_mode,
         });
@@ -2907,6 +2940,7 @@ export async function registerMCPServices(
                   clientId: effectiveClientId,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
+                  browserEvent,
                   clientSecret: effectiveClientSecret,
                   scope: effectiveScope,
                   compatibilityMode,
@@ -4070,10 +4104,12 @@ export async function registerMCPServices(
           oauth_dcr_mode?: MCPOAuthDCRMode;
         };
         headers?: Record<string, string>;
+        oauth_browser_event?: MCPOAuthBrowserEventRequest;
       },
       params?: AuthenticatedParams
     ) {
       try {
+        const browserEvent = readOAuthBrowserEventRequest(data.oauth_browser_event);
         assertPublicMCPOAuthCompatibilityMode(data.auth);
         const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
         const { StreamableHTTPClientTransport } = await import(
@@ -4313,6 +4349,7 @@ export async function registerMCPServices(
               dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
               socketId: connection?.id,
+              browserEvent,
             });
 
             const tokenResponse = await started.awaitToken();

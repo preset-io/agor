@@ -34,6 +34,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
@@ -62,6 +63,7 @@ import {
   type MCPServerCapabilityContext,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
+import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
@@ -176,22 +178,23 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   );
   const canAdd = !policyPending && canAddMcpServer(capability);
   const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
-  // This component is keyed by authenticated user below. Async continuations
-  // from the unmounted caller must not submit a form or surface results after
-  // an in-place launch-auth replacement has installed another identity.
-  const identityActiveRef = useRef(true);
-  useEffect(() => {
-    identityActiveRef.current = true;
-    return () => {
-      identityActiveRef.current = false;
-    };
-  }, []);
+  const operationGuard = useAuthorityOperationGuard(
+    durableAuthorityKey
+      ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
+      : null
+  );
+  const oauthBrowserEvents = useOAuthBrowserEventAttempt({
+    client,
+    currentUserId: currentUser?.user_id ?? null,
+    authGeneration,
+    authorityGuard: operationGuard,
+  });
   const capabilityRef = useRef({ capability, policyPending, addRestriction });
   capabilityRef.current = { capability, policyPending, addRestriction };
   const addIsCurrentlyAllowed = () => {
     const current = capabilityRef.current;
     return (
-      identityActiveRef.current && !current.policyPending && canAddMcpServer(current.capability)
+      operationGuard.isCurrent() && !current.policyPending && canAddMcpServer(current.capability)
     );
   };
   // Which transports a user may configure turns on role alone, so this is known
@@ -292,35 +295,37 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   // Persist the current form before every OAuth start. The saved row is the
   // daemon's tenant-scoped authority for provider URL and client credentials.
   const prepareOAuthStartForCreate = async (): Promise<string | null> => {
-    if (!client || !identityActiveRef.current) return null;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return null;
     if (!addIsCurrentlyAllowed()) {
       showError(capabilityRef.current.addRestriction);
       return null;
     }
     try {
       await createForm.validateFields();
-      if (!identityActiveRef.current || !addIsCurrentlyAllowed()) {
+      if (!operation.isCurrent()) return null;
+      if (!addIsCurrentlyAllowed()) {
         showError(capabilityRef.current.addRestriction);
         return null;
       }
       const data = buildCreateData(createForm.getFieldsValue(true));
 
       if (!createdServerId) {
-        if (!identityActiveRef.current || !addIsCurrentlyAllowed()) return null;
+        if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
         const result = await client.service('mcp-servers').create(data);
-        if (!identityActiveRef.current) return null;
+        if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
       const { name: _name, source: _source, ...updates } = data;
-      if (!identityActiveRef.current || !addIsCurrentlyAllowed()) return null;
+      if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
-      if (!identityActiveRef.current) return null;
+      if (!operation.isCurrent()) return null;
       return createdServerId;
     } catch (error) {
-      if (!identityActiveRef.current) return null;
+      if (!operation.isCurrent()) return null;
       // Say which field. Swallowing a validation rejection here left the OAuth
       // button doing nothing at all, with nothing on screen to explain it.
       showError(
@@ -351,10 +356,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return;
     }
 
+    const operation = operationGuard.begin();
     createForm
       .validateFields()
       .then(() => {
-        if (!identityActiveRef.current || !addIsCurrentlyAllowed()) {
+        if (!operation.isCurrent()) return;
+        if (!addIsCurrentlyAllowed()) {
           showError(capabilityRef.current.addRestriction);
           return;
         }
@@ -363,7 +370,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         resetCreateModal();
       })
       .catch((error) => {
-        if (!identityActiveRef.current) return;
+        if (!operation.isCurrent()) return;
         console.error('Form validation failed:', error);
         showError(firstFormErrorMessage(error) || 'Please fill in required fields');
       });
@@ -371,7 +378,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
 
   // Test connection from create modal (always inline config, no persistence).
   const handleCreateTestConnection = async () => {
-    if (!identityActiveRef.current) return;
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!client) {
       showError('Client not available');
       return;
@@ -390,21 +398,24 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     try {
       await createForm.validateFields(['headers']);
     } catch {
-      if (!identityActiveRef.current) return;
+      if (!operation.isCurrent()) return;
       showError('Please fix custom HTTP headers before testing');
       return;
     }
-    if (!identityActiveRef.current) return;
+    if (!operation.isCurrent()) return;
 
     setTesting(true);
     setTestResult(null);
+    const browserAttempt = oauthBrowserEvents.begin();
 
     try {
+      if (!operation.isCurrent()) return;
       const data = (await client.service('mcp-servers/discover').create({
         url: values.url,
         transport: values.transport || 'http',
         auth: buildAuthFromValues(values),
         headers: parseHeadersJSON(values.headers),
+        ...(browserAttempt ? { oauth_browser_event: browserAttempt.request } : {}),
       })) as {
         success: boolean;
         error?: string;
@@ -414,7 +425,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         prompts?: Array<{ name: string; description: string }>;
       };
 
-      if (!identityActiveRef.current) return;
+      if (!operation.isCurrent()) return;
 
       if (data.success && data.capabilities) {
         setTestResult({
@@ -436,7 +447,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         });
       }
     } catch (error) {
-      if (!identityActiveRef.current) return;
+      if (!operation.isCurrent()) return;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setTestResult({
         success: false,
@@ -446,7 +457,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         error: errorMessage,
       });
     } finally {
-      if (identityActiveRef.current) setTesting(false);
+      browserAttempt?.cleanup();
+      if (operation.isCurrent()) setTesting(false);
     }
   };
 
@@ -824,6 +836,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         open={editModalOpen}
         client={client}
         identityKey={currentUser?.user_id ?? null}
+        authGeneration={authGeneration}
         authorityKey={durableAuthorityKey}
         offeredTransports={offeredTransports}
         offeredScopes={editableScopes}

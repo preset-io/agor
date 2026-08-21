@@ -9,6 +9,7 @@ const preparedServerId = vi.fn();
 
 type FormFieldsMockProps = {
   onPrepareOAuthStart: () => Promise<string | null>;
+  onTestConnection: () => Promise<void>;
 };
 
 vi.mock('@/utils/message', () => ({
@@ -23,7 +24,7 @@ vi.mock('@/utils/message', () => ({
 vi.mock('./MCPServerFormFields', async () => {
   const { Button, Form, Input } = await import('antd');
   return {
-    MCPServerFormFields: ({ onPrepareOAuthStart }: FormFieldsMockProps) => (
+    MCPServerFormFields: ({ onPrepareOAuthStart, onTestConnection }: FormFieldsMockProps) => (
       <>
         <Form.Item label="Description" name="description">
           <Input />
@@ -46,6 +47,7 @@ vi.mock('./MCPServerFormFields', async () => {
         <Button onClick={() => void onPrepareOAuthStart().then(preparedServerId)}>
           Start OAuth Flow
         </Button>
+        <Button onClick={() => void onTestConnection()}>Test Connection</Button>
       </>
     ),
   };
@@ -81,6 +83,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         client={client}
         identityKey="user-a"
         authorityKey="user-a:admin:1"
+        authGeneration={1}
         mutationAllowed
         onClose={vi.fn()}
       />
@@ -131,6 +134,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           client={client}
           identityKey="user-a"
           authorityKey="user-a:admin:1"
+          authGeneration={1}
           mutationAllowed
           onClose={vi.fn()}
         />
@@ -175,6 +179,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         client={client}
         identityKey="user-a"
         authorityKey="user-a:admin:1"
+        authGeneration={1}
         mutationAllowed
         onClose={onClose}
       />
@@ -230,6 +235,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         client={client}
         identityKey="user-a"
         authorityKey="user-a:admin:1"
+        authGeneration={1}
         mutationAllowed
         onClose={vi.fn()}
       />
@@ -280,6 +286,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         client={client}
         identityKey="user-a"
         authorityKey="user-a:admin:1"
+        authGeneration={1}
         mutationAllowed
         onClose={vi.fn()}
       />
@@ -346,6 +353,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
         client={client}
         identityKey={identityKey}
         authorityKey={`${identityKey}:admin:2`}
+        authGeneration={2}
         mutationAllowed
         onClose={vi.fn()}
       />
@@ -377,6 +385,82 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     );
   });
 
+  it('drops a delayed saved-server discovery browser event across admin A -> admin B', async () => {
+    let resolveDiscover: ((value: { success: boolean }) => void) | undefined;
+    const discover = vi.fn(
+      () =>
+        new Promise<{ success: boolean }>((resolve) => {
+          resolveDiscover = resolve;
+        })
+    );
+    const listeners = new Set<(event: Record<string, unknown>) => void>();
+    const client = {
+      service: vi.fn((path: string) =>
+        path === 'mcp-servers/discover' ? { create: discover } : { patch: vi.fn() }
+      ),
+      io: {
+        on: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>
+          listeners.add(listener)
+        ),
+        off: vi.fn((_event: string, listener: (event: Record<string, unknown>) => void) =>
+          listeners.delete(listener)
+        ),
+      },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000060',
+      name: 'delayed-oauth',
+      transport: 'http',
+      url: 'https://delayed.example/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const view = (identityKey: string, authGeneration: number) => (
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey={identityKey}
+        authorityKey={`${identityKey}:admin:${authGeneration}`}
+        authGeneration={authGeneration}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+    const rendered = render(view('admin-a', 31));
+    await screen.findByLabelText('URL');
+    fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }));
+    await waitFor(() => expect(discover).toHaveBeenCalledOnce());
+    const request = discover.mock.calls[0]?.[0] as {
+      oauth_browser_event: { operation_id: string; auth_generation: number };
+    };
+    expect(request.oauth_browser_event.auth_generation).toBe(31);
+    expect(listeners.size).toBe(1);
+    // Socket.IO may already have snapshotted a callback for dispatch when the
+    // identity commit removes it. Exercise that queued callback directly.
+    const queuedListeners = [...listeners];
+
+    rendered.rerender(view('admin-b', 32));
+    expect(listeners.size).toBe(0);
+    for (const listener of queuedListeners) {
+      listener({
+        authUrl: 'https://provider.example/admin-a',
+        attempt_id: 'attempt-admin-a',
+        operation_id: request.oauth_browser_event.operation_id,
+        auth_generation: 31,
+        caller_user_id: 'admin-a',
+      });
+    }
+    resolveDiscover?.({ success: true });
+    await Promise.resolve();
+
+    expect(open).not.toHaveBeenCalled();
+    expect(discover).toHaveBeenCalledOnce();
+    open.mockRestore();
+  });
+
   it.each(['Save', 'Start OAuth Flow'])(
     'blocks %s after authority is lost while the edit dialog remains open',
     async (action) => {
@@ -401,6 +485,7 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
           client={client}
           identityKey="user-a"
           authorityKey={mutationAllowed ? 'user-a:admin:1' : null}
+          authGeneration={1}
           mutationAllowed={mutationAllowed}
           mutationBlockedReason="Connection authority changed"
           onClose={vi.fn()}

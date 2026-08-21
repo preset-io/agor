@@ -1,11 +1,14 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
+
+const { syncGroupsForUser } = vi.hoisted(() => ({ syncGroupsForUser: vi.fn() }));
+vi.mock('./groupMembershipSync', () => ({ syncGroupsForUser }));
 
 vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
@@ -969,6 +972,63 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(services).not.toContain('api/v1/user/api-keys');
   });
 
+  it('cancels group sync and onClose when caller identity changes during a multi-step save', async () => {
+    const adminA = makeUser({ user_id: 'admin-a', email: 'a@example.test', role: 'admin' });
+    const adminB = makeUser({ user_id: 'admin-b', email: 'b@example.test', role: 'admin' });
+    const target = makeUser({ user_id: 'target-user', email: 'target@example.test' });
+    let resolveUpdate: (() => void) | undefined;
+    const onUpdate = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpdate = resolve;
+        })
+    );
+    const onClose = vi.fn();
+    const client = {
+      service: (name: string) => ({
+        findAll: vi.fn(async () =>
+          name === 'groups'
+            ? [{ group_id: 'group-1', name: 'Engineering', slug: 'engineering' }]
+            : []
+        ),
+      }),
+    } as unknown as AgorClient;
+    let replaceCaller: (() => void) | undefined;
+
+    function Harness() {
+      const [caller, setCaller] = useState(adminA);
+      replaceCaller = () => setCaller(adminB);
+      return (
+        <UserSettingsModal
+          open
+          onClose={onClose}
+          user={target}
+          currentUser={caller}
+          client={client}
+          onUpdate={onUpdate}
+          initialTab="groups"
+        />
+      );
+    }
+
+    renderWithApp(<Harness />);
+    await screen.findByRole('heading', { name: 'Groups & access' });
+    await waitFor(() => expect(screen.getByLabelText('Groups')).toBeEnabled(), ASYNC);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+
+    // The first update was dispatched as A. Replace the caller after commit but
+    // before its promise continuation can read group form state or close B's UI.
+    act(() => replaceCaller?.());
+    resolveUpdate?.();
+    await act(async () => Promise.resolve());
+
+    expect(syncGroupsForUser).not.toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('Editing Admin')).toBeInTheDocument();
+  });
+
   it('falls back to Profile for a deep link to a tenant-disabled provider', async () => {
     // Gemini is disabled for the tenant, so `provider:gemini` is not a visible
     // panel; a stale deep link to it must not render its credential controls.
@@ -1386,6 +1446,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 // every tool enabled) before each test so provider panels render, and clear any
 // per-test override afterwards so visibility never leaks between tests.
 beforeEach(() => {
+  syncGroupsForUser.mockReset();
   __setAuthConfigForTests({ requireAuth: true });
   vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
   agorStore.getState().setAgenticToolSettings([]);

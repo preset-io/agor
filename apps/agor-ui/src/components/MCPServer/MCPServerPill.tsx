@@ -1,7 +1,8 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
 import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
@@ -93,25 +94,14 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
   const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
-  const mountedRef = useRef(true);
-  const authorityKeyRef = useRef(authorityKey);
-  authorityKeyRef.current = authorityKey;
-  const actionAllowedRef = useRef(actionAllowed);
-  actionAllowedRef.current = actionAllowed;
-  const clientRef = useRef(client);
-  clientRef.current = client;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const operationGuard = useAuthorityOperationGuard(
+    authorityKey && actionAllowed ? [authorityKey, client, actionAllowed] : null
+  );
 
   // Local status/expiry is caller-shaped too. Clear it immediately when the
   // identity, role, auth generation, or connection authority changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these props are the transition key
-  useEffect(() => {
+  useLayoutEffect(() => {
     setRefreshing(false);
     setExpiresAtOverride(undefined);
   }, [actionAllowed, authorityKey]);
@@ -132,14 +122,9 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   });
 
   const handleRefreshClick = async () => {
-    const refreshAuthorityKey = authorityKeyRef.current;
-    if (!client || !actionAllowed || !refreshAuthorityKey || refreshing) return;
-    const refreshClient = client;
-    const shouldApply = () =>
-      mountedRef.current &&
-      actionAllowedRef.current &&
-      authorityKeyRef.current === refreshAuthorityKey &&
-      clientRef.current === refreshClient;
+    const operation = operationGuard.begin();
+    if (!client || !actionAllowed || !authorityKey || refreshing || !operation.isCurrent()) return;
+    const shouldApply = operation.isCurrent;
     setRefreshing(true);
     try {
       const result = await refreshAndRefetchMCPOAuthGrant(

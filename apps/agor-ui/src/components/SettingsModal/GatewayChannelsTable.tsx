@@ -91,8 +91,12 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
+import {
+  type AuthorityOperationGuard,
+  useAuthorityOperationGuard,
+} from '@/hooks/useAuthorityOperationGuard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -746,7 +750,8 @@ const SlackScopeChangeWarning: React.FC<{
   addedScopes: string[];
   appInfo: SlackAppInfo | null;
   options: SlackWizardOptions;
-}> = ({ addedScopes, appInfo, options }) => {
+  authorityGuard: AuthorityOperationGuard;
+}> = ({ addedScopes, appInfo, options, authorityGuard }) => {
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
   const scopeKey = addedScopes.join(',');
@@ -759,7 +764,10 @@ const SlackScopeChangeWarning: React.FC<{
   if (addedScopes.length === 0) return null;
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(JSON.stringify(buildSlackManifest(options), null, 2));
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -814,7 +822,8 @@ const SlackScopeChangeWarning: React.FC<{
 const SlackManifestPanel: React.FC<{
   options: SlackWizardOptions;
   appInfo: SlackAppInfo | null;
-}> = ({ options, appInfo }) => {
+  authorityGuard: AuthorityOperationGuard;
+}> = ({ options, appInfo, authorityGuard }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
@@ -830,7 +839,10 @@ const SlackManifestPanel: React.FC<{
   }, [manifestJson]);
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(manifestJson);
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -1003,6 +1015,7 @@ const SlackSetupWizard: React.FC<{
   testResult: GatewayConnectionTestResult | null;
   testLoading: boolean;
   onTest: () => void;
+  authorityGuard: AuthorityOperationGuard;
 }> = ({
   client,
   currentUser,
@@ -1016,6 +1029,7 @@ const SlackSetupWizard: React.FC<{
   testResult,
   testLoading,
   onTest,
+  authorityGuard,
 }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -1137,7 +1151,10 @@ const SlackSetupWizard: React.FC<{
   );
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(manifestJson);
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -1146,8 +1163,11 @@ const SlackSetupWizard: React.FC<{
   };
 
   const handleTestClick = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     try {
       await form.validateFields(['bot_token', 'app_token']);
+      if (!operation.isCurrent()) return;
     } catch {
       return;
     }
@@ -2012,6 +2032,7 @@ const ChannelFormFields: React.FC<{
   onDiscordTest: () => void;
   /** Slack app identity resolved server-side on edit open (edit mode only). */
   slackAppInfo: SlackAppInfo | null;
+  authorityGuard: AuthorityOperationGuard;
 }> = ({
   client,
   currentUser,
@@ -2036,6 +2057,7 @@ const ChannelFormFields: React.FC<{
   onShortcutTest,
   onDiscordTest,
   slackAppInfo,
+  authorityGuard,
 }) => {
   const { showError } = useThemedMessage();
   const { token } = theme.useToken();
@@ -2150,6 +2172,7 @@ const ChannelFormFields: React.FC<{
       addedScopes={addedSlackScopes}
       appInfo={slackAppInfo}
       options={slackOptions}
+      authorityGuard={authorityGuard}
     />
   );
 
@@ -2327,6 +2350,8 @@ const ChannelFormFields: React.FC<{
                   icon={<GithubOutlined />}
                   block
                   onClick={async () => {
+                    const operation = authorityGuard.begin();
+                    if (!operation.isCurrent()) return;
                     const daemonUrl = getDaemonUrl();
                     const params = new URLSearchParams();
                     const appName = form.getFieldValue('github_app_name');
@@ -2350,10 +2375,12 @@ const ChannelFormFields: React.FC<{
                           'Content-Type': 'application/json',
                         },
                       });
+                      if (!operation.isCurrent()) return;
                       if (!stateRes.ok) {
                         const body = await stateRes
                           .json()
                           .catch(() => ({}) as Record<string, unknown>);
+                        if (!operation.isCurrent()) return;
                         const err =
                           typeof body?.error === 'string'
                             ? body.error
@@ -2362,6 +2389,7 @@ const ChannelFormFields: React.FC<{
                         return;
                       }
                       const { state } = (await stateRes.json()) as { state?: string };
+                      if (!operation.isCurrent()) return;
                       if (!state) {
                         showError('Daemon did not return an install state token.');
                         return;
@@ -2372,6 +2400,7 @@ const ChannelFormFields: React.FC<{
                         '_blank'
                       );
                     } catch (err) {
+                      if (!operation.isCurrent()) return;
                       showError(
                         err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
                       );
@@ -2929,11 +2958,14 @@ const ChannelFormFields: React.FC<{
                       icon={<ThunderboltOutlined />}
                       loading={connectionTestLoading}
                       onClick={async () => {
+                        const operation = authorityGuard.begin();
+                        if (!operation.isCurrent()) return;
                         // The token is required only on create; in edit the stored
                         // token backs the redacted field, so skip validation there.
                         if (mode === 'create') {
                           try {
                             await form.validateFields(['shortcut_api_token']);
+                            if (!operation.isCurrent()) return;
                           } catch {
                             return;
                           }
@@ -3107,6 +3139,7 @@ const ChannelFormFields: React.FC<{
             testResult={connectionTestResult}
             testLoading={connectionTestLoading}
             onTest={onSlackTest}
+            authorityGuard={authorityGuard}
           />
         )}
 
@@ -3240,7 +3273,13 @@ const ChannelFormFields: React.FC<{
                     subtitle="recommended scopes & events"
                   />
                 ),
-                children: <SlackManifestPanel options={slackOptions} appInfo={slackAppInfo} />,
+                children: (
+                  <SlackManifestPanel
+                    options={slackOptions}
+                    appInfo={slackAppInfo}
+                    authorityGuard={authorityGuard}
+                  />
+                ),
               },
 
               // ── Message Sources ──
@@ -3590,6 +3629,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const { token } = theme.useToken();
+  const operationGuard = useAuthorityOperationGuard(
+    currentUser?.user_id && currentUser.role
+      ? [currentUser.user_id, currentUser.role, client]
+      : null
+  );
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
@@ -3654,7 +3698,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   }, [referencedBranchesById]);
 
   useEffect(() => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
 
     const targetIds = new Set<string>();
     for (const channel of gatewayChannelById.values()) {
@@ -3668,7 +3713,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     );
     if (missingIds.length === 0) return;
 
-    let cancelled = false;
     void Promise.all(
       missingIds.map(async (id) => {
         if (loadingReferencedBranchIds.current.has(id)) return null;
@@ -3683,7 +3727,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       })
     ).then((results) => {
-      if (cancelled) return;
+      if (!operation.isCurrent()) return;
       const resolved = results.filter((wt): wt is Branch => wt !== null);
       if (resolved.length === 0) return;
 
@@ -3697,9 +3741,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     });
 
     return () => {
-      cancelled = true;
+      operation.cancel();
     };
-  }, [client, gatewayChannelById, branchById]);
+  }, [client, gatewayChannelById, branchById, operationGuard]);
 
   const branchOptionsById = useMemo(() => {
     const merged = new Map<string, Branch>();
@@ -3735,6 +3779,26 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     resetGithubState();
     resetConnectionTest();
   }, [resetGithubState, resetConnectionTest]);
+
+  // Passwords/tokens and selected saved rows belong to the authenticated
+  // caller. Erase them during the identity commit, while the operation guard
+  // prevents an older validation/fetch continuation from recreating them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authenticated identity and role intentionally erase credential-bearing forms
+  useLayoutEffect(() => {
+    createForm.resetFields();
+    editForm.resetFields();
+    setCreateModalOpen(false);
+    setEditModalOpen(false);
+    setEditingChannel(null);
+    setChannelType('slack');
+    setSelectedAgent('claude-code');
+    setRequiresSupportedToolSelection(false);
+    setCreating(false);
+    setReferencedBranchesById(new Map());
+    referencedBranchesByIdRef.current = new Map();
+    loadingReferencedBranchIds.current.clear();
+    resetCreateFlow();
+  }, [createForm, currentUser?.role, currentUser?.user_id, editForm, resetCreateFlow]);
 
   const invalidateConnectionTest = useCallback(() => {
     setConnectionTestResult(null);
@@ -3774,6 +3838,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config: Record<string, unknown>,
       gatewayChannelId?: string
     ): Promise<GatewayConnectionTestResult | null> => {
+      const operation = operationGuard.begin();
+      if (!operation.isCurrent()) return null;
       if (!client) {
         showError('Not connected to server');
         return null;
@@ -3792,9 +3858,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         const result = (await client
           .service('gateway-channels/test')
           .create(payload)) as GatewayConnectionTestResult;
+        if (!operation.isCurrent()) return null;
         setConnectionTestResult(result);
         return result;
       } catch (error) {
+        if (!operation.isCurrent()) return null;
         const result: GatewayConnectionTestResult = {
           ok: false,
           failures: [
@@ -3808,10 +3876,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         setConnectionTestResult(result);
         return result;
       } finally {
-        setConnectionTestLoading(false);
+        if (operation.isCurrent()) setConnectionTestLoading(false);
       }
     },
-    [client, showError]
+    [client, operationGuard, showError]
   );
 
   // Probe the entered Slack tokens against the live workspace. No
@@ -4075,6 +4143,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleCreate = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!selectedAgent) {
       showError('Choose a supported agentic tool before creating this channel');
       return;
@@ -4082,6 +4152,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setCreating(true);
     try {
       await createForm.validateFields();
+      if (!operation.isCurrent()) return;
       // Use getFieldsValue(true) to include values from collapsed (unmounted)
       // panels that validateFields() may omit.
       const values = createForm.getFieldsValue(true);
@@ -4154,13 +4225,16 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         return;
       }
 
+      if (!operation.isCurrent()) return;
       await client.service('gateway-channels').create(data);
+      if (!operation.isCurrent()) return;
       showSuccess('Gateway channel created!');
       createForm.resetFields();
       setCreateModalOpen(false);
       setChannelType('slack');
       resetCreateFlow();
     } catch (error: unknown) {
+      if (!operation.isCurrent()) return;
       const err = error as { errorFields?: { errors: string[] }[]; message?: string };
       if (err.errorFields?.length) {
         showError(err.errorFields[0].errors[0] || 'Please fill in required fields');
@@ -4168,7 +4242,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         showError(`Failed to create channel: ${err.message || String(error)}`);
       }
     } finally {
-      setCreating(false);
+      if (operation.isCurrent()) setCreating(false);
     }
   };
 
@@ -4178,6 +4252,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const isFinalCreateStep = createStep >= createSteps.length - 1;
 
   const handleCreatePrimary = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (isFinalCreateStep) {
       await handleCreate();
       return;
@@ -4191,6 +4267,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     if (fields.length > 0) {
       try {
         await createForm.validateFields(fields);
+        if (!operation.isCurrent()) return;
       } catch {
         return;
       }
@@ -4224,6 +4301,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // the wrong Slack app.
     slackAppInfoChannelIdRef.current = channel.channel_type === 'slack' ? channel.id : null;
     if (channel.channel_type === 'slack' && client) {
+      const operation = operationGuard.begin();
       void (async () => {
         let info: SlackAppInfo | null = null;
         try {
@@ -4234,7 +4312,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         } catch {
           info = null;
         }
-        if (slackAppInfoChannelIdRef.current === channel.id) {
+        if (operation.isCurrent() && slackAppInfoChannelIdRef.current === channel.id) {
           setSlackAppInfo(info);
         }
       })();
@@ -4352,6 +4430,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleUpdate = () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!editingChannel) return;
     if (!selectedAgent) {
       showError('Choose a supported agentic tool before saving this historical channel');
@@ -4360,6 +4440,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     editForm
       .validateFields()
       .then(() => {
+        if (!operation.isCurrent()) return;
         // Use getFieldsValue(true) to include values from collapsed (unmounted)
         // panels that validateFields() may omit.
         const values = editForm.getFieldsValue(true);
@@ -4376,6 +4457,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           editingChannel.config as Record<string, unknown>,
           selectedAgent
         );
+        if (!operation.isCurrent()) return;
         onUpdate?.(editingChannel.id, updates);
         editForm.resetFields();
         setEditModalOpen(false);
@@ -4384,6 +4466,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         setRequiresSupportedToolSelection(false);
       })
       .catch((error) => {
+        if (!operation.isCurrent()) return;
         console.error('Form validation failed:', error);
         if (error.errorFields?.length > 0) {
           showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
@@ -4661,6 +4744,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onShortcutTest={handleShortcutTest}
             onDiscordTest={handleDiscordTest}
             slackAppInfo={null}
+            authorityGuard={operationGuard}
           />
         </Form>
       </AdaptiveSettingsModal>
@@ -4723,6 +4807,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onShortcutTest={handleShortcutTest}
             onDiscordTest={handleDiscordTest}
             slackAppInfo={slackAppInfo}
+            authorityGuard={operationGuard}
           />
         </Form>
       </AdaptiveSettingsModal>

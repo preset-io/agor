@@ -132,6 +132,12 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
+    expect(codeOnly).toMatch(/operation_id:\s*opts\.browserEvent\.operation_id/);
+    expect(codeOnly).toMatch(/auth_generation:\s*opts\.browserEvent\.auth_generation/);
+    expect(codeOnly).toMatch(/caller_user_id:\s*opts\.userId/);
+    expect(codeOnly).toMatch(
+      /opts\.socketId\s*&&\s*opts\.userId\s*&&\s*opts\.browserEvent\s*&&\s*app\.io/
+    );
     expect(codeOnly).toMatch(
       /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
     );

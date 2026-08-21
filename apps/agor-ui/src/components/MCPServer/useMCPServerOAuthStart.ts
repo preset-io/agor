@@ -1,6 +1,7 @@
 import type { MCPOAuthDCRDiagnostic, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import {
   oauthAttemptFailureMessage,
   refetchMCPOAuthDurableState,
@@ -56,6 +57,9 @@ export function useMCPServerOAuthStart({
   authorityKeyRef.current = authorityKey;
   const clientRef = useRef(client);
   clientRef.current = client;
+  const operationGuard = useAuthorityOperationGuard(
+    authorityKey && startAllowed ? [authorityKey, client, startAllowed] : null
+  );
 
   const invalidateOAuthStart = useCallback(() => {
     oauthStartGenerationRef.current += 1;
@@ -103,10 +107,13 @@ export function useMCPServerOAuthStart({
     }
 
     const startClient = client;
+    const authorityOperation = operationGuard.begin();
+    if (!authorityOperation.isCurrent()) return;
     oauthStartInFlightRef.current = true;
     const startGeneration = ++oauthStartGenerationRef.current;
     const isCurrentStart = () =>
       oauthStartGenerationRef.current === startGeneration &&
+      authorityOperation.isCurrent() &&
       startAllowedRef.current &&
       authorityKeyRef.current === startAuthorityKey &&
       clientRef.current === startClient;
@@ -198,6 +205,7 @@ export function useMCPServerOAuthStart({
     client,
     onOAuthSucceeded,
     onPrepareOAuthStart,
+    operationGuard,
     showError,
     showInfo,
     showSuccess,

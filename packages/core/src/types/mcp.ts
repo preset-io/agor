@@ -200,6 +200,23 @@ export const MCP_MEMBER_POLICIES = [
 
 export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 
+/**
+ * Caller-generated correlation for the compatibility browser hint emitted by
+ * blocking MCP discovery. The daemon derives `caller_user_id` from auth; the
+ * generation is an opaque browser authority epoch echoed only to the exact
+ * initiating socket.
+ */
+export interface MCPOAuthBrowserEventRequest {
+  operation_id: string;
+  auth_generation: number;
+}
+
+export interface MCPOAuthOpenBrowserEvent extends MCPOAuthBrowserEventRequest {
+  authUrl: string;
+  attempt_id: MCPOAuthAttemptID;
+  caller_user_id: UserID;
+}
+
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
 
 /**

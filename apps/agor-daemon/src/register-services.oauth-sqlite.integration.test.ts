@@ -293,6 +293,7 @@ type SQLiteHarness = {
   rawDb: Awaited<ReturnType<typeof createDatabaseAsync>>;
   user: User;
   server: MCPServer;
+  emittedBrowserEvents: Array<Record<string, unknown>>;
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
@@ -328,11 +329,15 @@ async function createHarness(
   });
 
   let nextUrl = deferred<string>();
+  const emittedBrowserEvents: Array<Record<string, unknown>> = [];
   const io = {
     local: {
       to: () => ({
-        emit: (event: string, value: { authUrl?: string }) => {
-          if (event === 'oauth:open_browser' && value.authUrl) nextUrl.resolve(value.authUrl);
+        emit: (event: string, value: Record<string, unknown>) => {
+          if (event === 'oauth:open_browser' && typeof value.authUrl === 'string') {
+            emittedBrowserEvents.push(value);
+            nextUrl.resolve(value.authUrl);
+          }
         },
       }),
     },
@@ -384,6 +389,7 @@ async function createHarness(
     rawDb,
     user,
     server,
+    emittedBrowserEvents,
     nextAuthorizationUrl: async () => {
       const value = await nextUrl.promise;
       nextUrl = deferred<string>();
@@ -575,6 +581,10 @@ describe('SQLite saved-row OAuth authority', () => {
           oauth_client_id: 'transient-client-id',
           oauth_compatibility_mode: 'legacy',
         },
+        oauth_browser_event: {
+          operation_id: 'settings-discover-admin-a-0001',
+          auth_generation: 41,
+        },
       },
       paramsFor(harness)
     );
@@ -589,6 +599,15 @@ describe('SQLite saved-row OAuth authority', () => {
     );
     expect(authorizationUrl.searchParams.get('client_id')).toBe('saved-client-id');
     expect(authorizationUrl.searchParams.get('resource')).toBe(provider.savedMcpUrl);
+    expect(harness.emittedBrowserEvents).toEqual([
+      expect.objectContaining({
+        authUrl: authorizationUrl.toString(),
+        operation_id: 'settings-discover-admin-a-0001',
+        auth_generation: 41,
+        caller_user_id: harness.user.user_id,
+        attempt_id: expect.any(String),
+      }),
+    ]);
     expect(provider.requests.some((request) => request.path === '/transient/mcp')).toBe(false);
     expect(provider.requests.some((request) => request.transientHeader)).toBe(false);
 
@@ -727,6 +746,10 @@ describe('SQLite saved-row OAuth authority', () => {
         mcp_url: provider.savedMcpUrl,
         mcp_server_id: harness.server.mcp_server_id,
         start_browser_flow: true,
+        oauth_browser_event: {
+          operation_id: 'test-oauth-admin-a-0001',
+          auth_generation: 43,
+        },
       },
       paramsFor(harness)
     );

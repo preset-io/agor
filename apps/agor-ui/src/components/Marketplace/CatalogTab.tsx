@@ -16,8 +16,9 @@ import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
@@ -127,16 +128,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [keyRequirement, setKeyRequirement] = useState<MCPCatalogCredentialRequirement | null>(
     null
   );
-  // The exported owner below is keyed by current user. This flag also stops a
-  // connect response initiated by caller A from navigating, persisting a
-  // branch preference, or restoring A's error state after caller B replaced it.
-  const identityActiveRef = useRef(true);
-  useEffect(() => {
-    identityActiveRef.current = true;
-    return () => {
-      identityActiveRef.current = false;
-    };
-  }, []);
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
@@ -177,6 +168,18 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       memberPolicy.policy,
       memberPolicy.canConfigure,
     ]
+  );
+  const operationGuard = useAuthorityOperationGuard(
+    connectionReady && currentUser?.user_id && currentUser.role && !policyPending
+      ? [
+          currentUser.user_id,
+          currentUser.role,
+          authGeneration,
+          client,
+          memberPolicy.policy,
+          memberPolicy.canConfigure,
+        ]
+      : null
   );
 
   // Any narrowing invalidates the current offset — page 4 of an unfiltered
@@ -235,7 +238,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       acknowledgedDisclosure: string;
       bearerToken?: string;
     }) => {
-      if (!selected || !client || !identityActiveRef.current) return;
+      const operation = operationGuard.begin();
+      if (!selected || !client || !operation.isCurrent()) return;
       setConnecting(true);
       setConnectError(null);
       try {
@@ -250,7 +254,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           // empty arrived.
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
-        if (!identityActiveRef.current) return;
+        if (!operation.isCurrent()) return;
         rememberConnectBranchId(currentUser?.user_id, branchId);
         // A starter prompt is written to exercise the server it ships with, so
         // it is only worth arming the composer with once that server can answer
@@ -269,7 +273,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
-        if (!identityActiveRef.current) return;
+        if (!operation.isCurrent()) return;
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
         // The catalog file is presentational; the endpoint decides. When those
         // disagree the daemon says so on the refusal, and taking it here is
@@ -280,10 +284,17 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
-        if (identityActiveRef.current) setConnecting(false);
+        if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, currentUser?.user_id, navigate, selected, userAuthenticatedMcpServerIds]
+    [
+      client,
+      currentUser?.user_id,
+      navigate,
+      operationGuard,
+      selected,
+      userAuthenticatedMcpServerIds,
+    ]
   );
 
   return (

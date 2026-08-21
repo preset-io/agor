@@ -115,6 +115,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    role: 'admin',
     ...overrides,
   } as unknown as User;
 }
@@ -167,6 +168,7 @@ function renderTable(client: AgorClient | null) {
       branchById={new Map([[branch.branch_id, branch]])}
       userById={new Map([[user.user_id, user]])}
       mcpServerById={new Map<string, MCPServer>()}
+      currentUser={user}
     />
   );
 }
@@ -384,6 +386,51 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
   });
 
+  it('erases create secrets and cancels validation continuation on admin A -> admin B', async () => {
+    const { client, channelCreate } = makeClient();
+    const branch = makeBranch();
+    const adminA = makeUser({ user_id: 'admin-a', email: 'a@example.test' });
+    const adminB = makeUser({ user_id: 'admin-b', email: 'b@example.test' });
+    const users = new Map([
+      [adminA.user_id, adminA],
+      [adminB.user_id, adminB],
+    ]);
+    const table = (currentUser: User) => (
+      <MemoryRouter>
+        <AntdApp>
+          <GatewayChannelsTable
+            client={client}
+            gatewayChannelById={new Map()}
+            branchById={new Map([[branch.branch_id, branch]])}
+            userById={users}
+            mcpServerById={new Map()}
+            currentUser={currentUser}
+          />
+        </AntdApp>
+      </MemoryRouter>
+    );
+    const rendered = render(table(adminA));
+    clickButton(/Add Channel/);
+    await advanceToTokensStep();
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), {
+      target: { value: 'xoxb-admin-a-secret' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: 'xapp-admin-a-secret' },
+    });
+
+    // Ant validation resolves in a microtask. Commit B before that continuation
+    // can read the registered A form values and dispatch them.
+    clickButton(/Create channel/);
+    rendered.rerender(table(adminB));
+    await flush();
+
+    expect(channelCreate).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByDisplayValue('xoxb-admin-a-secret')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('xapp-admin-a-secret')).not.toBeInTheDocument();
+  });
+
   it('invalidates a passing test result when a channel-scope option changes', async () => {
     const { client } = makeClient({ ok: true, failures: [], notVerifiable: [] });
     renderTable(client);
@@ -497,6 +544,43 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
+  });
+
+  it('erases edit secrets and cancels save continuation on admin A -> admin B', async () => {
+    const branch = makeBranch();
+    const channel = makeSlackChannel();
+    const adminA = makeUser({ user_id: 'admin-a', email: 'a@example.test' });
+    const adminB = makeUser({ user_id: 'admin-b', email: 'b@example.test' });
+    const onUpdate = vi.fn();
+    const table = (currentUser: User) => (
+      <MemoryRouter>
+        <AntdApp>
+          <GatewayChannelsTable
+            client={null}
+            gatewayChannelById={new Map([[channel.id, channel]])}
+            branchById={new Map([[branch.branch_id, branch]])}
+            userById={new Map([[currentUser.user_id, currentUser]])}
+            mcpServerById={new Map()}
+            currentUser={currentUser}
+            onUpdate={onUpdate}
+          />
+        </AntdApp>
+      </MemoryRouter>
+    );
+    const rendered = render(table(adminA));
+    fireEvent.click(screen.getByTitle('Edit'));
+    expandPanel('Credentials');
+    fireEvent.change(screen.getByLabelText(/Bot Token/), {
+      target: { value: 'xoxb-admin-a-rotation' },
+    });
+
+    clickButton(/^Save$/);
+    rendered.rerender(table(adminB));
+    await flush();
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByDisplayValue('xoxb-admin-a-rotation')).not.toBeInTheDocument();
   });
 
   it('copies the recommended manifest derived from the channel options', async () => {

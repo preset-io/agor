@@ -11,6 +11,8 @@ const connectionState = vi.hoisted(() => ({
   connecting: false,
   authGeneration: 1,
 }));
+const updateSessionMcpServers = vi.hoisted(() => vi.fn());
+const showSuccess = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: () => ({
@@ -21,6 +23,20 @@ vi.mock('@/hooks/usePermissions', () => ({
 
 vi.mock('@/contexts/ConnectionContext', () => ({
   useConnectionState: () => connectionState,
+}));
+
+vi.mock('@/utils/sessionMcpServers', () => ({ updateSessionMcpServers }));
+
+vi.mock('@/utils/message', () => ({
+  useThemedMessage: () => ({ showSuccess, showError: vi.fn() }),
+}));
+
+vi.mock('../MCPServerSelect', () => ({
+  MCPServerSelect: ({ onChange }: { onChange: (ids: string[]) => void }) => (
+    <button type="button" onClick={() => onChange(['replacement-server'])}>
+      replace-session-mcp
+    </button>
+  ),
 }));
 
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -55,6 +71,40 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.connecting = false;
     connectionState.authGeneration = 1;
     vi.clearAllMocks();
+  });
+
+  it('drops the attachment-save continuation when admin A is replaced by admin B', async () => {
+    let resolveUpdate: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    updateSessionMcpServers.mockReturnValue(pending);
+    const props = (currentUserId: string) => ({
+      client,
+      currentUserId,
+      sessionId: 'session-id',
+      sessionMcpServerIds: [server.mcp_server_id],
+      mcpServerById: new Map([[server.mcp_server_id, server]]),
+      userAuthenticatedMcpServerIds: new Set<string>(),
+    });
+    const rendered = render(<SessionMcpFooterControl {...props('user-a')} />, {
+      wrapper: Wrapper,
+    });
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. 1 MCP server attached. Open to add or change MCP servers.',
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'replace-session-mcp' }));
+    await waitFor(() => expect(updateSessionMcpServers).toHaveBeenCalledOnce());
+
+    connectionState.authGeneration = 2;
+    rendered.rerender(<SessionMcpFooterControl {...props('user-b')} />);
+    resolveUpdate?.();
+    await act(async () => pending);
+
+    expect(showSuccess).not.toHaveBeenCalled();
+    expect(updateSessionMcpServers).toHaveBeenCalledOnce();
   });
 
   it('keeps the portaled editor usable and restores disclosure behavior and focus', async () => {

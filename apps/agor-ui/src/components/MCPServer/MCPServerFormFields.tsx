@@ -19,7 +19,8 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
@@ -133,14 +134,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
   const oauthStartAllowed = mutationAllowed && authorityKey !== null;
+  const operationGuard = useAuthorityOperationGuard(
+    oauthStartAllowed ? [authorityKey, client, mutationAllowed] : null
+  );
 
   // `Start OAuth Flow` writes the server row before it redirects, so it needs
   // everything a save needs — not just the URL it puts in the request. Read
@@ -169,21 +166,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     startAllowed: oauthStartAllowed,
     startBlockedReason: mutationBlockedReason,
   });
-
-  useEffect(() => {
-    if (!client) return;
-    // Blocking discover/test endpoints cannot return the authorization URL
-    // before their callback. The daemon sends this compatibility hint only to
-    // this exact initiating socket; durable attempt/status refetch remains the
-    // completion authority.
-    const openBrowserForBlockingFlow = ({ authUrl }: { authUrl?: string }) => {
-      if (authUrl) window.open(authUrl, '_blank', 'noopener,noreferrer');
-    };
-    client.io.on('oauth:open_browser', openBrowserForBlockingFlow);
-    return () => {
-      client.io.off('oauth:open_browser', openBrowserForBlockingFlow);
-    };
-  }, [client]);
 
   // Watch advanced OAuth field values so we can show a "customized" dot on
   // the Advanced collapse header when any of them has a non-default value.
@@ -215,6 +197,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     (typeof watchedDcrMode === 'string' && watchedDcrMode !== 'advertised');
 
   const handleDisconnectOAuth = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!mutationAllowed) {
       showError(mutationBlockedReason);
       return;
@@ -233,7 +217,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       const data = (await client.service('mcp-servers/oauth-disconnect').create({
         mcp_server_id: serverId,
       })) as { success: boolean; message?: string; error?: string };
-      if (!mountedRef.current) return;
+      if (!operation.isCurrent()) return;
 
       if (data.success) {
         showSuccess(data.message || 'OAuth connection removed');
@@ -242,14 +226,16 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         showError(data.error || 'Failed to disconnect OAuth');
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!operation.isCurrent()) return;
       showError(`Disconnect error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (mountedRef.current) setDisconnectingOAuth(false);
+      if (operation.isCurrent()) setDisconnectingOAuth(false);
     }
   };
 
   const handleTestAuth = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!client) {
       showError('Client not available');
       return;
@@ -276,7 +262,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           api_token: apiToken,
           api_secret: apiSecret,
         })) as { success: boolean; error?: string };
-        if (!mountedRef.current) return;
+        if (!operation.isCurrent()) return;
 
         if (data.success) {
           showSuccess('JWT authentication successful - token received');
@@ -310,7 +296,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           hint?: string;
           debugInfo?: unknown;
         };
-        if (!mountedRef.current) return;
+        if (!operation.isCurrent()) return;
 
         if (data.success) {
           if (data.requiresBrowserFlow) {
@@ -350,11 +336,11 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         showInfo('No authentication required - ready to use');
       }
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!operation.isCurrent()) return;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       showError(`Connection test failed: ${errorMessage}`);
     } finally {
-      if (mountedRef.current) setTestingAuth(false);
+      if (operation.isCurrent()) setTestingAuth(false);
     }
   };
 

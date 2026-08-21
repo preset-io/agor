@@ -7,7 +7,8 @@ import type {
   TenantAgenticToolSettings,
 } from '@agor-live/client';
 import { Alert, Select, Space, Spin, Switch, Tabs, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { agorStore } from '../../store/agorStore';
 import {
   type AgenticToolFieldConfig,
@@ -20,6 +21,7 @@ import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
+  authorityKey: string | null;
 }
 
 const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
@@ -69,7 +71,10 @@ const RESOLUTION_POLICIES: Array<{
   },
 ];
 
-export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
+export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
+  client,
+  authorityKey,
+}) => {
   const { token } = theme.useToken();
   const [settings, setSettings] = useState<
     Partial<Record<TenantAgenticToolName, TenantAgenticToolSettings>>
@@ -77,13 +82,23 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<Partial<Record<AgenticToolConfigField, boolean>>>({});
+  const operationGuard = useAuthorityOperationGuard(authorityKey ? [authorityKey, client] : null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases caller-private state
+  useLayoutEffect(() => {
+    setSettings({});
+    setError(null);
+    setSaving({});
+  }, [authorityKey]);
 
   const load = useCallback(async () => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     setLoading(true);
     setError(null);
     try {
       const result = await client.service('agentic-tool-settings').find();
+      if (!operation.isCurrent()) return;
       const rows = Array.isArray(result) ? result : result.data;
       setSettings(
         Object.fromEntries(rows.map((row) => [row.tool, row])) as Partial<
@@ -91,11 +106,12 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         >
       );
     } catch (loadError) {
+      if (!operation.isCurrent()) return;
       setError(loadError instanceof Error ? loadError.message : 'Failed to load agentic tools');
     } finally {
-      setLoading(false);
+      if (operation.isCurrent()) setLoading(false);
     }
-  }, [client]);
+  }, [client, operationGuard]);
 
   useEffect(() => {
     void load();
@@ -110,14 +126,17 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       connection?: Partial<Record<AgenticToolConfigField, string | null>>;
     }
   ) => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     try {
       setError(null);
       const updated = await client.service('agentic-tool-settings').patch(tool, data);
+      if (!operation.isCurrent()) return;
       setSettings((current) => ({ ...current, [tool]: updated }));
       // Single-row admin edit: merge without touching the hydration gate.
       agorStore.getState().upsertAgenticToolSetting(updated);
     } catch (saveError) {
+      if (!operation.isCurrent()) return;
       setError(saveError instanceof Error ? saveError.message : 'Failed to save agentic tool');
     }
   };

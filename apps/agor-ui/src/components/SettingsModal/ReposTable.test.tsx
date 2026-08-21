@@ -41,7 +41,7 @@ describe('ReposTable search', () => {
       ],
     ]);
 
-    render(<ReposTable repoById={repoById} />);
+    render(<ReposTable repoById={repoById} authorityKey="admin-a:admin" />);
 
     fireEvent.change(screen.getByPlaceholderText(/Search name, slug, URL/i), {
       target: { value: 'preset-docs' },
