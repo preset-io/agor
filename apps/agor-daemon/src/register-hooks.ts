@@ -809,6 +809,79 @@ export const redactMCPServerSecretFields = async (context: HookContext) => {
   return context;
 };
 
+export type RealtimeAuthorizationInvalidationMode = 'none' | 'cache' | 'evict';
+
+/**
+ * Classify authorization mutations by the capability they can stale.
+ *
+ * True record creates are additive: they cannot leave a previously authorized
+ * socket with access it has lost. Owner/membership creates still clear every
+ * replica's cache so the newly authorized principal does not wait for a stale
+ * negative entry, but they must not tear down the Socket.IO RPC that is
+ * creating the grant. Upsert-shaped grant creates, patches, and removals can
+ * reduce an existing capability and therefore evict.
+ */
+export function classifyRealtimeAuthorizationInvalidation(
+  context: Pick<HookContext, 'path' | 'method' | 'data'>
+): RealtimeAuthorizationInvalidationMode {
+  if (!['create', 'update', 'patch', 'remove'].includes(context.method)) return 'none';
+
+  if (['branches/:id/owners', 'boards/:id/owners', 'group-memberships'].includes(context.path)) {
+    return context.method === 'create' ? 'cache' : 'evict';
+  }
+
+  if (['branches/:id/group-grants', 'boards/:id/group-grants'].includes(context.path)) {
+    // These services expose create as an upsert, so a caller can lower an
+    // existing grant through create. Treat it as a possible revocation.
+    return 'evict';
+  }
+
+  if (context.path === 'groups') {
+    // An empty group has no authority. Later membership/grant writes carry
+    // their own distributed invalidation.
+    return context.method === 'create' ? 'none' : 'evict';
+  }
+
+  // Board-object rows are authorized through their referenced board/branch;
+  // creating or removing a spatial representation does not change either ACL.
+  if (context.path === 'board-objects') return 'none';
+
+  const data =
+    context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+      ? (context.data as Record<string, unknown>)
+      : {};
+
+  if (context.path === 'branches') {
+    if (context.method === 'create') return 'none';
+    if (context.method === 'remove') return 'evict';
+    return ['board_id', 'others_can', 'permission_source'].some((field) =>
+      Object.hasOwn(data, field)
+    )
+      ? 'evict'
+      : 'none';
+  }
+
+  if (context.path === 'boards') {
+    if (context.method === 'create') return 'none';
+    if (context.method === 'remove') return 'evict';
+    return ['access_mode', 'primary_teammate_id', 'default_others_can'].some((field) =>
+      Object.hasOwn(data, field)
+    )
+      ? 'evict'
+      : 'none';
+  }
+
+  if (context.path === 'users') {
+    if (context.method === 'create') return 'none';
+    if (context.method === 'remove') return 'evict';
+    return ['password', 'role', 'tokens_valid_after'].some((field) => Object.hasOwn(data, field))
+      ? 'evict'
+      : 'none';
+  }
+
+  return 'none';
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -1231,53 +1304,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const shouldEvictRealtimeAuthorization = (context: HookContext): boolean => {
-    if (!['create', 'update', 'patch', 'remove'].includes(context.method)) return false;
-    if (
-      [
-        'branches/:id/owners',
-        'branches/:id/group-grants',
-        'boards/:id/owners',
-        'boards/:id/group-grants',
-        'groups',
-        'group-memberships',
-      ].includes(context.path)
-    ) {
-      return true;
-    }
-    if (context.path === 'board-objects') {
-      return context.method === 'create' || context.method === 'remove';
-    }
-    const data =
-      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
-        ? (context.data as Record<string, unknown>)
-        : {};
-    if (context.path === 'branches') {
-      if (context.method === 'remove') return true;
-      return ['board_id', 'others_can', 'permission_source'].some((field) =>
-        Object.hasOwn(data, field)
-      );
-    }
-    if (context.path === 'boards') {
-      if (context.method === 'remove') return true;
-      return ['access_mode', 'primary_teammate_id', 'default_others_can'].some((field) =>
-        Object.hasOwn(data, field)
-      );
-    }
-    if (context.path === 'users') {
-      if (context.method === 'remove') return true;
-      return ['password', 'role', 'tokens_valid_after'].some((field) => Object.hasOwn(data, field));
-    }
-    return false;
-  };
-
   const evictStaleRealtimeAuthorization = (context: HookContext): HookContext => {
-    if (!shouldEvictRealtimeAuthorization(context)) return context;
+    const mode = classifyRealtimeAuthorizationInvalidation(context);
+    if (mode === 'none') return context;
     deferWithTenantContext(
       context.params,
       async () => {
         app.emit('realtime:authorization-invalidated', {
           tenantId: requireCurrentTenantId(),
+          disconnectSockets: mode === 'evict',
         });
       },
       () => console.warn('[realtime] Failed to schedule authorization eviction')
@@ -1285,12 +1320,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const evictRealtimeAuthorization = (context: HookContext): HookContext => {
+  const invalidateRealtimeAuthorizationCache = (context: HookContext): HookContext => {
     deferWithTenantContext(
       context.params,
       async () => {
         app.emit('realtime:authorization-invalidated', {
           tenantId: requireCurrentTenantId(),
+          disconnectSockets: false,
         });
       },
       () => console.warn('[realtime] Failed to schedule authorization eviction')
@@ -3548,7 +3584,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
-        evictRealtimeAuthorization,
+        // A primary teammate must already be attached to this board. Changing
+        // the display pointer therefore cannot narrow the board/branch ACL,
+        // but every replica still drops any derived visibility cache.
+        invalidateRealtimeAuthorizationCache,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;
@@ -3556,7 +3595,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
-        evictRealtimeAuthorization,
+        // Branch detachment is the revoking operation and has its own full
+        // eviction; clearing this redundant display pointer is cache-only.
+        invalidateRealtimeAuthorizationCache,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;

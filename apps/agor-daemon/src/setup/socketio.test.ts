@@ -35,6 +35,7 @@ import {
   boardPresenceRoomName,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
   HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
   LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   sessionStreamRoomName,
   tenantChannelName,
@@ -345,6 +346,43 @@ it('evicts stale tenant sockets locally and propagates the eviction across HA re
 
   io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({ tenantId: 'tenant-b' });
   expect(tenantB.connected).toBe(false);
+});
+
+it('clears distributed authorization caches without disconnecting sockets for additive grants', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const tenantA = makeSocket('tenant-a-socket', io);
+  const tenantB = makeSocket('tenant-b-socket', io);
+  asUser(tenantA, ALICE);
+  asUser(tenantB, BOB);
+  tenantA.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  tenantB.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+  connect(io, tenantA);
+  connect(io, tenantB);
+
+  const invalidation = { tenantId: 'tenant-a', disconnectSockets: false };
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.(invalidation);
+
+  expect(tenantA.connected).toBe(true);
+  expect(tenantB.connected).toBe(true);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: invalidation,
+  });
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+  expect(app.emit).not.toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+
+  io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({
+    tenantId: 'tenant-b',
+    disconnectSockets: false,
+  });
+  expect(tenantB.connected).toBe(true);
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'tenant-b',
+  });
 });
 
 it('fences an already-authenticated task executor on exact and HA session revocation', () => {

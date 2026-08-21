@@ -28,6 +28,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
+  classifyRealtimeAuthorizationInvalidation,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -62,6 +63,52 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('classifyRealtimeAuthorizationInvalidation', () => {
+  const classify = (path: string, method: HookContext['method'], data: unknown = {}) =>
+    classifyRealtimeAuthorizationInvalidation({ path, method, data } as Pick<
+      HookContext,
+      'path' | 'method' | 'data'
+    >);
+
+  it.each([
+    ['branches', { board_id: 'board-1' }],
+    ['boards', { access_mode: 'private' }],
+    ['users', { role: 'member' }],
+    ['board-objects', { board_id: 'board-1', branch_id: 'branch-1' }],
+    ['groups', { name: 'new group' }],
+  ])('does not evict sockets while creating additive %s state', (path, data) => {
+    expect(classify(path, 'create', data)).toBe('none');
+  });
+
+  it.each(['branches/:id/owners', 'boards/:id/owners', 'group-memberships'])(
+    'distributes cache-only invalidation for additive grants through %s',
+    (path) => {
+      expect(classify(path, 'create')).toBe('cache');
+    }
+  );
+
+  it.each([
+    ['branches', 'patch', { others_can: 'none' }],
+    ['branches', 'patch', { board_id: 'board-2' }],
+    ['branches', 'remove', {}],
+    ['boards', 'patch', { access_mode: 'private' }],
+    ['boards', 'remove', {}],
+    ['users', 'patch', { role: 'suspended' }],
+    ['users', 'remove', {}],
+    ['branches/:id/owners', 'remove', {}],
+    ['branches/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['boards/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['group-memberships', 'remove', {}],
+    ['groups', 'patch', { archived: true }],
+  ] as const)('evicts stale sockets for revoking %s.%s', (path, method, data) => {
+    expect(classify(path, method, data)).toBe('evict');
+  });
+
+  it('ignores branch metadata patches that cannot change authorization', () => {
+    expect(classify('branches', 'patch', { name: 'Renamed' })).toBe('none');
+  });
+});
 
 describe('protectFilesystemHomeWrite', () => {
   const config = { paths: { data_home: '/srv/agor-data' } };

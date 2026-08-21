@@ -53,8 +53,10 @@ import {
   HA_AUTHORIZATION_INVALIDATION_EVENT,
   HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
   isTenantRealtimeRoomName,
+  LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
   LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   parseTerminalChannel,
+  type RealtimeAuthorizationInvalidation,
   tenantChannelName,
   tenantUserChannelName,
   terminalChannelName,
@@ -790,12 +792,20 @@ export function createSocketIOConfig(
       }
     });
 
-    const evictTenantSockets = (data: { tenantId?: unknown }): void => {
+    const invalidateTenantAuthorization = (data: RealtimeAuthorizationInvalidation): void => {
       if (
         typeof data?.tenantId !== 'string' ||
         data.tenantId.length === 0 ||
         data.tenantId.length > 128
       ) {
+        return;
+      }
+      // Additive authorization changes need distributed cache coherence but do
+      // not invalidate an already-authorized passive room capability. Avoid
+      // tearing down the mutation's own Socket.IO RPC before its acknowledgement
+      // and avoid forcing every tenant user through an unnecessary reconnect.
+      if (data.disconnectSockets === false) {
+        app.emit(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, { tenantId: data.tenantId });
         return;
       }
       // Clear replica-local authorization capabilities before disconnecting.
@@ -813,13 +823,13 @@ export function createSocketIOConfig(
     // fresh authentication and every board/session subscription to pass its
     // current authorization check. In HA mode, the internal server-side event
     // applies the same fence on every replica; it never targets a client room.
-    app.on('realtime:authorization-invalidated', (data: { tenantId?: unknown }) => {
-      evictTenantSockets(data);
+    app.on('realtime:authorization-invalidated', (data: RealtimeAuthorizationInvalidation) => {
+      invalidateTenantAuthorization(data);
       if (options.adapter) {
         io.serverSideEmit(HA_AUTHORIZATION_INVALIDATION_EVENT, data);
       }
     });
-    io.on(HA_AUTHORIZATION_INVALIDATION_EVENT, evictTenantSockets);
+    io.on(HA_AUTHORIZATION_INVALIDATION_EVENT, invalidateTenantAuthorization);
 
     const evictRevokedExecutorSockets = (data: ExecutorSessionTokenRevocation): void => {
       const tenantId =

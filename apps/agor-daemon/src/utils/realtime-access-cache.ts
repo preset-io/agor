@@ -6,7 +6,10 @@ import {
   type UserID,
   type UUID,
 } from '@agor/core/types';
-import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from '../realtime/routing.js';
+import {
+  LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
+} from '../realtime/routing.js';
 import { PERMISSION_RANK } from './branch-authorization.js';
 
 export type RealtimeAccessBranchRepository = {
@@ -196,4 +199,5 @@ export function bindRealtimeAccessCacheInvalidation(
   cache: RealtimeAccessCache
 ): void {
   eventSource.on?.(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, () => cache.clearAll());
+  eventSource.on?.(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, () => cache.clearAll());
 }

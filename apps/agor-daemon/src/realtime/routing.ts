@@ -40,11 +40,32 @@ const REALTIME_ROOM_PREFIX = 'agor:v2:tenant:';
 /** Internal server-to-server eviction signal; never emitted to browser rooms. */
 export const HA_AUTHORIZATION_INVALIDATION_EVENT = 'agor:authorization-invalidated:v1';
 
+/**
+ * Distributed authorization-cache invalidation.
+ *
+ * Additive mutations (for example granting an owner or creating a new
+ * resource) only need to clear replica-local authorization caches. Mutations
+ * that can revoke existing access additionally disconnect authenticated
+ * sockets so every passive room capability is rebuilt from current authority.
+ *
+ * `disconnectSockets` is optional for rolling-deployment compatibility: an
+ * older sender produces an eviction, and a receiver must default to the safer
+ * disconnecting behavior when the field is absent.
+ */
+export interface RealtimeAuthorizationInvalidation {
+  tenantId?: unknown;
+  disconnectSockets?: boolean;
+}
+
 /** Internal exact/session executor capability revocation signal. */
 export const HA_EXECUTOR_TOKEN_INVALIDATION_EVENT = 'agor:executor-token-invalidated:v1';
 
 /** Process-local notification emitted before stale sockets are disconnected. */
 export const LOCAL_AUTHORIZATION_INVALIDATION_EVENT = 'realtime:authorization-invalidated-local';
+
+/** Process-local cache-only fence for additive authorization changes. */
+export const LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT =
+  'realtime:authorization-cache-invalidated-local';
 
 export function tenantChannelName(tenantId: string): string {
   return `${REALTIME_ROOM_PREFIX}${encodeRealtimeRoomComponent(tenantId)}`;
