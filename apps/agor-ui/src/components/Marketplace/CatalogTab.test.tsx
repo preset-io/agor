@@ -445,6 +445,18 @@ describe('connect', () => {
     return findDrawer();
   }
 
+  it('restores focus to the keyboard trigger after the drawer finishes closing', async () => {
+    renderTab();
+    const trigger = await findCard('DeepWiki');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await findDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it('shows the access disclosure expanded and blocks connect until it is acknowledged', async () => {
     const drawer = await openDrawer();
 

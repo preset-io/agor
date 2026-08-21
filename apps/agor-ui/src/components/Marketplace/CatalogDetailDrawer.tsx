@@ -59,6 +59,8 @@ export interface CatalogDetailDrawerProps {
   entry: MCPCatalogEntry | null;
   open: boolean;
   onClose: () => void;
+  /** Restore focus to the catalog trigger after the drawer has actually closed. */
+  onAfterOpenChange?: (open: boolean) => void;
   branches: Branch[];
   branchesLoading: boolean;
   branchesError: string | null;
@@ -112,6 +114,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   entry,
   open,
   onClose,
+  onAfterOpenChange,
   branches,
   branchesLoading,
   branchesError,
@@ -297,6 +300,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     <Drawer
       open={open}
       onClose={onClose}
+      afterOpenChange={onAfterOpenChange}
       size={480}
       destroyOnHidden
       title={

@@ -16,7 +16,7 @@ import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, message, Pagination, Row, Skeleton, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
@@ -122,6 +122,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
+  const drawerOpen = useRef(false);
+  const drawerTrigger = useRef<HTMLElement | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   // What the live endpoint said it wanted, when a refusal contradicted the
@@ -214,17 +216,43 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   );
 
   const openEntry = useCallback((entry: MCPCatalogEntry) => {
+    drawerOpen.current = true;
+    drawerTrigger.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setConnectError(null);
     // A requirement learned about one entry says nothing about the next.
     setKeyRequirement(null);
     setSelected(entry);
   }, []);
 
+  const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
+    if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
+    trigger.focus();
+    drawerTrigger.current = null;
+  }, []);
+
   const closeDrawer = useCallback(() => {
+    drawerOpen.current = false;
+    const trigger = drawerTrigger.current;
     setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);
-  }, []);
+    // `afterOpenChange(false)` is the normal restoration boundary. Keep a
+    // guarded fallback for browsers that cancel the exit motion after Escape
+    // (for example when reduced-motion state changes during the animation).
+    window.setTimeout(() => restoreDrawerFocus(trigger), 350);
+  }, [restoreDrawerFocus]);
+
+  const handleDrawerOpenChange = useCallback(
+    (open: boolean) => {
+      // A close transition may finish after a rapid close/reopen. That older
+      // animation must not consume the new interaction's trigger.
+      if (open || drawerOpen.current) return;
+      const trigger = drawerTrigger.current;
+      restoreDrawerFocus(trigger);
+    },
+    [restoreDrawerFocus]
+  );
 
   // `REQ-CAT-3`: the count is a filtering aid, so it appears only once
   // filtering is happening.
@@ -443,6 +471,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         entry={selected}
         open={selected !== null}
         onClose={closeDrawer}
+        onAfterOpenChange={handleDrawerOpenChange}
         branches={branches}
         branchesLoading={branchesLoading}
         branchesError={branchesError}

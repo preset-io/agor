@@ -234,8 +234,8 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
-import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
+import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import {
   bindMCPDiscoveryOAuthGrant,
   bindMCPDiscoveryResolvedConfiguration,
