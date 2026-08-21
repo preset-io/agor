@@ -32,8 +32,6 @@ Framework source branch from the chosen gallery template. Undefined falls
   goals?: string[];
   /** Chosen gallery template id (persona); null/undefined = blank starter. */
   templateId?: string | null;
-  /** Whether the acting user can connect MCP servers themselves (admin+). */
-  canManageIntegrations?: boolean;
   user?: { name?: string | null; email?: string | null } | null;
   client: AgorClient | null;
   repoById: TeammateCreationDeps['repoById'];
@@ -225,7 +223,6 @@ export async function seedOnboardingTeammate(
           goals: input.goals,
           templateId: input.templateId,
           suggestedIntegrations: input.suggestedIntegrations,
-          canManageIntegrations: input.canManageIntegrations,
         }),
       },
       onCreateSession: input.onCreateSession,

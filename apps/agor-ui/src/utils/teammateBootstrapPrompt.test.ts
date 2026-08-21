@@ -80,7 +80,10 @@ describe('buildTeammateBootstrapPrompt', () => {
 
     expect(prompt).toContain('- Created from the Legal Analyst template.');
     expect(prompt).toMatch(/Open as yourself: one warm line, in your persona's voice/);
-    expect(prompt).toContain('set up to help Max with what they picked');
+    expect(prompt).toContain('set up as a Legal Analyst to help Max');
+    expect(prompt).toMatch(/ground the opening in the template's remit/i);
+    expect(prompt).not.toContain('see "What the user wants" above');
+    expect(prompt).not.toMatch(/specific to that goal/i);
     expect(prompt).toContain('- End with a single clear next step.');
     // Not the single-question fallback.
     expect(prompt).not.toMatch(/ask exactly one specific question about what/i);
@@ -102,31 +105,29 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(unknown).not.toContain('Created from the');
   });
 
-  it('lists suggested integrations and gives admins the "set it up yourself" MCP line', () => {
+  it('preserves the reviewed setup route for every suggested integration', () => {
     const prompt = buildTeammateBootstrapPrompt({
       displayName: 'Board Bot',
-      canManageIntegrations: true,
       suggestedIntegrations: [
         ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
         ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
+        ONBOARDING_INTEGRATION_RECOMMENDATIONS.sentry,
       ],
     });
-    expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub');
-    expect(prompt).toMatch(/offer to set it up for them yourself/i);
-    expect(prompt).toContain('Settings -> MCP');
-    expect(prompt).not.toMatch(/a workspace admin has to connect it/i);
-    expect(prompt).toContain(DOCS_HOOK);
-  });
+    expect(prompt).toContain('- Suggested tools and connections: Slack, GitHub, Sentry');
 
-  it('tells non-admins that an admin must connect, without pointing at MCP settings', () => {
-    const prompt = buildTeammateBootstrapPrompt({
-      displayName: 'Board Bot',
-      canManageIntegrations: false,
-      suggestedIntegrations: [ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack],
-    });
-    expect(prompt).toMatch(/a workspace admin has to connect it/i);
-    expect(prompt).toContain("Don't send this user to the admin-only MCP settings screen");
-    expect(prompt).not.toMatch(/offer to set it up for them yourself/i);
+    expect(prompt).toContain('Slack: first check whether a configured server is already available');
+    expect(prompt).toContain('https://mcp.slack.com/mcp');
+    expect(prompt).toMatch(/use session scope and attach it to this session/i);
+    expect(prompt).toMatch(/workspace member policy/i);
+    expect(prompt).not.toMatch(/admin-only MCP settings/i);
+
+    expect(prompt).toContain('GitHub: use the repository already connected to Agor');
+    expect(prompt).toContain('Do not describe this as an MCP or Marketplace install');
+
+    expect(prompt).toContain('Sentry: use the reviewed Marketplace entry io.sentry/mcp');
+    expect(prompt).toMatch(/do not bypass the catalog by registering a guessed endpoint/i);
+    expect(prompt).toContain(DOCS_HOOK);
   });
 
   it('drops the MCP line for empty / whitespace-only integration lists, keeps the docs hook', () => {

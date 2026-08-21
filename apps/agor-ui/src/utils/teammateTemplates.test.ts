@@ -7,6 +7,7 @@ import {
   getCategoryColor,
   getTeammateTemplate,
   getTemplateBySourceBranch,
+  getTemplateForFrameworkSource,
   recommendedTemplateIds,
   resolveTemplateSourceBranch,
   TEAMMATE_GALLERY_CARDS,
@@ -158,6 +159,33 @@ describe('getTemplateBySourceBranch', () => {
 
   it('returns undefined for an unrecognized branch', () => {
     expect(getTemplateBySourceBranch('feature/whatever')).toBeUndefined();
+  });
+});
+
+describe('getTemplateForFrameworkSource', () => {
+  it('recovers a template only for the detected framework repository', () => {
+    expect(
+      getTemplateForFrameworkSource({
+        sourceBranch: 'template/legal-analyst',
+        selectedRepoId: 'repo-framework',
+        frameworkRepoId: 'repo-framework',
+      })?.id
+    ).toBe('legal-analyst');
+
+    expect(
+      getTemplateForFrameworkSource({
+        sourceBranch: 'template/legal-analyst',
+        selectedRepoId: 'repo-unrelated',
+        frameworkRepoId: 'repo-framework',
+      })
+    ).toBeUndefined();
+    expect(
+      getTemplateForFrameworkSource({
+        sourceBranch: 'template/legal-analyst',
+        selectedRepoId: 'repo-framework',
+        frameworkRepoId: undefined,
+      })
+    ).toBeUndefined();
   });
 });
 

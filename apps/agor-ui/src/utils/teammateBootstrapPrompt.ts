@@ -25,11 +25,6 @@ export interface TeammateBootstrapPromptInput {
   templateId?: string | null;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[] | null;
-  /**
-   * Whether the acting user can connect MCP servers themselves (admin+). Drives
-   * whether the opener offers to set a connection up, or defers to an admin.
-   */
-  canManageIntegrations?: boolean | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -48,8 +43,6 @@ export interface TeammateBootstrapPromptContext {
   /** Chosen template's title; present only when a real (non-blank) template resolved. */
   templateTitle?: string;
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
-  /** True when the acting user can connect MCP servers themselves. */
-  canManageIntegrations?: boolean;
   firstSession: true;
 }
 
@@ -108,11 +101,8 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     'Your first message sets the working relationship. Make it personal and easy to scan: a short intro, then the value, then one real step. No wall of text, and no generic "what do you want to do?" interview.'
   );
 
-  // A picked goal OR a template persona is enough to open personally; only the
-  // no-goal, no-template case falls back to the single-question opener.
-  const personalOpen = context.hasPrimaryGoal || Boolean(context.templateTitle);
   const userName = context.user?.name;
-  if (personalOpen) {
+  if (context.hasPrimaryGoal) {
     const helpTarget = userName ?? 'them';
     lines.push(
       `- Open as yourself: one warm line, in your persona's voice, naming who you are and that you're set up to help ${helpTarget} with what they picked (see "What the user wants" above). If your template persona and the user's goal diverge, lead with the user's goal.`
@@ -124,6 +114,18 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
       '- Then act: take one concrete first-win step now and show the result. If one essential fact blocks you, make one specific offer or ask one specific question, never a generic one.'
     );
     lines.push('- End with a single clear next step.');
+  } else if (context.templateTitle) {
+    const helpTarget = userName ?? 'them';
+    lines.push(
+      `- Open as yourself: one warm line, in your persona's voice, naming who you are and that you're set up as a ${context.templateTitle} to help ${helpTarget}. Ground the opening in the template's remit; do not claim the user chose a goal.`
+    );
+    lines.push(
+      "- Then 2-3 short bullets on how you'll help within that remit: concrete capabilities, not a catalog."
+    );
+    lines.push(
+      '- Then act: take one concrete first-win step grounded in the template if live context supports it. If one essential fact blocks a useful step, ask one specific question tied to the template remit, never a generic one.'
+    );
+    lines.push('- End with a single clear next step.');
   } else {
     const workingTarget = userName ?? 'the user';
     lines.push(
@@ -133,10 +135,27 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   if (context.suggestedIntegrations?.length) {
     lines.push(
-      context.canManageIntegrations
-        ? "When a connection would unlock the win, say in one plain line what it unlocks, then offer to set it up for them yourself: register and connect it through the MCP tools or a secure credential flow, never asking for a secret in chat. Tell them they can review or disable it anytime under Settings -> MCP. Don't just point at the settings screen, and don't wait to be asked."
-        : "When a connection would unlock the win, name it and what it unlocks, but explain a workspace admin has to connect it. Don't send this user to the admin-only MCP settings screen."
+      'When one of these would unlock the first win, name it, explain what it unlocks, and use only its setup route below. Do not wait to be asked, do not invent an endpoint, and do not treat every connection as MCP:'
     );
+    for (const integration of context.suggestedIntegrations) {
+      switch (integration.setup.surface) {
+        case 'marketplace':
+          lines.push(
+            `- ${integration.name}: use the reviewed Marketplace entry ${integration.setup.catalogEntryName}. Ask the user to connect it there; do not bypass the catalog by registering a guessed endpoint through MCP tools.`
+          );
+          break;
+        case 'mcp-settings':
+          lines.push(
+            `- ${integration.name}: first check whether a configured server is already available. If not, offer to register the official endpoint ${integration.setup.endpoint} through the MCP tools only after the user agrees; use session scope and attach it to this session unless they explicitly ask for workspace-wide setup. Let the service enforce the current user's workspace member policy, and explain any policy refusal instead of assuming only admins can configure MCP. Never ask for a secret in chat; if OAuth requires browser action, send the user to Settings -> MCP Servers for that action. Do not call this a Marketplace entry, and keep gateway channels separate.`
+          );
+          break;
+        case 'connected-repository':
+          lines.push(
+            `- ${integration.name}: use the repository already connected to Agor, or ask which repository to add. Do not describe this as an MCP or Marketplace install.`
+          );
+          break;
+      }
+    }
   }
 
   lines.push(
@@ -155,7 +174,6 @@ export function buildTeammateBootstrapPromptContext({
   goals,
   templateId,
   suggestedIntegrations,
-  canManageIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
@@ -190,7 +208,6 @@ export function buildTeammateBootstrapPromptContext({
     ...(goals?.some((id) => findOnboardingGoal(id)) ? { hasPrimaryGoal: true } : {}),
     ...(templateTitle ? { templateTitle } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
-    ...(canManageIntegrations ? { canManageIntegrations: true } : {}),
     firstSession: true,
   };
 }

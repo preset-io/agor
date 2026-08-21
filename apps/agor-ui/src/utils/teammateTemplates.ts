@@ -221,6 +221,24 @@ export function getTemplateBySourceBranch(
 }
 
 /**
+ * Recover a template only when a manual teammate was cut from the detected
+ * framework repository. Source-branch names are not globally meaningful: an
+ * unrelated repository may legitimately have the same branch name.
+ */
+export function getTemplateForFrameworkSource({
+  sourceBranch,
+  selectedRepoId,
+  frameworkRepoId,
+}: {
+  sourceBranch?: string | null;
+  selectedRepoId?: string | null;
+  frameworkRepoId?: string | null;
+}): TeammateTemplate | undefined {
+  if (!selectedRepoId || selectedRepoId !== frameworkRepoId) return undefined;
+  return getTemplateBySourceBranch(sourceBranch);
+}
+
+/**
  * Authoritative goal → recommended template mapping, in priority order. Goal
  * ids come from ONBOARDING_GOALS (onboardingGoals.ts). A goal that maps to no
  * template lists []. This is the single source of truth for recommendations.
