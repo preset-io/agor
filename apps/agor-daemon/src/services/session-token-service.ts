@@ -170,9 +170,17 @@ export interface SessionTokenServiceDependencies {
   authorityStore?: SessionTokenAuthorityStore;
   now?: () => Date;
   startCleanupTimer?: boolean;
+  /** Fence already-authenticated executor sockets after authority commits. */
+  onRevoked?: (revocation: ExecutorSessionTokenRevocation) => void | Promise<void>;
 }
 
-function fingerprintToken(token: string): string {
+export interface ExecutorSessionTokenRevocation {
+  tenantId?: string;
+  tokenFingerprint?: string;
+  sessionId?: string;
+}
+
+export function fingerprintExecutorSessionToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
@@ -180,6 +188,7 @@ export class SessionTokenService {
   private readonly tokens = new Map<string, SessionTokenData>();
   private readonly authorityStore: SessionTokenAuthorityStore | null;
   private readonly now: () => Date;
+  private readonly onRevoked?: SessionTokenServiceDependencies['onRevoked'];
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private jwtSecret: string | null = null;
 
@@ -198,6 +207,7 @@ export class SessionTokenService {
     }
 
     this.now = dependencies.now ?? (() => new Date());
+    this.onRevoked = dependencies.onRevoked;
     if (dependencies.authorityStore) {
       this.authorityStore = dependencies.authorityStore;
     } else if (dependencies.db && isPostgresDatabaseHandle(dependencies.db)) {
@@ -266,7 +276,7 @@ export class SessionTokenService {
       // unavailable. There is deliberately no local fallback.
       await this.authorityStore.issue({
         tenantId: tenantId as string,
-        tokenFingerprint: fingerprintToken(token),
+        tokenFingerprint: fingerprintExecutorSessionToken(token),
         tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
         purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
         sessionId,
@@ -339,7 +349,7 @@ export class SessionTokenService {
       // back to the local Map in PostgreSQL mode.
       const sessionInfo = await this.authorityStore.validateAndConsume({
         tenantId: trustedTenantId,
-        tokenFingerprint: fingerprintToken(token),
+        tokenFingerprint: fingerprintExecutorSessionToken(token),
         tokenType: EXECUTOR_SESSION_TOKEN_TYPE,
         purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
         sessionId: claims.sessionId,
@@ -389,13 +399,33 @@ export class SessionTokenService {
 
   /** Revoke one exact bearer. PostgreSQL failures are surfaced to the caller. */
   async revokeToken(token: string): Promise<boolean> {
-    if (!this.authorityStore) return this.tokens.delete(token);
+    if (!this.authorityStore) {
+      const existing = this.tokens.get(token);
+      const revoked = this.tokens.delete(token);
+      if (revoked) {
+        await this.onRevoked?.({
+          ...(existing?.tenant_id ? { tenantId: existing.tenant_id } : {}),
+          tokenFingerprint: fingerprintExecutorSessionToken(token),
+          ...(existing?.session_id ? { sessionId: existing.session_id } : {}),
+        });
+      }
+      return revoked;
+    }
 
     const claims = this.verifyToken(token, true);
     if (!claims?.tenantId) return false;
     const ambientTenantId = getCurrentTenantId();
     if (ambientTenantId && ambientTenantId !== claims.tenantId) return false;
-    return this.authorityStore.revoke(fingerprintToken(token), claims.tenantId);
+    const tokenFingerprint = fingerprintExecutorSessionToken(token);
+    const revoked = await this.authorityStore.revoke(tokenFingerprint, claims.tenantId);
+    if (revoked) {
+      await this.onRevoked?.({
+        tenantId: claims.tenantId,
+        tokenFingerprint,
+        sessionId: claims.sessionId,
+      });
+    }
+    return revoked;
   }
 
   /** Revoke all token authorities for a logical/synthetic session in one tenant. */
@@ -403,7 +433,9 @@ export class SessionTokenService {
     if (this.authorityStore) {
       const tenantId = getCurrentTenantId();
       if (!tenantId) throw new Error('Missing trusted tenant context for session token revocation');
-      return this.authorityStore.revokeSession(sessionId, tenantId);
+      const revoked = await this.authorityStore.revokeSession(sessionId, tenantId);
+      if (revoked > 0) await this.onRevoked?.({ tenantId, sessionId });
+      return revoked;
     }
 
     let count = 0;
@@ -412,6 +444,13 @@ export class SessionTokenService {
         this.tokens.delete(token);
         count += 1;
       }
+    }
+    if (count > 0) {
+      const tenantId = getCurrentTenantId();
+      await this.onRevoked?.({
+        ...(tenantId ? { tenantId } : {}),
+        sessionId,
+      });
     }
     return count;
   }

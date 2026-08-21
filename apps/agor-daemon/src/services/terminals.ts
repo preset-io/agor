@@ -30,7 +30,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
-import { terminalChannelName } from '../realtime/routing.js';
+import {
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
+  terminalChannelName,
+} from '../realtime/routing.js';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
@@ -146,6 +149,9 @@ export class TerminalsService {
     );
     events.on('terminal:close-branch', (data: { tenantId?: string; branchId?: string }) => {
       if (data.tenantId && data.branchId) this.closeBranch(data.tenantId, data.branchId);
+    });
+    events.on(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, (data: { tenantId?: string }) => {
+      if (data.tenantId) this.closeTenant(data.tenantId);
     });
   }
 
@@ -439,6 +445,13 @@ export class TerminalsService {
       if (terminal.tenantId === tenantId && terminal.branchId === branchId) {
         this.stopTerminal(terminal);
       }
+    }
+  }
+
+  /** Revoke every process-local terminal capability for an invalidated tenant. */
+  closeTenant(tenantId: string): void {
+    for (const terminal of [...this.terminals.values()]) {
+      if (terminal.tenantId === tenantId) this.stopTerminal(terminal);
     }
   }
 

@@ -1,6 +1,7 @@
 import type { Branch } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  bindRealtimeAccessCacheInvalidation,
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
@@ -151,5 +152,38 @@ describe('RealtimeAccessCache', () => {
       mode: 'allAuthenticated',
     });
     expect(branchRepository.findExplicitViewUserIds).not.toHaveBeenCalled();
+  });
+
+  it('clears warmed ACL and session mappings before a replica reconnect can reuse them', async () => {
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'none')),
+      findExplicitViewUserIds: vi.fn(async () => ['u1']),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+      findCreatedByBySessionId: vi.fn(async () => 'u1'),
+    } as unknown as RealtimeAccessSessionRepository;
+    const cache = new RealtimeAccessCache({ branchRepository, sessionsRepository });
+    let invalidate: (() => void) | undefined;
+    bindRealtimeAccessCacheInvalidation(
+      {
+        on(_event, listener) {
+          invalidate = listener;
+        },
+      },
+      cache
+    );
+
+    await cache.getBranchVisibility('b1');
+    await cache.getBranchIdForSession('s1');
+    await cache.getSessionOwnerId('s1');
+    invalidate?.();
+    await cache.getBranchVisibility('b1');
+    await cache.getBranchIdForSession('s1');
+    await cache.getSessionOwnerId('s1');
+
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
+    expect(sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(2);
   });
 });

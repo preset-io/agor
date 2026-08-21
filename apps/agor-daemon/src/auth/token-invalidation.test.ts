@@ -97,6 +97,9 @@ test('runtime tenant helpers preserve standard and custom tenant claims', () => 
   });
   expect(readRuntimeTenantClaim({ org_id: 'tenant-b' }, 'org_id')).toBe('tenant-b');
   expect(readRuntimeTenantClaim({ tenant_id: 'tenant-c' }, 'org_id')).toBe('tenant-c');
+  expect(() =>
+    readRuntimeTenantClaim({ tenant_id: 'tenant-a', org_id: 'tenant-b' }, 'org_id')
+  ).toThrow(/Conflicting signed tenant claims/);
 });
 
 function createAuthApp(
@@ -412,6 +415,32 @@ test('refresh token lookup is scoped to the tenant claim and reissues tenant-bea
   expect(result.user).not.toHaveProperty('tenant_id');
   const decoded = jwt.verify(result.accessToken, JWT_SECRET) as jwt.JwtPayload;
   expect(decoded.tenant_id).toBe('tenant-a');
+});
+
+test('refresh rejects a verified token with contradictory canonical and configured tenant claims', async () => {
+  const usersService = { get: vi.fn() };
+  const refreshService = createRefreshTokenService({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: REFRESH_TOKEN_TTL,
+    tenantClaim: 'org_id',
+    usersService: usersService as never,
+  });
+  const refreshToken = issueRuntimeToken(
+    {
+      sub: 'tenant-user',
+      type: 'refresh',
+      tenant_id: 'tenant-a',
+      org_id: 'tenant-b',
+    },
+    JWT_SECRET,
+    REFRESH_TOKEN_TTL
+  );
+
+  await expect(refreshService.create({ refreshToken })).rejects.toThrow(
+    /Invalid or expired refresh token/
+  );
+  expect(usersService.get).not.toHaveBeenCalled();
 });
 
 dbTest(

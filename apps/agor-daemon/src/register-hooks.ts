@@ -24,6 +24,7 @@ import {
   ArtifactRepository,
   assertTenantWritable,
   BoardCommentsRepository,
+  BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
   CardRepository,
@@ -179,6 +180,7 @@ import {
 import { createMcpServerWriteAuthorizationHook } from './utils/mcp-server-authorization.js';
 import { realignRepoOriginAfterPatchHook } from './utils/realign-repo-origin.js';
 import {
+  bindRealtimeAccessCacheInvalidation,
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
@@ -990,8 +992,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
     sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
   });
+  bindRealtimeAccessCacheInvalidation(app, realtimeAccessCache);
   const boardRepository = new BoardRepository(db);
   const boardCommentsRepository = new BoardCommentsRepository(db);
+  const boardObjectsRepository = new BoardObjectRepository(db);
   const cardRepository = new CardRepository(db);
 
   const authorizeExternalBoard = async (
@@ -1020,29 +1024,86 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  const boardObjectAccess =
+    (action: string) =>
+    async (context: HookContext): Promise<HookContext> => {
+      if (!executionMode.appRbacEnabled || !context.params.provider) return context;
+      const user = context.params.user;
+      if (!user) throw new NotAuthenticated('Authentication required');
+      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+
+      const data = context.data as
+        | { board_id?: BoardID; branch_id?: import('@agor/core/types').BranchID }
+        | undefined;
+      if (context.method === 'create') {
+        if (!data?.board_id || !data.branch_id) {
+          throw new Forbidden(`Board resource is unavailable to ${action}`);
+        }
+        const [canMutateBoard, canViewBranch] = await Promise.all([
+          boardRepository.canMutate(data.board_id, user.user_id as UUID).catch(() => false),
+          boardObjectsRepository
+            .canViewBranchReference(user.user_id as UUID, data.branch_id)
+            .catch(() => false),
+        ]);
+        if (!canMutateBoard || !canViewBranch) {
+          throw new Forbidden(`Board resource is unavailable to ${action}`);
+        }
+        return context;
+      }
+
+      const existing =
+        typeof context.id === 'string'
+          ? await boardObjectsRepository.findVisibleByObjectId(user.user_id as UUID, context.id)
+          : null;
+      if (!existing) throw new Forbidden(`Board resource is unavailable to ${action}`);
+      await authorizeExternalBoard(context, existing.board_id, 'mutate', action);
+      return context;
+    };
+
   const boardCommentAccess =
     (mode: 'view' | 'author', action: string) =>
     async (context: HookContext): Promise<HookContext> => {
       const user = context.params.user;
-      const data = context.data as { board_id?: string } | undefined;
+      if (!executionMode.appRbacEnabled || !context.params.provider) return context;
+      if (!user) throw new NotAuthenticated('Authentication required');
+      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+
+      const data = context.data as Partial<import('@agor/core/types').BoardComment> | undefined;
       const existing =
         typeof context.id === 'string'
-          ? await boardCommentsRepository.findById(context.id)
+          ? await boardCommentsRepository.findVisibleById(user.user_id as UUID, context.id)
           : undefined;
-      const boardId = existing?.board_id ?? data?.board_id;
-      await authorizeExternalBoard(context, boardId, 'view', action);
-      if (existing?.board_id && data?.board_id && data.board_id !== existing.board_id) {
-        await authorizeExternalBoard(context, data.board_id, 'view', action);
+      if (typeof context.id === 'string' && !existing) {
+        throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
-      if (
-        mode === 'author' &&
-        executionMode.appRbacEnabled &&
-        context.params.provider &&
-        user &&
-        !user._isServiceAccount &&
-        !hasMinimumRole(user.role, ROLES.ADMIN) &&
-        existing?.created_by !== user.user_id
-      ) {
+      if (context.method === 'create') {
+        const allowed = data
+          ? await boardCommentsRepository.canViewReferences(user.user_id as UUID, data)
+          : false;
+        if (!allowed) throw new Forbidden(`Board resource is unavailable to ${action}`);
+      }
+
+      // A comment's authorization anchor is immutable. Moving an existing
+      // thread to a different board/branch/session/task/message would turn an
+      // author-only content edit into an ACL mutation and risks publication to
+      // a resource the caller could not previously address.
+      if (existing && data) {
+        for (const field of [
+          'board_id',
+          'branch_id',
+          'session_id',
+          'task_id',
+          'message_id',
+          'parent_comment_id',
+        ] as const) {
+          if (Object.hasOwn(data, field) && data[field] !== existing[field]) {
+            throw new Forbidden(
+              `Board comment attachments cannot be changed while trying to ${action}`
+            );
+          }
+        }
+      }
+      if (mode === 'author' && existing?.created_by !== user.user_id) {
         throw new Forbidden(`Only the comment author may ${action}`);
       }
       return context;
@@ -1180,6 +1241,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ? (context.data as Record<string, unknown>)
         : {};
     if (context.path === 'branches') {
+      if (context.method === 'remove') return true;
       return ['board_id', 'others_can', 'permission_source'].some((field) =>
         Object.hasOwn(data, field)
       );
@@ -1199,6 +1261,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const evictStaleRealtimeAuthorization = (context: HookContext): HookContext => {
     if (!shouldEvictRealtimeAuthorization(context)) return context;
+    deferWithTenantContext(
+      context.params,
+      async () => {
+        app.emit('realtime:authorization-invalidated', {
+          tenantId: requireCurrentTenantId(),
+        });
+      },
+      () => console.warn('[realtime] Failed to schedule authorization eviction')
+    );
+    return context;
+  };
+
+  const evictRealtimeAuthorization = (context: HookContext): HookContext => {
     deferWithTenantContext(
       context.params,
       async () => {
@@ -1404,10 +1479,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       get: [
         ...(executionMode.appRbacEnabled ? [scopeReadToAccessibleBoardsSql(superadminOpts)] : []),
       ],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create board objects')],
-      update: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete board objects')],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create board objects'),
+        boardObjectAccess('create board objects'),
+      ],
+      update: [
+        requireMinimumRole(ROLES.MEMBER, 'update board objects'),
+        boardObjectAccess('update board objects'),
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update board objects'),
+        boardObjectAccess('update board objects'),
+      ],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete board objects'),
+        boardObjectAccess('delete board objects'),
+      ],
     },
   });
 
@@ -3446,6 +3533,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
+        evictRealtimeAuthorization,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;
@@ -3453,6 +3541,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
+        evictRealtimeAuthorization,
         async (context: HookContext<Board>) => {
           emitBoardPatched(context.result, context);
           return context;

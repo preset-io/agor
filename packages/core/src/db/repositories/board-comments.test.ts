@@ -447,7 +447,7 @@ describe('BoardCommentsRepository.findAll', () => {
           content: 'visible message comment',
         })
       );
-      await repo.create(
+      const hiddenTaskComment = await repo.create(
         createCommentData({
           board_id: privateBoard.board_id,
           task_id: hiddenTarget.task.task_id,
@@ -477,6 +477,24 @@ describe('BoardCommentsRepository.findAll', () => {
       await expect(
         repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
       ).resolves.toBe(3);
+      await expect(
+        repo.findVisibleById(userId, visibleTaskComment.comment_id)
+      ).resolves.toMatchObject({ comment_id: visibleTaskComment.comment_id });
+      // The same private board is visible through visibleTarget, but that must
+      // not widen access to an attachment on hiddenTarget.
+      await expect(repo.findVisibleById(userId, hiddenTaskComment.comment_id)).resolves.toBeNull();
+      await expect(
+        repo.canViewReferences(userId, {
+          board_id: privateBoard.board_id,
+          task_id: visibleTarget.task.task_id,
+        })
+      ).resolves.toBe(true);
+      await expect(
+        repo.canViewReferences(userId, {
+          board_id: privateBoard.board_id,
+          task_id: hiddenTarget.task.task_id,
+        })
+      ).resolves.toBe(false);
 
       const isolatedPrivateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
       await new BoardRepository(db).update(isolatedPrivateBoard.board_id, {

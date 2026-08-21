@@ -89,6 +89,16 @@ export class BoardCommentsService extends DrizzleService<
     };
   }
 
+  /** Apply the same attachment-aware predicate to point reads as list reads. */
+  async get(id: string, params?: BoardCommentsParams): Promise<BoardComment> {
+    const visibleToUserId = params?._agorSqlBoardAccessUserId;
+    const comment = visibleToUserId
+      ? await this.commentsRepo.findVisibleById(visibleToUserId, id)
+      : await this.commentsRepo.findById(id);
+    if (!comment) throw new Error(`Board comment ${id} not found`);
+    return comment;
+  }
+
   /**
    * Custom method: Resolve comment
    */

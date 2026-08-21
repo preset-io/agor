@@ -79,4 +79,23 @@ describe('ServiceJWTStrategy terminal-scoped identity', () => {
       )
     ).resolves.toBe('executor-service');
   });
+
+  it('rejects contradictory verified tenant claims before the scoped entity lookup', async () => {
+    const strategy = new ServiceJWTStrategy(undefined, 'org_id');
+    await expect(
+      strategy.getEntityId(
+        {
+          authentication: {
+            payload: {
+              sub: ALICE,
+              type: 'access',
+              tenant_id: 'tenant-a',
+              org_id: 'tenant-b',
+            },
+          },
+        },
+        {} as never
+      )
+    ).rejects.toThrow(/Conflicting signed tenant claims/);
+  });
 });

@@ -29,11 +29,14 @@ import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   boardPresenceRoomName,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
+  HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   sessionStreamRoomName,
   tenantChannelName,
   tenantUserChannelName,
   terminalChannelName,
 } from '../realtime/routing';
+import { fingerprintExecutorSessionToken } from '../services/session-token-service';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
 import { executorTaskChannelName } from '../utils/realtime-publish';
@@ -331,9 +334,72 @@ it('evicts stale tenant sockets locally and propagates the eviction across HA re
     event: HA_AUTHORIZATION_INVALIDATION_EVENT,
     data: { tenantId: 'tenant-a' },
   });
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
 
   io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({ tenantId: 'tenant-b' });
   expect(tenantB.connected).toBe(false);
+});
+
+it('fences an already-authenticated task executor on exact and HA session revocation', () => {
+  const { app, io } = buildHarness({
+    adapter: {} as never,
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+  });
+  const exactToken = 'executor-token-exact';
+  const exact = makeSocket('executor-exact', io);
+  exact.feathers = {
+    authentication: {
+      accessToken: exactToken,
+      payload: {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-1',
+        task_id: 'task-1',
+      },
+    },
+  };
+  exact.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
+  connect(io, exact);
+
+  (app as any).eventHandlers.get('realtime:executor-token-invalidated')?.({
+    tenantId: 'tenant-a',
+    tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
+  });
+  expect(exact.connected).toBe(false);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
+    data: {
+      tenantId: 'tenant-a',
+      tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
+    },
+  });
+
+  const session = makeSocket('executor-session', io);
+  session.feathers = {
+    authentication: {
+      accessToken: 'another-token',
+      payload: {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-2',
+        task_id: 'task-2',
+      },
+    },
+  };
+  session.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+  connect(io, session);
+
+  io.serverHandlers.get(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT)?.({
+    tenantId: 'tenant-b',
+    sessionId: 'session-2',
+  });
+  expect(session.connected).toBe(false);
 });
 
 it('revokes a captured terminal subscription capability on logout', async () => {
@@ -568,8 +634,9 @@ it('does not retry or remove an already-established authorized membership', asyn
   expect(socket.left).not.toContain(channel);
 });
 
-function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
-  browser.handlers.get('join')?.(terminalChannel());
+async function attachTerminal(io: FakeIO, browser: FakeSocket): Promise<FakeSocket> {
+  const join = browser.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  await join?.(terminalChannel(), { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH });
   const executor = makeSocket('exec-sock', io);
   asServiceForUser(executor, ALICE);
   connect(io, executor);
@@ -1399,12 +1466,12 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('does not match'));
     });
 
-    it('accepts and re-emits with the AUTHED userId when payload matches', () => {
+    it('accepts and re-emits with the AUTHED userId when payload matches', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:input')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1421,12 +1488,12 @@ describe('terminal:* handler authorization', () => {
       ]);
     });
 
-    it('rejects when allow_web_terminal is false', () => {
+    it('rejects when allow_web_terminal is false', async () => {
       const { io } = buildHarness({ webTerminalEnabled: false });
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:input')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1436,12 +1503,12 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('web terminal disabled'));
     });
 
-    it('rate-limits per socket (drops events past the burst cap)', () => {
+    it('rate-limits per socket (drops events past the burst cap)', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       // Burst = 1000 tokens. Fire 1500 events back-to-back; expect ~1000
       // through, the rest dropped. Use ≤1000 / ≥500 bounds to allow tiny
       // wall-clock refill during the loop without making the test flaky.
@@ -1464,12 +1531,12 @@ describe('terminal:* handler authorization', () => {
       expect(io.emitted).toEqual([]);
     });
 
-    it('accepts when payload userId matches authed user', () => {
+    it('accepts when payload userId matches authed user', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:resize')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1791,13 +1858,16 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('join rejected'));
     });
 
-    it('allows a user to join their own terminal channel', () => {
+    it('rejects a browser raw-joining even its own previously known terminal channel', () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
       s.handlers.get('join')?.(terminalChannel());
-      expect(s.joined.has(terminalChannel())).toBe(true);
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('browser terminal joins require an authorized allocation')
+      );
     });
 
     it('rejects the same user and terminal id in another tenant', () => {

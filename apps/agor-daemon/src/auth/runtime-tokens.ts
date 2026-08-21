@@ -32,8 +32,20 @@ export function readRuntimeTenantClaim(
 ): string | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
   const record = payload as Record<string, unknown>;
-  const value = record[claimName] ?? record.tenant_id;
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const normalize = (value: unknown, name: string): string | undefined => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new Error(`Invalid signed tenant claim: ${name}`);
+    }
+    return value.trim();
+  };
+  const canonical = normalize(record.tenant_id, 'tenant_id');
+  const configured =
+    claimName === 'tenant_id' ? canonical : normalize(record[claimName], claimName);
+  if (configured && canonical && configured !== canonical) {
+    throw new Error('Conflicting signed tenant claims');
+  }
+  return configured ?? canonical;
 }
 
 export function issueRuntimeToken(

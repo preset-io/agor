@@ -24,14 +24,14 @@ function params(role = ROLES.MEMBER) {
 }
 
 describe('board comment custom-route authorization', () => {
-  it('requires current board visibility and does not enumerate denied comments', async () => {
+  it('requires current attachment visibility and does not enumerate denied comments', async () => {
     const findComment = vi.fn(async () => COMMENT);
-    const canViewBoard = vi.fn(async () => false);
+    const findVisibleComment = vi.fn(async () => null);
     const denied = await authorizeBoardCommentRouteAccess({
       commentId: COMMENT.comment_id,
       params: params(),
       findComment,
-      canViewBoard,
+      findVisibleComment,
     }).catch((error: Error & { code?: number }) => ({
       code: error.code,
       message: error.message,
@@ -40,7 +40,7 @@ describe('board comment custom-route authorization', () => {
       commentId: 'missing',
       params: params(),
       findComment: async () => null,
-      canViewBoard,
+      findVisibleComment,
     }).catch((error: Error & { code?: number }) => ({
       code: error.code,
       message: error.message,
@@ -48,7 +48,7 @@ describe('board comment custom-route authorization', () => {
 
     expect(denied).toEqual(missing);
     expect(denied).toMatchObject({ code: 404 });
-    expect(canViewBoard).toHaveBeenCalledWith(COMMENT.board_id, USER as UUID);
+    expect(findVisibleComment).toHaveBeenCalledWith(COMMENT.comment_id, USER as UUID);
   });
 
   it('allows a current viewer and preserves the admin authority path', async () => {
@@ -57,20 +57,20 @@ describe('board comment custom-route authorization', () => {
         commentId: COMMENT.comment_id,
         params: params(),
         findComment: async () => COMMENT,
-        canViewBoard: async () => true,
+        findVisibleComment: async () => COMMENT,
       })
     ).resolves.toBe(COMMENT);
 
-    const canViewBoard = vi.fn(async () => false);
+    const findVisibleComment = vi.fn(async () => null);
     await expect(
       authorizeBoardCommentRouteAccess({
         commentId: COMMENT.comment_id,
         params: params(ROLES.ADMIN),
         findComment: async () => COMMENT,
-        canViewBoard,
+        findVisibleComment,
       })
     ).resolves.toBe(COMMENT);
-    expect(canViewBoard).not.toHaveBeenCalled();
+    expect(findVisibleComment).not.toHaveBeenCalled();
   });
 
   it('derives reaction/reply ownership and strips caller-controlled resource fields', () => {

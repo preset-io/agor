@@ -139,6 +139,12 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
       await expect(
         boRepo.findVisibleByObjectId(userId, hiddenBranchObject.object_id)
       ).resolves.toBeNull();
+      await expect(boRepo.canViewBranchReference(userId, visibleBranch.branch_id)).resolves.toBe(
+        true
+      );
+      await expect(boRepo.canViewBranchReference(userId, hiddenBranch.branch_id)).resolves.toBe(
+        false
+      );
 
       const isolatedPrivateBoardId = await createBoard(db, {
         name: 'Isolated Private Board',

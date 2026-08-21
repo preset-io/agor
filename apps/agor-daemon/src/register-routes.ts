@@ -24,7 +24,6 @@ import {
 import {
   assertTenantWritable,
   BoardCommentsRepository,
-  BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
@@ -398,20 +397,15 @@ export async function authorizeBoardCommentRouteAccess(input: {
   commentId: string;
   params: BoardCommentRouteParams;
   findComment: (commentId: string) => Promise<BoardComment | null>;
-  canViewBoard: (boardId: string, userId: UUID) => Promise<boolean>;
+  findVisibleComment: (commentId: string, userId: UUID) => Promise<BoardComment | null>;
 }): Promise<BoardComment> {
   const user = input.params.user;
   if (!user) throw new NotAuthenticated('Authentication required');
-  const comment = await input.findComment(input.commentId);
+  const privileged = user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN);
+  const comment = privileged
+    ? await input.findComment(input.commentId)
+    : await input.findVisibleComment(input.commentId, user.user_id as UUID);
   if (!comment) throw new NotFound('Board comment not found');
-  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return comment;
-  let allowed = false;
-  try {
-    allowed = await input.canViewBoard(comment.board_id, user.user_id as UUID);
-  } catch {
-    // Preserve the same non-enumerating denial for missing/foreign boards.
-  }
-  if (!allowed) throw new NotFound('Board comment not found');
   return comment;
 }
 
@@ -3553,13 +3547,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const boardCommentRouteRepository = new BoardCommentsRepository(db);
-  const boardCommentBoardRepository = new BoardRepository(db);
   const authorizeBoardCommentRoute = (id: string, params: RouteParams) =>
     authorizeBoardCommentRouteAccess({
       commentId: id,
       params,
       findComment: (commentId) => boardCommentRouteRepository.findById(commentId),
-      canViewBoard: (boardId, userId) => boardCommentBoardRepository.canView(boardId, userId),
+      findVisibleComment: (commentId, userId) =>
+        boardCommentRouteRepository.findVisibleById(userId, commentId),
     });
   const boardCommentsService = safeService('board-comments') as unknown as {
     toggleReaction: (

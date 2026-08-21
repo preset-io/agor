@@ -281,6 +281,7 @@ type PublishScope =
   | { kind: 'global' }
   | { kind: 'board'; boardId: string | null }
   | { kind: 'branch'; branchId: BranchID | null }
+  | { kind: 'branches'; branchIds: BranchID[] }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
@@ -528,6 +529,60 @@ async function resolveBranchIdFromSessionTaskOrMessage(
   return undefined;
 }
 
+/**
+ * Resolve every attachment on a board resource. `undefined` means the row is
+ * purely spatial and should inherit board visibility; `null` means at least
+ * one caller-supplied attachment could not be resolved and must fail closed.
+ */
+async function resolveBranchIdsFromBoardResource(
+  data: unknown,
+  context: PublishContext,
+  accessCache: RealtimeAccessCache
+): Promise<BranchID[] | null | undefined> {
+  const record = asRecord(data);
+  if (!record) return null;
+
+  const branchIds = new Set<BranchID>();
+  let hasAttachment = false;
+  const directBranchId = extractBranchId(data, context);
+  if (directBranchId) {
+    hasAttachment = true;
+    branchIds.add(directBranchId as BranchID);
+  }
+
+  const sessionId = extractSessionId(data);
+  if (sessionId) {
+    hasAttachment = true;
+    const branchId = await sessionBranchId(sessionId, accessCache);
+    if (!branchId) return null;
+    branchIds.add(branchId);
+  }
+
+  const taskId = extractTaskId(data);
+  if (taskId) {
+    hasAttachment = true;
+    const resolvedSessionId = await taskSessionId(context, taskId);
+    const branchId = resolvedSessionId
+      ? await sessionBranchId(resolvedSessionId, accessCache)
+      : null;
+    if (!branchId) return null;
+    branchIds.add(branchId);
+  }
+
+  const messageId = extractMessageId(data);
+  if (messageId) {
+    hasAttachment = true;
+    const resolvedSessionId = await messageSessionId(context, messageId);
+    const branchId = resolvedSessionId
+      ? await sessionBranchId(resolvedSessionId, accessCache)
+      : null;
+    if (!branchId) return null;
+    branchIds.add(branchId);
+  }
+
+  return hasAttachment ? [...branchIds] : undefined;
+}
+
 async function resolveBranchIdFromBranchOrSession(
   data: unknown,
   context: PublishContext,
@@ -551,6 +606,14 @@ async function resolvePublishScope(
   switch (audience) {
     case 'board': {
       return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+    }
+    case 'board-resource': {
+      const branchIds = await resolveBranchIdsFromBoardResource(data, context, accessCache);
+      if (branchIds === null) return { kind: 'serviceOnly' };
+      if (branchIds === undefined) {
+        return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+      }
+      return { kind: 'branches', branchIds };
     }
     case 'branch':
     case 'branch-route': {
@@ -987,6 +1050,26 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           })
         );
         return filterToUserIdsOrAdmins(tenantScoped, visibleUserIds, allowSuperadmin);
+      }
+      if (scope.kind === 'branches') {
+        let explicitUserIds: Set<UserID> | null = null;
+        for (const branchId of scope.branchIds) {
+          const visibility = await accessCache.getBranchVisibility(branchId);
+          if (!visibility) return filterToServiceConnections(tenantScoped);
+          if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) continue;
+          if (explicitUserIds) {
+            const intersection = new Set<UserID>();
+            for (const userId of explicitUserIds) {
+              if (visibility.userIds.has(userId)) intersection.add(userId);
+            }
+            explicitUserIds = intersection;
+          } else {
+            explicitUserIds = new Set(visibility.userIds);
+          }
+        }
+        return explicitUserIds
+          ? filterToUserIdsOrSuperadmins(tenantScoped, explicitUserIds, allowSuperadmin)
+          : tenantScoped;
       }
       if (!scope.branchId) {
         console.warn('[realtime] Suppressing scoped event without resolvable branch context', {

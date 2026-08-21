@@ -164,6 +164,34 @@ realtime primitives unless explicitly audited.
   intentionally exposes that distinction; constant-time database behavior is
   not claimed.
 
+## Independent review hardening
+
+An independent Codex review found five additional authorization-lifecycle
+gaps. They were fixed before merge:
+
+1. Board objects and comments now authorize and publish against every attached
+   branch/session/task/message, rather than treating access to any branch on a
+   private board as access to all attached resources. Only unattached records
+   use board visibility as their audience.
+2. Authorization invalidation clears every replica's realtime access cache
+   before sockets are disconnected. Branch removals and custom primary-teammate
+   mutations use the same distributed path, so reconnect cannot reuse a warm
+   pre-revocation decision.
+3. Browsers can no longer issue raw terminal-room joins. An authorized
+   `terminals.create` installs the server-owned attachment capability, and an
+   authorization invalidation retires the tenant's local terminal attachments.
+4. Executor-session token revocation now propagates a hashed token fingerprint
+   (or an explicitly session-wide scope) across replicas and disconnects active
+   matching task executors. Raw bearer tokens never enter Redis messages.
+5. Handshake, Feathers JWT authentication, refresh, and channel setup share one
+   signed tenant-claim reconciliation rule. Contradictory canonical/configured
+   tenant claims fail authentication rather than merely declining room setup.
+
+Regression coverage includes two branches with different visibility on one
+private board, warm-cache revoke/reconnect, browser terminal rejoin after
+invalidation, local and cross-replica active executor revocation, and
+post-connect contradictory-claim authentication.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -203,7 +231,7 @@ realtime primitives unless explicitly audited.
 
 Observed results on the audit branch:
 
-- daemon suite: 248 files passed, 14 skipped; 3,231 tests passed, 87 skipped;
+- daemon suite: 248 files passed, 14 skipped; 3,275 tests passed, 87 skipped;
 - focused realtime/security suite: 12 files and 430 tests passed;
 - PostgreSQL/RLS suite: 140 tests passed across 30 isolated databases, with the
   application role verified as `NOSUPERUSER` and `NOBYPASSRLS`;
@@ -211,6 +239,14 @@ Observed results on the audit branch:
 - daemon, UI, and executor source typechecks: passed;
 - Biome/Prettier and multitenancy, realtime, and short-ID boundary checks:
   passed.
+- root `pnpm check` after the independent review hardening: passed (21/21
+  typecheck tasks and 15/15 build tasks).
+
+The PostgreSQL/RLS and Redis results above were observed earlier on this audit
+branch. Their disposable fixture URLs were not present for the final reviewer
+remediation rerun; the corresponding suites remained environment-gated and
+the new Redis authorization-cache/revocation scenarios were additionally
+covered by deterministic local transport tests.
 
 ```bash
 pnpm --filter @agor/daemon exec vitest run \

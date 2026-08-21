@@ -40,6 +40,12 @@ const REALTIME_ROOM_PREFIX = 'agor:v2:tenant:';
 /** Internal server-to-server eviction signal; never emitted to browser rooms. */
 export const HA_AUTHORIZATION_INVALIDATION_EVENT = 'agor:authorization-invalidated:v1';
 
+/** Internal exact/session executor capability revocation signal. */
+export const HA_EXECUTOR_TOKEN_INVALIDATION_EVENT = 'agor:executor-token-invalidated:v1';
+
+/** Process-local notification emitted before stale sockets are disconnected. */
+export const LOCAL_AUTHORIZATION_INVALIDATION_EVENT = 'realtime:authorization-invalidated-local';
+
 export function tenantChannelName(tenantId: string): string {
   return `${REALTIME_ROOM_PREFIX}${encodeRealtimeRoomComponent(tenantId)}`;
 }

@@ -47,6 +47,8 @@ export type RealtimePublishAudience =
   | 'tenant'
   /** Connections whose user can currently view the referenced board. */
   | 'board'
+  /** Attached rows require every referenced branch; unattached rows inherit board visibility. */
+  | 'board-resource'
   /** Branch-scoped; branch id read from the row (`branch_id`), or `context.id`. */
   | 'branch'
   /** Branch-scoped; branch id read from `params.route.id` of a `/branches/:id/…` route. */
@@ -129,11 +131,11 @@ export const REALTIME_PUBLISH_POLICY = {
   // Board-attached resources that may or may not hang off a branch.
   // ---------------------------------------------------------------------------
   'board-objects': {
-    audience: 'board',
+    audience: 'board-resource',
     why: 'useAgorData and BoardBranchList track card/zone placement live.',
   },
   'board-comments': {
-    audience: 'board',
+    audience: 'board-resource',
     why: 'useAgorData renders comment threads live.',
   },
   artifacts: {

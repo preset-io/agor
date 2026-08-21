@@ -5,7 +5,11 @@ import {
 } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
-import { type SessionTokenAuthorityStore, SessionTokenService } from './session-token-service';
+import {
+  fingerprintExecutorSessionToken,
+  type SessionTokenAuthorityStore,
+  SessionTokenService,
+} from './session-token-service';
 
 const scopeOnlyDb = { run: () => undefined } as unknown as TenantScopeAwareDatabase;
 
@@ -149,15 +153,20 @@ describe('SessionTokenService runtime scoping', () => {
       requireScope: true,
       label: 'standalone token test',
     });
+    const onRevoked = vi.fn();
     const service = new SessionTokenService(
       { expiration_ms: 60_000, max_uses: -1 },
-      { db: guardedSqliteDb, now: () => now, startCleanupTimer: false }
+      { db: guardedSqliteDb, now: () => now, startCleanupTimer: false, onRevoked }
     );
     service.setJwtSecret('session-token-test-secret');
 
     const revoked = await service.generateToken('session-1', 'user-1');
     expect(service.getActiveTokenCount()).toBe(1);
     await expect(service.revokeToken(revoked)).resolves.toBe(true);
+    expect(onRevoked).toHaveBeenCalledWith({
+      tokenFingerprint: fingerprintExecutorSessionToken(revoked),
+      sessionId: 'session-1',
+    });
     await expect(service.validateToken(revoked)).resolves.toBeNull();
 
     const expired = await service.generateToken('session-2', 'user-1');
@@ -165,6 +174,25 @@ describe('SessionTokenService runtime scoping', () => {
     await expect(service.validateToken(expired)).resolves.toBeNull();
     await expect(service.cleanupExpiredTokens()).resolves.toBe(1);
     expect(service.getActiveTokenCount()).toBe(0);
+  });
+
+  it('notifies replicas after a PostgreSQL session-wide authority revocation commits', async () => {
+    const store = authorityStore({ revokeSession: vi.fn(async () => 2) });
+    const onRevoked = vi.fn();
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { authorityStore: store, startCleanupTimer: false, onRevoked }
+    );
+
+    await expect(
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+        service.revokeSessionTokens('session-1')
+      )
+    ).resolves.toBe(2);
+    expect(onRevoked).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      sessionId: 'session-1',
+    });
   });
 
   it('persists only a fingerprint and fails issuance before returning a bearer', async () => {

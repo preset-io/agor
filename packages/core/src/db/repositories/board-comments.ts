@@ -10,7 +10,7 @@ import { and, eq, isNotNull, isNull, like, or, type SQL, sql } from 'drizzle-orm
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type BoardCommentInsert, type BoardCommentRow, boardComments } from '../schema';
+import { type BoardCommentInsert, type BoardCommentRow, boardComments, boards } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -174,6 +174,88 @@ export class BoardCommentsRepository
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find comment: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find one comment only when every non-null attachment is visible to the
+   * caller. Unattached spatial comments fall back to board visibility.
+   */
+  async findVisibleById(userId: UUID, id: string): Promise<BoardComment | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const row = await select(this.db)
+        .from(boardComments)
+        .where(and(eq(boardComments.comment_id, fullId), this.buildVisibleToUserCondition(userId)))
+        .one();
+
+      return row ? this.rowToComment(row) : null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find visible comment: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Authorize references on a prospective comment before it exists.
+   *
+   * Every supplied branch/session/task/message reference must independently
+   * resolve through the caller's branch visibility. Only a comment with no
+   * stronger attachment inherits board visibility.
+   */
+  async canViewReferences(
+    userId: UUID,
+    references: Pick<
+      Partial<BoardComment>,
+      'board_id' | 'branch_id' | 'session_id' | 'task_id' | 'message_id'
+    >
+  ): Promise<boolean> {
+    if (!references.board_id) return false;
+    const hasAttachment = Boolean(
+      references.branch_id || references.session_id || references.task_id || references.message_id
+    );
+    const conditions: SQL[] = [];
+    if (references.branch_id) {
+      conditions.push(
+        visibleBranchReferenceAccessExists(this.db, userId, sql`${references.branch_id}`)
+      );
+    }
+    if (references.session_id) {
+      conditions.push(
+        visibleSessionReferenceAccessExists(this.db, userId, sql`${references.session_id}`)
+      );
+    }
+    if (references.task_id) {
+      conditions.push(
+        visibleTaskReferenceAccessExists(this.db, userId, sql`${references.task_id}`)
+      );
+    }
+    if (references.message_id) {
+      conditions.push(
+        visibleMessageReferenceAccessExists(this.db, userId, sql`${references.message_id}`)
+      );
+    }
+    if (!hasAttachment) {
+      conditions.push(
+        visibleBoardReferenceAccessExists(this.db, userId, sql`${references.board_id}`)
+      );
+    }
+
+    try {
+      const row = await select(this.db, { allowed: and(...conditions) ?? sql`false` })
+        .from(boards)
+        .where(eq(boards.board_id, references.board_id))
+        .one();
+      return row?.allowed === true || row?.allowed === 1;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to authorize board comment references: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

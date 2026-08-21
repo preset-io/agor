@@ -6,6 +6,7 @@ import {
   type UserID,
   type UUID,
 } from '@agor/core/types';
+import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from '../realtime/routing.js';
 import { PERMISSION_RANK } from './branch-authorization.js';
 
 export type RealtimeAccessBranchRepository = {
@@ -183,4 +184,16 @@ export class RealtimeAccessCache {
       ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
       : { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: entry.userIds };
   }
+}
+
+/**
+ * Bind the distributed-eviction receiver to the cache it protects. Kept beside
+ * the cache so future cached authorization state cannot be added without being
+ * covered by the same `clearAll()` fence.
+ */
+export function bindRealtimeAccessCacheInvalidation(
+  eventSource: { on?: (event: string, listener: () => void) => unknown },
+  cache: RealtimeAccessCache
+): void {
+  eventSource.on?.(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, () => cache.clearAll());
 }

@@ -370,9 +370,6 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           terminal.clear();
         }
 
-        // Join the user's terminal channel
-        socket.emit('join', result.channel);
-
         // Send initial resize to trigger Zellij full redraw (important for reconnections)
         // This ensures the tab bar and status bar are properly rendered
         socket.emit('terminal:resize', {

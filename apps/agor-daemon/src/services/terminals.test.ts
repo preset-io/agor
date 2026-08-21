@@ -407,6 +407,28 @@ describe('attachment lifecycle', () => {
     });
   });
 
+  it('tenant authorization invalidation retires every stale terminal capability', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    service.closeTenant('tenant-x');
+
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: terminal.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+  });
+
   it('fails closed without tenant context and rejects removed CLI compatibility input', async () => {
     const service = new TerminalsService(makeApp() as never, {} as never);
     await expect(

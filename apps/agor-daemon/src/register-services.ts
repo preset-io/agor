@@ -292,7 +292,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       expiration_ms: config.execution?.session_token_expiration_ms ?? 24 * 60 * 60 * 1000,
       max_uses: config.execution?.session_token_max_uses ?? -1,
     },
-    { db }
+    {
+      db,
+      onRevoked: (revocation) => {
+        app.emit('realtime:executor-token-invalidated', revocation);
+      },
+    }
   );
 
   const appRecord = app as unknown as Record<string, unknown>;

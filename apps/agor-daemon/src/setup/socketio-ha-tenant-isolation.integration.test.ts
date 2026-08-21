@@ -13,6 +13,10 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  bindRealtimeAccessCacheInvalidation,
+  RealtimeAccessCache,
+} from '../utils/realtime-access-cache.js';
 import { createSocketIOConfig, type SocketIOOptions } from './socketio.js';
 
 const redisUrl = process.env.AGOR_TEST_REDIS_URL;
@@ -34,6 +38,7 @@ interface Replica {
   server: HttpServer;
   url: string;
   redis: [Redis, Redis];
+  accessCache: RealtimeAccessCache;
 }
 
 function tenantFrom(params?: TestParams): string | undefined {
@@ -68,6 +73,27 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
   const sub = new Redis(redisUrl!, { lazyConnect: true });
   await Promise.all([pub.connect(), sub.connect()]);
   const app = feathersExpress(feathers());
+  const accessCache = new RealtimeAccessCache({
+    branchRepository: {
+      async findRealtimeVisibilityBranch(branchId) {
+        return branchId === 'branch-a'
+          ? { branch_id: 'branch-a' as never, others_can: 'none' }
+          : null;
+      },
+      async findExplicitViewUserIds() {
+        return replicaVisibilityUsers;
+      },
+    },
+    sessionsRepository: {
+      async findBranchIdBySessionId() {
+        return null;
+      },
+      async findCreatedByBySessionId() {
+        return null;
+      },
+    },
+  });
+  bindRealtimeAccessCacheInvalidation(app, accessCache);
   app.use('users', {
     async get(id: UserID, params?: TestParams): Promise<User> {
       const tenantId = tenantFrom(params);
@@ -116,8 +142,16 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
   });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
-  return { app, server, url: `http://127.0.0.1:${address.port}`, redis: [pub, sub] };
+  return {
+    app,
+    server,
+    url: `http://127.0.0.1:${address.port}`,
+    redis: [pub, sub],
+    accessCache,
+  };
 }
+
+let replicaVisibilityUsers: UserID[] = [USER_A];
 
 describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', () => {
   const replicas: Replica[] = [];
@@ -131,6 +165,7 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
       await Promise.all(replica.redis.map((client) => client.quit().catch(() => undefined)));
     }
     replicas.length = 0;
+    replicaVisibilityUsers = [USER_A];
   });
 
   it('delivers an authorized event across replicas once and evicts stale tenant rooms on every replica', async () => {
@@ -181,10 +216,24 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
     expect(peerEvents).toHaveLength(1);
     expect(foreignEvents).toEqual([]);
 
+    // Warm replica B's five-minute ACL cache before revocation. The shared
+    // backing state then changes as though replica A committed an ACL delete.
+    await expect(replicaB.accessCache.getBranchVisibility('branch-a')).resolves.toEqual({
+      mode: 'explicitUsers',
+      userIds: new Set([USER_A]),
+    });
+    replicaVisibilityUsers = [];
+
     replicaA.app.emit('realtime:authorization-invalidated', { tenantId: TENANT_A });
     await delay(200);
     expect(senderA.io.connected).toBe(false);
     expect(peerA.io.connected).toBe(false);
     expect(observerB.io.connected).toBe(true);
+    // The Redis receiver clears authorization state before socket eviction, so
+    // an immediate reconnect to replica B cannot reuse the warmed grant.
+    await expect(replicaB.accessCache.getBranchVisibility('branch-a')).resolves.toEqual({
+      mode: 'explicitUsers',
+      userIds: new Set(),
+    });
   });
 });

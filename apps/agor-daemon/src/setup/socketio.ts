@@ -32,20 +32,33 @@ import type {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { Server, ServerOptions, Socket } from 'socket.io';
-import { isExecutorSessionTokenPayload } from '../auth/executor-session-token.js';
-import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
+import {
+  getExecutorSessionTokenSessionId,
+  isExecutorSessionTokenPayload,
+} from '../auth/executor-session-token.js';
+import {
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+  readRuntimeTenantClaim,
+} from '../auth/runtime-tokens.js';
 import { isTerminalExecutorIdentity } from '../auth/terminal-executor-guard.js';
 import { assertUserTokenNotInvalidated } from '../auth/token-invalidation.js';
 import {
   boardPresenceRoomName,
   emitHaNativeSocketEvent,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
+  HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
   isTenantRealtimeRoomName,
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   parseTerminalChannel,
   tenantChannelName,
   tenantUserChannelName,
   terminalChannelName,
 } from '../realtime/routing.js';
+import {
+  type ExecutorSessionTokenRevocation,
+  fingerprintExecutorSessionToken,
+} from '../services/session-token-service.js';
 import type { TerminalAttachmentIdentity } from '../services/terminals.js';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
@@ -332,23 +345,14 @@ function resolveSignedSocketTenant(
 ): TenantContext | undefined {
   if (!config) return undefined;
   if (config.mode === 'required_from_auth') {
-    const configuredClaim = config.auth_claim;
-    const configuredValue =
-      configuredClaim && typeof payload[configuredClaim] === 'string'
-        ? payload[configuredClaim].trim()
-        : undefined;
-    const canonicalValue =
-      typeof payload.tenant_id === 'string' ? payload.tenant_id.trim() : undefined;
-    if (configuredValue && canonicalValue && configuredValue !== canonicalValue) {
-      throw new Error('Conflicting signed tenant claims');
-    }
+    const tenantId = readRuntimeTenantClaim(payload, config.auth_claim);
     return resolveTenantContext(
       {
         ...config,
-        auth_claim: configuredValue ? configuredClaim : 'tenant_id',
+        auth_claim: 'tenant_id',
         trusted_header: undefined,
       },
-      { authPayload: payload }
+      { authPayload: { ...payload, ...(tenantId ? { tenant_id: tenantId } : {}) } }
     );
   }
   return resolveTenantContext(config, { authPayload: payload });
@@ -754,6 +758,10 @@ export function createSocketIOConfig(
       ) {
         return;
       }
+      // Clear replica-local authorization capabilities before disconnecting.
+      // A reconnect can land on this same replica immediately and must not
+      // inherit a warmed pre-revocation ACL cache or terminal allocation.
+      app.emit(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, { tenantId: data.tenantId });
       for (const socket of io.sockets.sockets.values()) {
         if (getSocketAuthState(socket).tenant?.tenant_id === data.tenantId) {
           socket.disconnect(true);
@@ -772,6 +780,53 @@ export function createSocketIOConfig(
       }
     });
     io.on(HA_AUTHORIZATION_INVALIDATION_EVENT, evictTenantSockets);
+
+    const evictRevokedExecutorSockets = (data: ExecutorSessionTokenRevocation): void => {
+      const tenantId =
+        typeof data?.tenantId === 'string' &&
+        data.tenantId.length > 0 &&
+        data.tenantId.length <= 128
+          ? data.tenantId
+          : undefined;
+      if (multiTenancy && !tenantId) return;
+      const tokenFingerprint =
+        typeof data?.tokenFingerprint === 'string' && /^[a-f0-9]{64}$/.test(data.tokenFingerprint)
+          ? data.tokenFingerprint
+          : undefined;
+      const sessionId =
+        typeof data?.sessionId === 'string' && data.sessionId.length > 0
+          ? data.sessionId
+          : undefined;
+      if (!tokenFingerprint && !sessionId) return;
+
+      for (const socket of io.sockets.sockets.values()) {
+        const feathers = (socket as FeathersSocket).feathers;
+        const payload = feathers?.authentication?.payload;
+        if (!isExecutorSessionTokenPayload(payload)) continue;
+        const auth = getSocketAuthState(socket);
+        if (tenantId && auth.tenant?.tenant_id !== tenantId) continue;
+        const exactMatch =
+          tokenFingerprint &&
+          typeof feathers?.authentication?.accessToken === 'string' &&
+          fingerprintExecutorSessionToken(feathers.authentication.accessToken) === tokenFingerprint;
+        const sessionMatch = sessionId && getExecutorSessionTokenSessionId(payload) === sessionId;
+        // Exact revocation must not widen into a session-wide fence merely
+        // because the diagnostic session id accompanies it. Session-wide
+        // revocation is represented by omitting tokenFingerprint.
+        if (tokenFingerprint ? exactMatch : sessionMatch) {
+          leaveAllExecutorTaskChannels(app, feathers);
+          socket.disconnect(true);
+        }
+      }
+    };
+
+    app.on('realtime:executor-token-invalidated', (data: ExecutorSessionTokenRevocation) => {
+      evictRevokedExecutorSockets(data);
+      if (options.adapter && data.tenantId) {
+        io.serverSideEmit(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, data);
+      }
+    });
+    io.on(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, evictRevokedExecutorSockets);
 
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
@@ -1183,33 +1238,33 @@ export function createSocketIOConfig(
           rejectTerminal('join', 'terminal channel tenant does not match authenticated tenant');
           return;
         }
-        if (auth.isService) {
-          if (
-            !auth.terminalUserId ||
-            auth.terminalUserId !== target.userId ||
-            !auth.terminalId ||
-            auth.terminalId !== target.terminalId ||
-            !auth.terminalBranchId ||
-            !auth.terminalOwnerBootId ||
-            auth.terminalOwnerBootId !== options.workIdentity?.bootId ||
-            !matchesLocalTerminalAttachment(auth)
-          ) {
-            rejectTerminal(
-              'join',
-              'terminal executor scope or owner boot fence does not match the requested channel or live attachment'
-            );
-            return;
-          }
-        } else if (auth.userId !== target.userId) {
+        // Browsers never possess a reusable raw-room capability. The only
+        // browser join is performed server-side by TerminalsService.create
+        // after its live branch permission check. This handler remains solely
+        // for the terminal executor's exactly-scoped runtime token.
+        if (!auth.isService) {
+          rejectTerminal('join', 'browser terminal joins require an authorized allocation');
+          return;
+        }
+        if (
+          !auth.terminalUserId ||
+          auth.terminalUserId !== target.userId ||
+          !auth.terminalId ||
+          auth.terminalId !== target.terminalId ||
+          !auth.terminalBranchId ||
+          !auth.terminalOwnerBootId ||
+          auth.terminalOwnerBootId !== options.workIdentity?.bootId ||
+          !matchesLocalTerminalAttachment(auth)
+        ) {
           rejectTerminal(
             'join',
-            `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to join another user's terminal channel`
+            'terminal executor scope or owner boot fence does not match the requested channel or live attachment'
           );
           return;
         }
         console.debug(`🖥️  Socket ${socket.id} joining its authorized terminal channel`);
         socket.join(channel);
-        if (auth.isService && auth.terminalId === target.terminalId) {
+        if (auth.terminalId === target.terminalId) {
           const prev = activeTerminalExecutorById.get(target.terminalId);
           if (prev && prev !== socket.id) {
             // Stop the replaced executor from observing any future frames even

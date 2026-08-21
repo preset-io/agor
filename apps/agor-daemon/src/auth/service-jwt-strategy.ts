@@ -12,7 +12,6 @@
 
 import { JWTStrategy } from '@agor/core/feathers';
 import type { Params, UserAuthMetadata } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
 import {
@@ -119,6 +118,10 @@ export class ServiceJWTStrategy extends JWTStrategy {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers auth result compatibility
   async getEntityId(authResult: any, params: Params): Promise<string> {
     const payload = authResult?.authentication?.payload as UserAuthTokenPayload | undefined;
+    // getEntityId runs only after JWTStrategy has verified the signature. Set
+    // tenant context here—before getEntity's tenant-scoped user lookup—rather
+    // than trusting `jwt.decode()` in authenticate.
+    propagateTenantFromJwtPayload(params, payload, this.tenantClaim);
     if (payload?.sub === 'executor-service' && payload.type !== 'service') {
       // getEntityId runs after signature verification and before getEntity.
       // Reject here so an access token using the reserved subject can never be
@@ -136,9 +139,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
-    const decoded = jwt.decode(authentication?.accessToken) as UserAuthTokenPayload | null;
-    propagateTenantFromJwtPayload(params, decoded, this.tenantClaim);
-
     // Call parent to verify JWT signature and get payload
     const result = (await super.authenticate(authentication, params)) as {
       accessToken?: string;
