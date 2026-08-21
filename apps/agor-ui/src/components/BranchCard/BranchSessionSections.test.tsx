@@ -256,6 +256,10 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Spawned child')).toBeInTheDocument();
     expect(screen.getByText('Remote child')).toBeInTheDocument();
     expect(screen.getAllByText('Team Slack')).toHaveLength(2);
+    for (const channelPill of screen.getAllByTitle('Team Slack')) {
+      expect(channelPill.getAttribute('style')).toContain('align-self: flex-start');
+      expect(channelPill.getAttribute('style')).toContain('max-width: 100%');
+    }
     expect(
       Array.from(container.querySelectorAll('[data-session-id]')).map((row) =>
         row.getAttribute('data-session-id')
@@ -275,7 +279,14 @@ describe('BranchSessionSections', () => {
     expect(screen.queryByText('Remote child')).not.toBeInTheDocument();
 
     fireEvent.click(getSessionTreeToggle('Older gateway'));
-    fireEvent.click(await screen.findByText('Remote child'));
+    const remoteChildButton = await screen.findByLabelText('Open session Remote child');
+    expect(remoteChildButton.tagName).toBe('BUTTON');
+    remoteChildButton.focus();
+    expect(remoteChildButton).toHaveFocus();
+    // Keyboard activation of a native button is delivered as a click with no
+    // pointer detail; exercise that navigation path without reimplementing the
+    // browser's Enter/Space semantics in the component.
+    fireEvent.click(remoteChildButton, { detail: 0 });
     expect(onSessionClick).toHaveBeenCalledWith('gateway-remote-child');
   });
 
