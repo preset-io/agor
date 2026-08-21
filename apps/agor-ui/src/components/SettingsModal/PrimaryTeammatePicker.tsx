@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Repo } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, UserID } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
@@ -10,7 +10,7 @@ import { selectBoardById, selectRepoById } from '../../store/selectors';
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
   /** Caller identity; changing it invalidates all caller-scoped cached data. */
-  currentUserId?: string;
+  currentUserId?: UserID;
   /** Drop the heading/description chrome for embedding in a tight surface (e.g. a popover). */
   compact?: boolean;
   disabled?: boolean;
@@ -120,10 +120,12 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   }, [candidates, boardById, repoById, current]);
 
   const handleChange = async (branchId: string) => {
-    if (!client) return;
+    if (!client || !currentUserId) return;
     setSaving(true);
     try {
-      const branch = await client.service('users').setPrimaryTeammate({ branchId });
+      const branch = await client
+        .service('users')
+        .setPrimaryTeammate({ branchId, expectedUserId: currentUserId });
       setCurrent(branch);
       if (branch) {
         message.success(`Primary assistant set to ${teammateLabel(branch)}`);
@@ -166,7 +168,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       <Select
         showSearch
         loading={saving}
-        disabled={disabled || saving || !client || loadFailed}
+        disabled={disabled || saving || !client || !currentUserId || loadFailed}
         placeholder="Select a primary assistant"
         value={current?.branch_id}
         onChange={handleChange}

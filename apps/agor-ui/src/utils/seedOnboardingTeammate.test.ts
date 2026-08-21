@@ -1,4 +1,4 @@
-import type { Branch, Repo, Session } from '@agor-live/client';
+import type { Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
@@ -17,6 +17,7 @@ const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSessio
 const completeInitialization = {
   sessionId: 'session-1',
 };
+const USER_ID = 'user-1' as UserID;
 
 function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
   const onWarn = vi.fn();
@@ -46,6 +47,8 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     ],
     goals: ['ship-without-busywork'],
     user: { name: 'Ada', email: 'ada@example.com' },
+    expectedUserId: USER_ID,
+    isCurrentUser: () => true,
     client,
     repoById: new Map(),
     branchById: new Map(),
@@ -125,7 +128,10 @@ describe('seedOnboardingTeammate', () => {
       sessionId: 'session-1',
       initialization: completeInitialization,
     });
-    expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({ branchId: 'branch-1' });
+    expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({
+      branchId: 'branch-1',
+      expectedUserId: USER_ID,
+    });
     expect(onWarn).not.toHaveBeenCalled();
   });
 
@@ -208,7 +214,7 @@ describe('seedOnboardingTeammate', () => {
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
-    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
 
     const { input } = setup({ sourceBranch: 'template/legal-analyst' });
     await seedOnboardingTeammate(input);
@@ -251,7 +257,10 @@ describe('seedOnboardingTeammate', () => {
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
       expect(onCreateSession).not.toHaveBeenCalled();
       expect(result).toEqual({ branchId: 'branch-1' });
-      expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({ branchId: 'branch-1' });
+      expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        expectedUserId: USER_ID,
+      });
 
       // The user is told why there's no session waiting for them.
       expect(onWarn).toHaveBeenCalledTimes(1);
@@ -281,14 +290,20 @@ describe('seedOnboardingTeammate', () => {
       branch_id: 'branch-existing',
     } as Session;
     const setPrimaryTeammate = vi.fn(async () => undefined);
-    const { input, onWarn } = setup({
+    const { input: baseInput, onWarn, setPrimaryTeammateIfUnset } = setup();
+    const input = {
+      ...baseInput,
       frameworkRepo: undefined,
       branchById: new Map([[existingBranch.branch_id, existingBranch]]),
       sessionById: new Map([[existingSession.session_id, existingSession]]),
       client: {
-        service: vi.fn(() => ({ setPrimaryTeammate })),
+        service: vi.fn((name: string) => {
+          if (name === 'boards') return { setPrimaryTeammate };
+          if (name === 'users') return { setPrimaryTeammateIfUnset };
+          return {};
+        }),
       } as unknown as SeedOnboardingTeammateInput['client'],
-    });
+    } satisfies SeedOnboardingTeammateInput;
 
     const result = await seedOnboardingTeammate(input);
 
@@ -326,12 +341,19 @@ describe('seedOnboardingTeammate', () => {
       if (name === 'boards') return { setPrimaryTeammate };
       return {};
     });
-    const { input, onWarn } = setup({
+    const { input: baseInput, onWarn, setPrimaryTeammateIfUnset } = setup();
+    const input = {
+      ...baseInput,
       frameworkRepo: undefined,
       branchById: new Map(),
       sessionById: new Map(),
-      client: { service } as unknown as SeedOnboardingTeammateInput['client'],
-    });
+      client: {
+        service: vi.fn((name: string) => {
+          if (name === 'users') return { setPrimaryTeammateIfUnset };
+          return service(name);
+        }),
+      } as unknown as SeedOnboardingTeammateInput['client'],
+    } satisfies SeedOnboardingTeammateInput;
 
     const result = await seedOnboardingTeammate(input);
 
@@ -347,6 +369,43 @@ describe('seedOnboardingTeammate', () => {
       branchId: 'branch-existing',
       sessionId: 'session-existing',
     });
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('does not start any onboarding side effect after the initiating user changes', async () => {
+    const { input, onWarn, setPrimaryTeammateIfUnset } = setup({
+      isCurrentUser: () => false,
+    });
+
+    await expect(seedOnboardingTeammate(input)).resolves.toEqual({});
+
+    expect(createTeammateBranchMock).not.toHaveBeenCalled();
+    expect(setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it('stops after a delayed branch stage when the initiating user changes', async () => {
+    let currentUserId = USER_ID;
+    let resolveBranch!: (branch: Branch) => void;
+    createTeammateBranchMock.mockImplementation(
+      () =>
+        new Promise<Branch>((resolve) => {
+          resolveBranch = resolve;
+        })
+    );
+    const { input, onWarn, setPrimaryTeammateIfUnset } = setup({
+      isCurrentUser: (expectedUserId) => currentUserId === expectedUserId,
+    });
+
+    const seeding = seedOnboardingTeammate(input);
+    await vi.waitFor(() => expect(createTeammateBranchMock).toHaveBeenCalledTimes(1));
+    currentUserId = 'user-2' as UserID;
+    resolveBranch({ branch_id: 'branch-1', board_id: 'board-1' } as Branch);
+
+    await expect(seeding).resolves.toEqual({});
+    expect(setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
   });
 });

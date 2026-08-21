@@ -122,7 +122,7 @@ export class AppVariableRepository {
   }
 
   /** Ensure a row exists without replacing a concurrent writer's value. */
-  async setIfAbsent(data: SetAppVariableInput): Promise<boolean> {
+  async setIfAbsent(data: SetAppVariableInput): Promise<void> {
     const now = new Date();
     const encrypted = data.encrypted === true;
     const insertRow: AppVariableInsert = {
@@ -139,11 +139,7 @@ export class AppVariableRepository {
       created_at: now,
       updated_at: now,
     };
-    const result = await insert(this.db, appVariables)
-      .values(insertRow)
-      .onConflictDoNothing()
-      .run();
-    return result.rowsAffected > 0;
+    await insert(this.db, appVariables).values(insertRow).onConflictDoNothing().run();
   }
 
   /**

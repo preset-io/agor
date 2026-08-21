@@ -11,6 +11,8 @@ export interface StartTeammateBootstrapSessionInput<
   sessionConfig: TSessionConfig;
   onCreateSession: (config: TSessionConfig, boardId: string) => Promise<TInitialization | null>;
   onStatusChange?: (status: string) => void;
+  /** Abort caller-owned stages after an authenticated-identity change. */
+  shouldContinue?: () => boolean;
 }
 
 /**
@@ -30,12 +32,16 @@ export async function startTeammateBootstrapSession<
   sessionConfig,
   onCreateSession,
   onStatusChange,
+  shouldContinue = () => true,
 }: StartTeammateBootstrapSessionInput<TSessionConfig, TInitialization>): Promise<TInitialization> {
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
   onStatusChange?.('Preparing AI teammate worktree…');
   await waitForBranchFilesystemReady(client, branchId);
 
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
   onStatusChange?.('Starting first session…');
   const initialization = await onCreateSession(sessionConfig, boardId);
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
   if (!initialization) {
     throw new Error('First AI teammate session could not be created.');
   }

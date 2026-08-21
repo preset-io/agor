@@ -598,9 +598,15 @@ export interface UsersService extends AgorService<User> {
    * Set the calling user's primary teammate to an accessible branch,
    * recorded as an explicit user pick.
    */
-  setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null>;
+  setPrimaryTeammate(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null>;
   /** Set an onboarding/default teammate only when the caller is still unset. */
-  setPrimaryTeammateIfUnset(data: { branchId: string }, params?: Params): Promise<Branch | null>;
+  setPrimaryTeammateIfUnset(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null>;
   /** Seed the caller's primary coding agent without overwriting an existing preference. */
   setPrimaryAgenticToolIfUnset(
     data: { tool: AgenticToolName; expectedUserId: UserID },

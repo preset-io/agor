@@ -13,6 +13,7 @@ import { createUsersService } from './users';
 
 const CALLER = 'caller-user' as UUID;
 const CALLER_PARAMS = { user: { user_id: CALLER, role: 'member' } } as never;
+const teammateMutation = (branchId: string) => ({ branchId, expectedUserId: CALLER });
 
 let uniqueId = 9_000;
 
@@ -77,7 +78,7 @@ describe('UsersService primary teammate', () => {
     const service = createUsersService(db);
     const setSpy = vi.spyOn(UserPrimaryTeammateRepository.prototype, 'setPrimaryTeammate');
 
-    const written = await service.setPrimaryTeammate({ branchId }, CALLER_PARAMS);
+    const written = await service.setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS);
 
     expect(written?.branch_id).toBe(branchId);
     expect(setSpy).toHaveBeenCalledWith(CALLER, branchId, {
@@ -96,15 +97,15 @@ describe('UsersService primary teammate', () => {
     const setSpy = vi.spyOn(UserPrimaryTeammateRepository.prototype, 'setPrimaryTeammateIfUnset');
 
     await expect(
-      service.setPrimaryTeammateIfUnset({ branchId: onboarding }, CALLER_PARAMS)
+      service.setPrimaryTeammateIfUnset(teammateMutation(onboarding), CALLER_PARAMS)
     ).resolves.toMatchObject({ branch_id: onboarding });
     expect(setSpy).toHaveBeenCalledWith(CALLER, onboarding, {
       source: 'default',
     });
 
-    await service.setPrimaryTeammate({ branchId: explicit }, CALLER_PARAMS);
+    await service.setPrimaryTeammate(teammateMutation(explicit), CALLER_PARAMS);
     await expect(
-      service.setPrimaryTeammateIfUnset({ branchId: onboarding }, CALLER_PARAMS)
+      service.setPrimaryTeammateIfUnset(teammateMutation(onboarding), CALLER_PARAMS)
     ).resolves.toMatchObject({ branch_id: explicit });
     setSpy.mockRestore();
   });
@@ -118,7 +119,7 @@ describe('UsersService primary teammate', () => {
     const service = createUsersService(db);
 
     await expect(
-      service.setPrimaryTeammate({ branchId: inaccessible }, CALLER_PARAMS)
+      service.setPrimaryTeammate(teammateMutation(inaccessible), CALLER_PARAMS)
     ).rejects.toThrow();
   });
 
@@ -130,7 +131,7 @@ describe('UsersService primary teammate', () => {
     });
 
     await expect(
-      createUsersService(db).setPrimaryTeammate({ branchId }, CALLER_PARAMS)
+      createUsersService(db).setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS)
     ).rejects.toThrow(/create sessions/);
   });
 
@@ -158,12 +159,12 @@ describe('UsersService primary teammate', () => {
     await expect(service.getPrimaryTeammateCandidates(undefined, viewerParams)).rejects.toThrow(
       /Member role/
     );
-    await expect(service.setPrimaryTeammate({ branchId }, viewerParams)).rejects.toThrow(
-      /Member role/
-    );
-    await expect(service.setPrimaryTeammateIfUnset({ branchId }, viewerParams)).rejects.toThrow(
-      /Member role/
-    );
+    await expect(
+      service.setPrimaryTeammate(teammateMutation(branchId), viewerParams)
+    ).rejects.toThrow(/Member role/);
+    await expect(
+      service.setPrimaryTeammateIfUnset(teammateMutation(branchId), viewerParams)
+    ).rejects.toThrow(/Member role/);
   });
 
   dbTest('setPrimaryTeammate rejects non-teammate and archived branches', async ({ db }) => {
@@ -173,10 +174,10 @@ describe('UsersService primary teammate', () => {
     const service = createUsersService(db);
 
     await expect(
-      service.setPrimaryTeammate({ branchId: ordinaryBranch }, CALLER_PARAMS)
+      service.setPrimaryTeammate(teammateMutation(ordinaryBranch), CALLER_PARAMS)
     ).rejects.toThrow(/active teammate/);
     await expect(
-      service.setPrimaryTeammate({ branchId: archivedTeammate }, CALLER_PARAMS)
+      service.setPrimaryTeammate(teammateMutation(archivedTeammate), CALLER_PARAMS)
     ).rejects.toThrow(/active teammate/);
   });
 
@@ -194,7 +195,9 @@ describe('UsersService primary teammate', () => {
       } as never;
       const service = createUsersService(db, app);
 
-      await expect(service.setPrimaryTeammate({ branchId }, CALLER_PARAMS)).resolves.toMatchObject({
+      await expect(
+        service.setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS)
+      ).resolves.toMatchObject({
         branch_id: branchId,
       });
       await expect(service.getPrimaryTeammate(undefined, CALLER_PARAMS)).resolves.toMatchObject({
@@ -208,10 +211,30 @@ describe('UsersService primary teammate', () => {
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();
     await expect(service.getPrimaryTeammateCandidates(undefined, {} as never)).rejects.toThrow();
     await expect(
-      service.setPrimaryTeammate({ branchId: generateId() }, {} as never)
+      service.setPrimaryTeammate(teammateMutation(generateId()), {} as never)
     ).rejects.toThrow();
     await expect(
-      service.setPrimaryTeammateIfUnset({ branchId: generateId() }, {} as never)
+      service.setPrimaryTeammateIfUnset(teammateMutation(generateId()), {} as never)
     ).rejects.toThrow();
   });
+
+  dbTest(
+    'teammate mutations reject a stale initiating identity before repository access',
+    async ({ db }) => {
+      await ensureCaller(db);
+      const service = createUsersService(db);
+      const lookup = vi.spyOn(
+        UserPrimaryTeammateRepository.prototype,
+        'findEligiblePrimaryTeammate'
+      );
+      const stale = { branchId: generateId(), expectedUserId: generateId() };
+
+      await expect(service.setPrimaryTeammate(stale, CALLER_PARAMS)).rejects.toThrow(/authority/i);
+      await expect(service.setPrimaryTeammateIfUnset(stale, CALLER_PARAMS)).rejects.toThrow(
+        /authority/i
+      );
+      expect(lookup).not.toHaveBeenCalled();
+      lookup.mockRestore();
+    }
+  );
 });

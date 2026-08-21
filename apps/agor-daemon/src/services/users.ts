@@ -1310,10 +1310,7 @@ export class UsersService {
     return this.requireAvatarSync().refreshUserFromSettings(userId);
   }
 
-  /**
-   * Resolve the calling user's primary teammate branch, or null when unset or
-   * no longer accessible (the "needs picking" signal for the settings picker).
-   */
+  /** Resolve the calling user's primary teammate branch, or null when unset or inaccessible. */
   async getPrimaryTeammate(_data: unknown, params?: Params): Promise<Branch | null> {
     const userId = requireCallerId(params);
     return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId, {
@@ -1363,8 +1360,14 @@ export class UsersService {
    * Rejects branches the caller cannot access to avoid persisting a pointer
    * that would immediately resolve back to null.
    */
-  async setPrimaryTeammate(data: { branchId: string }, params?: Params): Promise<Branch | null> {
+  async setPrimaryTeammate(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null> {
     const userId = this.requirePrimaryTeammateMember(params);
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
     const branchId = data?.branchId as BranchID | undefined;
     if (!branchId) {
       throw new Forbidden('A branchId is required to set a primary teammate');
@@ -1393,10 +1396,13 @@ export class UsersService {
    * remains `default` for analytics and future preference migrations.
    */
   async setPrimaryTeammateIfUnset(
-    data: { branchId: string },
+    data: { branchId: string; expectedUserId: UserID },
     params?: Params
   ): Promise<Branch | null> {
     const userId = this.requirePrimaryTeammateMember(params);
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
     const branchId = data?.branchId as BranchID | undefined;
     if (!branchId) {
       throw new Forbidden('A branchId is required to set a primary teammate');

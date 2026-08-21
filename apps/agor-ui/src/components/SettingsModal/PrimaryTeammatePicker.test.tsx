@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Repo } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, UserID } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,7 @@ function teammate(id: string, displayName: string, overrides?: Partial<Branch>):
 
 const board = { board_id: 'board-1', name: 'Ambient', icon: '📋' } as Board;
 const repo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
+const USER_ID = 'user-1' as UserID;
 
 function seedStore(branches: Branch[]) {
   agorStore.setState({
@@ -52,7 +53,7 @@ function createClient(current: Branch | null) {
 function renderPicker(client: AgorClient) {
   return render(
     <AntApp>
-      <PrimaryTeammatePicker client={client} />
+      <PrimaryTeammatePicker client={client} currentUserId={USER_ID} />
     </AntApp>
   );
 }
@@ -116,14 +117,14 @@ describe('PrimaryTeammatePicker', () => {
 
     const view = render(
       <AntApp>
-        <PrimaryTeammatePicker client={client} currentUserId="user-1" />
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} />
       </AntApp>
     );
     expect(await screen.findByText(/Currently/)).toHaveTextContent('Ada');
 
     view.rerender(
       <AntApp>
-        <PrimaryTeammatePicker client={client} currentUserId="user-2" />
+        <PrimaryTeammatePicker client={client} currentUserId={'user-2' as UserID} />
       </AntApp>
     );
     await waitFor(() => expect(screen.getByText(/Currently/)).toHaveTextContent('Grace'));
@@ -139,7 +140,12 @@ describe('PrimaryTeammatePicker', () => {
     fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(await screen.findByText('Grace'));
 
-    await waitFor(() => expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: 'branch-2' }));
+    await waitFor(() =>
+      expect(setPrimaryTeammate).toHaveBeenCalledWith({
+        branchId: 'branch-2',
+        expectedUserId: USER_ID,
+      })
+    );
     // Named confirmation toast on a successful pick.
     expect(await screen.findByText(/Primary assistant set to/)).toBeInTheDocument();
   });

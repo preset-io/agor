@@ -17,7 +17,7 @@ import { BranchRepository } from './branches';
 export const USER_PRIMARY_TEAMMATE_SET_EVENT = 'user.primary_teammate.set';
 
 /**
- * How the primary teammate came to be set: `default` for backfill/onboarding
+ * How the primary teammate came to be set: `default` for onboarding
  * auto-assignment, `explicit` for a user-driven Settings pick.
  */
 export type PrimaryTeammateAssignmentSource = 'default' | 'explicit';
@@ -70,8 +70,9 @@ export class UserPrimaryTeammateRepository {
 
   /**
    * Resolve the user's active primary teammate branch, or null when unset,
-   * ineligible, or no longer usable under the configured access policy. Null is
-   * the unambiguous "needs picking" signal for callers.
+   * ineligible, or no longer usable under the configured access policy. An
+   * unset preference is a normal state; individual UI surfaces decide whether
+   * they need the caller to choose one for the action at hand.
    */
   async resolvePrimaryTeammate(
     userId: UserID,

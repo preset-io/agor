@@ -738,6 +738,8 @@ function AppContent() {
     // close the modal at the very end — otherwise the user stares at a blank
     // homepage while the async work runs.
     if (!currentUser || !client) throw new Error('Not connected - try again when Agor reconnects.');
+    const operationUserId = currentUser.user_id;
+    const isCurrentUser = () => currentUserIdRef.current === operationUserId;
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
@@ -751,6 +753,7 @@ function AppContent() {
         );
       }
     }
+    if (!isCurrentUser()) return;
 
     // Seed the user's first AI teammate on the board they just named. The
     // framework repo has been cloning in the background since the wizard opened
@@ -778,6 +781,7 @@ function AppContent() {
     if (!readyFrameworkRepo && result.teammateName?.trim() && client) {
       readyFrameworkRepo = await waitForFrameworkRepoReady(client, 20_000);
     }
+    if (!isCurrentUser()) return;
 
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     const seeded = await seedOnboardingTeammate({
@@ -795,20 +799,32 @@ function AppContent() {
         name: currentUser.name,
         email: currentUser.email,
       },
+      expectedUserId: operationUserId,
+      isCurrentUser: (expectedUserId) =>
+        expectedUserId === operationUserId && currentUserIdRef.current === expectedUserId,
       client,
       repoById: agorStore.getState().repoById,
       branchById: agorStore.getState().branchById,
       sessionById: agorStore.getState().sessionById,
       existingBranchId: retainedSeed?.branchId || result.branchId || undefined,
       existingSessionId: retainedSeed?.sessionId || result.sessionId || undefined,
-      onCreateBranch: handleCreateBranch,
-      onUpdateBranch: (branchId, updates) =>
-        handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
+      onCreateBranch: (repoId, data) =>
+        isCurrentUser() ? handleCreateBranch(repoId, data) : Promise.resolve(null),
+      onUpdateBranch: (branchId, updates) => {
+        if (!isCurrentUser()) return;
+        return handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true });
+      },
       onCreateSession: async (config, boardId) => {
+        if (!isCurrentUser()) return null;
         return handleCreateSession(config, boardId);
       },
-      onWarn: (message) => showWarning(message, { key: 'onboarding-teammate', duration: 8 }),
+      onWarn: (message) => {
+        if (isCurrentUser()) {
+          showWarning(message, { key: 'onboarding-teammate', duration: 8 });
+        }
+      },
     });
+    if (!isCurrentUser()) return;
     const branchId = seeded.branchId ?? retainedSeed?.branchId ?? result.branchId;
     const sessionId = seeded.sessionId ?? retainedSeed?.sessionId ?? result.sessionId;
     onboardingSeedResultRef.current.set(result.boardId, {
@@ -832,6 +848,7 @@ function AppContent() {
       },
       { silent: true }
     );
+    if (!isCurrentUser()) return;
 
     // Always land the user on a board — never the homepage. Prefer the seeded
     // session, then the board the wizard created, then the user's main board,
