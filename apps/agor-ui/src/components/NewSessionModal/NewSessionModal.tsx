@@ -17,7 +17,7 @@ import {
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
@@ -52,7 +52,7 @@ const PASTE_SHORTCUT =
 export interface NewSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (config: NewSessionConfig) => Promise<SessionInitializationResult | null>;
+  onCreate: (config: NewSessionConfig) => Promise<SessionCreationResult | null>;
   availableAgents: AgenticToolOption[];
   branchId: string; // Required - the branch to create the session in
   branch?: Branch; // Optional - branch details for display

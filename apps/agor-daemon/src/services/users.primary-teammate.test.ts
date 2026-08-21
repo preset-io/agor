@@ -83,7 +83,6 @@ describe('UsersService primary teammate', () => {
     expect(written?.branch_id).toBe(branchId);
     expect(setSpy).toHaveBeenCalledWith(CALLER, branchId, {
       source: 'explicit',
-      updatedBy: CALLER,
     });
     const resolved = await service.getPrimaryTeammate(undefined, CALLER_PARAMS);
     expect(resolved?.branch_id).toBe(branchId);
@@ -102,7 +101,6 @@ describe('UsersService primary teammate', () => {
     ).resolves.toMatchObject({ branch_id: onboarding });
     expect(setSpy).toHaveBeenCalledWith(CALLER, onboarding, {
       source: 'default',
-      updatedBy: CALLER,
     });
 
     await service.setPrimaryTeammate({ branchId: explicit }, CALLER_PARAMS);
@@ -239,7 +237,10 @@ describe('UsersService primary teammate', () => {
         created_by: generateId() as UUID,
         others_can: 'none',
       });
-      const app = { get: () => ({ execution: { branch_rbac: false } }) } as never;
+      const app = {
+        get: () => ({ execution: { branch_rbac: false } }),
+        service: () => ({ emit: vi.fn() }),
+      } as never;
       const service = createUsersService(db, app);
 
       await expect(service.setPrimaryTeammate({ branchId }, CALLER_PARAMS)).resolves.toMatchObject({

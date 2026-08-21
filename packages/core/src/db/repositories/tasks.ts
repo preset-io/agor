@@ -64,17 +64,6 @@ import {
 import { visibleSessionReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 
-export interface PromptIdempotencyAdmission {
-  key: UUID;
-  requestFingerprint: string;
-}
-
-export class PromptIdempotencyConflictError extends RepositoryError {
-  constructor() {
-    super('Prompt idempotency key is already bound to a different request');
-  }
-}
-
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
     !!row.executor_connected_at &&
@@ -549,33 +538,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
-  }
-
-  /**
-   * Resolve a public retry identity within its caller and Session scope.
-   * Tenant scope is supplied by the repository's ambient database boundary
-   * (and PostgreSQL RLS), never by untrusted request data.
-   */
-  async findByPromptIdempotency(
-    sessionId: SessionID,
-    createdBy: string,
-    admission: PromptIdempotencyAdmission
-  ): Promise<Task | null> {
-    const row = await select(this.db)
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.session_id, sessionId),
-          eq(tasks.created_by, createdBy),
-          eq(tasks.prompt_idempotency_key, admission.key)
-        )
-      )
-      .one();
-    if (!row) return null;
-    if (row.prompt_request_fingerprint !== admission.requestFingerprint) {
-      throw new PromptIdempotencyConflictError();
-    }
-    return this.rowToTask(row);
   }
 
   /**
@@ -1626,8 +1588,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     created_by: string;
     status: TaskPendingDispatchStatus;
     metadata?: TaskMetadata;
-    /** Caller-scoped public retry identity, distinct from the Task UUIDv7. */
-    promptIdempotency?: PromptIdempotencyAdmission;
   }): Promise<Task> {
     const taskBase: Partial<Task> = {
       task_id: input.task_id,
@@ -1691,28 +1651,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .one();
           if (!sessionRow) throw new EntityNotFoundError('Session', input.session_id);
 
-          if (input.promptIdempotency) {
-            const existingIdempotentRow = await select(txDb)
-              .from(tasks)
-              .where(
-                and(
-                  eq(tasks.session_id, input.session_id),
-                  eq(tasks.created_by, input.created_by),
-                  eq(tasks.prompt_idempotency_key, input.promptIdempotency.key)
-                )
-              )
-              .one();
-            if (existingIdempotentRow) {
-              if (
-                existingIdempotentRow.prompt_request_fingerprint !==
-                input.promptIdempotency.requestFingerprint
-              ) {
-                throw new PromptIdempotencyConflictError();
-              }
-              return this.rowToTask(existingIdempotentRow);
-            }
-          }
-
           let existingCreated: Task | undefined;
           if (input.task_id) {
             await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, input.task_id));
@@ -1759,14 +1697,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             };
           }
 
-          const insertData: TaskInsert = {
-            ...this.taskToInsert({
-              ...taskBase,
-              queue_position: nextPosition,
-            }),
-            prompt_idempotency_key: input.promptIdempotency?.key,
-            prompt_request_fingerprint: input.promptIdempotency?.requestFingerprint,
-          };
+          const insertData = this.taskToInsert({
+            ...taskBase,
+            queue_position: nextPosition,
+          });
           await insert(txDb, tasks).values(insertData).run();
 
           const row = await select(txDb)

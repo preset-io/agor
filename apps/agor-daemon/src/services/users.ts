@@ -1335,8 +1335,22 @@ export class UsersService {
     const existing = await primaryTeammates.resolvePrimaryTeammate(userId, options);
     if (existing || (await primaryTeammates.getBranchId(userId))) return existing;
 
-    await backfillUserPrimaryTeammate(this.db, userId, options);
+    const outcome = await backfillUserPrimaryTeammate(this.db, userId, options);
+    if (outcome === 'assigned') await this.emitUserPreferencePatched(userId, params);
     return primaryTeammates.resolvePrimaryTeammate(userId, options);
+  }
+
+  private async emitUserPreferencePatched(userId: UserID, params?: Params): Promise<void> {
+    if (!this.app) return;
+    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
+    if (!row) return;
+    emitServiceEvent(this.app, {
+      path: 'users',
+      event: 'patched',
+      id: userId,
+      data: this.rowToUser(row, false, undefined, false),
+      params,
+    });
   }
 
   private shouldEnforcePrimaryTeammateAccess(params?: Params): boolean {
@@ -1387,8 +1401,8 @@ export class UsersService {
 
     await primaryTeammates.setPrimaryTeammate(userId, branchId, {
       source: 'explicit',
-      updatedBy: userId,
     });
+    await this.emitUserPreferencePatched(userId, params);
     return branch;
   }
 
@@ -1419,8 +1433,8 @@ export class UsersService {
 
     const inserted = await primaryTeammates.setPrimaryTeammateIfUnset(userId, branchId, {
       source: 'default',
-      updatedBy: userId,
     });
+    if (inserted) await this.emitUserPreferencePatched(userId, params);
     return inserted
       ? branch
       : primaryTeammates.resolvePrimaryTeammate(userId, {
@@ -1535,6 +1549,7 @@ export class UsersService {
       agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       primary_agentic_tool?: AgenticToolName;
+      primary_teammate_id?: BranchID;
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
       default_mcp_server_ids?: string[];
@@ -1584,6 +1599,7 @@ export class UsersService {
       primary_agentic_tool: isAgenticToolName(data.primary_agentic_tool)
         ? data.primary_agentic_tool
         : undefined,
+      primary_teammate_id: data.primary_teammate_id,
       default_agentic_config: data.default_agentic_config,
       default_agentic_selection: data.default_agentic_selection,
       default_mcp_server_ids: data.default_mcp_server_ids,

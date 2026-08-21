@@ -28,8 +28,6 @@ interface SessionPageProps {
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
   onMenuClick?: () => void;
-  promptDrafts: ReadonlyMap<string, string>;
-  onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 
 export const SessionPage: React.FC<SessionPageProps> = ({
@@ -41,8 +39,6 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   currentUser,
   onSendPrompt,
   onMenuClick,
-  promptDrafts,
-  onUpdateDraft,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
 
@@ -72,9 +68,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     );
   }
 
-  const handleSendPrompt = (prompt: string) => {
-    onSendPrompt?.(sessionId, prompt);
-  };
+  const handleSendPrompt = (prompt: string) => onSendPrompt?.(sessionId, prompt);
 
   const handlePermissionDecision = async (
     _sessionId: string,
@@ -138,8 +132,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         onSend={handleSendPrompt}
         disabled={session.status === 'running'}
         placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}
-        promptDraft={sessionId ? promptDrafts.get(sessionId) || '' : ''}
-        onUpdateDraft={(draft: string) => sessionId && onUpdateDraft(sessionId, draft)}
+        currentUserId={currentUser?.user_id}
         client={client}
         sessionId={(sessionId as SessionID) || null}
         userById={userById}

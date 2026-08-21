@@ -1,6 +1,6 @@
 import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
-import type { UserID } from './id';
+import type { BranchID, UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
 /** Canonical syntax for the transitional delegated execution-home key. */
@@ -550,6 +550,8 @@ export interface User extends BaseUserFields {
   // Default agentic tool configuration (prepopulates session creation forms)
   /** Agentic coding tool preselected for new sessions. */
   primary_agentic_tool?: AgenticToolName;
+  /** Teammate branch preselected by quick compose and user preferences. */
+  primary_teammate_id?: BranchID;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.

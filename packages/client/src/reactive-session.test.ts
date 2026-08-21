@@ -189,11 +189,11 @@ describe('ReactiveSessionHandle prompt contract', () => {
     await handle.ready();
 
     const result = await handle.prompt('Fix failing tests', {
-      idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
+      permissionMode: 'auto',
     });
 
     expect(prompt).toHaveBeenCalledWith(SESSION_ID, 'Fix failing tests', {
-      idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
+      permissionMode: 'auto',
     });
     expect(result).toBe(admittedTask);
   });

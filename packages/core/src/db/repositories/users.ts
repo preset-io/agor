@@ -96,6 +96,8 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         return out;
       })(),
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
+      primary_agentic_tool: row.data.primary_agentic_tool,
+      primary_teammate_id: row.data.primary_teammate_id,
       default_agentic_selection: row.data.default_agentic_selection,
       default_mcp_server_ids: row.data.default_mcp_server_ids ?? [
         ...new Set(legacyDefaultMcpServerIds),
@@ -155,6 +157,8 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         // from the existing row so a generic field update doesn't wipe them.
         env_vars: user.env_vars_raw,
         default_agentic_config: user.default_agentic_config,
+        primary_agentic_tool: user.primary_agentic_tool,
+        primary_teammate_id: user.primary_teammate_id,
         default_agentic_selection: user.default_agentic_selection,
         default_mcp_server_ids: user.default_mcp_server_ids,
       },

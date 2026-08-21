@@ -108,7 +108,7 @@ interface PromptInputProps {
   sessionId: SessionID;
   getDraft: (id: string) => string;
   saveDraft: (id: string, value: string) => void;
-  deleteDraft: (id: string) => void;
+  deleteDraft: (id: string, expectedText?: string) => void;
   /** Fires only on empty↔non-empty transitions, not every keystroke */
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
@@ -402,12 +402,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
-  // Per-session draft storage (localStorage-backed to survive unmounts).
+  // Shared single-draft storage (localStorage-backed to survive refreshes).
   // Aliased as stable callbacks because they're threaded through props and
   // effect deps below.
-  const getDraft = React.useCallback(getPromptDraft, []);
-  const saveDraft = React.useCallback(savePromptDraft, []);
-  const deleteDraft = React.useCallback(deletePromptDraft, []);
+  const getDraft = React.useCallback(
+    (sessionId: string) => getPromptDraft(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const saveDraft = React.useCallback(
+    (sessionId: string, value: string) => savePromptDraft(currentUserId, sessionId, value),
+    [currentUserId]
+  );
+  const deleteDraft = React.useCallback(
+    (sessionId: string, expectedText?: string) =>
+      deletePromptDraft(currentUserId, sessionId, expectedText),
+    [currentUserId]
+  );
 
   // Input value lives entirely inside PromptInput (local state).
   // The parent reads it imperatively via promptRef / inputValueRef — no
@@ -1056,16 +1066,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
-      if (composerStillOwnsSend) {
+      const composerStillOwnsSentText =
+        composerStillOwnsSend && promptRef.current?.getValue() === latestValue;
+      if (composerStillOwnsSentText) {
         promptRef.current?.clear();
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
-        // The old composer is no longer live; clear only its saved draft so the
-        // successfully sent snapshot does not reappear when the user returns.
-        // Never call promptRef.current?.clear() here because it now belongs to
-        // a different active session.
-        deleteDraft(sendStartSessionId);
+        // The composer moved or its text changed while admission was pending.
+        // Clear only an exactly matching persisted snapshot; never erase the
+        // replacement text now visible to the user.
+        deleteDraft(sendStartSessionId, latestValue);
       }
 
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent

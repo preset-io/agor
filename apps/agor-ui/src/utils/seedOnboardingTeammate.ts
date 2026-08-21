@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session } from '@agor-live/client';
-import type { NewSessionConfig, SessionInitializationResult } from '../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
@@ -45,7 +45,7 @@ export interface SeedOnboardingTeammateInput {
   onCreateSession: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<SessionInitializationResult | null>;
+  ) => Promise<SessionCreationResult | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
   onWarn: (message: string) => void;
 }
@@ -145,7 +145,7 @@ export async function seedOnboardingTeammate(
 ): Promise<{
   branchId?: string;
   sessionId?: string;
-  initialization?: SessionInitializationResult;
+  initialization?: SessionCreationResult;
 }> {
   const teammateName = input.teammateName?.trim();
   // Nothing to seed — the user skipped naming a teammate.

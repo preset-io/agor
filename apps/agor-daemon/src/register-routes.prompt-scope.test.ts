@@ -63,25 +63,24 @@ describe('prompt and widget transaction scopes', () => {
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
 
-  it('keeps public prompt retry identities scoped and separate from Task IDs', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
-    const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
-    const prompt = source.slice(promptStart, runStart);
+  it('initializes required session configuration before first prompt in one tenant write scope', () => {
+    const start = source.indexOf("'/sessions/:id/initialize'");
+    const end = source.indexOf('// Health endpoint', start);
+    const initialization = source.slice(start - 100, end);
 
-    expect(prompt).toContain('idempotencyKey?: UUID');
-    expect(prompt).toContain('const stableTaskId = data.idempotencyTaskId;');
-    expect(prompt).toContain('requestFingerprint: createHash');
-    expect(prompt).toContain('permissionMode: data.permissionMode ?? null');
-    expect(prompt).toContain('stream: data.stream !== false');
-    expect(prompt).toContain('taskRepo.findByPromptIdempotency(');
-    expect(prompt).toContain('prior.session_id !== id');
-    expect(prompt).toContain(
-      'prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt'
-    );
-    expect(prompt).toContain('task_id: requestedTaskId');
-    expect(prompt).toContain('promptIdempotency,');
-    expect(prompt.indexOf('const promptTenantId = getCurrentTenantId()')).toBeLessThan(
-      prompt.indexOf('const stableTaskId = data.idempotencyTaskId;')
+    expect(start).toBeGreaterThan(0);
+    expect(initialization).toContain('registerAuthenticatedRoute(');
+    expect(initialization).toContain('data?.expectedUserId !== callerId');
+    expect(initialization).toContain('await assertTenantWritable(db, tenantId)');
+    const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
+    const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
+    const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");
+    expect(mcpSetup).toBeGreaterThan(0);
+    expect(envSetup).toBeGreaterThan(mcpSetup);
+    expect(promptAdmission).toBeGreaterThan(envSetup);
+    expect(initialization.indexOf("path: 'session-mcp-servers'")).toBeGreaterThan(promptAdmission);
+    expect(initialization.indexOf("path: 'session-env-selections'")).toBeGreaterThan(
+      promptAdmission
     );
   });
 

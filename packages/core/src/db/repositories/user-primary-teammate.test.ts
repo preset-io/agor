@@ -154,6 +154,30 @@ describe('UserPrimaryTeammateRepository', () => {
     expect(await repo.getBranchId(user)).toBe(explicit);
   });
 
+  dbTest('stores the teammate on User without replacing sibling preferences', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const user = await users.create({
+      email: 'user-attribute@example.com',
+      role: 'member',
+      primary_agentic_tool: 'codex',
+    });
+    const board = await createBoard(db, { access_mode: 'shared' });
+    const branchId = await createBranch(db, board.board_id as UUID);
+    const repo = new UserPrimaryTeammateRepository(db);
+
+    await repo.setPrimaryTeammate(user.user_id, branchId, { source: 'explicit' });
+    await expect(users.findById(user.user_id)).resolves.toMatchObject({
+      primary_agentic_tool: 'codex',
+      primary_teammate_id: branchId,
+    });
+
+    await repo.clearPrimaryTeammate(user.user_id);
+    await expect(users.findById(user.user_id)).resolves.toMatchObject({
+      primary_agentic_tool: 'codex',
+      primary_teammate_id: undefined,
+    });
+  });
+
   dbTest('emits an assignment event carrying the source', async ({ db }) => {
     const events: CapturedEvent[] = [];
     setAnalyticsLoggerForTests(createCapturingLogger(events));

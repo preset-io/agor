@@ -6,8 +6,8 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { createHash } from 'node:crypto';
 import { Transform } from 'node:stream';
+import type { SessionInitializationRequest } from '@agor/core/api';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
@@ -27,7 +27,6 @@ import {
   generateId,
   getCurrentTenantId,
   MessagesRepository,
-  PromptIdempotencyConflictError,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -63,6 +62,7 @@ import type {
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
+  MCPServerID,
   Message,
   MessageID,
   MessageSource,
@@ -1575,12 +1575,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           stream?: boolean;
           messageSource?: MessageSource;
           /**
-           * Public caller-generated UUID for safe retry after an ambiguous
-           * transport failure. The Task row is tenant-scoped and reconciliation
-           * additionally binds this key to caller, session, and prompt content.
-           */
-          idempotencyKey?: UUID;
-          /**
            * Internal-only task metadata merged onto the queued/created task.
            * Used by daemon callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
@@ -1608,17 +1602,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!data.prompt) throw new Error('Prompt required');
         if (data.idempotencyTaskId && params.provider) {
           throw new Forbidden('idempotencyTaskId is internal-only');
-        }
-        if (
-          data.idempotencyKey &&
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-            data.idempotencyKey
-          )
-        ) {
-          throw new BadRequest('idempotencyKey must be a UUID');
-        }
-        if (data.idempotencyKey && data.idempotencyTaskId) {
-          throw new BadRequest('Use only one prompt idempotency identity');
         }
         if (data.metadata !== undefined && params.provider) {
           throw new Forbidden('Task metadata is internal-only');
@@ -1698,56 +1681,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        const stableTaskId = data.idempotencyTaskId;
-        const expectedCreator = params.user?.user_id ?? session.created_by;
-        const promptIdempotency = data.idempotencyKey
-          ? {
-              key: data.idempotencyKey,
-              requestFingerprint: createHash('sha256')
-                .update(
-                  JSON.stringify({
-                    prompt: data.prompt,
-                    permissionMode: data.permissionMode ?? null,
-                    stream: data.stream !== false,
-                  })
-                )
-                .digest('hex'),
-            }
-          : undefined;
-        const findPriorAdmission = async (): Promise<Task | null> => {
-          try {
-            if (stableTaskId) return taskRepo.findById(stableTaskId);
-            if (promptIdempotency) {
-              return taskRepo.findByPromptIdempotency(
-                id as SessionID,
-                expectedCreator,
-                promptIdempotency
-              );
-            }
-            return null;
-          } catch (error) {
-            if (error instanceof PromptIdempotencyConflictError) {
-              throw new Conflict(error.message);
-            }
-            throw error;
-          }
-        };
         const reconcileDurablyDispatchedTask = async (): Promise<Task | null> => {
-          if (!stableTaskId && !promptIdempotency) return null;
-          const prior = await findPriorAdmission();
+          if (!data.idempotencyTaskId) return null;
+          const prior = await taskRepo.findById(data.idempotencyTaskId);
           if (!prior) return null;
           if (prior.session_id !== id) {
-            throw new Conflict('Prompt idempotency identity is already in use');
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
           }
+          const expectedCreator = params.user?.user_id ?? session.created_by;
           if (prior.created_by !== expectedCreator || prior.full_prompt !== data.prompt) {
-            throw new Conflict('Prompt idempotency identity is already in use');
+            throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
           }
           if (isTaskPendingDispatch(prior)) return null;
 
           await reconcileStableInitialUserMessage(
             prior,
             params,
-            prior.metadata?.initial_message_id ?? (prior.task_id as MessageID)
+            prior.metadata?.initial_message_id ?? (data.idempotencyTaskId as MessageID)
           );
           return prior;
         };
@@ -1825,46 +1775,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               params
             );
 
-            const prior = await findPriorAdmission();
+            const prior = data.idempotencyTaskId
+              ? await taskRepo.findById(data.idempotencyTaskId)
+              : null;
             if (prior && prior.session_id !== id) {
-              throw new Conflict('Prompt idempotency identity is already in use');
+              throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
-            // Public retry keys are scoped admission identities, never entity
-            // IDs. Allocate the Task/Message UUIDv7 server-side and let the
-            // repository reconcile concurrent requests to the winning row.
-            const requestedTaskId = stableTaskId ?? (promptIdempotency ? generateId() : undefined);
             const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
               trustedInternalMetadata: !params.provider,
             });
-            if (requestedTaskId) {
-              taskMetadata.initial_message_id = requestedTaskId as MessageID;
+            if (data.idempotencyTaskId) {
+              taskMetadata.initial_message_id = data.idempotencyTaskId as MessageID;
             }
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
-            let task: Task;
-            try {
-              task = await taskRepo.createPending({
-                task_id: requestedTaskId,
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.QUEUED,
-                metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
-                promptIdempotency,
-              });
-            } catch (error) {
-              if (error instanceof PromptIdempotencyConflictError) {
-                throw new Conflict(error.message);
-              }
-              throw error;
-            }
+            const task = await taskRepo.createPending({
+              task_id: data.idempotencyTaskId,
+              session_id: id as SessionID,
+              full_prompt: data.prompt,
+              created_by: createdBy,
+              status: TaskStatus.QUEUED,
+              metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
+            });
             await tasksService.autoTitleSession(task, params);
 
-            const admittedNewTask =
-              !prior && (!requestedTaskId || task.task_id === requestedTaskId);
-            if (admittedNewTask) {
+            if (!prior) {
               // Repository admission bypasses TasksService.create. Publish the
               // entity before its possible patched/dispatch event so reactive
               // clients observe a coherent lifecycle.
@@ -1883,8 +1820,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
-                ...((stableTaskId || promptIdempotency) && task.metadata?.initial_message_id
-                  ? { stableInitialMessageId: task.metadata.initial_message_id }
+                ...(data.idempotencyTaskId
+                  ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
                   : {}),
               },
               params
@@ -4534,6 +4471,106 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       create: { role: ROLES.MEMBER, action: 'modify session env selections' },
       remove: { role: ROLES.MEMBER, action: 'modify session env selections' },
       patch: { role: ROLES.MEMBER, action: 'modify session env selections' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // Session initialization
+  //
+  // Session creation and browser file upload remain separate because uploads
+  // are multipart and require a durable session id. Everything that must be
+  // true before the first task starts belongs here, inside one tenant unit of
+  // work: MCP selection, environment selection, then prompt admission.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/initialize',
+    {
+      async create(data: SessionInitializationRequest, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        const callerId = params.user?.user_id;
+        if (!callerId || data?.expectedUserId !== callerId) {
+          throw new Forbidden('Session initialization caller changed');
+        }
+        const tenantId = getCurrentTenantId();
+        if (!tenantId) throw new Error('Missing active tenant context for session initialization');
+        await assertTenantWritable(db, tenantId);
+
+        const session = await authorizeAndLoadSessionForMcpConfig(id, params);
+        let configuredMcpServerIds: MCPServerID[] | undefined;
+        let configuredEnvVarNames: string[] | undefined;
+
+        if (data.mcpServerIds !== undefined) {
+          if (
+            !Array.isArray(data.mcpServerIds) ||
+            !data.mcpServerIds.every((serverId) => typeof serverId === 'string' && serverId)
+          ) {
+            throw new BadRequest('mcpServerIds must contain non-empty strings');
+          }
+          configuredMcpServerIds = [...new Set(data.mcpServerIds)] as MCPServerID[];
+          try {
+            await sessionMCPServersService.setServers(
+              session.session_id,
+              configuredMcpServerIds,
+              params
+            );
+          } catch (error) {
+            if (error instanceof MCPServerNotUsableError) {
+              throw new Forbidden('An MCP server is private to another user');
+            }
+            throw error;
+          }
+        }
+
+        if (data.envVarNames !== undefined) {
+          configuredEnvVarNames = normalizeEnvVarNames(data.envVarNames);
+          await sessionEnvSelectionsService.setAll(
+            session.session_id,
+            configuredEnvVarNames,
+            params
+          );
+        }
+
+        const prompt = data.prompt?.trim();
+        const task = prompt
+          ? await app.service('/sessions/:id/prompt').create(
+              {
+                prompt: data.prompt,
+                permissionMode: data.permissionMode,
+              },
+              { ...params, route: { id: session.session_id } }
+            )
+          : undefined;
+
+        // Publish relationship replacements only once every required stage has
+        // succeeded. If prompt admission throws, the outer tenant transaction
+        // rolls the setup back without broadcasting ghost configuration.
+        if (configuredMcpServerIds) {
+          emitServiceEvent(app, {
+            path: 'session-mcp-servers',
+            event: 'patched',
+            data: { session_id: session.session_id, mcp_server_ids: configuredMcpServerIds },
+            params,
+          });
+        }
+        if (configuredEnvVarNames) {
+          emitServiceEvent(app, {
+            path: 'session-env-selections',
+            event: 'patched',
+            data: { session_id: session.session_id, env_var_names: configuredEnvVarNames },
+            params,
+          });
+        }
+
+        return { session, task };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      create: { role: ROLES.MEMBER, action: 'initialize sessions' },
     },
     requireAuth
   );

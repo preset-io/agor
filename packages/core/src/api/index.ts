@@ -122,16 +122,37 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
-  /** Caller-generated UUID used to reconcile ambiguous transport retries. */
-  idempotencyKey?: string;
 }
 
 export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt'> {
   params?: Params;
 }
 
+/** Required setup for an already-created session, applied before its first prompt. */
+export interface SessionInitializationRequest {
+  /** Fence delayed calls to the identity that created the session. */
+  expectedUserId: string;
+  mcpServerIds?: string[];
+  envVarNames?: string[];
+  prompt?: string;
+  permissionMode?: PermissionMode;
+}
+
+export interface SessionInitializationOptions extends SessionInitializationRequest {
+  params?: Params;
+}
+
+export interface SessionInitializationResult {
+  session: Session;
+  task?: Task;
+}
+
 export interface SessionsClientHelpers {
   prompt(sessionId: string, prompt: string, options?: SessionPromptOptions): Promise<Task>;
+  initialize(
+    sessionId: string,
+    options: SessionInitializationOptions
+  ): Promise<SessionInitializationResult>;
 }
 
 /**
@@ -1253,6 +1274,13 @@ function extendSessionsHelpers(client: AgorClient): void {
         .service(`sessions/${sessionId}/prompt`)
         .create({ prompt, ...requestOptions } as SessionPromptRequest, params);
       return response as Task;
+    },
+    initialize: async (sessionId: string, options: SessionInitializationOptions) => {
+      const { params, ...request } = options;
+      const response = await client
+        .service(`sessions/${sessionId}/initialize`)
+        .create(request, params);
+      return response as SessionInitializationResult;
     },
   };
 

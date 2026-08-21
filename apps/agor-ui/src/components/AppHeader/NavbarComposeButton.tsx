@@ -33,7 +33,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
@@ -64,9 +64,7 @@ export interface NavbarComposeButtonProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
-  sessionInitializationsInFlight?: ReadonlySet<string>;
+  ) => Promise<SessionCreationResult | null>;
   disabled?: boolean;
 }
 
@@ -95,8 +93,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   currentUser,
   currentBoardId,
   onCreateSession,
-  onRetrySessionInitialization,
-  sessionInitializationsInFlight,
   disabled = false,
 }) => {
   const { token } = theme.useToken();
@@ -120,11 +116,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
     valid: true,
   });
-  const [deliveryFailure, setDeliveryFailure] = useState<{
-    sessionId: string;
-    branch: Branch;
-    mode: SendMode;
-  } | null>(null);
   const [inPlaceResult, setInPlaceResult] = useState<{ sessionId: string; branch: Branch } | null>(
     null
   );
@@ -235,7 +226,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setPrompt('');
     setPendingSend(null);
     setPrimaryBranch(null);
-    setDeliveryFailure(null);
     clearAttachments();
   };
 
@@ -312,10 +302,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       );
       if (!outcome) return; // onCreateSession already surfaced the failure
       const { sessionId } = outcome;
-      if (outcome.status === 'retryable') {
-        setDeliveryFailure({ sessionId, branch, mode });
-        return;
-      }
       finishSuccessfulSend(mode, branch, sessionId);
     } finally {
       setSubmitting(null);
@@ -336,35 +322,13 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       setOpen(false);
       setPrompt('');
       setPendingSend(null);
-      setDeliveryFailure(null);
       clearAttachments();
       setInPlaceResult({ sessionId, branch });
     }
   };
 
-  const retrySessionInitialization = async () => {
-    if (!deliveryFailure || !onRetrySessionInitialization) return;
-    const failure = deliveryFailure;
-    setSubmitting(failure.mode);
-    try {
-      const outcome = await onRetrySessionInitialization(failure.sessionId);
-      if (!outcome) {
-        setDeliveryFailure(null);
-        return;
-      }
-      if (outcome.status === 'retryable') {
-        setDeliveryFailure(failure);
-        return;
-      }
-      setDeliveryFailure(null);
-      finishSuccessfulSend(failure.mode, failure.branch, failure.sessionId);
-    } finally {
-      setSubmitting(null);
-    }
-  };
-
   const runSend = async (mode: SendMode, branch = primaryBranch) => {
-    if (disabled || resolveFailed || deliveryFailure || !configValidity.valid) return;
+    if (disabled || resolveFailed || !configValidity.valid) return;
     if (!branch) {
       // Arm synchronously so a fast picker selection cannot outrun validation.
       // The picked branch path validates immediately before creating.
@@ -393,7 +357,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     disabled ||
     resolving ||
     resolveFailed ||
-    deliveryFailure !== null ||
     !configValidity.valid ||
     submitting !== null ||
     (!prompt.trim() && attachments.length === 0);
@@ -562,44 +525,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               Pick a primary assistant above to send.
             </Typography.Text>
           )}
-          {deliveryFailure && (
-            <Alert
-              type="warning"
-              showIcon
-              message="Session created, but setup is incomplete"
-              description="Your complete draft is still here. Retry setup and delivery against the session that was already created."
-              action={
-                <Space>
-                  <Button
-                    size="small"
-                    loading={
-                      submitting !== null ||
-                      sessionInitializationsInFlight?.has(deliveryFailure.sessionId)
-                    }
-                    disabled={
-                      submitting !== null ||
-                      sessionInitializationsInFlight?.has(deliveryFailure.sessionId)
-                    }
-                    onClick={() => void retrySessionInitialization()}
-                  >
-                    Retry setup
-                  </Button>
-                  <Button
-                    size="small"
-                    type="link"
-                    onClick={() => {
-                      setOpen(false);
-                      navigation.goToSession(deliveryFailure.sessionId);
-                    }}
-                  >
-                    Open session
-                  </Button>
-                </Space>
-              }
-              style={{ marginBottom: token.marginXS }}
-            />
-          )}
-
           <Flex justify="flex-end" gap={token.marginXS}>
             <Tooltip title={backgroundTooltip}>
               <Button

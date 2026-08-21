@@ -1,10 +1,10 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionInitializationResult } from '../../domain/sessionCreation';
+import type { SessionCreationResult } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -204,19 +204,12 @@ function renderCompose(opts: {
   pathname?: string;
   currentUser?: User | null;
   disabled?: boolean;
-  onCreateSession?: (
-    config: unknown,
-    boardId: string
-  ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
+  onCreateSession?: (config: unknown, boardId: string) => Promise<SessionCreationResult | null>;
 }) {
   const onCreateSession =
     opts.onCreateSession ??
     vi.fn().mockResolvedValue({
-      status: 'complete',
       sessionId: 'session-new',
-      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
-      delivery: { prompt: 'not-requested', attachments: 'not-requested' },
     });
   const result = render(
     <MemoryRouter initialEntries={[opts.pathname ?? '/b/x/']}>
@@ -226,7 +219,6 @@ function renderCompose(opts: {
           currentUser={opts.currentUser ?? null}
           currentBoardId={opts.currentBoardId ?? 'board-current'}
           onCreateSession={onCreateSession as never}
-          onRetrySessionInitialization={opts.onRetrySessionInitialization}
           disabled={opts.disabled}
         />
       </AntApp>
@@ -505,60 +497,6 @@ describe('NavbarComposeButton', () => {
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(goToSession).not.toHaveBeenCalled();
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
-  });
-
-  it('preserves the draft and avoids a false success when initial delivery fails', async () => {
-    const retry = {
-      content: {
-        prompt: 'do not lose me',
-        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
-      },
-    };
-    const onCreateSession = vi.fn().mockResolvedValue({
-      status: 'retryable',
-      sessionId: 'session-undelivered',
-      setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
-      delivery: {
-        prompt: 'failed',
-        attachments: 'not-requested',
-        retry: retry.content,
-      },
-      retry,
-    });
-    let finishRetry!: (outcome: SessionInitializationResult) => void;
-    const onRetrySessionInitialization = vi.fn(
-      () => new Promise<SessionInitializationResult>((resolve) => (finishRetry = resolve))
-    );
-    renderCompose({ primary: primaryBranch, onCreateSession, onRetrySessionInitialization });
-    openPopover();
-    const prompt = await screen.findByTestId('compose-prompt');
-    fireEvent.change(prompt, { target: { value: 'do not lose me' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send in Background' }));
-
-    expect(await screen.findByText('Session created, but setup is incomplete')).toBeInTheDocument();
-    expect(prompt).toHaveValue('do not lose me');
-    expect(screen.getByRole('button', { name: 'Send in Background' })).toBeDisabled();
-    expect(goToSession).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
-    await waitFor(() =>
-      expect(onRetrySessionInitialization).toHaveBeenCalledWith('session-undelivered')
-    );
-    expect(screen.getByRole('button', { name: /Retry setup/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /Retry setup/ }));
-    expect(onRetrySessionInitialization).toHaveBeenCalledTimes(1);
-    await act(async () =>
-      finishRetry({
-        status: 'complete',
-        sessionId: 'session-undelivered',
-        setup: { mcpServers: 'not-requested', environmentVariables: 'not-requested' },
-        delivery: { prompt: 'delivered', attachments: 'not-requested' },
-      })
-    );
-    await waitFor(() =>
-      expect(screen.queryByText('Session created, but setup is incomplete')).not.toBeInTheDocument()
-    );
-    expect(goToSession).not.toHaveBeenCalled();
   });
 
   it('disables the compose mutation surface while the connection is unavailable', () => {

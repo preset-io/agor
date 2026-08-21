@@ -14,7 +14,7 @@
  * This wrapper returns augmented query builders with unified execution methods.
  */
 
-import { type SQL, sql } from 'drizzle-orm';
+import { type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -143,6 +143,39 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
       return sql`${column}${sql.join(objectParts, sql``)}${sql.raw(`->>'${lastPart}'`)}`;
     }
   }
+}
+
+/**
+ * Set a top-level JSON property without replacing unrelated properties.
+ *
+ * User preferences and credential metadata share `users.data`; callers must
+ * never implement a read/spread/write cycle that can lose a concurrent update
+ * to a sibling property.
+ */
+export function jsonSetString(db: Database, column: SQLWrapper, key: string, value: string): SQL {
+  if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {
+    throw new Error(`jsonSetString only supports safe top-level keys: ${key}`);
+  }
+  if (isSQLiteDatabase(db)) {
+    return sql`json_set(${column}, ${`$.${key}`}, ${value})`;
+  }
+  return sql`pg_catalog.jsonb_set(
+    ${column},
+    ${`{${key}}`}::pg_catalog.text[],
+    pg_catalog.to_jsonb(${value}::pg_catalog.text),
+    true
+  )`;
+}
+
+/** Remove a top-level JSON property without replacing unrelated properties. */
+export function jsonRemoveProperty(db: Database, column: SQLWrapper, key: string): SQL {
+  if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {
+    throw new Error(`jsonRemoveProperty only supports safe top-level keys: ${key}`);
+  }
+  if (isSQLiteDatabase(db)) {
+    return sql`json_remove(${column}, ${`$.${key}`})`;
+  }
+  return sql`${column} - ${key}`;
 }
 
 /**

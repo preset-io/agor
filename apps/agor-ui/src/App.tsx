@@ -50,31 +50,7 @@ import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
-import type {
-  NewSessionConfig,
-  SessionInitializationResult,
-  SessionInitializationRetry,
-} from './domain/sessionCreation';
-import {
-  admitSessionInitializationPrompt,
-  createPromptIdempotencyKey,
-  initializeCreatedSession,
-} from './domain/sessionCreation';
-import {
-  createSessionInitializationRecoveryState,
-  pruneSessionInitializationRecovery,
-  recordSessionInitializationResult,
-  runSessionInitializationSingleFlight,
-  scopeSessionInitializationRecovery,
-} from './domain/sessionInitializationRecovery';
-import {
-  captureSessionPromptDraft,
-  clearSessionPromptDraft,
-  createSessionPromptDraftState,
-  readSessionPromptDrafts,
-  scopeSessionPromptDraftState,
-  updateSessionPromptDraft,
-} from './domain/sessionPromptDrafts';
+import type { NewSessionConfig, SessionCreationResult } from './domain/sessionCreation';
 import {
   IdentityContractState,
   useAgorClient,
@@ -106,6 +82,7 @@ import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
+import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import { getRouterBasename } from './utils/uiRoutes';
@@ -127,9 +104,6 @@ const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
 // Stable empty-repo array so the onboarding framework-repo memo keeps a constant
 // identity while the wizard is closed (no framework repo resolved yet).
 const EMPTY_REPOS: Repo[] = [];
-const EMPTY_SESSION_INITIALIZATION_RETRIES: ReadonlyMap<string, SessionInitializationRetry> =
-  new Map();
-const EMPTY_SESSION_PROMPT_DRAFTS: ReadonlyMap<string, string> = new Map();
 
 /**
  * Resolve the framework repo once it reaches `clone_status: 'ready'`, up to a
@@ -480,81 +454,8 @@ function AppContent() {
     }
   }, [location.pathname, location.search]);
 
-  const recoveryOwnerId = user?.user_id ?? null;
-  const initializationGenerationOwnerRef = useRef(recoveryOwnerId);
-  const initializationGenerationRef = useRef(0);
-  if (initializationGenerationOwnerRef.current !== recoveryOwnerId) {
-    initializationGenerationOwnerRef.current = recoveryOwnerId;
-    initializationGenerationRef.current += 1;
-  }
-  const authenticationGeneration = initializationGenerationRef.current;
-  // Per-session prompt drafts persist across session switches, but never across callers.
-  const [sessionPromptDraftState, setSessionPromptDraftState] = useState(() =>
-    createSessionPromptDraftState(recoveryOwnerId, authenticationGeneration)
-  );
-  const [sessionInitializationRecovery, setSessionInitializationRecovery] = useState(() =>
-    createSessionInitializationRecoveryState(recoveryOwnerId)
-  );
-  const sessionInitializationRecoveryRef = useRef(sessionInitializationRecovery);
-  const recoveryOwnerIdRef = useRef(recoveryOwnerId);
-  recoveryOwnerIdRef.current = recoveryOwnerId;
-  const initializationFlightsRef = useRef(new Map<string, Promise<SessionInitializationResult>>());
-  const initializationAbortControllersRef = useRef(new Map<string, AbortController>());
-  const [sessionInitializationsInFlight, setSessionInitializationsInFlight] = useState<
-    ReadonlySet<string>
-  >(new Set());
-
-  // Identity can rotate while the Feathers client remains mounted. Scope
-  // retained prompts/files by caller. The render-time owner comparison keeps
-  // the previous caller's payload invisible before the clearing effect runs.
-  const sessionInitializationRetries =
-    sessionInitializationRecovery.ownerId === recoveryOwnerId
-      ? sessionInitializationRecovery.retries
-      : EMPTY_SESSION_INITIALIZATION_RETRIES;
-  const promptDrafts =
-    sessionPromptDraftState.ownerId === recoveryOwnerId &&
-    sessionPromptDraftState.ownerGeneration === authenticationGeneration
-      ? readSessionPromptDrafts(sessionPromptDraftState)
-      : EMPTY_SESSION_PROMPT_DRAFTS;
-
-  useEffect(() => {
-    for (const controller of initializationAbortControllersRef.current.values()) {
-      controller.abort();
-    }
-    initializationAbortControllersRef.current.clear();
-    initializationFlightsRef.current.clear();
-    setSessionInitializationsInFlight(new Set());
-    setSessionPromptDraftState((current) =>
-      scopeSessionPromptDraftState(current, recoveryOwnerId, authenticationGeneration)
-    );
-    setSessionInitializationRecovery(() => {
-      const next = scopeSessionInitializationRecovery(
-        sessionInitializationRecoveryRef.current,
-        recoveryOwnerId
-      );
-      sessionInitializationRecoveryRef.current = next;
-      return next;
-    });
-  }, [authenticationGeneration, recoveryOwnerId]);
-
-  // Realtime deletion can happen in another browser, so prune independently
-  // of this component's explicit delete handler without subscribing the shell
-  // to every session-map render.
-  useEffect(
-    () =>
-      agorStore.subscribe((state, previous) => {
-        if (state.sessionById === previous.sessionById) return;
-        setSessionInitializationRecovery(() => {
-          const next = pruneSessionInitializationRecovery(
-            sessionInitializationRecoveryRef.current,
-            (sessionId) => state.sessionById.has(sessionId as SessionID)
-          );
-          sessionInitializationRecoveryRef.current = next;
-          return next;
-        });
-      }),
-    []
-  );
+  const currentUserIdRef = useRef(user?.user_id ?? null);
+  currentUserIdRef.current = user?.user_id ?? null;
 
   // Track if we've successfully loaded data at least once
   // This prevents UI from unmounting during reconnections
@@ -1113,160 +1014,30 @@ function AppContent() {
     );
   }
 
-  const initializeSession = (
-    sessionId: string,
-    initialization: SessionInitializationRetry
-  ): Promise<SessionInitializationResult> => {
-    const operationOwnerId = recoveryOwnerId;
-    if (!operationOwnerId) {
-      return Promise.reject(new Error('Authenticated user required to initialize a session'));
-    }
-    const operationGeneration = initializationGenerationRef.current;
-    const operationAccessToken = accessToken;
-    const flightKey = `${operationOwnerId}:${sessionId}`;
-
-    return runSessionInitializationSingleFlight(
-      initializationFlightsRef.current,
-      flightKey,
-      async () => {
-        const abortController = new AbortController();
-        initializationAbortControllersRef.current.set(flightKey, abortController);
-        setSessionInitializationsInFlight((current) => new Set(current).add(sessionId));
-
-        const shouldContinue = () =>
-          !!operationOwnerId &&
-          recoveryOwnerIdRef.current === operationOwnerId &&
-          initializationGenerationRef.current === operationGeneration &&
-          !abortController.signal.aborted;
-
-        const outcome = await initializeCreatedSession(sessionId, initialization, {
-          shouldContinue,
-          associateMcpServer: async (targetSessionId, serverId) => {
-            if (!client) throw new Error('Connection unavailable');
-            await client.service(`sessions/${targetSessionId}/mcp-servers`).create({
-              mcpServerId: serverId,
-            });
-          },
-          updateEnvironmentVariables: async (targetSessionId, envVarNames) => {
-            if (!client) throw new Error('Connection unavailable');
-            await client.service(`sessions/${targetSessionId}/env-selections`).patch(null, {
-              envVarNames,
-            });
-          },
-          uploadAttachments: async (targetSessionId, prompt, files) => {
-            const uploaded = await uploadFilesToSession({
-              sessionId: targetSessionId,
-              daemonUrl: getDaemonUrl(),
-              files,
-              notifyAgent: false,
-              accessToken: operationAccessToken,
-              signal: abortController.signal,
-            });
-            return buildPromptWithAttachments(prompt, uploaded.files);
-          },
-          sendPrompt: (targetSessionId, prompt, permissionMode, idempotencyKey) =>
-            admitSessionInitializationPrompt(
-              async () => {
-                if (!client) throw new Error('Connection unavailable');
-                await client.sessions.prompt(targetSessionId, prompt, {
-                  permissionMode,
-                  idempotencyKey,
-                });
-              },
-              shouldContinue,
-              (error) => {
-                showError(
-                  `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
-                );
-                console.error('Prompt error:', error);
-              }
-            ),
-          onSetupError: (stage, error) => {
-            const label = stage === 'mcpServers' ? 'MCP servers' : 'environment variables';
-            showError(
-              `Failed to configure ${label}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          },
-          onAttachmentUploadError: (error) => {
-            showError(
-              `Failed to upload attachments: ${error instanceof Error ? error.message : String(error)}`
-            );
-          },
-        });
-        if (!shouldContinue()) return outcome;
-        setSessionInitializationRecovery(() => {
-          const next = recordSessionInitializationResult(
-            scopeSessionInitializationRecovery(
-              sessionInitializationRecoveryRef.current,
-              operationOwnerId
-            ),
-            operationOwnerId,
-            outcome,
-            agorStore.getState().sessionById.has(sessionId as SessionID)
-          );
-          sessionInitializationRecoveryRef.current = next;
-          return next;
-        });
-        return outcome;
-      },
-      () => {
-        initializationAbortControllersRef.current.delete(flightKey);
-        if (
-          recoveryOwnerIdRef.current === operationOwnerId &&
-          initializationGenerationRef.current === operationGeneration
-        ) {
-          setSessionInitializationsInFlight((current) => {
-            const next = new Set(current);
-            next.delete(sessionId);
-            return next;
-          });
-        }
-      }
-    );
-  };
-
-  const retrySessionInitialization = async (
-    sessionId: string
-  ): Promise<SessionInitializationResult | null> => {
-    const ownerId = recoveryOwnerId;
-    if (!ownerId || sessionInitializationRecoveryRef.current.ownerId !== ownerId) return null;
-    const retry = sessionInitializationRecoveryRef.current.retries.get(sessionId);
-    if (!retry) return null;
-    const outcome = await initializeSession(sessionId, retry);
-    const tool = agorStore.getState().sessionById.get(sessionId)?.agentic_tool;
-    if (outcome.status === 'complete' && isAgenticToolName(tool)) {
-      void setPrimaryAgenticToolIfUnset(client, currentUser, tool).catch((error) => {
-        console.warn(
-          '[sessions] Failed to seed primary coding agent:',
-          error instanceof Error ? error.message : String(error)
-        );
-      });
-    }
-    return outcome;
-  };
-
-  // Handle session creation
+  // Handle session creation. The browser owns only the multipart upload gap;
+  // required session configuration and prompt admission are one daemon-side
+  // tenant unit of work. A failure leaves a usable blank session and seeds the
+  // normal composer rather than retaining a second recovery state machine.
   const handleCreateSession = async (
     config: NewSessionConfig,
-    boardId: string
-  ): Promise<SessionInitializationResult | null> => {
+    _boardId: string
+  ): Promise<SessionCreationResult | null> => {
     const branch_id = config.branch_id;
     if (!branch_id) {
       showError('Failed to create session: Branch ID is required to create a session');
       return null;
     }
+    if (!client || !currentUser) {
+      showError('Failed to create session: Authentication required');
+      return null;
+    }
 
+    const operationUserId = currentUser.user_id;
+    const operationAccessToken = accessToken;
     const { attachmentFiles, ...sessionConfig } = config;
-    let session: Session | null = null;
+    let session: Session;
     try {
-      // Files pasted/dropped into the New Session modal ride along on the
-      // config but must never enter the session-create REST payload — strip
-      // them out and upload them once the session (and its ID) exists.
-      // Create the session with the branch_id
-      session = await createSession({
-        ...sessionConfig,
-        branch_id,
-      });
+      session = await createSession({ ...sessionConfig, branch_id });
     } catch (error) {
       showError(
         `Failed to create session: ${error instanceof Error ? error.message : String(error)}`
@@ -1274,76 +1045,65 @@ function AppContent() {
       return null;
     }
 
-    if (!session) {
-      showError('Failed to create session');
-      return null;
-    }
-
-    // From this point onward the session identity is durable. Every setup or
-    // delivery failure is represented as a retry against this same session;
-    // never collapse back to null and invite a duplicate create.
     sessionCreated(session);
     showSuccess('Session created!');
-    const outcome = await initializeSession(session.session_id, {
-      mcpServerIds: config.mcpServerIds,
-      envVarNames: config.envVarNames,
-      content: {
-        prompt: config.initialPrompt ?? '',
-        attachmentFiles,
+
+    let prompt = config.initialPrompt ?? '';
+    try {
+      if (attachmentFiles?.length) {
+        const uploaded = await uploadFilesToSession({
+          sessionId: session.session_id,
+          daemonUrl: getDaemonUrl(),
+          files: attachmentFiles,
+          notifyAgent: false,
+          accessToken: operationAccessToken,
+        });
+        prompt = buildPromptWithAttachments(prompt, uploaded.files);
+      }
+
+      // The Feathers client can survive a logout/login. Never let a delayed
+      // operation continue under the newly authenticated caller.
+      if (currentUserIdRef.current !== operationUserId) return null;
+
+      await client.sessions.initialize(session.session_id, {
+        expectedUserId: operationUserId,
+        mcpServerIds: config.mcpServerIds,
+        envVarNames: config.envVarNames,
+        prompt,
         permissionMode: config.permissionMode,
-        idempotencyKey: createPromptIdempotencyKey(),
-      },
-    });
-    if (outcome.status === 'complete' && isAgenticToolName(config.agent)) {
-      // Preference bootstrapping is deliberately non-blocking: initialization
-      // succeeded, and a profile-sync failure must not strand the new session.
-      void setPrimaryAgenticToolIfUnset(client, currentUser, config.agent).catch((error) => {
-        console.warn(
-          '[sessions] Failed to seed primary coding agent:',
-          error instanceof Error ? error.message : String(error)
-        );
       });
+
+      if (currentUserIdRef.current !== operationUserId) return null;
+      if (isAgenticToolName(config.agent)) {
+        void setPrimaryAgenticToolIfUnset(client, currentUser, config.agent).catch((error) => {
+          console.warn(
+            '[sessions] Failed to seed primary coding agent:',
+            error instanceof Error ? error.message : String(error)
+          );
+        });
+      }
+      return { sessionId: session.session_id };
+    } catch (error) {
+      if (currentUserIdRef.current !== operationUserId) return null;
+      savePromptDraft(operationUserId, session.session_id, prompt);
+      showError(
+        `Session created, but setup did not finish: ${
+          error instanceof Error ? error.message : String(error)
+        }. Open the session to review setup and retry the prompt.`
+      );
+      return { sessionId: session.session_id };
     }
-    return outcome;
-  };
-
-  // Update draft for a specific session
-  const handleUpdateDraft = (sessionId: string, draft: string) => {
-    setSessionPromptDraftState((current) =>
-      updateSessionPromptDraft(current, recoveryOwnerId, authenticationGeneration, sessionId, draft)
-    );
-  };
-
-  // Clear draft for a specific session
-  const handleClearDraft = (sessionId: string) => {
-    const snapshot = captureSessionPromptDraft(
-      sessionPromptDraftState,
-      recoveryOwnerId,
-      authenticationGeneration,
-      sessionId,
-      sessionPromptDraftState.entries.get(sessionId)?.text ?? ''
-    );
-    setSessionPromptDraftState((current) => clearSessionPromptDraft(current, snapshot));
   };
 
   // Handle fork session
   //
   // On failure we RETHROW the error so upstream modals (ForkSpawnModal) can
   // stay open and preserve the user's typed prompt. The error toast is still
-  // surfaced here so the user gets immediate feedback either way. We also
-  // mirror the prompt onto the forked session's per-session draft so that if
-  // the async executor spawn fails later (the fork REST call can succeed
-  // while the background executor errors out silently), the user can still
-  // find their prompt in the new session's compose box.
+  // surfaced here so the user gets immediate feedback either way.
   const handleForkSession = async (sessionId: string, prompt: string) => {
     try {
-      const session = await forkSession(sessionId as SessionID, prompt);
+      await forkSession(sessionId as SessionID, prompt);
       showSuccess('Session forked successfully!');
-      // Seed a per-session draft on the new fork so the prompt is recoverable
-      // even if the background executor fails after the REST call returned.
-      handleUpdateDraft(session.session_id, prompt);
-      // Clear the parent's draft after a successful fork
-      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fork session';
       showError(`Failed to fork session: ${message}`);
@@ -1354,10 +1114,8 @@ function AppContent() {
   // Handle btw fork session (ephemeral fork for side questions)
   const handleBtwForkSession = async (sessionId: string, prompt: string) => {
     try {
-      const session = await btwForkSession(sessionId as SessionID, prompt);
+      await btwForkSession(sessionId as SessionID, prompt);
       showSuccess('Side question sent via btw fork');
-      handleUpdateDraft(session.session_id, prompt);
-      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create btw fork';
       showError(`Failed to create btw fork: ${message}`);
@@ -1370,13 +1128,8 @@ function AppContent() {
     // Handle both string prompt and full SpawnConfig
     const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
     try {
-      const session = await spawnSession(sessionId as SessionID, spawnConfig);
+      await spawnSession(sessionId as SessionID, spawnConfig);
       showSuccess('Subsession session spawned successfully!');
-      if (spawnConfig.prompt?.trim()) {
-        handleUpdateDraft(session.session_id, spawnConfig.prompt);
-      }
-      // Clear the draft after spawning subsession
-      handleClearDraft(sessionId);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to spawn session';
       showError(`Failed to spawn session: ${message}`);
@@ -1388,34 +1141,15 @@ function AppContent() {
   const handleSendPrompt = async (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode,
-    idempotencyKey?: string
+    permissionMode?: PermissionMode
   ): Promise<boolean> => {
     if (!client) return false;
-    const operationOwnerId = recoveryOwnerId;
-    const operationGeneration = authenticationGeneration;
-    const draftSnapshot = captureSessionPromptDraft(
-      sessionPromptDraftState,
-      operationOwnerId,
-      operationGeneration,
-      sessionId,
-      prompt
-    );
-
+    const operationUserId = currentUserIdRef.current;
     try {
-      await client.sessions.prompt(sessionId, prompt, {
-        permissionMode,
-        idempotencyKey,
-      });
-
-      // Clear the draft after sending
-      setSessionPromptDraftState((current) => clearSessionPromptDraft(current, draftSnapshot));
+      await client.sessions.prompt(sessionId, prompt, { permissionMode });
       return true;
     } catch (error) {
-      if (
-        recoveryOwnerIdRef.current === operationOwnerId &&
-        initializationGenerationRef.current === operationGeneration
-      ) {
+      if (currentUserIdRef.current === operationUserId) {
         showError(
           `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
         );
@@ -1439,14 +1173,6 @@ function AppContent() {
   const handleDeleteSession = async (sessionId: string) => {
     const success = await deleteSession(sessionId as SessionID);
     if (success) {
-      setSessionInitializationRecovery(() => {
-        const next = pruneSessionInitializationRecovery(
-          sessionInitializationRecoveryRef.current,
-          (retainedSessionId) => retainedSessionId !== sessionId
-        );
-        sessionInitializationRecoveryRef.current = next;
-        return next;
-      });
       showSuccess('Session deleted successfully!');
     } else {
       showError('Failed to delete session');
@@ -2114,9 +1840,6 @@ function AppContent() {
         />
       }
       onCreateSession={handleCreateSession}
-      onRetrySessionInitialization={retrySessionInitialization}
-      sessionInitializationRetries={sessionInitializationRetries}
-      sessionInitializationsInFlight={sessionInitializationsInFlight}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}
@@ -2256,8 +1979,6 @@ function AppContent() {
                 onToggleReaction={handleToggleReaction}
                 onDeleteComment={handleDeleteComment}
                 onLogout={logout}
-                promptDrafts={promptDrafts}
-                onUpdateDraft={handleUpdateDraft}
               />
             }
           />

@@ -34,8 +34,6 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
-  promptDrafts: ReadonlyMap<string, string>;
-  onUpdateDraft: (sessionId: string, draft: string) => void;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -48,8 +46,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
-  promptDrafts,
-  onUpdateDraft,
 }) => {
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
@@ -129,8 +125,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               currentUser={user}
               onSendPrompt={onSendPrompt}
               onMenuClick={() => setDrawerOpen(true)}
-              promptDrafts={promptDrafts}
-              onUpdateDraft={onUpdateDraft}
             />
           }
         />

@@ -1,31 +1,29 @@
 import type { Branch, BranchID, UserID } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
+import { and, eq, isNull } from 'drizzle-orm';
 import { analyticsLogger } from '../../analytics/logger';
 import type { Database } from '../client';
-import { AppVariableRepository } from './app-variables';
+import {
+  jsonExtract,
+  jsonRemoveProperty,
+  jsonSetString,
+  select,
+  update,
+} from '../database-wrapper';
+import { users } from '../schema';
 import { BranchRepository } from './branches';
-
-/**
- * app_variables namespace for a user's primary teammate branch. The row key is
- * the user id, so there is one value per (tenant, user) — tenant scoping is
- * ambient via the tenant-scoped database, mirroring KnowledgeSemanticSettings.
- * Named distinctly from boards' `primary_teammate_id` to avoid any collision.
- */
-export const USER_PRIMARY_TEAMMATE_NAMESPACE = 'user.primary_teammate_branch';
 
 /** Analytics event emitted whenever a user's primary teammate branch is set. */
 export const USER_PRIMARY_TEAMMATE_SET_EVENT = 'user.primary_teammate.set';
 
 /**
  * How the primary teammate came to be set: `default` for backfill/onboarding
- * auto-assignment, `explicit` for a later user-driven pick (a future phase).
+ * auto-assignment, `explicit` for a user-driven Settings pick.
  */
 export type PrimaryTeammateAssignmentSource = 'default' | 'explicit';
 
 export interface SetPrimaryTeammateOptions {
   source: PrimaryTeammateAssignmentSource;
-  /** Actor for the app_variable audit column; defaults to the target user. */
-  updatedBy?: UserID | null;
 }
 
 export interface ResolvePrimaryTeammateOptions {
@@ -50,18 +48,24 @@ export function buildPrimaryTeammateSetAnalyticsProperties(
  * database; reads and writes are scoped to the ambient tenant.
  */
 export class UserPrimaryTeammateRepository {
-  private variables: AppVariableRepository;
   private branches: BranchRepository;
 
   constructor(db: Database) {
-    this.variables = new AppVariableRepository(db);
     this.branches = new BranchRepository(db);
+    this.db = db;
   }
+
+  private db: Database;
 
   /** Raw stored branch id for the user, or null when unset. */
   async getBranchId(userId: UserID): Promise<BranchID | null> {
-    const value = await this.variables.getPlain(USER_PRIMARY_TEAMMATE_NAMESPACE, userId);
-    return (value as BranchID | null) ?? null;
+    const row = await select(this.db, {
+      branchId: jsonExtract(this.db, users.data, 'primary_teammate_id'),
+    })
+      .from(users)
+      .where(eq(users.user_id, userId))
+      .one();
+    return (row?.branchId as BranchID | null | undefined) ?? null;
   }
 
   /**
@@ -126,12 +130,13 @@ export class UserPrimaryTeammateRepository {
     branchId: BranchID,
     options: SetPrimaryTeammateOptions
   ): Promise<void> {
-    await this.variables.set({
-      namespace: USER_PRIMARY_TEAMMATE_NAMESPACE,
-      key: userId,
-      value: branchId,
-      updated_by: options.updatedBy ?? userId,
-    });
+    await update(this.db, users)
+      .set({
+        updated_at: new Date(),
+        data: jsonSetString(this.db, users.data, 'primary_teammate_id', branchId),
+      })
+      .where(eq(users.user_id, userId))
+      .run();
     analyticsLogger.track(
       USER_PRIMARY_TEAMMATE_SET_EVENT,
       buildPrimaryTeammateSetAnalyticsProperties(userId, branchId, options.source),
@@ -145,12 +150,20 @@ export class UserPrimaryTeammateRepository {
     branchId: BranchID,
     options: SetPrimaryTeammateOptions
   ): Promise<boolean> {
-    const inserted = await this.variables.setIfAbsent({
-      namespace: USER_PRIMARY_TEAMMATE_NAMESPACE,
-      key: userId,
-      value: branchId,
-      updated_by: options.updatedBy ?? userId,
-    });
+    const updated = await update(this.db, users)
+      .set({
+        updated_at: new Date(),
+        data: jsonSetString(this.db, users.data, 'primary_teammate_id', branchId),
+      })
+      .where(
+        and(
+          eq(users.user_id, userId),
+          isNull(jsonExtract(this.db, users.data, 'primary_teammate_id'))
+        )
+      )
+      .returning({ userId: users.user_id })
+      .one();
+    const inserted = Boolean(updated);
     if (inserted) {
       analyticsLogger.track(
         USER_PRIMARY_TEAMMATE_SET_EVENT,
@@ -163,6 +176,12 @@ export class UserPrimaryTeammateRepository {
 
   /** Clear the user's primary teammate branch. */
   async clearPrimaryTeammate(userId: UserID): Promise<void> {
-    await this.variables.delete(USER_PRIMARY_TEAMMATE_NAMESPACE, userId);
+    await update(this.db, users)
+      .set({
+        updated_at: new Date(),
+        data: jsonRemoveProperty(this.db, users.data, 'primary_teammate_id'),
+      })
+      .where(eq(users.user_id, userId))
+      .run();
   }
 }

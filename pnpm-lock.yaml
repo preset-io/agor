@@ -516,9 +516,6 @@ importers:
       use-stick-to-bottom:
         specifier: ^1.1.6
         version: 1.1.6(react@19.2.8)
-      uuid:
-        specifier: ^14.0.1
-        version: 14.0.1
       vega:
         specifier: ^6.3.1
         version: 6.3.1

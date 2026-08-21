@@ -8,7 +8,7 @@ import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import type { NewSessionConfig, SessionInitializationResult } from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -62,9 +62,7 @@ export interface AppHeaderProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
-  sessionInitializationsInFlight?: ReadonlySet<string>;
+  ) => Promise<SessionCreationResult | null>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -142,8 +140,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   instanceLabel,
   instanceDescription,
   onCreateSession,
-  onRetrySessionInitialization,
-  sessionInitializationsInFlight,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -309,8 +305,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             currentUser={user}
             currentBoardId={currentBoardId}
             onCreateSession={onCreateSession}
-            onRetrySessionInitialization={onRetrySessionInitialization}
-            sessionInitializationsInFlight={sessionInitializationsInFlight}
             disabled={mutationDisabled}
           />
         )}

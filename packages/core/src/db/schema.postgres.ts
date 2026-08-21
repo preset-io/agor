@@ -345,12 +345,6 @@ export const tasks = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
 
-    // Public prompt retries use a caller-provided admission key without
-    // overloading the server-owned UUIDv7 Task identity. The fingerprint
-    // binds the key to the complete execution request.
-    prompt_idempotency_key: varchar('prompt_idempotency_key', { length: 36 }),
-    prompt_request_fingerprint: varchar('prompt_request_fingerprint', { length: 64 }),
-
     data: t
       .json<unknown>('data')
       .$type<{
@@ -421,9 +415,6 @@ export const tasks = pgTable(
     queuedPositionUnique: uniqueIndex('tasks_queued_position_unique')
       .on(table.tenant_id, table.session_id, table.queue_position)
       .where(sql`${table.status} = 'queued'`),
-    promptIdempotencyUnique: uniqueIndex('tasks_prompt_idempotency_unique')
-      .on(table.tenant_id, table.created_by, table.session_id, table.prompt_idempotency_key)
-      .where(sql`${table.prompt_idempotency_key} IS NOT NULL`),
     // Bounded all-daemon recovery discovers one routing ref per queued
     // Session in tenant/session order. The partial predicate keeps active and
     // historical Tasks out of this small recovery index.
@@ -1161,6 +1152,7 @@ export const users = pgTable(
           };
         };
         primary_agentic_tool?: import('../types/agentic-tool').AgenticToolName;
+        primary_teammate_id?: import('../types/id').BranchID;
         default_mcp_server_ids?: string[];
         default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()

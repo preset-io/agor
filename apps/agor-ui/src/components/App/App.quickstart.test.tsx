@@ -184,13 +184,7 @@ function optimisticCreate(...ids: string[]) {
     call += 1;
     insertSession(id);
     return {
-      status: 'complete' as const,
       sessionId: id,
-      setup: {
-        mcpServers: 'not-requested' as const,
-        environmentVariables: 'not-requested' as const,
-      },
-      delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
     };
   });
 }
@@ -216,22 +210,9 @@ function NavProbe() {
 function renderShell(
   user: User,
   onCreateSession = vi.fn(async () => ({
-    status: 'complete' as const,
     sessionId: 'new-session-id',
-    setup: {
-      mcpServers: 'not-requested' as const,
-      environmentVariables: 'not-requested' as const,
-    },
-    delivery: { prompt: 'not-requested' as const, attachments: 'not-requested' as const },
   })),
-  client: unknown = null,
-  recovery?: {
-    retries: ReadonlyMap<string, import('../../domain/sessionCreation').SessionInitializationRetry>;
-    inFlight?: ReadonlySet<string>;
-    onRetry: (
-      sessionId: string
-    ) => Promise<import('../../domain/sessionCreation').SessionInitializationResult | null>;
-  }
+  client: unknown = null
 ) {
   // Mirror the real router: the same App element is mounted at the board,
   // session, and branch paths, so navigating between them preserves App state
@@ -245,9 +226,6 @@ function renderShell(
       availableAgents={AVAILABLE_AGENTS}
       initialBoardId={BOARD_ID}
       onCreateSession={onCreateSession}
-      sessionInitializationRetries={recovery?.retries}
-      sessionInitializationsInFlight={recovery?.inFlight}
-      onRetrySessionInitialization={recovery?.onRetry}
     />
   );
   render(
@@ -404,73 +382,6 @@ describe('App quick-start — always shows the tool picker', () => {
 
     expect(screen.getByTestId('tool-picker')).toBeInTheDocument();
     expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument();
-  });
-
-  it('hands standard-modal initialization failures to the selected session recovery surface', async () => {
-    const retry = {
-      content: {
-        prompt: 'retain this draft',
-        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
-      },
-    };
-    const onCreateSession = vi.fn(async () => {
-      insertSession(SESSION_A);
-      return {
-        status: 'retryable' as const,
-        sessionId: SESSION_A,
-        setup: { mcpServers: 'failed' as const, environmentVariables: 'pending' as const },
-        delivery: { prompt: 'pending' as const, attachments: 'not-requested' as const },
-        retry,
-      };
-    });
-    const onRetry = vi.fn(async () => ({
-      status: 'complete' as const,
-      sessionId: SESSION_A,
-      setup: { mcpServers: 'configured' as const, environmentVariables: 'not-requested' as const },
-      delivery: { prompt: 'delivered' as const, attachments: 'not-requested' as const },
-    }));
-    renderShell(USER, onCreateSession, null, {
-      retries: new Map([[SESSION_A, retry]]),
-      onRetry,
-    });
-
-    fireEvent.click(await screen.findByTestId('quick-start'));
-    fireEvent.click(await screen.findByTestId('advanced-setup'));
-    await act(async () => fireEvent.click(await screen.findByTestId('modal-create')));
-
-    expect(await screen.findByText('Session created, but setup is incomplete')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry setup' }));
-    await waitFor(() => expect(onRetry).toHaveBeenCalledWith(SESSION_A));
-  });
-
-  it('disables standard-modal recovery while the canonical retry is in flight', async () => {
-    const retry = {
-      content: {
-        prompt: 'retain this draft',
-        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
-      },
-    };
-    const onCreateSession = vi.fn(async () => {
-      insertSession(SESSION_A);
-      return {
-        status: 'retryable' as const,
-        sessionId: SESSION_A,
-        setup: { mcpServers: 'failed' as const, environmentVariables: 'pending' as const },
-        delivery: { prompt: 'pending' as const, attachments: 'not-requested' as const },
-        retry,
-      };
-    });
-    renderShell(USER, onCreateSession, null, {
-      retries: new Map([[SESSION_A, retry]]),
-      inFlight: new Set([SESSION_A]),
-      onRetry: vi.fn(async () => null),
-    });
-
-    fireEvent.click(await screen.findByTestId('quick-start'));
-    fireEvent.click(await screen.findByTestId('advanced-setup'));
-    await act(async () => fireEvent.click(await screen.findByTestId('modal-create')));
-
-    expect(await screen.findByRole('button', { name: /Retry setup/ })).toBeDisabled();
   });
 
   it('passes only the selected tool user default into quick start', async () => {

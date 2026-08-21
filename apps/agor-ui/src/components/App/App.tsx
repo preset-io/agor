@@ -20,7 +20,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Alert, Button, Flex, Layout, theme, Upload } from 'antd';
+import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -32,11 +32,7 @@ import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
-import type {
-  NewSessionConfig,
-  SessionInitializationResult,
-  SessionInitializationRetry,
-} from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
@@ -176,12 +172,7 @@ export interface AppProps {
   onCreateSession?: (
     config: NewSessionConfig,
     boardId: string
-  ) => Promise<SessionInitializationResult | null>;
-  onRetrySessionInitialization?: (sessionId: string) => Promise<SessionInitializationResult | null>;
-  /** Session-scoped recovery payloads retained by the root creation seam. */
-  sessionInitializationRetries?: ReadonlyMap<string, SessionInitializationRetry>;
-  /** Canonical caller/session initialization operations currently running. */
-  sessionInitializationsInFlight?: ReadonlySet<string>;
+  ) => Promise<SessionCreationResult | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -316,9 +307,6 @@ export const App: React.FC<AppProps> = ({
   suppressLeftPanel = false,
   topBanner,
   onCreateSession,
-  onRetrySessionInitialization,
-  sessionInitializationRetries,
-  sessionInitializationsInFlight,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -400,9 +388,6 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [retryingInitializationSessionId, setRetryingInitializationSessionId] = useState<
-    string | null
-  >(null);
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
   // both answer "what am I looking at right now?" so they share one
@@ -1433,7 +1418,6 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
   const stableOnCreateSession = useStableCallback(onCreateSession);
-  const stableOnRetrySessionInitialization = useStableCallback(onRetrySessionInitialization);
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1468,8 +1452,6 @@ export const App: React.FC<AppProps> = ({
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
           onCreateSession={stableOnCreateSession}
-          onRetrySessionInitialization={stableOnRetrySessionInitialization}
-          sessionInitializationsInFlight={sessionInitializationsInFlight}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
@@ -1704,42 +1686,6 @@ export const App: React.FC<AppProps> = ({
                     >
                       {effectiveSelectedSessionId ? (
                         <Flex vertical style={{ height: '100%' }}>
-                          {sessionInitializationRetries?.has(effectiveSelectedSessionId) && (
-                            <Alert
-                              type="warning"
-                              showIcon
-                              title="Session created, but setup is incomplete"
-                              description="Retry setup and delivery against the session that was already created."
-                              action={
-                                <Button
-                                  size="small"
-                                  loading={
-                                    retryingInitializationSessionId ===
-                                      effectiveSelectedSessionId ||
-                                    sessionInitializationsInFlight?.has(effectiveSelectedSessionId)
-                                  }
-                                  disabled={
-                                    retryingInitializationSessionId ===
-                                      effectiveSelectedSessionId ||
-                                    sessionInitializationsInFlight?.has(effectiveSelectedSessionId)
-                                  }
-                                  onClick={async () => {
-                                    if (!onRetrySessionInitialization) return;
-                                    setRetryingInitializationSessionId(effectiveSelectedSessionId);
-                                    try {
-                                      await onRetrySessionInitialization(
-                                        effectiveSelectedSessionId
-                                      );
-                                    } finally {
-                                      setRetryingInitializationSessionId(null);
-                                    }
-                                  }}
-                                >
-                                  Retry setup
-                                </Button>
-                              }
-                            />
-                          )}
                           <div style={{ flex: 1, minHeight: 0 }}>
                             <SessionPanel
                               client={client}

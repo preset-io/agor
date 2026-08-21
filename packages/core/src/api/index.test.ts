@@ -919,7 +919,6 @@ describe('createClient', () => {
       const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
         permissionMode: 'auto',
         stream: true,
-        idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
       });
 
       expect(createMock).toHaveBeenCalledWith(
@@ -927,11 +926,38 @@ describe('createClient', () => {
           prompt: 'Fix failing tests',
           permissionMode: 'auto',
           stream: true,
-          idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
         },
         undefined
       );
       expect(result).toBe(admittedTask);
+    });
+
+    it('should expose sessions.initialize helper for backend-owned setup', async () => {
+      const client = createClient();
+      const routeService = client.service('sessions/session-123/initialize');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+      const resultValue = { session: { session_id: 'session-123' }, task: { task_id: 'task-1' } };
+      createMock.mockResolvedValue(resultValue);
+
+      const result = await client.sessions.initialize('session-123', {
+        expectedUserId: 'user-123',
+        mcpServerIds: ['mcp-1'],
+        envVarNames: ['TOKEN'],
+        prompt: 'Start here',
+        permissionMode: 'auto',
+      });
+
+      expect(createMock).toHaveBeenCalledWith(
+        {
+          expectedUserId: 'user-123',
+          mcpServerIds: ['mcp-1'],
+          envVarNames: ['TOKEN'],
+          prompt: 'Start here',
+          permissionMode: 'auto',
+        },
+        undefined
+      );
+      expect(result).toBe(resultValue);
     });
 
     // The pure-REST counterpart to client.sessions.prompt() — a thin wrapper

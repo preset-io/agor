@@ -15,10 +15,7 @@ const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
 
 const completeInitialization = {
-  status: 'complete' as const,
   sessionId: 'session-1',
-  setup: { mcpServers: 'not-requested' as const, environmentVariables: 'not-requested' as const },
-  delivery: { prompt: 'delivered' as const, attachments: 'not-requested' as const },
 };
 
 function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
@@ -132,39 +129,23 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('returns the complete retry payload when onboarding session initialization is incomplete', async () => {
+  it('returns the durable session when daemon-side initialization is incomplete', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
-    const file = new File(['draft'], 'draft.txt');
-    const retryableInitialization = {
-      status: 'retryable' as const,
+    const incompleteInitialization = {
       sessionId: 'session-1',
-      setup: { mcpServers: 'failed' as const, environmentVariables: 'pending' as const },
-      delivery: { prompt: 'pending' as const, attachments: 'failed' as const },
-      retry: {
-        mcpServerIds: ['mcp-1'],
-        content: {
-          prompt: 'retain onboarding draft',
-          attachmentFiles: [file],
-          idempotencyKey: '0198cdef-1234-7000-8000-123456789abc',
-        },
-      },
     };
-    startTeammateBootstrapSessionMock.mockResolvedValue(retryableInitialization);
+    startTeammateBootstrapSessionMock.mockResolvedValue(incompleteInitialization);
 
     const result = await seedOnboardingTeammate(setup().input);
 
     expect(result).toEqual({
       branchId: 'branch-1',
       sessionId: 'session-1',
-      initialization: retryableInitialization,
+      initialization: incompleteInitialization,
     });
-    expect(result.initialization?.status).toBe('retryable');
-    if (result.initialization?.status === 'retryable') {
-      expect(result.initialization.retry.content.attachmentFiles).toEqual([file]);
-    }
   });
 
   // The completion handler (App.handleOnboardingComplete) resolves the framework
