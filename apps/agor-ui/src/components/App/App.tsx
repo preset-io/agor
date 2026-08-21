@@ -1848,7 +1848,7 @@ export const App: React.FC<AppProps> = ({
           onArchiveOrDelete={onArchiveOrDeleteBranch}
           onOpenSettings={() => {
             setBranchModalBranchId(null);
-            openSettings();
+            openSettings('repos');
           }}
           onSessionClick={handleSessionClick}
           onExecuteScheduleNow={onExecuteScheduleNow}

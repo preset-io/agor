@@ -39,6 +39,7 @@ import {
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
+import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { MobileHeader } from './MobileHeader';
@@ -101,7 +102,10 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
   const { token } = theme.useToken();
-  const board = boardById.get(boardId);
+  const resolvedBoardId = boardById.has(boardId)
+    ? boardId
+    : resolveBoardFromUrlPure(boardId, boardById);
+  const board = resolvedBoardId ? boardById.get(resolvedBoardId) : undefined;
 
   if (!board) {
     return (
@@ -114,7 +118,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     );
   }
 
-  const placements = [...(boardObjectsByBoardId.get(boardId) ?? [])].sort((a, b) =>
+  const placements = [...(boardObjectsByBoardId.get(board.board_id) ?? [])].sort((a, b) =>
     spatialSort(a.position, b.position)
   );
   const branches = placements.flatMap((placement) => {

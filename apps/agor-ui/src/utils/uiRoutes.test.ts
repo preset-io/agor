@@ -34,12 +34,30 @@ describe('responsiveRoutePath', () => {
   });
 
   it('preserves session context in both directions', () => {
-    expect(responsiveRoutePath('/s/01a012d8/', 'mobile', entities)).toBe(
+    expect(responsiveRoutePath('/s/01a012d84f507c329daa6e3f/', 'mobile', entities)).toBe(
       '/m/session/01a012d8-4f50-7c32-9daa-6e3f70819b2c'
     );
     expect(
       responsiveRoutePath('/m/session/01a012d8-4f50-7c32-9daa-6e3f70819b2c', 'desktop', entities)
     ).toBe('/s/01a012d84f507c329daa6e3f/');
+  });
+
+  it('preserves cold board and canonical session tokens for loader healing', () => {
+    const cold = { boards: [], sessions: [] };
+    expect(responsiveRoutePath('/b/delivery/', 'mobile', cold)).toBe('/m/board/delivery');
+    expect(responsiveRoutePath('/s/01a012d84f507c329daa6e3f/', 'mobile', cold)).toBe(
+      '/m/session/01a012d84f507c329daa6e3f'
+    );
+  });
+
+  it('does not select an arbitrary session for an ambiguous prefix', () => {
+    const ambiguous = {
+      boards: [],
+      sessions: [...entities.sessions, { session_id: '01a012d8-4f50-7c32-9daa-6e3f99999999' }],
+    };
+    expect(responsiveRoutePath('/s/01a012d84f507c329daa6e3f/', 'mobile', ambiguous)).toBe(
+      '/m/session/01a012d84f507c329daa6e3f'
+    );
   });
 
   // A board the store hasn't hydrated yet has no slug to route by, so the

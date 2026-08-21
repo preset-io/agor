@@ -279,11 +279,14 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                           ) : (
                             <div>
                               {branchSessions.map((session) => (
-                                <div
+                                <Button
+                                  type="text"
+                                  block
                                   key={session.session_id}
                                   onClick={() => handleSessionClick(session.session_id)}
                                   style={{
-                                    cursor: 'pointer',
+                                    height: 'auto',
+                                    textAlign: 'left',
                                     padding: '6px 8px 6px 28px',
                                     borderRadius: 4,
                                   }}
@@ -317,7 +320,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                         ` • ${session.model_config.model}`}
                                     </Text>
                                   </div>
-                                </div>
+                                </Button>
                               ))}
                             </div>
                           ),

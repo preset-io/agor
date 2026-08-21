@@ -1,5 +1,6 @@
 import { type BoardID, boardPath, type SessionID, sessionPath } from '@agor-live/client';
 import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
+import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from './urlResolution';
 
 function currentPathname(): string {
   return typeof window === 'undefined' ? '/' : window.location.pathname;
@@ -30,20 +31,21 @@ export function responsiveRoutePath(
   if (target === 'mobile') {
     const boardToken = pathname.match(/^\/b\/([^/]+)\/?$/)?.[1];
     if (boardToken) {
-      const board = Array.from(entities.boards).find(
-        (item) =>
-          item.board_id === boardToken ||
-          item.slug === boardToken ||
-          item.board_id.startsWith(boardToken)
-      );
-      if (board) return `/m/board/${board.board_id}`;
+      const boards = new Map(Array.from(entities.boards, (board) => [board.board_id, board]));
+      const boardId = resolveBoardFromUrlPure(boardToken, boards);
+      // Keep a cold slug/short-id deep link intact. Mobile board resolution uses
+      // the same ambiguity-safe resolver once the initial board list arrives.
+      return `/m/board/${boardId ?? boardToken}`;
     }
     const sessionToken = pathname.match(/^\/s\/([^/]+)\/?$/)?.[1];
     if (sessionToken) {
-      const session = Array.from(entities.sessions).find(
-        (item) => item.session_id === sessionToken || item.session_id.startsWith(sessionToken)
+      const sessions = new Map(
+        Array.from(entities.sessions, (session) => [session.session_id, session])
       );
-      if (session) return `/m/session/${session.session_id}`;
+      const sessionId = resolveSessionFromShortIdPure(sessionToken, sessions);
+      // The loader accepts short IDs, so preserve a cold canonical token rather
+      // than discarding navigation context while the store is still empty.
+      return `/m/session/${sessionId ?? sessionToken}`;
     }
     return '/m';
   }

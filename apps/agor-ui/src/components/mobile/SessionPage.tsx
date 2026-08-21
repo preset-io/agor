@@ -11,6 +11,7 @@ import { getTeammateConfig, isTeammate, PermissionScope } from '@agor-live/clien
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { ConversationView } from '../ConversationView';
 import { MobileHeader } from './MobileHeader';
 import { MobilePromptInput } from './MobilePromptInput';
@@ -42,7 +43,12 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
 
-  const session = sessionId ? sessionById.get(sessionId) : undefined;
+  const resolvedSessionId = sessionId
+    ? sessionById.has(sessionId)
+      ? sessionId
+      : (resolveSessionFromShortIdPure(sessionId, sessionById) ?? undefined)
+    : undefined;
+  const session = resolvedSessionId ? sessionById.get(resolvedSessionId) : undefined;
   const branch = session?.branch_id ? branchById.get(session.branch_id) || null : null;
 
   if (!sessionId) {

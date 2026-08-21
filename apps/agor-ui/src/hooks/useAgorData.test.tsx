@@ -61,6 +61,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   // a different set than an earlier deferred one.
   const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
+  const fetchArguments = new Map<string, unknown[]>();
 
   const respond = async (name: string, method: 'findAll' | 'find') => {
     const key = `${name}:${method}`;
@@ -74,9 +75,15 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     return data;
   };
 
+  const recordAndRespond = (name: string, method: 'findAll' | 'find', args: unknown) => {
+    const key = `${name}:${method}`;
+    fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), args]);
+    return respond(name, method);
+  };
+
   const service = (name: string) => ({
-    findAll: vi.fn(() => respond(name, 'findAll')),
-    find: vi.fn(() => respond(name, 'find')),
+    findAll: vi.fn((args) => recordAndRespond(name, 'findAll', args)),
+    find: vi.fn((args) => recordAndRespond(name, 'find', args)),
     get: vi.fn().mockResolvedValue(seed[`${name}:get`] ?? null),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
@@ -133,6 +140,8 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
       fetchHooks.set(`${name}:${method}`, fn),
     fetchCount: (name: string, method: 'findAll' | 'find') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
+    fetchArguments: (name: string, method: 'findAll' | 'find') =>
+      fetchArguments.get(`${name}:${method}`) ?? [],
   };
 }
 
@@ -220,7 +229,7 @@ describe('useAgorData — socket-event bailouts', () => {
     });
     const directBranch = makeBranch({ branch_id: branchId, board_id: boardId });
     const boardObject = makeBoardObject({ board_id: boardId, branch_id: branchId });
-    const { client } = makeMockClient({
+    const { client, fetchArguments } = makeMockClient({
       sessions: [],
       boards: [{ board_id: boardId, slug: 'delivery' }],
       'sessions:get': directSession,
@@ -234,6 +243,9 @@ describe('useAgorData — socket-event bailouts', () => {
 
     expect(agorStore.getState().sessionById.get(sessionId)).toMatchObject({ branch_id: branchId });
     expect(agorStore.getState().boardObjectById.get('bo-1')).toMatchObject({ board_id: boardId });
+    expect(fetchArguments('board-objects', 'findAll')).toContainEqual({
+      query: expect.objectContaining({ board_id: boardId }),
+    });
     window.history.pushState({}, '', '/');
   });
 

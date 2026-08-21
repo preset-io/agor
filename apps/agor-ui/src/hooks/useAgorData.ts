@@ -178,9 +178,12 @@ export function resolveDisplayedBoardId(
   if (mobile) {
     const [, mobileSegment, token] = mobile;
     if (mobileSegment === 'session') {
-      // Full session_id in the URL, so this is a direct lookup rather than the
-      // short-id resolution the desktop `/s/` route needs.
-      const session = sessionById.get(token);
+      // Mobile routes normally carry a full ID, but a cold responsive handoff
+      // preserves the desktop short token until the targeted get heals it.
+      const sessionId = sessionById.has(token)
+        ? token
+        : resolveSessionFromShortIdPure(token, sessionById);
+      const session = sessionId ? sessionById.get(sessionId) : undefined;
       if (!session) return null;
       if (session.branch_board_id) return session.branch_board_id;
       const branchId = session.branch_id;

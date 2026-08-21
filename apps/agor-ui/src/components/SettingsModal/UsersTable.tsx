@@ -1,4 +1,4 @@
-import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
+import { AgorUserLifecycleAuthority, EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgorClient,
   CreateUserInput,
@@ -70,6 +70,8 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const externallyManaged =
+    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
   const canCreateUsers =
     isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
   const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
@@ -286,7 +288,11 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const usersTable = (
     <div>
       <ResponsiveSettingsHeader
-        description="Manage user accounts and permissions."
+        description={
+          externallyManaged
+            ? 'User accounts and roles are managed by your identity provider.'
+            : 'Manage user accounts and permissions.'
+        }
         actions={(compact) => (
           <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
