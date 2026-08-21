@@ -1030,8 +1030,13 @@ function createExecuteHandler(
         const branch = await branchRepo.findById(session.branch_id);
         if (!branch?.path) return undefined;
         let baseRepoPath: string | undefined;
-        // Only linked worktrees need the shared git dir; a self-standing clone
-        // carries its own `.git` inside the branch dir.
+        // Only linked worktrees need the shared git dir; a clone carries its
+        // own `.git` inside the branch dir — EXCEPT for its object store when
+        // it was created with `git clone --reference`, which leaves an
+        // alternates pointer into `<data_home>/repos/<slug>/.git/objects`.
+        // The daemon refuses to create that pointer when this sandbox would
+        // hide it (see `shouldUseCloneReferencePath`), so a clone-mode branch
+        // needs nothing mounted from `repos/`.
         if (branch.storage_mode !== 'clone' && branch.repo_id) {
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;

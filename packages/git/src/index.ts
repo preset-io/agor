@@ -1202,16 +1202,22 @@ export interface CreateBranchAsCloneOptions {
    * part of the correctness fallback rather than only an optimization.
    *
    * That probe only covers *this* process's view. The alternates pointer it
-   * writes is consumed by every later git command in the branch, possibly
-   * from a different mount (a session executor that binds the branch
-   * workspace but not the daemon's `repos/`). Nothing observable here can
-   * predict that, so the cross-mount case is an operator decision instead:
-   * `execution.branch_storage.borrow_base_objects: false` makes the daemon
-   * stop passing a `referencePath` at all.
+   * writes is consumed by every later git command in the branch, from a
+   * context that may not see `<path>` at all — Agor's own `git.branch.add`
+   * runs unsandboxed while the sessions that later run git in that branch are
+   * bubblewrap-wrapped, and `sandbox.home_mode: per_user` masks the daemon's
+   * `repos/`. Nothing observable here can predict that, so the decision is
+   * made from configuration upstream: `shouldUseCloneReferencePath`
+   * (apps/agor-daemon/src/utils/clone-reference.ts) stops the daemon passing a
+   * `referencePath` at all for those deployments.
    *
-   * NEVER paired with `--dissociate`: dissociate copies all reachable
-   * objects out of the reference into the new clone (~equivalent to a
-   * naïve clone), defeating the purpose. See design doc §5.
+   * NEVER paired with `--dissociate` for the normal path: dissociate repacks
+   * the borrowed objects into the new clone, so the disk win is gone
+   * (~equivalent to a naïve clone) even though the network transfer is still
+   * saved. See design doc §5. It remains the right tool for *repairing* a
+   * clone whose borrow already turned out to be unresolvable — `git repack -a
+   * -d` (no `-l`, which would exclude exactly the borrowed objects) followed
+   * by deleting `.git/objects/info/alternates`.
    *
    * Operational caveat: `git gc --prune=now` against the reference can
    * orphan objects that branches' alternates pointers still depend on.

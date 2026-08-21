@@ -856,24 +856,35 @@ export interface AgorBranchStorageSettings {
   /**
    * Whether clone-mode branches may borrow objects from the daemon-managed
    * base clone via `git clone --reference` (an `alternates` pointer into
-   * `<data_home>/repos/<slug>/.git/objects`). Defaults to `true` — on a
-   * single-mount install this is a large disk win and nothing else changes.
+   * `<data_home>/repos/<slug>/.git/objects`). On a single-mount install this
+   * is a large disk win and nothing else changes.
    *
-   * Set `false` when sessions run somewhere the daemon's `repos/` directory
-   * is not mounted (containerized / templated executors that only bind the
-   * branch workspace). The alternates pointer is baked into the branch at
-   * create time and consumed by every later `git` command, so a branch
-   * created with a borrow it cannot resolve is permanently broken:
+   * The alternates pointer is baked into the branch at create time and
+   * consumed by every later `git` command, so a branch created with a borrow
+   * it cannot resolve is permanently broken:
    *
    * ```
    * error: unable to normalize alternate object path: /…/.agor/repos/<org>/<repo>/.git/objects
    * fatal: Failed to traverse parents of commit <sha>
    * ```
    *
+   * Tri-state — leave unset unless you have a reason:
+   *  - unset (default): borrow, unless Agor can see that sessions will not be
+   *    able to resolve the pointer. Today that inference fires for
+   *    `execution.sandbox.enabled` + `home_mode: per_user`, whose owner-home
+   *    overlay hides the whole daemon `.agor` tree including `repos/`.
+   *  - `false`: never borrow. Use this for containerized / templated executors
+   *    that bind only the branch workspace — Agor cannot inspect an external
+   *    substrate's mounts, so it has to be told.
+   *  - `true`: always borrow, even where Agor would have inferred otherwise.
+   *    You are asserting the base clone is reachable from sessions (for
+   *    example via `execution.sandbox.extra_allow_write`).
+   *
+   * `execution.executor_storage.base_repository: 'unavailable'` outranks all
+   * three: it asserts the base checkout does not exist for executors at all.
+   *
    * Disabling costs disk (each branch carries a full object store) and buys
-   * mount-independence. Implied by
-   * `execution.executor_storage.base_repository: 'unavailable'`, which
-   * already asserts that executors cannot see the base checkout.
+   * mount-independence.
    */
   borrow_base_objects?: boolean;
 }

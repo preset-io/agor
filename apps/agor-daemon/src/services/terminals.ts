@@ -282,6 +282,12 @@ export class TerminalsService {
         : undefined;
     let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (sandboxCfg?.enabled === true) {
+      // Only linked worktrees need the shared git dir bound in. A clone-mode
+      // branch carries its own `.git` — EXCEPT for its object store when it was
+      // created with `git clone --reference`, which leaves an alternates
+      // pointer into `<data_home>/repos/<slug>/.git/objects`. The daemon
+      // refuses to create that pointer when this sandbox would hide it (see
+      // `shouldUseCloneReferencePath`), so nothing extra is mounted here.
       if (branch.storage_mode !== 'clone' && branch.repo_id) {
         sandboxBaseRepoPath = await this.withTenantDatabase((tenantDb) =>
           new RepoRepository(tenantDb)

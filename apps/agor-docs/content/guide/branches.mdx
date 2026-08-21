@@ -101,7 +101,7 @@ execution:
     # Optional: reject clone_depth and require complete history.
     allow_shallow_clones: false
     # Optional: stop clone-mode branches from borrowing objects from the
-    # daemon's base clone. See "Borrowed objects" below.
+    # daemon's base clone. Usually inferred — see "Borrowed objects" below.
     borrow_base_objects: false
 ```
 
@@ -133,16 +133,41 @@ fatal: Failed to traverse parents of commit <sha>
 ```
 
 Set `borrow_base_objects: false` on those deployments. Every clone-mode branch then carries its own
-complete object store: more disk, no cross-mount dependency. The default (`true`) is correct for
-single-mount installs, which is most of them.
+complete object store: more disk, no cross-mount dependency.
 
-Agor also disables the borrow automatically when
-[`execution.executor_storage.base_repository`](/guide/containerized-execution) is `unavailable` —
-that setting is already an operator assertion that executors cannot see the base checkout.
+Agor turns the borrow off by itself in two cases, so most operators never touch the setting:
 
-The setting only affects branches created after the change. An existing branch that was cloned with
-a borrow it cannot resolve has to be recreated (or have `.git/objects/info/alternates` removed and
-its objects refetched).
+- **`execution.sandbox` is enabled with `home_mode: per_user`** — including `unix_user_mode:
+  sandbox`, which forces exactly that. The owner-home overlay deliberately hides the entire daemon
+  `.agor` tree — `repos/` included — and re-exposes only the branch and the managed agentic-tools
+  directory. Branch creation itself is never sandboxed, so without this the daemon would happily
+  write a pointer its own sessions cannot follow.
+- **[`execution.executor_storage.base_repository`](/guide/containerized-execution) is
+  `unavailable`** — already an operator assertion that executors cannot see the base checkout.
+
+Setting `borrow_base_objects: true` explicitly overrides the sandbox inference, for operators who
+have made the base clone reachable another way (for example
+`execution.sandbox.extra_allow_write: ['<data_home>/repos']`). `base_repository: unavailable` is not
+overridable.
+
+#### Repairing a branch that already has an unresolvable borrow
+
+The setting only affects branches created after the change. An existing branch keeps its pointer.
+
+Do **not** just delete `.git/objects/info/alternates` — the borrowed objects were never copied into
+the branch, so removing the pointer leaves the repository with no objects at all (`fatal: bad object
+HEAD`) and loses any commit that was never pushed. Materialize the objects first, from a context
+where the base clone **is** readable (the daemon host, not a sandboxed session):
+
+```bash
+cd <data_home>/worktrees/<repo>/<branch>
+git repack -a -d          # copies borrowed objects into a local pack — no -l/--local
+rm -f .git/objects/info/alternates
+git fsck --connectivity-only   # verify before trusting it
+```
+
+Recreating the branch also works, but it allocates a new `branch_id` and orphans anything bound to
+the old one (schedules, gateway channels).
 
 ---
 

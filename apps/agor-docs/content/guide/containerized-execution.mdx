@@ -78,8 +78,13 @@ execution:
 Otherwise clone-mode branches are created with an `alternates` pointer into a base clone the
 executor cannot read, and every git command inside the branch fails with
 `unable to normalize alternate object path`. Declaring
-`execution.executor_storage.base_repository: unavailable` implies the same thing. See
-[Borrowed objects](/guide/branches) for the full explanation.
+`execution.executor_storage.base_repository: unavailable` implies the same thing.
+
+This one has to be declared: Agor infers it automatically for its own bubblewrap sandbox, but it
+cannot inspect an external launcher's mounts. Branch materialization runs on the daemon host, where
+the base clone is visible, so nothing detects the mismatch at create time — the failure only shows
+up later, inside sessions. See [Borrowed objects](/guide/branches) for the full explanation and for
+how to repair a branch that already has an unresolvable pointer.
 
 ## Shared Filesystem Setup
 
