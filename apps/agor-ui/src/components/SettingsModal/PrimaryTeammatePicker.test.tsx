@@ -1,5 +1,5 @@
 import type { AgorClient, Board, Branch, Repo, UserID } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -148,5 +148,52 @@ describe('PrimaryTeammatePicker', () => {
     );
     // Named confirmation toast on a successful pick.
     expect(await screen.findByText(/Primary assistant set to/)).toBeInTheDocument();
+  });
+
+  it('discards a delayed pick completion after the authenticated user changes', async () => {
+    const grace = teammate('branch-2', 'Grace');
+    seedStore([grace]);
+    let resolvePick!: (branch: Branch) => void;
+    const setPrimaryTeammate = vi.fn(
+      () =>
+        new Promise<Branch>((resolve) => {
+          resolvePick = resolve;
+        })
+    );
+    const client = {
+      service: () => ({
+        getPrimaryTeammate: vi.fn().mockResolvedValue(null),
+        getPrimaryTeammateCandidates: vi.fn().mockResolvedValue([grace]),
+        setPrimaryTeammate,
+      }),
+    } as unknown as AgorClient;
+    const onPicked = vi.fn();
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} onPicked={onPicked} />
+      </AntApp>
+    );
+
+    await screen.findByText(/No primary assistant set/);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByText('Grace'));
+    await waitFor(() => expect(setPrimaryTeammate).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <AntApp>
+        <PrimaryTeammatePicker
+          client={client}
+          currentUserId={'user-2' as UserID}
+          onPicked={onPicked}
+        />
+      </AntApp>
+    );
+    await act(async () => {
+      resolvePick(grace);
+      await Promise.resolve();
+    });
+
+    expect(onPicked).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Primary assistant set to/)).not.toBeInTheDocument();
   });
 });

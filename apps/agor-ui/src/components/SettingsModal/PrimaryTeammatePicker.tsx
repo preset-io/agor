@@ -3,7 +3,7 @@ import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
 
@@ -62,9 +62,23 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const mutationGenerationRef = useRef(0);
+  const activeUserIdRef = useRef(currentUserId);
+  if (activeUserIdRef.current !== currentUserId) {
+    activeUserIdRef.current = currentUserId;
+    mutationGenerationRef.current += 1;
+  }
+
+  useEffect(
+    () => () => {
+      mutationGenerationRef.current += 1;
+    },
+    []
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: caller identity invalidates caller-scoped RPC results even when the client instance is reused
   useEffect(() => {
+    setSaving(false);
     if (!client) {
       setCurrent(null);
       setCandidates([]);
@@ -121,22 +135,29 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
 
   const handleChange = async (branchId: string) => {
     if (!client || !currentUserId) return;
+    const operationGeneration = mutationGenerationRef.current;
+    const operationUserId = currentUserId;
+    const isCurrentOperation = () =>
+      mutationGenerationRef.current === operationGeneration &&
+      activeUserIdRef.current === operationUserId;
     setSaving(true);
     try {
       const branch = await client
         .service('users')
-        .setPrimaryTeammate({ branchId, expectedUserId: currentUserId });
+        .setPrimaryTeammate({ branchId, expectedUserId: operationUserId });
+      if (!isCurrentOperation()) return;
       setCurrent(branch);
       if (branch) {
         message.success(`Primary assistant set to ${teammateLabel(branch)}`);
         onPicked?.(branch);
       }
     } catch (error) {
+      if (!isCurrentOperation()) return;
       message.error(
         `Failed to update primary assistant: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setSaving(false);
+      if (isCurrentOperation()) setSaving(false);
     }
   };
 

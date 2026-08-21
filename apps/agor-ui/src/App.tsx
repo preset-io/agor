@@ -340,6 +340,30 @@ function AppContent() {
     reAuthenticate,
   } = useAuth();
 
+  // A caller ID is not enough to fence work across logout/login: the same
+  // person can establish a new authenticated session while an operation from
+  // the old one is still pending. Explicit auth boundaries increment this ref
+  // synchronously; render-time principal changes cover launch/impersonation.
+  // Routine token refreshes retain both the principal and generation.
+  const authenticationGenerationRef = useRef(0);
+  const renderedAuthUserIdRef = useRef(user?.user_id ?? null);
+  const renderedAuthUserId = user?.user_id ?? null;
+  if (renderedAuthUserIdRef.current !== renderedAuthUserId) {
+    renderedAuthUserIdRef.current = renderedAuthUserId;
+    authenticationGenerationRef.current += 1;
+  }
+  const handleLogin = useCallback(
+    (email: string, password: string) => {
+      authenticationGenerationRef.current += 1;
+      return login(email, password);
+    },
+    [login]
+  );
+  const handleLogout = useCallback(() => {
+    authenticationGenerationRef.current += 1;
+    return logout();
+  }, [logout]);
+
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
   // anonymous mode was removed; the LoginPage gate below blocks rendering
@@ -536,18 +560,28 @@ function AppContent() {
   }, [capturedSha, currentUser?.email]);
 
   // Onboarding wizard state
-  const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
+  const [onboardingWizardOwner, setOnboardingWizardOwner] = useState<{
+    userId: UUID;
+    authenticationGeneration: number;
+  } | null>(null);
   const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
+  const onboardingWizardOpen =
+    !!currentUser &&
+    onboardingWizardOwner?.userId === currentUser.user_id &&
+    onboardingWizardOwner.authenticationGeneration === authenticationGenerationRef.current;
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
   const onboardingSeedOwnerRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (onboardingSeedOwnerRef.current === currentUser?.user_id) return;
-    onboardingSeedOwnerRef.current = currentUser?.user_id;
+    const ownerKey = onboardingWizardOwner
+      ? `${onboardingWizardOwner.userId}:${onboardingWizardOwner.authenticationGeneration}`
+      : undefined;
+    if (onboardingSeedOwnerRef.current === ownerKey) return;
+    onboardingSeedOwnerRef.current = ownerKey;
     onboardingSeedResultRef.current.clear();
-  }, [currentUser?.user_id]);
+  }, [onboardingWizardOwner]);
 
   // Clone a repository (framework repo, GitHub repos, etc.). Defined here —
   // above the early returns and the onboarding auto-clone hook below — so it can
@@ -707,7 +741,7 @@ function AppContent() {
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
     if (currentUser && !canRunOnboarding) {
-      setOnboardingWizardOpen(false);
+      setOnboardingWizardOwner(null);
       return;
     }
     if (
@@ -720,7 +754,10 @@ function AppContent() {
       currentSurface.startsWorkspaceRuntime &&
       !loading
     ) {
-      setOnboardingWizardOpen(true);
+      setOnboardingWizardOwner({
+        userId: currentUser.user_id,
+        authenticationGeneration: authenticationGenerationRef.current,
+      });
     }
   }, [
     currentUser,
@@ -737,9 +774,16 @@ function AppContent() {
     // resolves, so we do the teammate creation + navigation FIRST and only
     // close the modal at the very end — otherwise the user stares at a blank
     // homepage while the async work runs.
-    if (!currentUser || !client) throw new Error('Not connected - try again when Agor reconnects.');
+    if (!currentUser) {
+      setOnboardingWizardOwner(null);
+      return;
+    }
+    if (!client) throw new Error('Not connected - try again when Agor reconnects.');
     const operationUserId = currentUser.user_id;
-    const isCurrentUser = () => currentUserIdRef.current === operationUserId;
+    const operationAuthenticationGeneration = authenticationGenerationRef.current;
+    const isCurrentUser = () =>
+      currentUserIdRef.current === operationUserId &&
+      authenticationGenerationRef.current === operationAuthenticationGeneration;
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
@@ -801,7 +845,9 @@ function AppContent() {
       },
       expectedUserId: operationUserId,
       isCurrentUser: (expectedUserId) =>
-        expectedUserId === operationUserId && currentUserIdRef.current === expectedUserId,
+        expectedUserId === operationUserId &&
+        currentUserIdRef.current === expectedUserId &&
+        authenticationGenerationRef.current === operationAuthenticationGeneration,
       client,
       repoById: agorStore.getState().repoById,
       branchById: agorStore.getState().branchById,
@@ -870,7 +916,7 @@ function AppContent() {
 
     // Close the wizard only now that creation + navigation are done, so the
     // loading affordance stayed visible for the whole operation.
-    setOnboardingWizardOpen(false);
+    setOnboardingWizardOwner(null);
   };
 
   const handleCheckAuth = useCallback(
@@ -951,7 +997,7 @@ function AppContent() {
   if (!authLoading && !authenticated && !hasTokens) {
     return (
       <LoginPage
-        onLogin={login}
+        onLogin={handleLogin}
         error={authError}
         externalLaunchLoginRedirectUrl={
           authConfig?.externalLaunch?.enabled
@@ -1235,6 +1281,8 @@ function AppContent() {
 
   const handleRestartOnboarding = async () => {
     if (!currentUser || !canRunOnboarding) return;
+    const operationUserId = currentUser.user_id;
+    const operationAuthenticationGeneration = authenticationGenerationRef.current;
 
     const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
     delete preferences.onboarding;
@@ -1248,9 +1296,19 @@ function AppContent() {
       return;
     }
 
+    if (
+      currentUserIdRef.current !== operationUserId ||
+      authenticationGenerationRef.current !== operationAuthenticationGeneration
+    ) {
+      return;
+    }
+
     setOpenUserSettings(false);
     setOnboardingWizardInstance((value) => value + 1);
-    setOnboardingWizardOpen(true);
+    setOnboardingWizardOwner({
+      userId: operationUserId,
+      authenticationGeneration: operationAuthenticationGeneration,
+    });
   };
 
   // Handle delete user
@@ -1274,8 +1332,8 @@ function AppContent() {
       userId,
       email: currentUser.email,
       newPassword,
-      login,
-      logout,
+      login: handleLogin,
+      logout: handleLogout,
     });
 
     showSuccess(
@@ -1798,7 +1856,7 @@ function AppContent() {
       client={client}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={logout}
+      onLogout={handleLogout}
     />
   );
 
@@ -1808,7 +1866,7 @@ function AppContent() {
       connected={connected}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={logout}
+      onLogout={handleLogout}
     />
   );
 
@@ -1817,7 +1875,7 @@ function AppContent() {
       client={client}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
-      onLogout={logout}
+      onLogout={handleLogout}
     />
   );
 
@@ -1898,7 +1956,7 @@ function AppContent() {
       onResolveComment={handleResolveComment}
       onToggleReaction={handleToggleReaction}
       onDeleteComment={handleDeleteComment}
-      onLogout={logout}
+      onLogout={handleLogout}
       onRetryConnection={retryConnection}
       instanceLabel={instanceConfig?.label}
       instanceDescription={instanceConfig?.description}
@@ -1917,7 +1975,7 @@ function AppContent() {
         open={!!currentUser?.must_change_password}
         user={currentUser}
         onChangePassword={handleForcePasswordChange}
-        onLogout={logout}
+        onLogout={handleLogout}
       />
 
       {/* Shared/current-user settings for lightweight surfaces. The full
@@ -1939,15 +1997,13 @@ function AppContent() {
         />
       )}
 
-      {/* Onboarding Wizard - shown for new users.
-            Key by user identity so the wizard's local React state is bound to
-            the signed-in user. On any user change (logout → login as someone
-            else, or admin impersonate), React tears down + remounts the wizard
-            with fresh state, so one user's onboarding progress can never leak
-            into another user's session. */}
+      {/* Onboarding Wizard - shown for new users. Both visibility and local
+            React state belong to one authenticated generation, not merely a
+            user ID. Logout/login as the same user and principal changes both
+            invalidate the old wizard and any pending completion work. */}
       <ConfigProvider theme={ONBOARDING_DARK_THEME}>
         <OnboardingWizard
-          key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
+          key={`${currentUser?.user_id ?? '__anon__'}:${authenticationGenerationRef.current}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
           user={currentUser}
@@ -1996,7 +2052,7 @@ function AppContent() {
                 onResolveComment={handleResolveComment}
                 onToggleReaction={handleToggleReaction}
                 onDeleteComment={handleDeleteComment}
-                onLogout={logout}
+                onLogout={handleLogout}
               />
             }
           />

@@ -408,4 +408,30 @@ describe('seedOnboardingTeammate', () => {
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
   });
+
+  it('stops after a delayed stage when the same user establishes a new auth session', async () => {
+    let authenticationGeneration = 1;
+    const operationGeneration = authenticationGeneration;
+    let resolveBranch!: (branch: Branch) => void;
+    createTeammateBranchMock.mockImplementation(
+      () =>
+        new Promise<Branch>((resolve) => {
+          resolveBranch = resolve;
+        })
+    );
+    const { input, onWarn, setPrimaryTeammateIfUnset } = setup({
+      isCurrentUser: (expectedUserId) =>
+        expectedUserId === USER_ID && authenticationGeneration === operationGeneration,
+    });
+
+    const seeding = seedOnboardingTeammate(input);
+    await vi.waitFor(() => expect(createTeammateBranchMock).toHaveBeenCalledTimes(1));
+    authenticationGeneration += 1;
+    resolveBranch({ branch_id: 'branch-1', board_id: 'board-1' } as Branch);
+
+    await expect(seeding).resolves.toEqual({});
+    expect(setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
+  });
 });
