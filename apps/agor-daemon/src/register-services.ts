@@ -237,6 +237,10 @@ import {
   registerMcpCapabilityRoleFloor,
 } from './utils/mcp-server-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
+import {
+  AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
+  readSocketAuthorityId,
+} from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
@@ -2284,8 +2288,26 @@ export async function registerMCPServices(
   const oauthBrowserReservations = new Map<string, OAuthBrowserReservationRecord>();
 
   const socketIdFromParams = (params?: AuthenticatedParams): string | undefined => {
-    const id = (params?.connection as { id?: unknown } | undefined)?.id;
-    return typeof id === 'string' && id ? id : undefined;
+    // Feathers intentionally exposes `socket.feathers`, not the Socket.IO
+    // socket itself, as params.connection. Accept only the immutable marker
+    // installed on that exact server-owned connection object and prove that
+    // it still belongs to the live socket map. Never trust an id supplied in
+    // request data, headers, auth payload, or a fabricated connection object.
+    if (params?.provider !== 'socketio') return undefined;
+    const socketId = readSocketAuthorityId(params.connection);
+    if (!socketId) return undefined;
+    const socket = app.io?.sockets?.sockets?.get(socketId) as
+      | { feathers?: unknown; connected?: boolean }
+      | undefined;
+    if (
+      !socket ||
+      socket.connected === false ||
+      socket.feathers !== params.connection ||
+      readSocketAuthorityId(socket.feathers) !== socketId
+    ) {
+      return undefined;
+    }
+    return socketId;
   };
   const authorityFingerprintFromParams = (params?: AuthenticatedParams): string | undefined => {
     const connection = params?.connection as
@@ -2311,12 +2333,14 @@ export async function registerMCPServices(
     | undefined => {
     const socket = app.io?.sockets?.sockets?.get(socketId) as
       | {
-          feathers?: AuthenticatedParams & { id?: string };
+          feathers?: AuthenticatedParams;
           data?: { tenant?: { tenant_id?: string } };
+          connected?: boolean;
         }
       | undefined;
-    if (!socket) return undefined;
+    if (!socket || socket.connected === false) return undefined;
     const connection = socket.feathers;
+    if (readSocketAuthorityId(connection) !== socketId) return undefined;
     return {
       userId: connection?.user?.user_id,
       role: connection?.user?.role,
@@ -2343,10 +2367,17 @@ export async function registerMCPServices(
     );
   };
   const requestAuthorityAssertion = (params?: AuthenticatedParams): (() => void) | undefined => {
+    // REST requests are already tied to one authenticated HTTP request and
+    // internal calls intentionally use their caller-owned authority model.
+    // A real Socket.IO request, however, must always carry the server marker:
+    // silently falling back here would disable in-place identity fencing.
+    if (params?.provider !== 'socketio') return undefined;
     const userId = params?.user?.user_id;
     const role = params?.user?.role;
     const socketId = socketIdFromParams(params);
-    if (!userId || !role || !socketId) return undefined;
+    if (!userId || !role || !socketId) {
+      throw new Forbidden('MCP Socket.IO request authority is unavailable');
+    }
     const claim: LiveSocketRequestAuthorityClaim = {
       userId,
       role,
@@ -2422,6 +2453,15 @@ export async function registerMCPServices(
       if (reservation.expiresAt <= now) deleteOAuthBrowserReservation(token);
     }
   };
+  const clearOAuthBrowserReservationsForSocket = (socketId: string): void => {
+    for (const [token, reservation] of oauthBrowserReservations) {
+      if (reservation.socketId === socketId) deleteOAuthBrowserReservation(token);
+    }
+  };
+  // Reservations are bound to one physical transport. Socket setup emits this
+  // daemon-internal event synchronously for every disconnect, including when
+  // Socket.IO itself is created only after services have registered.
+  app.on(AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT, clearOAuthBrowserReservationsForSocket);
   const readReservationToken = (value: unknown): string | undefined => {
     // Older/non-browser callers may omit the compatibility hint. Nullish
     // values are equivalently absent and must never crash the request path.
@@ -3220,7 +3260,7 @@ export async function registerMCPServices(
         compatibility_mode?: 'strict' | 'legacy';
         dcr_mode?: MCPOAuthDCRMode;
       },
-      params?: AuthenticatedParams & { connection?: { id?: string } }
+      params?: AuthenticatedParams
     ) {
       try {
         const browserReservation = data.start_browser_flow
@@ -3395,10 +3435,6 @@ export async function registerMCPServices(
             console.log('[OAuth Test] Starting browser-based OAuth 2.1 flow...');
 
             try {
-              const connection = (params as AuthenticatedParams)?.connection as
-                | { id?: string }
-                | undefined;
-
               // Route through the daemon's two-phase flow so the redirect_uri
               // is the daemon's public base URL (browser-reachable for any
               // user) rather than a 127.0.0.1 callback server bound to the
@@ -3417,7 +3453,7 @@ export async function registerMCPServices(
                   oauthMode: effectiveOAuthMode,
                   clientId: effectiveClientId,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
-                  socketId: connection?.id,
+                  socketId: socketIdFromParams(params as AuthenticatedParams | undefined),
                   browserReservation,
                   clientSecret: effectiveClientSecret,
                   scope: effectiveScope,
@@ -3856,8 +3892,7 @@ export async function registerMCPServices(
           } satisfies MCPOAuthStartFailure;
         }
 
-        const connection = params?.connection as { id?: string } | undefined;
-        const socketId = connection?.id;
+        const socketId = socketIdFromParams(params);
 
         let result: StartTwoPhaseOAuthResult;
         try {
@@ -4896,7 +4931,6 @@ export async function registerMCPServices(
             // Route through the daemon's two-phase flow (callback → daemon's
             // public URL) instead of the legacy 127.0.0.1 callback server, so
             // remote browsers can complete the redirect on a deployed Agor.
-            const connection = params?.connection as { id?: string } | undefined;
             if (
               (serverConfig.auth?.oauth_mode ?? 'per_user') === 'shared' &&
               !hasMinimumRole(params?.user?.role, ROLES.ADMIN)
@@ -4926,7 +4960,7 @@ export async function registerMCPServices(
               compatibilityMode,
               dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
-              socketId: connection?.id,
+              socketId: socketIdFromParams(params),
               browserReservation,
             });
 

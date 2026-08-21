@@ -1,4 +1,4 @@
-import http from 'node:http';
+import http, { type Server as HttpServer } from 'node:http';
 import {
   createDatabaseAsync,
   MCPServerRepository,
@@ -7,7 +7,13 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, feathers } from '@agor/core/feathers';
+import {
+  type Application,
+  feathers,
+  feathersExpress,
+  socketio,
+  socketioClient,
+} from '@agor/core/feathers';
 import { loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
@@ -18,9 +24,17 @@ import type {
   UserID,
 } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
+import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { issueRuntimeToken } from './auth/runtime-tokens.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import { createSocketIOConfig } from './setup/socketio.js';
+import {
+  AGOR_SOCKET_AUTHORITY_ID_PROPERTY,
+  installSocketAuthorityId,
+  readSocketAuthorityId,
+} from './utils/socket-request-authority.js';
 
 // The boundary under test is daemon discovery/OAuth authority, not the MCP
 // SDK's stream parser. Mock only the post-grant capability client so Vitest
@@ -356,7 +370,7 @@ type SQLiteHarness = {
   deny: (state: string) => Promise<{ status: number; body: string }>;
   liveSocket: {
     id: string;
-    feathers: AuthenticatedParams & { id: string };
+    feathers: AuthenticatedParams;
     data: { tenant: { tenant_id: string; source: string } };
   };
 };
@@ -401,15 +415,18 @@ async function createHarness(
   const liveSocket = {
     id: 'sqlite-test-socket',
     feathers: {
-      id: 'sqlite-test-socket',
       user,
       authentication: {
         strategy: 'jwt',
         accessToken: 'sqlite-initial-authority-token',
       },
-    } as AuthenticatedParams & { id: string },
+    } as AuthenticatedParams,
     data: { tenant: { tenant_id: 'default', source: 'static' } },
   };
+  installSocketAuthorityId(
+    liveSocket.feathers as unknown as Record<PropertyKey, unknown>,
+    liveSocket.id
+  );
   const io = {
     local: {
       to: () => ({
@@ -486,13 +503,14 @@ async function createHarness(
   } satisfies SQLiteHarness;
 }
 
-function paramsFor(harness: SQLiteHarness): AuthenticatedParams & { connection: { id: string } } {
+function paramsFor(harness: SQLiteHarness): AuthenticatedParams {
   return {
+    provider: 'socketio',
     user: harness.liveSocket.feathers.user,
     tenant: { tenant_id: 'default', source: 'static' },
     connection: harness.liveSocket.feathers,
     authentication: harness.liveSocket.feathers.authentication,
-  } as AuthenticatedParams & { connection: { id: string } };
+  } as AuthenticatedParams;
 }
 
 function replaceLiveSocketAuthority(harness: SQLiteHarness, suffix = 'replacement'): void {
@@ -512,7 +530,7 @@ function addLiveAuthority(
   tenantId: string,
   userId: string,
   socketId: string
-): AuthenticatedParams & { connection: { id: string } } {
+): AuthenticatedParams {
   const user = {
     ...harness.user,
     user_id: userId as UserID,
@@ -520,13 +538,13 @@ function addLiveAuthority(
     role: 'member' as const,
   };
   const connection = {
-    id: socketId,
     user,
     authentication: {
       strategy: 'jwt',
       accessToken: `token:${tenantId}:${userId}:${socketId}`,
     },
-  } as AuthenticatedParams & { id: string };
+  } as AuthenticatedParams;
+  installSocketAuthorityId(connection as unknown as Record<PropertyKey, unknown>, socketId);
   const socket = {
     id: socketId,
     feathers: connection,
@@ -538,11 +556,12 @@ function addLiveAuthority(
     }
   ).sockets.sockets.set(socketId, socket);
   return {
+    provider: 'socketio',
     user,
     tenant: { tenant_id: tenantId, source: 'auth' },
     connection,
     authentication: connection.authentication,
-  } as AuthenticatedParams & { connection: { id: string } };
+  } as AuthenticatedParams;
 }
 
 async function reserveBrowserEvent(
@@ -614,8 +633,209 @@ async function replaceWithNewAuthorization(harness: SQLiteHarness): Promise<numb
   return generation;
 }
 
+const REAL_SOCKET_JWT_SECRET = 'real-socket-authority-integration-secret';
+
+type RealSocketHarness = {
+  app: Application & { io: import('socket.io').Server };
+  rawDb: Awaited<ReturnType<typeof createDatabaseAsync>>;
+  userA: User;
+  userB: User;
+  serverRow: MCPServer;
+  httpServer: HttpServer;
+  client: Application;
+  clientSocket: ClientSocket;
+  replaceAuthorityWithB: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
+function waitForClientSocket(socket: ClientSocket): Promise<void> {
+  if (socket.connected) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('Timed out connecting real Socket.IO client')),
+      5_000
+    );
+    socket.once('connect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.once('connect_error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function createRealSocketHarness(
+  provider: TestProvider,
+  options: { outboundDnsLookup?: OutboundDnsLookup } = {}
+): Promise<RealSocketHarness> {
+  const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+  await runMigrations(rawDb);
+  const users = new UsersRepository(rawDb);
+  const userA = await users.create({
+    email: `real-socket-a-${Math.random()}@example.test`,
+    role: 'admin',
+  });
+  const userB = await users.create({
+    email: `real-socket-b-${Math.random()}@example.test`,
+    role: 'admin',
+  });
+  const serverRow = await new MCPServerRepository(rawDb).create({
+    name: 'real-socket-oauth-authority',
+    transport: 'http',
+    url: provider.savedMcpUrl,
+    scope: 'global',
+    owner_user_id: userA.user_id as UserID,
+    auth: { type: 'oauth', oauth_client_id: 'saved-client-id', oauth_mode: 'per_user' },
+  });
+
+  const app = feathersExpress(feathers()) as unknown as Application & {
+    io: import('socket.io').Server;
+    listen: (port: number, hostname: string) => Promise<HttpServer>;
+  };
+  app.use('/users', {
+    async get(id: string) {
+      const user = await users.findById(id);
+      if (!user) throw new Error('Unknown socket test user');
+      return user;
+    },
+  } as never);
+  app.use('/socket-authority-inspect', {
+    async find(params?: AuthenticatedParams) {
+      const descriptor = params?.connection
+        ? Object.getOwnPropertyDescriptor(params.connection, AGOR_SOCKET_AUTHORITY_ID_PROPERTY)
+        : undefined;
+      return {
+        provider: params?.provider,
+        authorityId: readSocketAuthorityId(params?.connection),
+        plainId: (params?.connection as { id?: unknown } | undefined)?.id,
+        enumerable: descriptor?.enumerable,
+        configurable: descriptor?.configurable,
+        writable: descriptor?.writable,
+      };
+    },
+  } as never);
+  app.use('/socket-authority-replace', {
+    async create(_data: unknown, params?: AuthenticatedParams) {
+      if (params?.provider !== 'socketio' || !params.connection) {
+        throw new Error('Expected a genuine Socket.IO replacement request');
+      }
+      const replacementToken = issueRuntimeToken(
+        { sub: userB.user_id, type: 'access' },
+        REAL_SOCKET_JWT_SECRET,
+        '5m'
+      );
+      params.connection.user = userB;
+      params.connection.authentication = {
+        strategy: 'jwt',
+        accessToken: replacementToken,
+      };
+      // This is the same server lifecycle event emitted after a successful
+      // Feathers authentication replacement, exercised through a second real
+      // service call on the surviving physical socket.
+      app.emit(
+        'login',
+        { user: userB, accessToken: replacementToken },
+        {
+          connection: params.connection,
+          params: {
+            ...params,
+            user: userB,
+            authentication: params.connection.authentication,
+            tenant: { tenant_id: 'default', source: 'static' },
+          },
+        }
+      );
+      return { replaced: true };
+    },
+  } as never);
+
+  const socketConfig = createSocketIOConfig(app, {
+    corsOrigin: '*',
+    credentialsAllowed: false,
+    jwtSecret: REAL_SOCKET_JWT_SECRET,
+    multiTenancy: {
+      mode: 'static',
+      static_tenant_id: 'default',
+    } as never,
+  });
+  app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
+  await registerMCPServices({
+    db: rawDb as unknown as TenantScopeAwareDatabase,
+    app,
+    config: {} as RegisterServicesContext['config'],
+    jwtSecret: REAL_SOCKET_JWT_SECRET,
+    daemonUrl: 'http://127.0.0.1:3030',
+    bundledUiAvailable: false,
+    DAEMON_PORT: 3030,
+    UI_PORT: 5173,
+    branchRbacEnabled: false,
+    allowSuperadmin: false,
+    requireAuth: async (context) => {
+      if (context.params.provider === 'socketio' && !context.params.user) {
+        throw new Error('Unauthenticated Socket.IO integration request');
+      }
+      context.params.tenant = { tenant_id: 'default', source: 'static' };
+      return context;
+    },
+    deployment: {} as RegisterServicesContext['deployment'],
+    mcpOutboundDnsLookup: options.outboundDnsLookup,
+  });
+
+  const httpServer = await app.listen(0, '127.0.0.1');
+  if (!httpServer.listening) {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once('listening', resolve);
+      httpServer.once('error', reject);
+    });
+  }
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') throw new Error('Expected Socket.IO test listener');
+  const accessToken = issueRuntimeToken(
+    { sub: userA.user_id, type: 'access' },
+    REAL_SOCKET_JWT_SECRET,
+    '5m'
+  );
+  const clientSocket = createSocketClient(`http://127.0.0.1:${address.port}`, {
+    auth: { token: accessToken },
+    transports: ['websocket'],
+    reconnection: false,
+  });
+  const client = feathers();
+  client.configure(socketioClient(clientSocket));
+  await waitForClientSocket(clientSocket);
+
+  const replaceAuthorityWithB = async (): Promise<void> => {
+    await client.service('socket-authority-replace').create({});
+  };
+
+  let closed = false;
+  return {
+    app,
+    rawDb,
+    userA,
+    userB,
+    serverRow,
+    httpServer,
+    client,
+    clientSocket,
+    replaceAuthorityWithB,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      clientSocket.close();
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((error) => (error ? reject(error) : resolve()))
+      );
+      (rawDb as unknown as { $client?: { close(): void } }).$client?.close();
+    },
+  };
+}
+
 const providers: TestProvider[] = [];
 const databases: SQLiteHarness['rawDb'][] = [];
+const realSocketHarnesses: RealSocketHarness[] = [];
 let previousBaseUrl: string | undefined;
 let previousMasterSecret: string | undefined;
 
@@ -627,6 +847,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await Promise.all(realSocketHarnesses.splice(0).map((harness) => harness.close()));
   await Promise.all(providers.splice(0).map((provider) => provider.close()));
   for (const db of databases.splice(0)) {
     (db as unknown as { $client?: { close(): void } }).$client?.close();
@@ -635,6 +856,238 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('real Feathers Socket.IO request authority', () => {
+  it('binds params.connection to the immutable physical socket and ignores spoofed ids', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createRealSocketHarness(provider);
+    realSocketHarnesses.push(harness);
+
+    const inspected = (await harness.client.service('socket-authority-inspect').find()) as {
+      provider?: string;
+      authorityId?: string;
+      plainId?: unknown;
+      enumerable?: boolean;
+      configurable?: boolean;
+      writable?: boolean;
+    };
+    expect(inspected).toEqual({
+      provider: 'socketio',
+      authorityId: harness.clientSocket.id,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+
+    const reservation = (await harness.client
+      .service('mcp-servers/oauth-browser-reservations')
+      .create({
+        operation: 'discover',
+        mcp_server_id: harness.serverRow.mcp_server_id,
+        // Neither a documented field nor this namespaced value can influence
+        // the server-derived transport binding.
+        socket_id: 'attacker-supplied-id',
+        [AGOR_SOCKET_AUTHORITY_ID_PROPERTY]: 'attacker-supplied-id',
+      })) as { reservation_token?: string };
+    expect(reservation.reservation_token).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
+
+    const realConnection = harness.app.io.sockets.sockets.get(harness.clientSocket.id!)?.feathers;
+    expect(realConnection).toBeDefined();
+    const fakeConnection = {
+      id: harness.clientSocket.id,
+      user: harness.userA,
+      authentication: realConnection?.authentication,
+    } as AuthenticatedParams;
+    installSocketAuthorityId(
+      fakeConnection as unknown as Record<PropertyKey, unknown>,
+      harness.clientSocket.id!
+    );
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-browser-reservations')
+        .create({ operation: 'discover', mcp_server_id: harness.serverRow.mcp_server_id }, {
+          provider: 'socketio',
+          connection: fakeConnection,
+          user: harness.userA,
+          authentication: fakeConnection.authentication,
+          tenant: { tenant_id: 'default', source: 'static' },
+        } as AuthenticatedParams)
+    ).rejects.toThrow(/live socket/i);
+    await expect(
+      harness.app.service('mcp-servers/test-jwt').create(
+        {
+          api_url: `${provider.baseUrl}/jwt`,
+          api_token: 'must-not-dispatch',
+          api_secret: 'must-not-dispatch',
+        },
+        {
+          provider: 'socketio',
+          connection: { id: harness.clientSocket.id },
+          user: harness.userA,
+          tenant: { tenant_id: 'default', source: 'static' },
+        } as AuthenticatedParams
+      )
+    ).rejects.toThrow(/socket.*authority/i);
+    expect(provider.requests).toEqual([]);
+  });
+
+  it('drops one-shot reservations as soon as the physical socket disconnects', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createRealSocketHarness(provider);
+    realSocketHarnesses.push(harness);
+    const reserved = (await harness.client
+      .service('mcp-servers/oauth-browser-reservations')
+      .create({ operation: 'test-oauth', mcp_server_id: harness.serverRow.mcp_server_id })) as {
+      reservation_token: string;
+    };
+
+    const disconnected = new Promise<void>((resolve) => {
+      const serverSocket = harness.app.io.sockets.sockets.get(harness.clientSocket.id!);
+      serverSocket?.once('disconnect', () => resolve());
+    });
+    harness.clientSocket.close();
+    await disconnected;
+
+    await expect(
+      harness.app.service('mcp-servers/test-oauth').create(
+        {
+          mcp_url: provider.savedMcpUrl,
+          mcp_server_id: harness.serverRow.mcp_server_id,
+          start_browser_flow: true,
+          oauth_browser_event: { reservation_token: reserved.reservation_token },
+        },
+        {
+          provider: 'rest',
+          user: harness.userB,
+          tenant: { tenant_id: 'default', source: 'static' },
+        } as AuthenticatedParams
+      )
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/invalid, expired, or already used/i),
+    });
+    expect(provider.requests).toEqual([]);
+  });
+
+  it('fences A secrets at held DNS on a genuine test-jwt socket call', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const dnsStarted = deferred<void>();
+    const releaseDns = deferred<void>();
+    const harness = await createRealSocketHarness(provider, {
+      outboundDnsLookup: async (hostname) => {
+        expect(hostname).toBe('localhost');
+        dnsStarted.resolve();
+        await releaseDns.promise;
+        return [{ address: '127.0.0.1', family: 4 }];
+      },
+    });
+    realSocketHarnesses.push(harness);
+
+    const request = harness.client.service('mcp-servers/test-jwt').create({
+      api_url: `${provider.baseUrl.replace('127.0.0.1', 'localhost')}/jwt`,
+      api_token: 'admin-a-api-token',
+      api_secret: 'admin-a-api-secret',
+    });
+    await dnsStarted.promise;
+    await harness.replaceAuthorityWithB();
+    releaseDns.resolve();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests).toEqual([]);
+  });
+
+  it('fences oauth-start when A becomes B during the authoritative DB read', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createRealSocketHarness(provider);
+    realSocketHarnesses.push(harness);
+    const readStarted = deferred<void>();
+    const releaseRead = deferred<void>();
+    const originalFindById = MCPServerRepository.prototype.findById;
+    let held = false;
+    const findSpy = vi
+      .spyOn(MCPServerRepository.prototype, 'findById')
+      .mockImplementation(async function (id) {
+        const result = await originalFindById.call(this, id);
+        if (id === harness.serverRow.mcp_server_id && !held) {
+          held = true;
+          readStarted.resolve();
+          await releaseRead.promise;
+        }
+        return result;
+      });
+    try {
+      const request = harness.client
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.serverRow.mcp_server_id });
+      await readStarted.promise;
+      await harness.replaceAuthorityWithB();
+      releaseRead.resolve();
+
+      await expect(request).rejects.toThrow(/authority/i);
+      expect(provider.requests).toEqual([]);
+    } finally {
+      releaseRead.resolve();
+      findSpy.mockRestore();
+    }
+  });
+
+  it('fences oauth-start after a held initialize probe before discovery or flow creation', async () => {
+    const provider = await createTestProvider({ holdMcpChallenge: true });
+    providers.push(provider);
+    const harness = await createRealSocketHarness(provider);
+    realSocketHarnesses.push(harness);
+
+    const request = harness.client
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.serverRow.mcp_server_id });
+    await provider.mcpRequested.promise;
+    await harness.replaceAuthorityWithB();
+    provider.releaseMcp();
+
+    await expect(request).rejects.toThrow(/authority/i);
+    expect(provider.requests.map((entry) => entry.path)).toEqual(['/saved/mcp']);
+    expect(
+      provider.requests.some(
+        (entry) => entry.path.startsWith('/.well-known/') || entry.path === '/register'
+      )
+    ).toBe(false);
+  });
+
+  it('keeps REST and internal calls on their non-socket request authority models', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createRealSocketHarness(provider);
+    realSocketHarnesses.push(harness);
+    const service = harness.app.service('mcp-servers/test-jwt');
+
+    await expect(
+      service.create(
+        {
+          api_url: `${provider.baseUrl}/jwt`,
+          api_token: 'rest-token',
+          api_secret: 'rest-secret',
+        },
+        {
+          provider: 'rest',
+          user: harness.userA,
+          tenant: { tenant_id: 'default', source: 'static' },
+        } as AuthenticatedParams
+      )
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      service.create({
+        api_url: `${provider.baseUrl}/jwt`,
+        api_token: 'internal-token',
+        api_secret: 'internal-secret',
+      })
+    ).resolves.toMatchObject({ success: true });
+    expect(provider.requests.filter((entry) => entry.path === '/jwt')).toHaveLength(2);
+  });
 });
 
 describe('SQLite saved-row OAuth authority', () => {
