@@ -187,4 +187,23 @@ describe('usePresence', () => {
       lastSeen: 20_000,
     });
   });
+
+  it('tracks tenant-wide presence without disclosing board metadata', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: null, users, globalPresence: true })
+    );
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        timestamp: 1_000,
+      } satisfies PresenceUpdatedEvent);
+    });
+
+    expect(result.current.activeUsers).toHaveLength(1);
+    expect(result.current.activeUsers[0]).toMatchObject({ lastSeen: 1_000 });
+    expect(result.current.activeUsers[0]?.boardId).toBeUndefined();
+  });
 });
