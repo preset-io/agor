@@ -23,7 +23,7 @@ import {
   getCurrentTenantDatabaseScope,
   runWithTenantContext,
 } from '@agor/core/db';
-import { type HookContext, TaskStatus } from '@agor/core/types';
+import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -43,6 +43,7 @@ import {
   shouldValidateRepoEnvironmentPayload,
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
+  validateBranchEnvPolicyHook,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 
@@ -396,6 +397,73 @@ describe('tenant-owned service registration', () => {
   });
 });
 
+describe('registered board admin authority', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'patch', RegisteredHook[]>>;
+  };
+
+  const captureBoardHooks = (allowSuperadmin: boolean): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'boards') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: true },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    return registrations;
+  };
+
+  it('preserves ordinary board-admin authority for superadmins when bypass is disabled', async () => {
+    const context = {
+      path: 'boards',
+      method: 'patch',
+      id: 'board-1',
+      data: { name: 'Renamed' },
+      params: {
+        provider: 'rest',
+        user: { user_id: 'super-1', role: 'superadmin' },
+      },
+    } as HookContext;
+
+    const registrations = captureBoardHooks(false);
+    expect(registrations).not.toHaveLength(0);
+    for (const registration of registrations) {
+      for (const hook of registration.before?.patch ?? []) {
+        await hook(context);
+      }
+    }
+
+    expect(context).toBeDefined();
+  });
+});
+
 describe('shouldValidateRepoEnvironmentPayload', () => {
   it('skips absent repo environment payloads', () => {
     expect(shouldValidateRepoEnvironmentPayload(undefined)).toBe(false);
@@ -405,6 +473,80 @@ describe('shouldValidateRepoEnvironmentPayload', () => {
   it('validates present repo environment payloads', () => {
     expect(shouldValidateRepoEnvironmentPayload({})).toBe(true);
     expect(shouldValidateRepoEnvironmentPayload('invalid shape')).toBe(true);
+  });
+});
+
+describe('branch environment materialization validation', () => {
+  it('does not reject branch creation when the rendered health URL is invalid', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        stop_command: 'pkill -f pnpm',
+        health_check_url: 'not-an-http-url',
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).resolves.toBe(context);
+  });
+
+  it('does not reject a materialization patch with an invalid rendered health URL', async () => {
+    const existing = {
+      branch_id: 'branch-1',
+      repo_id: 'repo-1',
+      name: 'branch-1',
+      path: '/tmp/branch-1',
+      ref: 'branch-1',
+      ref_type: 'branch',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      created_by: 'user-1',
+    } as Branch;
+    const get = vi.fn(async () => existing);
+    const context = {
+      path: 'branches',
+      method: 'patch',
+      id: existing.branch_id,
+      data: {
+        environment_variant: 'dev',
+        start_command: 'pnpm dev',
+        stop_command: 'pkill -f pnpm',
+        health_check_url: 'not-an-http-url',
+      },
+      params: {},
+      service: { get },
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).resolves.toBe(context);
+    expect(get).toHaveBeenCalledWith(existing.branch_id, context.params);
+  });
+
+  it('still rejects unsafe rendered app URLs before persistence', async () => {
+    const context = {
+      path: 'branches',
+      method: 'create',
+      data: {
+        start_command: 'pnpm dev',
+        app_url: 'javascript:alert(1)',
+      },
+      params: {},
+    } as HookContext;
+
+    await expect(
+      validateBranchEnvPolicyHook({
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      })(context)
+    ).rejects.toThrow('managed environment app URL');
   });
 });
 

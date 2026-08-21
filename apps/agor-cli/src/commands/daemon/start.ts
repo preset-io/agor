@@ -45,15 +45,35 @@ export default class DaemonStart extends Command {
   };
 
   async run(): Promise<void> {
+    try {
+      await this.start();
+    } catch (error) {
+      // oclif signals a clean exit by throwing; let those through untouched.
+      if (error && typeof error === 'object' && 'oclif' in error) throw error;
+
+      // Anything else that stops a start is a diagnosable local-install problem,
+      // and `agor doctor` is the one command that inspects all of them. Point
+      // there once, here, instead of teaching every failure path to do it.
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(chalk.red('✗ Failed to start the daemon'));
+      this.log('');
+      this.log(message);
+      // Failures that already name their own remedy don't need the generic one.
+      if (!message.includes('agor doctor')) {
+        this.log('');
+        this.log(chalk.dim('Diagnose and repair the local installation with:'));
+        this.log(`  ${chalk.cyan('agor doctor')}`);
+      }
+      this.exit(1);
+    }
+  }
+
+  private async start(): Promise<void> {
     const { flags } = await this.parse(DaemonStart);
 
     // 1. Load & validate config
     const result = await loadDaemonConfigWithDeploymentIdentity(flags.config);
     const config = result.config;
-    if (result.migrated) {
-      this.log(chalk.green(`✓ Added daemon.deployment_id: ${result.migrated.deploymentId}`));
-      this.log(chalk.dim(`Backup: ${result.migrated.backupPath}`));
-    }
     await assertLocalContextUnlocked(config);
     const daemonUrl = resolveDaemonUrl(config);
 

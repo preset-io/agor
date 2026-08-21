@@ -33,10 +33,12 @@ export function summarizeSessionMcpServers(
   const attachedCount = serverIds.length;
   const healthyCount = Math.max(0, attachedCount - missingCount - needsAuthCount);
   const problemCount = missingCount + needsAuthCount;
-  // Unauthorized servers are a blocker the user must fix (their tools silently
-  // fail), so they read as an error — not a soft warning — like missing records.
+  // Not-connected / needs-auth is a nudge, not an alarm: the user just has to
+  // reconnect. It reads as a warning (amber) everywhere it drives color, so the
+  // badge, banner, and pill stay consistent. `error` is reserved for a genuine
+  // failure state, which this summary does not currently model.
   const tone: SessionMcpSummary['tone'] =
-    missingCount > 0 || needsAuthCount > 0 ? 'error' : 'default';
+    missingCount > 0 || needsAuthCount > 0 ? 'warning' : 'default';
 
   return {
     attachedCount,

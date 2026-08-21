@@ -71,6 +71,38 @@ export const MCP_OAUTH_COMPATIBILITY_MODES = ['strict', 'legacy'] as const;
 
 export type MCPOAuthCompatibilityMode = (typeof MCP_OAUTH_COMPATIBILITY_MODES)[number];
 
+/** Runtime guard for every public/persisted OAuth compatibility input. */
+export function isMCPOAuthCompatibilityMode(value: unknown): value is MCPOAuthCompatibilityMode {
+  return (
+    typeof value === 'string' &&
+    MCP_OAUTH_COMPATIBILITY_MODES.includes(value as MCPOAuthCompatibilityMode)
+  );
+}
+
+/**
+ * Reject internal or unknown compatibility policies at public/storage
+ * boundaries. `marketplace` is deliberately absent: it is a runtime decision,
+ * never data a caller or archive may provide.
+ */
+export function assertPublicMCPOAuthCompatibilityMode(auth: unknown): void {
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return;
+  const value = (auth as Record<string, unknown>).oauth_compatibility_mode;
+  if (value === undefined || isMCPOAuthCompatibilityMode(value)) return;
+  throw new Error('oauth_compatibility_mode must be either strict or legacy');
+}
+
+/**
+ * Effective OAuth discovery policy while a flow is running.
+ *
+ * `marketplace` is deliberately not an {@link MCPOAuthCompatibilityMode} and
+ * therefore cannot be submitted in an MCP server payload. The daemon derives
+ * it only for reviewed catalog installs whose row did not explicitly opt into
+ * `strict` or `legacy`. This keeps the default for every user/admin configured
+ * server strict while giving the marketplace a bounded interoperability
+ * profile that still enforces issuer/resource binding and PKCE S256.
+ */
+export type MCPOAuthRuntimeCompatibilityMode = MCPOAuthCompatibilityMode | 'marketplace';
+
 /**
  * Safe diagnostics for a failed OAuth Dynamic Client Registration attempt.
  *
@@ -90,7 +122,7 @@ export interface MCPOAuthStartFailure {
   redirect_uri?: string;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2] as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
@@ -128,7 +160,9 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
-  compatibilityMode: 'strict' | 'legacy';
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  /** Whether RFC 9207 says this AS will return `iss` on the callback. */
+  authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
 }
 
@@ -214,7 +248,10 @@ export type MCPScope = (typeof MCP_SCOPES)[number];
  * - `catalog`: installed from the marketplace; `catalog_entry_name` records
  *   which entry, the way `import_path` records which file
  *
- * This is provenance, not authorization — nothing reads it to decide access.
+ * This is not an access-control decision. Catalog provenance is one required
+ * input to the daemon's current-entry OAuth policy, but never grants access or
+ * relaxation by itself: the protected stamp and complete current catalog
+ * endpoint/transport/auth prescription must also match.
  */
 export type MCPSource = 'user' | 'imported' | 'agor' | 'catalog';
 
@@ -344,6 +381,17 @@ export interface MCPServer {
   // Authentication (for HTTP/SSE transports)
   auth?: MCPAuth;
 
+  /**
+   * Read-only effective policy resolved by the daemon for Settings and other
+   * operator surfaces. This is never accepted as persisted MCP server input:
+   * `marketplace` remains an internal runtime policy derived only from the
+   * current curated catalog entry.
+   */
+  oauth_compatibility_policy?: {
+    effective_mode: MCPOAuthRuntimeCompatibilityMode;
+    managed_by_catalog: boolean;
+  };
+
   // Scope
   scope: MCPScope;
   /**
@@ -406,6 +454,8 @@ export interface MCPServerFilters {
   usableByUserId?: string;
   /** Restrict to system-owned rows, used for the official catalog. */
   ownerless?: boolean;
+  /** Exact materialized catalog identity; never a substring search. */
+  catalogEntryName?: string;
 }
 
 /**

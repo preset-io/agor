@@ -614,8 +614,29 @@
     {
       "idx": 88,
       "version": "7",
-      "when": 1787232623412,
-      "tag": "0088_discord_gateway_hybrid",
+      "when": 1787212550878,
+      "tag": "0088_session_recent_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1787270400000,
+      "tag": "0089_mcp_catalog_install_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1787270400001,
+      "tag": "0090_external_user_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1787317142954,
+      "tag": "0091_discord_gateway_hybrid",
       "breakpoints": true
     }
   ]

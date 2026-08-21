@@ -5,9 +5,19 @@
  */
 
 import type { BranchRepository } from '@agor/core/db';
-import { BoardRepository, GroupRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  BoardRepository,
+  eq,
+  GroupRepository,
+  runWithTenantDatabaseTransaction,
+  select,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+  users,
+} from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
+  AuthenticatedParams,
   BoardGroupGrantWithGroup,
   BoardID,
   Branch,
@@ -22,8 +32,14 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  BRANCH_PERMISSION_LEVELS,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLES,
+} from '@agor/core/types';
 import { PERMISSION_RANK } from '../utils/branch-authorization.js';
+import { lockUserAuthorityMutation } from './user-authority-lock.js';
 
 function requireMember(context: HookContext): HookContext {
   if (!context.params.provider) return context;
@@ -125,6 +141,40 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
 
 export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
+
+  const assertCanManageMembershipTarget = async (
+    operationDb: TenantScopedDatabase,
+    userId: string,
+    params?: Params
+  ) => {
+    const authenticated = params as AuthenticatedParams | undefined;
+    // Actor-less provider-less calls are the explicit trusted provisioning
+    // seam. A provider-less call that carries a human actor is still a user
+    // action and must not acquire internal-call authority by changing transport.
+    if (!params?.provider && !authenticated?.user) return;
+    if (authenticated?.user?._isServiceAccount) return;
+    const actorId = authenticated?.user?.user_id;
+    if (!actorId) throw new NotAuthenticated('Authentication required');
+
+    await lockUserAuthorityMutation(operationDb, params);
+
+    // Load both sides under the active tenant/RLS scope. Missing and
+    // cross-tenant targets intentionally produce the same response as an
+    // authority failure so this write path cannot enumerate identities.
+    const [actor, target] = await Promise.all([
+      select(operationDb).from(users).where(eq(users.user_id, actorId)).one(),
+      select(operationDb).from(users).where(eq(users.user_id, userId)).one(),
+    ]);
+    if (
+      !actor ||
+      !target ||
+      !hasMinimumRole(actor.role, ROLES.ADMIN) ||
+      !hasRoleAuthorityOver(actor.role, target.role)
+    ) {
+      throw new Forbidden('You do not have authority to manage this user');
+    }
+  };
+
   return {
     async find(params?: Params): Promise<GroupMembership[]> {
       return repo.listMemberships({
@@ -136,12 +186,20 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
       data: { group_id?: string; user_id?: string },
       params?: Params
     ): Promise<GroupMembership> {
-      if (!data.group_id || !data.user_id)
-        throw new BadRequest('group_id and user_id are required');
-      return repo.addMember(
-        data.group_id,
-        data.user_id,
-        paramsUser(params)?.user_id as UserID | undefined
+      const groupId = data.group_id;
+      const userId = data.user_id;
+      if (!groupId || !userId) throw new BadRequest('group_id and user_id are required');
+      return runWithTenantDatabaseTransaction(
+        db,
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
+        async (operationDb) => {
+          await assertCanManageMembershipTarget(operationDb, userId, params);
+          return new GroupRepository(operationDb).addMember(
+            groupId,
+            userId,
+            paramsUser(params)?.user_id as UserID | undefined
+          );
+        }
       );
     },
     async remove(id: string, params?: Params): Promise<GroupMembership> {
@@ -150,9 +208,16 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
         (paramsRoute(params)?.groupId as string | undefined);
       const userId = (params?.query?.user_id as string | undefined) || id;
       if (!groupId || !userId) throw new BadRequest('group_id and user_id are required');
-      const removed = await repo.removeMember(groupId, userId);
-      if (!removed) throw new BadRequest(`Membership not found: ${groupId}/${userId}`);
-      return removed;
+      return runWithTenantDatabaseTransaction(
+        db,
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
+        async (operationDb) => {
+          await assertCanManageMembershipTarget(operationDb, userId, params);
+          const removed = await new GroupRepository(operationDb).removeMember(groupId, userId);
+          if (!removed) throw new BadRequest(`Membership not found: ${groupId}/${userId}`);
+          return removed;
+        }
+      );
     },
   };
 }

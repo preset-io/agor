@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
+  type ArtifactListProjection,
   ArtifactRepository,
   ArtifactTrustGrantRepository,
   BoardRepository,
@@ -47,6 +48,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  ARTIFACT_LIST_FIELDS_WITHOUT_FILES,
+  ARTIFACT_METADATA_LIST_FIELDS,
   canonicalizeAgorGrants,
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
@@ -67,7 +70,7 @@ import {
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from '../utils/spawn-executor.js';
 import type { UsersService } from './users.js';
 
@@ -169,6 +172,37 @@ export type ArtifactParams = QueryParams<{
   };
 
 const MAX_CONSOLE_ENTRIES = 100;
+
+const ARTIFACT_METADATA_LIST_FIELD_SET = new Set<string>(ARTIFACT_METADATA_LIST_FIELDS);
+const ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET = new Set<string>(ARTIFACT_LIST_FIELDS_WITHOUT_FILES);
+
+/**
+ * Choose the smallest SQL row shape that still preserves the generic adapter's
+ * late filter, sort, and select semantics.
+ *
+ * A nonempty `$select` is the only opt-in: no selection (including `$select:
+ * []`) retains the full-row response contract. Fields needed by residual
+ * filters and `$sort` must also be materialized even when the caller will not
+ * receive them. Unknown/future fields conservatively fall back to a full row so
+ * a type/schema addition cannot silently change query behavior.
+ */
+function resolveArtifactListProjection(query: Query): ArtifactListProjection {
+  const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
+  if (!selectedFields || selectedFields.length === 0) return 'full';
+
+  const materializedFields = new Set<string>(selectedFields);
+  for (const field of Object.keys(query)) {
+    if (!field.startsWith('$')) materializedFields.add(field);
+  }
+  for (const field of Object.keys(query.$sort ?? {})) materializedFields.add(field);
+
+  let projection: ArtifactListProjection = 'metadata';
+  for (const field of materializedFields) {
+    if (!ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET.has(field)) return 'full';
+    if (!ARTIFACT_METADATA_LIST_FIELD_SET.has(field)) projection = 'without-files';
+  }
+  return projection;
+}
 
 /** Path the synthesized .env file lands at in the file map. */
 const SYNTHESIZED_ENV_PATH = '/.env';
@@ -301,6 +335,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
+      projection?: ArtifactListProjection;
     } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
@@ -308,6 +343,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (params?._agorSqlBranchAccessUserId) {
       filter.visibleToUserId = params._agorSqlBranchAccessUserId;
     }
+
+    // `$select` used to run only after `SELECT *` and JSON decoding, so even a
+    // metadata-only initial hydration pulled every source file over the DB
+    // connection. Keep full-row reads as the default. A nonempty selection can
+    // use a leaner SQL shape only when that shape also contains every field the
+    // generic adapter still needs for its residual filtering and sorting.
+    const projection = resolveArtifactListProjection(query);
+    if (projection !== 'full') filter.projection = projection;
 
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
@@ -490,7 +533,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         executor_branch_id: branch.branch_id,
       }
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.publish',
         sessionToken,
@@ -962,7 +1005,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.land',
         sessionToken,
@@ -1687,7 +1730,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.validate',
         sessionToken: generateScopedServiceToken(

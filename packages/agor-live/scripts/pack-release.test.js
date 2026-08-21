@@ -93,6 +93,8 @@ test('release tarball materializes internal packages without postinstall', async
         type: 'module',
         files: ['bin', 'dist', 'LICENSE', 'README.md'],
         dependencies,
+        peerDependencies: { 'hot-shots': '^17.1.0' },
+        peerDependenciesMeta: { 'hot-shots': { optional: true } },
         bundleDependencies,
       })}\n`
     );
@@ -102,6 +104,8 @@ test('release tarball materializes internal packages without postinstall', async
     await execFileAsync('tar', ['-xzf', tarball, '-C', extract]);
     const manifest = JSON.parse(await readFile(join(extract, 'package', 'package.json'), 'utf8'));
     assert.equal(manifest.dependencies['@agor-live/client'], '1.2.3');
+    assert.equal(manifest.peerDependencies['hot-shots'], '^17.1.0');
+    assert.equal(manifest.peerDependenciesMeta['hot-shots'].optional, true);
     assert.equal(manifest.scripts?.postinstall, undefined);
     for (const bundledPackage of BUNDLED_INTERNAL_PACKAGES) {
       const internalManifest = JSON.parse(

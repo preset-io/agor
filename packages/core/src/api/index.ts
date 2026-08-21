@@ -1310,20 +1310,61 @@ export async function createRestClient(
   // Lazy-load REST client (only imported when needed, not in browser bundles)
   const { default: rest } = await import('@feathersjs/rest-client');
 
-  // When an API key is provided, wrap fetch to inject the Authorization header
-  const fetchFn = apiKey
-    ? (input: string | URL | globalThis.Request, init?: RequestInit) => {
-        const headers = new Headers(init?.headers);
-        headers.set('Authorization', `Bearer ${apiKey}`);
-        return fetchImpl(input, { ...init, headers });
-      }
-    : fetchImpl;
+  // Inject the Authorization header at the transport layer rather than relying on
+  // the Feathers authentication hook.
+  //
+  // That hook only decorates the *standard* service methods. Calls to custom methods
+  // registered via `service.methods(...)` — board `toYaml`/`clone`/`fromYaml`, repo
+  // `createBranch`, … — went out with no credentials at all, and the daemon correctly
+  // answered 401 "Not authenticated". Only the CLI hit this: the UI is on Socket.IO,
+  // where the connection itself is authenticated.
+  //
+  // The token is tracked here rather than read back from the authentication client
+  // because this client is configured with `storage: undefined`, so
+  // `getAccessToken()` resolves to null.
+  let bearerToken: string | null = apiKey ?? null;
+
+  const fetchFn = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+
+    // Never attach a bearer to the login exchange itself: the credentials live in
+    // the request body, and a stale token here would 401 the very call meant to
+    // replace it.
+    const target = typeof input === 'string' ? input : input.toString();
+    const isAuthenticationRequest = /\/authentication\/?(?:\?|$)/.test(target);
+
+    if (!isAuthenticationRequest && !headers.has('Authorization') && bearerToken) {
+      headers.set('Authorization', `Bearer ${bearerToken}`);
+    }
+
+    return fetchImpl(input, { ...init, headers });
+  };
 
   // Configure REST transport
   client.configure(rest(url).fetch(fetchFn));
 
   // Configure authentication with no storage (CLI will manage tokens separately)
   client.configure(authentication({ storage: undefined }));
+
+  // Remember the credential each successful login establishes, so `fetchFn` above
+  // can authenticate custom-method calls the Feathers hook does not cover.
+  if (!apiKey) {
+    const authenticateWithClient = client.authenticate.bind(client);
+    client.authenticate = async (data?: Parameters<typeof authenticateWithClient>[0]) => {
+      const result = await authenticateWithClient(data);
+      const established =
+        (result as { accessToken?: unknown } | undefined)?.accessToken ??
+        (data as { accessToken?: unknown } | undefined)?.accessToken;
+      if (typeof established === 'string') bearerToken = established;
+      return result;
+    };
+
+    const logoutFromClient = client.logout.bind(client);
+    client.logout = async () => {
+      bearerToken = null;
+      return logoutFromClient();
+    };
+  }
 
   // Create a dummy socket object to satisfy the interface
   client.io = {

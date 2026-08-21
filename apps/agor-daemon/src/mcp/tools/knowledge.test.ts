@@ -18,7 +18,7 @@ vi.mock('../../utils/executor-delegated-home.js', () => ({
 vi.mock('../../utils/spawn-executor.js', () => ({
   generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
 }));
 
 vi.mock('../resolve-ids.js', () => ({

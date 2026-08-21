@@ -9,7 +9,7 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogEntry } from '@agor/core/types';
+import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -69,7 +69,10 @@ function renderDrawer(entry: MCPCatalogEntry) {
   return { show };
 }
 
-const connectButton = () => screen.getByRole('button', { name: /Connect/ });
+const connectButton = () =>
+  screen
+    .getByText(/^(Connect, then sign in|Verify token & connect|Check & connect|Connect & try it)$/i)
+    .closest('button')!;
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {
@@ -111,5 +114,249 @@ describe('CatalogDetailDrawer consent', () => {
     expect(screen.getByText('Now also writes to your repositories.')).toBeVisible();
     expect(screen.getByRole('checkbox')).not.toBeChecked();
     expect(connectButton()).toBeDisabled();
+  });
+});
+
+/**
+ * The API-key field.
+ *
+ * The drawer is the only place a key is ever typed, so two of its rules are
+ * load-bearing rather than cosmetic: the field appears exactly for entries that
+ * ask for one, and what is typed belongs to the entry it was typed for. The
+ * second is the sharper one — a key left in the field across a change of entry
+ * would be one vendor's credential sent to another vendor's endpoint, and the
+ * drawer stays open across that change.
+ *
+ * The keys here are obvious fakes.
+ */
+const DATADOG = {
+  ...DEEPWIKI,
+  name: 'com.datadoghq/mcp',
+  title: 'Datadog',
+  permission_disclosure: 'Reads metrics, logs, traces, monitors, and incidents.',
+  website_url: 'https://docs.datadoghq.com/account_management/api-app-keys/',
+  auth_type: 'credentials',
+  credentials: {
+    scheme: 'bearer',
+    label: 'Personal access token',
+    acquisition_url: 'https://docs.datadoghq.com/mcp_server/setup/',
+  },
+} as unknown as MCPCatalogEntry;
+
+const SENTRY = {
+  ...DATADOG,
+  name: 'io.sentry/mcp',
+  title: 'Sentry',
+  permission_disclosure: 'Reads issues and events from the Sentry organisations you authorise.',
+} as unknown as MCPCatalogEntry;
+
+function renderWithConnect(entry: MCPCatalogEntry) {
+  const onConnect = vi.fn();
+  const props = (
+    shown: MCPCatalogEntry,
+    open = true,
+    credentialRequirement: MCPCatalogCredentialRequirement | null = null
+  ) => ({
+    entry: shown,
+    open,
+    onClose: vi.fn(),
+    branches: BRANCHES,
+    branchesLoading: false,
+    branchesError: null,
+    defaultBranchId: 'branch-1',
+    connecting: false,
+    connectError: null,
+    credentialRequirement,
+    onConnect,
+  });
+  const view = render(<CatalogDetailDrawer {...props(entry)} />);
+  return {
+    onConnect,
+    show: (next: MCPCatalogEntry) => view.rerender(<CatalogDetailDrawer {...props(next)} />),
+    // The Marketplace keeps this component mounted and toggles `open`, so
+    // closing it is a prop change rather than an unmount — which is exactly why
+    // state on it outlives the interaction unless something clears it.
+    setOpen: (open: boolean) => view.rerender(<CatalogDetailDrawer {...props(entry, open)} />),
+    /** What `CatalogTab` does after a refusal that named a requirement. */
+    answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+  };
+}
+
+const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
+
+describe('CatalogDetailDrawer API key', () => {
+  it('offers a key field for an entry that needs one, and gates connect on it', () => {
+    renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    // Acknowledged, branch chosen — and still not connectable, because the
+    // endpoint will refuse an install without a key anyway. Finding that out
+    // at the button beats finding it out from the daemon.
+    expect(keyField()).toBeVisible();
+    expect(connectButton()).toBeDisabled();
+
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('hands the pasted key to the connect callback', () => {
+    const { onConnect } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: '  fake-key-1111  ' } });
+
+    fireEvent.click(connectButton());
+
+    // Trimmed here as well as on the daemon: a key pasted from a terminal
+    // routinely arrives with surrounding whitespace, and the button should not
+    // enable for a field holding only spaces.
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'branch-1', bearerToken: 'fake-key-1111' })
+    );
+  });
+
+  it('does not enable connect for a field holding only whitespace', () => {
+    renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    fireEvent.change(keyField() as HTMLElement, { target: { value: '   ' } });
+
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('does not carry a key typed for one server to the next one shown', () => {
+    // The hazard the field is keyed by entry to prevent: the drawer stays open
+    // across a change of entry, so a bare string would leave Datadog's key in
+    // the box for a connect to Sentry.
+    const { show } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    show(SENTRY);
+
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('does not repopulate the field with a key discarded by closing the drawer', () => {
+    // `destroyOnHidden` unmounts the drawer's *contents* — the input and its
+    // reveal toggle — but this component stays mounted for as long as the
+    // Marketplace is open. Without an explicit discard the pasted key sat in
+    // React state indefinitely and came back, revealable, on reopening.
+    const { setOpen } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    setOpen(false);
+    setOpen(true);
+
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('keeps the key while a failed connect is still on screen', () => {
+    // The other half of the rule. A connect that failed leaves the drawer open,
+    // and a user who mistyped one character should not have to find the key
+    // again to fix it.
+    renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    expect(keyField()).toHaveValue('fake-datadog-key');
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('points at the vendor’s own page for where to get a key', () => {
+    // "API key" is ambiguous on a page that also mentions Agor, and without a
+    // pointer the answer is a search engine.
+    renderWithConnect(DATADOG);
+
+    const link = screen.getByRole('link', { name: /Where to find it/ });
+    expect(link).toHaveAttribute('href', DATADOG.credentials?.acquisition_url);
+  });
+
+  it('keeps the prescribed bearer field when the endpoint confirms credentials', () => {
+    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    answerFromEndpoint('required');
+
+    expect(keyField()).toBeVisible();
+    expect(connectButton()).toBeDisabled();
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('sends the key on the retry the endpoint asked for', () => {
+    // The whole point of one extra round trip: the second attempt carries what
+    // the first was refused for lacking.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    answerFromEndpoint('required');
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({ bearerToken: 'fake-key-1111' })
+    );
+  });
+
+  it('drops the requirement when the endpoint says it wants no key', () => {
+    // The other direction: the entry says `credentials`, the vendor has opened
+    // the endpoint up, and the daemon refuses every keyed request. The button
+    // was unreachable because it demanded a key that guaranteed refusal.
+    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    answerFromEndpoint('not_accepted');
+
+    expect(keyField()).toBeNull();
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('does not send — or keep — a key the endpoint refused to take', () => {
+    // Hiding the field while still holding what was typed in it would be the
+    // retention bug one state further along, and submitting it would repeat the
+    // refusal the retry exists to escape.
+    const { answerFromEndpoint, onConnect } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(connectButton());
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ bearerToken: expect.anything() })
+    );
+    // And the discarded key is not waiting in the field if the requirement
+    // flips back.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
+  });
+
+  it('offers no key field for an entry that does not need one', () => {
+    const { onConnect } = renderWithConnect(DEEPWIKI);
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(keyField()).toBeNull();
+
+    fireEvent.click(connectButton());
+
+    // No `bearerToken` at all rather than an empty one: the daemon refuses a key
+    // sent to an endpoint that never asked for one.
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ bearerToken: expect.anything() })
+    );
+  });
+
+  it('still removes the whole form for an entry the marketplace cannot install', () => {
+    // `blocked` and `api-key` are different answers. The key field must not
+    // resurrect a form for an entry with no endpoint to send anything to.
+    renderWithConnect({ ...DATADOG, remote_url: undefined, has_remote: false } as MCPCatalogEntry);
+
+    expect(keyField()).toBeNull();
+    expect(screen.queryByRole('button', { name: /Connect/ })).toBeNull();
   });
 });

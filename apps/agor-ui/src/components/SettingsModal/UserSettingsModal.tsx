@@ -1,5 +1,6 @@
 import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
 import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgenticAuthMethod,
@@ -14,7 +15,13 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import {
+  canAssignUserRole,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLE_OPTIONS,
+  ROLES,
+} from '@agor-live/client';
 import {
   BellOutlined,
   CheckCircleFilled,
@@ -52,6 +59,7 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
@@ -254,6 +262,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   initialTab,
 }) => {
   const { token } = theme.useToken();
+  const { config: authConfig, identityContractState } = useAuthConfig();
 
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -286,8 +295,40 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     null
   );
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const externallyManaged =
+    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
+  const identityWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'identityWrite'
+  );
+  const roleWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'roleWrite'
+  );
+  const passwordWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'passwordWrite'
+  );
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
+  const canEditTarget =
+    !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
+  const canAdministerTarget = isAdmin && canEditTarget;
+  const canWriteIdentity = canEditTarget && identityWriteAvailable;
+  const canWriteRole = canAdministerTarget && !isSelf && roleWriteAvailable;
+  const canWritePassword = canEditTarget && passwordWriteAvailable;
+  const canWriteExecutionHome = canAdministerTarget && identityWriteAvailable;
+  const identityWriteHelp = !identityWriteAvailable
+    ? 'Managed by your identity provider'
+    : canWriteIdentity
+      ? undefined
+      : 'You do not have authority to edit this user';
+  const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
+    canAssignUserRole(currentUser?.role, option.value)
+  );
 
   // Authorize the active panel SYNCHRONOUSLY during render (never correct it in
   // an effect): a stale/unauthorized key must resolve to Profile before any
@@ -296,6 +337,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // tenant-disabled provider deep link can't render its credential controls.
   // Mirrors the permission gating that builds `navGroups`.
   const activeKey = ((): string => {
+    if (isEditingOther && !canEditTarget) return 'profile';
     if (rawActiveKey.startsWith(PROVIDER_KEY_PREFIX)) {
       // FAIL CLOSED until availability is known: an unhydrated store reports
       // every tool as enabled, so a disabled-provider deep link would briefly
@@ -306,9 +348,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ? rawActiveKey
         : 'profile';
     }
+    if (rawActiveKey === 'security' && !canWriteExecutionHome && !canWritePassword)
+      return 'profile';
     if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
       return 'profile';
-    if (rawActiveKey === 'access' && !isAdmin) return 'profile';
+    if (rawActiveKey === 'access' && !canAdministerTarget) return 'profile';
     return rawActiveKey;
   })();
 
@@ -424,7 +468,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   const loadUserGroups = useCallback(async () => {
     const userId = user?.user_id;
-    if (!client || !userId || !isAdmin) {
+    if (!client || !userId || !canAdministerTarget) {
       setAvailableGroups([]);
       setUserGroupIds([]);
       setGroupsLoaded(false);
@@ -451,7 +495,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } finally {
       setLoadingGroups(false);
     }
-  }, [client, form, isAdmin, user?.user_id]);
+  }, [canAdministerTarget, client, form, user?.user_id]);
 
   // Initialize when modal opens with user data
   useEffect(() => {
@@ -587,7 +631,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const syncUserGroups = async (nextGroupIds: string[]) => {
-    if (!client || !user || !isAdmin || !groupsLoaded) return;
+    if (!client || !user || !canAdministerTarget || !groupsLoaded) return;
     await syncGroupsForUser(client, user.user_id, userGroupIds, nextGroupIds);
     setUserGroupIds(nextGroupIds);
   };
@@ -667,12 +711,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Profile edit and a Preferences edit from clobbering each other's keys when
   // both are flushed against the same not-yet-refreshed `user` prop.
   const commitMainPanels = async (panels: Set<string>): Promise<boolean> => {
-    if (!user) return false;
+    if (!user || !canEditTarget) return false;
 
     try {
       const toValidate: string[] = [];
-      if (panels.has('profile')) toValidate.push('email', 'name', 'role');
-      if (panels.has('security')) toValidate.push('unix_username');
+      if (panels.has('profile') && canWriteIdentity) toValidate.push('email', 'name');
+      if (panels.has('profile') && canWriteRole) toValidate.push('role');
+      if (panels.has('security') && canWriteExecutionHome) toValidate.push('unix_username');
       if (toValidate.length) await form.validateFields(toValidate);
 
       const updates: UpdateUserInput = {};
@@ -681,21 +726,23 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
       if (panels.has('profile')) {
         const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
-        updates.email = values.email;
-        updates.name = values.name;
-        updates.role = values.role;
+        if (canWriteIdentity) {
+          updates.email = values.email;
+          updates.name = values.name;
+        }
         if (values.useSlackAvatar === false) {
           nextPreferences.use_slack_avatar = false;
         } else {
           delete nextPreferences.use_slack_avatar;
         }
         preferencesTouched = true;
+        if (canWriteRole) updates.role = values.role;
       }
 
       if (panels.has('security')) {
         const values = form.getFieldsValue(['unix_username', 'password']);
-        updates.unix_username = values.unix_username;
-        if (values.password?.trim()) updates.password = values.password;
+        if (canWriteExecutionHome) updates.unix_username = values.unix_username;
+        if (canWritePassword && values.password?.trim()) updates.password = values.password;
       }
 
       if (panels.has('preferences')) {
@@ -710,7 +757,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         preferencesTouched = true;
       }
 
-      if (panels.has('access') && isAdmin && isEditingOther) {
+      if (panels.has('access') && canAdministerTarget && isEditingOther && canWritePassword) {
         updates.must_change_password = form.getFieldValue('must_change_password');
       }
 
@@ -985,6 +1032,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Sidebar navigation model. Kept as plain data so the same structure feeds
   // both the AntD menu and the search filter.
   const navGroups = useMemo(() => {
+    if (isEditingOther && !canEditTarget) {
+      return [
+        {
+          key: 'grp-account',
+          label: 'Account',
+          children: [{ key: 'profile', ...PANEL_META.profile }],
+        },
+      ];
+    }
     const groups: Array<{
       key: string;
       label: string;
@@ -1004,7 +1060,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: [
           { key: 'profile', ...PANEL_META.profile },
           { key: 'preferences', ...PANEL_META.preferences },
-          { key: 'security', ...PANEL_META.security },
+          ...(!canWriteExecutionHome && !canWritePassword
+            ? []
+            : [{ key: 'security', ...PANEL_META.security }]),
           // Personal API tokens and uploads are scoped to the signed-in caller,
           // so they are meaningless (and misleading) when an admin edits another
           // user.
@@ -1032,7 +1090,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       },
     ];
 
-    if (isAdmin) {
+    if (canAdministerTarget) {
       groups.push({
         key: 'grp-admin',
         label: 'Admin',
@@ -1040,7 +1098,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
     }
     return groups;
-  }, [visibleAgenticToolTabs, isAdmin, isEditingOther, resolveProvider]);
+  }, [
+    canAdministerTarget,
+    canEditTarget,
+    canWriteExecutionHome,
+    canWritePassword,
+    isEditingOther,
+    resolveProvider,
+    visibleAgenticToolTabs,
+  ]);
 
   const menuItems: MenuProps['items'] = useMemo(
     () =>
@@ -1101,18 +1167,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'profile',
       },
       {
-        label: 'Password',
-        kind: 'setting',
-        keywords: 'credentials security',
-        panelKey: 'security',
-      },
-      {
-        label: 'Execution home key',
-        kind: 'setting',
-        keywords: 'impersonation os process user',
-        panelKey: 'security',
-      },
-      {
         label: 'Enable chimes',
         kind: 'setting',
         keywords: 'sound audio notification',
@@ -1143,6 +1197,22 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'preferences',
       },
     ];
+    if (canWritePassword) {
+      entries.push({
+        label: 'Password',
+        kind: 'setting',
+        keywords: 'credentials security',
+        panelKey: 'security',
+      });
+    }
+    if (canWriteExecutionHome) {
+      entries.push({
+        label: 'Execution home key',
+        kind: 'setting',
+        keywords: 'impersonation os process user',
+        panelKey: 'security',
+      });
+    }
     if (isSelf && onRestartOnboarding) {
       entries.push({
         label: 'Restart onboarding',
@@ -1159,7 +1229,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'tokens',
       });
     }
-    if (isAdmin) {
+    if (canAdministerTarget) {
       entries.push({
         label: 'Groups',
         kind: 'setting',
@@ -1167,7 +1237,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'access',
       });
     }
-    if (isAdmin && isEditingOther) {
+    if (canAdministerTarget && isEditingOther && canWritePassword) {
       entries.push({
         label: 'Force password change on next login',
         kind: 'setting',
@@ -1306,10 +1376,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     navGroups,
     visibleAgenticToolTabs,
     resolveProvider,
-    isAdmin,
+    canAdministerTarget,
     isEditingOther,
     isSelf,
     onRestartOnboarding,
+    canWriteExecutionHome,
+    canWritePassword,
   ]);
 
   const searchActive = search.trim().length > 0;
@@ -1411,7 +1483,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // per field, so "Done" only flushes any dirty session-defaults left over
   // from another provider before closing.
   const handleModalSave = async () => {
-    if (!user || savingModal) return;
+    if (!user || savingModal || !canEditTarget) return;
     setSavingModal(true);
     try {
       // Flush EVERY edited main panel (plus the active one if it owns the shared
@@ -1440,9 +1512,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderProfilePanel = () => (
     <>
       <PanelHeader title={PANEL_META.profile.title} />
+      {externallyManaged && (
+        <Alert
+          type="info"
+          showIcon
+          title="Identity and role are managed by your workspace"
+          description="Changes appear after the next workspace sign-in. Your Agor preferences and connections remain editable."
+          style={{ marginBottom: 20 }}
+        />
+      )}
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name" name="name">
-          <Input placeholder="John Doe" />
+        <FieldRow label="Name" name="name" help={identityWriteHelp}>
+          <Input placeholder="John Doe" disabled={!canWriteIdentity} />
         </FieldRow>
 
         <FieldRow
@@ -1453,8 +1534,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             { required: true, message: 'Please enter an email' },
             { type: 'email', message: 'Please enter a valid email' },
           ]}
+          help={identityWriteHelp}
         >
-          <Input placeholder="user@example.com" />
+          <Input placeholder="user@example.com" disabled={!canWriteIdentity} />
         </FieldRow>
 
         <FieldRow
@@ -1463,7 +1545,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           valuePropName="checked"
           tooltip="Shows your Slack-synced profile image instead of your initials tile. Turns off automatically if Slack sync is removed."
         >
-          <Switch />
+          <Switch disabled={!canEditTarget} />
         </FieldRow>
 
         <FieldRow
@@ -1471,12 +1553,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
-          help={isAdmin ? undefined : 'Maintained by administrators'}
+          help={
+            !roleWriteAvailable
+              ? 'Managed by your identity provider'
+              : canWriteRole
+                ? undefined
+                : 'Maintained by administrators'
+          }
         >
           <Select
-            disabled={!isAdmin}
+            disabled={!canWriteRole}
             style={{ maxWidth: 320 }}
-            options={ROLE_OPTIONS.map((opt) => ({
+            options={assignableRoleOptions.map((opt) => ({
               value: opt.value,
               label: opt.label,
               description: opt.description,
@@ -1518,29 +1606,29 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
-        <FieldRow label="Password" name="password" help="Leave blank to keep current password">
-          <Input.Password placeholder="••••••••" />
-        </FieldRow>
+        {canWritePassword && (
+          <FieldRow label="Password" name="password" help="Leave blank to keep current password">
+            <Input.Password placeholder="••••••••" />
+          </FieldRow>
+        )}
 
-        <FieldRow
-          label="Execution home key"
-          name="unix_username"
-          help={
-            isAdmin
-              ? 'Transitional home key used only by delegated execution'
-              : 'Maintained by administrators'
-          }
-          rules={[
-            {
-              pattern: EXECUTION_HOME_KEY_PATTERN,
-              message:
-                'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
-            },
-            { max: 32, message: 'Execution home key must be 32 characters or less' },
-          ]}
-        >
-          <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />
-        </FieldRow>
+        {canWriteExecutionHome && (
+          <FieldRow
+            label="Execution home key"
+            name="unix_username"
+            help="Transitional home key used only by delegated execution"
+            rules={[
+              {
+                pattern: EXECUTION_HOME_KEY_PATTERN,
+                message:
+                  'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
+              },
+              { max: 32, message: 'Execution home key must be 32 characters or less' },
+            ]}
+          >
+            <Input placeholder="johnsmith" maxLength={32} />
+          </FieldRow>
+        )}
       </Form>
     </>
   );
@@ -1618,7 +1706,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           />
         </FieldRow>
 
-        {isAdmin && isEditingOther && (
+        {canAdministerTarget && isEditingOther && canWritePassword && (
           <>
             <SectionDivider label="Danger zone" />
             <Form.Item
@@ -1966,7 +2054,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         <Button key="close" onClick={handleClose} disabled={savingModal}>
           Close
         </Button>,
-        <Button key="save" type="primary" onClick={handleModalSave} loading={savingModal}>
+        <Button
+          key="save"
+          type="primary"
+          onClick={handleModalSave}
+          loading={savingModal}
+          disabled={!canEditTarget}
+        >
           Save
         </Button>,
       ];

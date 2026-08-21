@@ -26,7 +26,7 @@ import {
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { extractDbFilePath } from '@agor/core/utils/path';
-import { UI_MOUNT_PATH } from '@agor/core/utils/url';
+import { deriveLoopbackReachableOrigin, UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
 
@@ -37,6 +37,8 @@ import {
 import type { AgorConfig, ResolvedSecurity } from '@agor/core/config';
 import {
   assertValidEffectiveExecutionConfig,
+  assertValidEffectiveIdentityConfig,
+  assertValidRawConfig,
   getConfigPath,
   loadConfig,
   loadConfigFromFile,
@@ -46,8 +48,10 @@ import {
   resolveDeploymentConfig,
   resolveEffectiveConfig,
   resolveGitConfigParameters,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveSecurity,
+  resolveValidExternalLaunchProvider,
 } from '@agor/core/config';
 import { generateId, resolveDatabaseUrl } from '@agor/core/db';
 import {
@@ -66,6 +70,10 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
+import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
+import { createHttpMetricsMiddleware } from './metrics/http.js';
+import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
@@ -89,6 +97,7 @@ import { deepFreezeClone } from './utils/deep-freeze.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
+import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
@@ -150,6 +159,15 @@ export interface DaemonStartOptions {
  * or from main.ts with no args for direct execution.
  */
 export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
+  await runWithStartupMetricsOwner((ownMetrics) =>
+    startDaemonWithOwnedMetrics(options, ownMetrics)
+  );
+}
+
+async function startDaemonWithOwnedMetrics(
+  options: DaemonStartOptions | undefined,
+  ownMetrics: OwnStartupMetrics
+): Promise<void> {
   // Initialize Handlebars helpers for template rendering
   registerHandlebarsHelpers();
   console.log('✅ Handlebars helpers registered');
@@ -173,11 +191,17 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       ? await loadConfigFromFile(options.configPath)
       : await loadConfig();
 
+  // Programmatic startup must cross the same untrusted config boundary as
+  // YAML before environment projection reads nested scalar values.
+  assertValidRawConfig(config);
+
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
   config = resolveEffectiveConfig(config);
-  requireDeploymentId(config);
+  const deploymentId = requireDeploymentId(config);
   assertValidEffectiveExecutionConfig(config);
+  const externalLaunchProvider = resolveValidExternalLaunchProvider(config);
+  assertValidEffectiveIdentityConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
 
   // Deployment package availability is instance-global. Validate it before
@@ -247,7 +271,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const authenticatedHook = scopeExecutorRuntimeAuth(
     authenticate({ strategies: ['api-key', 'jwt'] })
   );
-  const requireAuth = createRequireAuthHook(authenticatedHook, multiTenancy);
+  const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -281,6 +305,21 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       user_id: freshUser.user_id,
     });
   };
+
+  /**
+   * `enforcePasswordChange` is also registered as a global app hook, but Feathers
+   * runs app-level hooks *before* service-level ones — so over REST it fired while
+   * `params.user` was still unset by the service's own `requireAuth`, hit its
+   * `if (!user) return context` guard, and silently passed the request through. A
+   * user flagged for a password change could do anything the CLI offered. On
+   * Socket.IO the connection already carries `params.user`, which is why the gate
+   * worked there and the gap only ever showed up over REST.
+   *
+   * Running it here, immediately after authentication resolves, means the check
+   * happens once at the auth chokepoint with the user actually populated.
+   */
+  const requireAuth = async (context: HookContext): Promise<HookContext> =>
+    enforcePasswordChange(await requireAuthOnly(context));
 
   // --------------------------------------------------------------------------
   // Ports, daemon URL, credentials
@@ -316,6 +355,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // for existing deployments).
   configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
+    localResponseOriginUrl: deriveLoopbackReachableOrigin(DAEMON_HOST, DAEMON_PORT),
     sandboxRuntimePaths: {
       homeDir: homedir(),
       dataHome,
@@ -341,6 +381,34 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     },
     generateBootId: generateId,
   });
+  const explicitMetricsInstanceId = process.env.AGOR_DAEMON_INSTANCE_ID?.trim();
+  const metricsWorkIdentity = resolveMetricsWorkIdentity(
+    deployment.mode,
+    distributedWorkIdentity,
+    explicitMetricsInstanceId
+  );
+  const unsafeHaMetricsIdentity =
+    effectiveConfig.metrics?.statsd?.enabled === true && !metricsWorkIdentity;
+  const metrics = unsafeHaMetricsIdentity
+    ? NOOP_METRICS
+    : createDaemonMetrics(effectiveConfig.metrics?.statsd, {
+        workIdentity: metricsWorkIdentity ?? distributedWorkIdentity,
+        deploymentMode: deployment.mode,
+        deploymentId,
+      });
+  ownMetrics(metrics);
+  app.set('metrics', metrics);
+  reconcileTrackedExecutorGauge(app);
+  if (unsafeHaMetricsIdentity) {
+    console.warn(
+      '[metrics.statsd] Metrics disabled: HA requires a stable, unique AGOR_DAEMON_INSTANCE_ID per replica (letters, digits, dot, underscore, or hyphen; max 100 characters) so gauges cannot collapse into a last-writer-wins series.'
+    );
+  }
+  if (metrics.enabled) {
+    console.log(
+      `📈 DogStatsD metrics enabled (${effectiveConfig.metrics?.statsd?.host}:${effectiveConfig.metrics?.statsd?.port}, prefix=${effectiveConfig.metrics?.statsd?.prefix})`
+    );
+  }
   const realtimeRuntime =
     deployment.mode === 'ha'
       ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity)
@@ -495,6 +563,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
       }) as never
     );
   }
+
+  // Start API transport timing before body parsing so malformed/oversized
+  // payload responses are visible too. Static/UI and the OAuth callback are
+  // excluded by code-defined prefixes rather than becoming route tags.
+  app.use(
+    createHttpMetricsMiddleware(app, metrics, {
+      excludedPathPrefixes: [UI_MOUNT_PATH, '/static', '/mcp-servers/oauth-callback'],
+    }) as never
+  );
 
   // Default to a 10MB JSON body. The previous 10MB pre-hardening default was
   // unbounded enough to allow trivial memory-pressure DoS, and a 1MB ceiling
@@ -665,7 +742,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     requireTenantScope: multiTenancy.mode === 'required_from_auth',
-    skipFirstRunAdminBootstrap: effectiveConfig.external_launch?.enabled === true,
+    skipFirstRunAdminBootstrap:
+      !resolveIdentityAuthority(effectiveConfig).capabilities.users.create,
     // The URL may come from DATABASE_URL, but operators still need to size the
     // per-replica pool from config.yaml. Keep this deliberately limited to max:
     // the public idleTimeout setting is documented in milliseconds while the
@@ -782,6 +860,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     db,
     app,
     config: effectiveConfig,
+    externalLaunchProvider,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -805,6 +884,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionEnvSelectionsService: services.sessionEnvSelectionsService,
     terminalsService: services.terminalsService,
   });
+
+  // --------------------------------------------------------------------------
+  // Phase 3.5: Every registered service must have declared its realtime
+  // audience. Undeclared services publish to nobody, which is the safe failure
+  // but an invisible one — so refuse to boot rather than let realtime for a new
+  // service quietly do nothing. Deterministic: it reads the registration table,
+  // not request data.
+  // --------------------------------------------------------------------------
+  assertRealtimePublishPolicyCoverage(app);
 
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)

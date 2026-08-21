@@ -11,9 +11,10 @@ vi.mock('../BoardEditModal', () => ({
   },
 }));
 
+const adversarialBoardName = `Board-${'unbroken-name-'.repeat(30)}終`;
 const board = {
   board_id: 'board-1',
-  name: 'A board with a very long name that should not move its action',
+  name: adversarialBoardName,
   created_by: 'owner-1',
   created_at: '',
   last_updated: '',
@@ -35,7 +36,7 @@ function clientFor({ owners = [owner], reject }: { owners?: User[]; reject?: unk
 
 function renderSwitcher(client = clientFor(), user: User = owner) {
   const onBoardChange = vi.fn();
-  render(
+  const view = render(
     <BoardSwitcher
       boards={[board]}
       currentBoardId={board.board_id}
@@ -46,8 +47,69 @@ function renderSwitcher(client = clientFor(), user: User = owner) {
       onUpdateBoard={vi.fn()}
     />
   );
-  return { onBoardChange };
+  return { ...view, onBoardChange };
 }
+
+describe('BoardSwitcher long-name layout', () => {
+  it('constrains every generated wrapper while keeping the name flexible and badge fixed', async () => {
+    const { container } = renderSwitcher();
+    const trigger = container.querySelector<HTMLButtonElement>('button.ant-dropdown-trigger');
+    expect(trigger).not.toBeNull();
+
+    const currentName = trigger?.querySelector<HTMLElement>('[data-current-board-name]');
+    expect(currentName?.parentElement).toHaveStyle({ flex: '1', minWidth: '0' });
+    expect(currentName?.parentElement?.style.overflow).toBe('');
+    expect(currentName).toHaveStyle({ flex: '1', minWidth: '0' });
+    expect(trigger?.querySelector('.anticon-down')).toHaveStyle({ flexShrink: '0' });
+
+    fireEvent.click(trigger as HTMLButtonElement);
+
+    const item = await screen.findByRole('menuitem');
+    const itemContent = item.querySelector<HTMLElement>('.ant-dropdown-menu-title-content');
+    const name = item.querySelector<HTMLElement>('[data-board-name]');
+    const badgeRoot = item.querySelector<HTMLElement>('.ant-badge');
+    const badgeIndicator = item.querySelector<HTMLElement>('.ant-badge-count');
+    const popup = screen.getByTestId('board-switcher-popup');
+
+    // jsdom has no layout engine: assert the durable semantic/style contracts,
+    // not pixel ellipsis behavior (which is covered in browser E2E).
+    expect(itemContent).toHaveStyle({ minWidth: '0' });
+    expect(name).toHaveClass('ant-typography-ellipsis');
+    expect(name).toHaveStyle({ flex: '1', minWidth: '0' });
+    expect(name).toHaveTextContent(adversarialBoardName);
+    expect(badgeRoot).toHaveStyle({ flexShrink: '0' });
+    expect(badgeRoot?.style.backgroundColor).toBe('');
+    expect(badgeIndicator?.style.flexShrink).toBe('');
+    expect(badgeIndicator?.style.backgroundColor).not.toBe('');
+    expect(popup).toHaveStyle({ width: '320px', maxWidth: 'calc(100vw - 48px)' });
+  });
+
+  it('reveals a clipped name when its menu item receives keyboard focus', async () => {
+    const { container } = renderSwitcher();
+    const trigger = container.querySelector<HTMLButtonElement>('button.ant-dropdown-trigger');
+    fireEvent.click(trigger as HTMLButtonElement);
+
+    const item = await screen.findByRole('menuitem');
+    const name = item.querySelector<HTMLElement>('[data-board-name]');
+    const popup = screen.getByTestId('board-switcher-popup');
+    const menu = screen.getByRole('menu');
+    expect(name).not.toBeNull();
+    Object.defineProperties(name as HTMLElement, {
+      clientWidth: { configurable: true, value: 120 },
+      scrollWidth: { configurable: true, value: 800 },
+    });
+
+    act(() => popup.focus());
+    expect(popup).toHaveAttribute('tabindex', '-1');
+    expect(menu).toHaveFocus();
+
+    act(() => item.focus());
+
+    expect(item).toHaveFocus();
+    expect(name).not.toHaveAttribute('tabindex');
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(adversarialBoardName);
+  });
+});
 
 describe('BoardSwitcher current-board edit shortcut', () => {
   it('allows the board creator even when legacy owner rows are missing', async () => {

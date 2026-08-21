@@ -102,6 +102,29 @@ describe('LoginPage external launch redirect', () => {
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
   });
 
+  it('does not offer a local-login fallback when identity authority disables it', () => {
+    render(
+      <LoginPage
+        onLogin={vi.fn()}
+        externalLaunchLoginRedirectUrl="https://workspace.example.com/open"
+        localLoginEnabled={false}
+      />
+    );
+
+    expect(screen.getByRole('link', { name: 'Return to workspace' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Use local login instead' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Email address')).not.toBeInTheDocument();
+  });
+
+  it('explains externally managed sign-in when no return URL is configured', () => {
+    render(<LoginPage onLogin={vi.fn()} localLoginEnabled={false} />);
+
+    expect(screen.getByText('Sign-in is managed by your workspace')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Email address')).not.toBeInTheDocument();
+  });
+
   it('pairs launch errors with the external return action', () => {
     render(
       <LoginPage

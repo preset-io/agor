@@ -2,162 +2,236 @@
  * Marketplace connect: install one catalog entry and hand back a session that
  * can use it.
  *
- * The request names a catalog entry and where the session should live, and
- * nothing else. URL, transport, and auth are read from the catalog entry —
- * accepting them from the client would make this a way to register any server
- * at all without passing the `mcp_member_policy` gate that guards
- * `POST /mcp-servers`.
+ * The request names a catalog entry, where the session should live, and — for
+ * an endpoint that asks for one — the caller's own bearer access token. Nothing else. URL,
+ * transport, and the kind of auth are read from the catalog entry and the live
+ * endpoint. Accepting those from the client would make this a way to register
+ * any server at all without passing the `mcp_member_policy` gate that guards
+ * `POST /mcp-servers`, and — now that a request can carry a credential — a way
+ * to name the destination that credential is sent to. A client that supplies
+ * both a URL and a key is a client that can post its own key to its own server;
+ * one that supplies only the key can only ever send it where the catalog
+ * already points.
  *
  * It also does not re-implement that gate. The server row is created through
  * the `mcp-servers` service and the session through `sessions`, with the
  * caller's own params, so policy, ownership stamping, the remote-transport
  * restriction, branch permissions, and execution identity all resolve exactly once,
- * in the places that already own them.
+ * in the places that already own them. The key rides along on that same row as
+ * `auth.token`, which is where every bearer credential in Agor lives — so it
+ * inherits the read-path redaction, the ownership rules, and the write
+ * authorizer without any of them learning that the marketplace exists.
  *
  * Scope: remote transport. An endpoint that accepts an unauthenticated client
  * is installed ready to use; one that answers with an OAuth challenge is
  * installed configured-but-unauthenticated, for the user to complete through
- * the OAuth flow that already exists in Settings → MCP Servers. An endpoint
- * wanting an API key still needs a credential model that does not exist.
+ * the OAuth flow that already exists in Settings → MCP Servers; one that asks
+ * for a bearer access token is installed with the key the caller pasted after
+ * that key has been tried against the endpoint.
  */
 
+import { isDatabaseUniqueConstraintError } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
-import { probeRemoteAuthType } from '@agor/core/mcp-catalog';
+import { probeRemoteAuthType, probeRemoteBearerToken } from '@agor/core/mcp-catalog';
+import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   CreateMCPServerInput,
   MCPAuth,
   MCPCatalogConnectData,
+  MCPCatalogConnectErrorData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
   MCPServer,
-  MCPTransport,
+  MCPServerID,
   Session,
   UserID,
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug } from '@agor/core/types';
+import {
+  catalogOAuthConfig,
+  catalogServerTransport,
+  isCurrentCatalogInstall,
+  sameCatalogEndpoint,
+} from './mcp-catalog-install-policy.js';
+import type { MCPServersService } from './mcp-servers.js';
 
-/** Catalog transports, as `mcp_servers` names them. */
-function toServerTransport(entry: MCPCatalogEntry): MCPTransport {
-  return entry.transport === 'sse' ? 'sse' : 'http';
+/**
+ * Auth fields that decide where an authorization code or a client credential is
+ * sent, and which connect itself never sets.
+ *
+ * A row carrying any of them is describing a flow the catalog did not: the
+ * grant behind it was minted through somebody's own host. That is a legitimate
+ * thing for a member to configure and use, and reusing it would expose nothing
+ * the owner does not already hold — but it would quietly make a marketplace
+ * install route somewhere the entry never named, which is a different promise
+ * from the one the disclosure made. Cheaper to decline than to explain.
+ */
+const CREDENTIAL_ROUTING_OVERRIDES = [
+  'oauth_authorization_url',
+  'oauth_token_url',
+  'oauth_client_secret',
+] as const satisfies readonly (keyof MCPAuth)[];
+
+/**
+ * The cheap half of the identity test: whether `server` is configured to talk
+ * to the place this entry names, on terms this entry would ask for.
+ *
+ * This is deliberately *not* the whole answer, and the comment that once said
+ * it was described a check that did not exist. What an access token is scoped
+ * to is a protected resource — the `resource` of RFC 9728 — not a vendor, and
+ * certainly not a catalog `name`, which is a label this repository chose and
+ * which no OAuth provider has ever seen. Comparing the row's configuration
+ * cannot establish that; only the grant can, and the grant is read separately
+ * in {@link findReusableCredential} via {@link MCPCatalogConnectDeps}.
+ *
+ * What this half does establish is where the credential would be *sent*, which
+ * is the boundary that decides who ends up holding it. Reuse pins the row's
+ * endpoint to the entry's endpoint, and refuses any row overriding the
+ * authorization or token endpoint, so an access token reused here can only ever
+ * travel to `entry.remote_url` and a refresh can only ever go to the token
+ * endpoint recorded when the grant was minted. Neither can be redirected to a
+ * party the user did not already consent to.
+ *
+ * `per_user` is required, not defaulted-into: a `shared` row's grant is keyed
+ * `(NULL, server)` and provisioned by an admin for everyone, so hydrating it
+ * here would let a member ride somebody else's consent into a new install.
+ * Whether the marketplace should ever install onto a shared grant is an open
+ * product question; until it is answered the safe reading is that it does not.
+ *
+ * Scope is compared as *requested* scope, which is the honest best available:
+ * nothing records what the provider actually granted (`user_mcp_oauth_tokens`
+ * has no scope column, and a provider may downscope silently), so the closest
+ * true statement is "this grant was asked for on the same terms this entry
+ * asks". Where they differ, reuse would hand over a token that fails at
+ * tool-call time with an error naming neither cause, so it declines and the
+ * user consents afresh. Today every entry states no scope and this compares
+ * `undefined` to `undefined`; it starts mattering the moment one does.
+ */
+function isCredentialPeerOf(
+  server: MCPServer,
+  entry: MCPCatalogEntry & { remote_url: string },
+  prescribed: MCPAuth
+): boolean {
+  const auth = server.auth;
+  if (auth?.type !== 'oauth' || prescribed.type !== 'oauth') return false;
+  if ((auth.oauth_mode ?? 'per_user') !== 'per_user') return false;
+  if (CREDENTIAL_ROUTING_OVERRIDES.some((field) => auth[field])) return false;
+  if ((auth.oauth_scope ?? undefined) !== (prescribed.oauth_scope ?? undefined)) return false;
+  return (
+    server.transport === catalogServerTransport(entry) &&
+    sameCatalogEndpoint(server.url, entry.remote_url) &&
+    Object.keys(server.headers ?? {}).length === 0
+  );
 }
 
 /**
- * Whether two endpoint URLs name the same place.
+ * Reconcile catalog-owned configuration without erasing the owner's explicit
+ * OAuth compatibility choice.
  *
- * Normalised through `URL` so a trailing slash, a default port, or a
- * differently-cased host does not read as a different server and cost somebody
- * their install. Anything unparseable falls back to an exact comparison rather
- * than guessing.
+ * Endpoint, transport, scope, headers, and every other auth field still come
+ * from the current catalog prescription. `strict` and `legacy` are different:
+ * they are the two validated public overrides the Settings UI can persist, and
+ * the OAuth resolver treats either as authoritative over the derived
+ * Marketplace profile. Replacing the whole auth object with `prescribed`
+ * would silently turn an explicit Strict row back into Marketplace whenever
+ * the catalog omits `compatibility_mode` (and similarly erase Legacy).
+ *
+ * Preserve only those two validated public values: Strict retains the narrow
+ * policy, while Legacy remains the explicit, deliberately broader operator
+ * override. A malformed database value is not carried forward through
+ * reconciliation.
  */
-function sameEndpoint(a: string | undefined, b: string): boolean {
-  if (!a) return false;
-  const normalize = (value: string): string => {
-    try {
-      const url = new URL(value.trim());
-      url.pathname = url.pathname.replace(/\/+$/, '');
-      return url.href;
-    } catch {
-      return value.trim();
-    }
-  };
-  return normalize(a) === normalize(b);
+function preserveExplicitOAuthCompatibility(server: MCPServer, prescribed: MCPAuth): MCPAuth {
+  if (server.auth?.type !== 'oauth' || prescribed.type !== 'oauth') return prescribed;
+  const explicitMode = server.auth.oauth_compatibility_mode;
+  if (explicitMode !== 'strict' && explicitMode !== 'legacy') return prescribed;
+  return { ...prescribed, oauth_compatibility_mode: explicitMode };
+}
+
+async function hasCatalogCredentialPolicy(
+  server: MCPServer,
+  entry: MCPCatalogEntry & { remote_url: string },
+  prescribed: MCPAuth
+): Promise<boolean> {
+  if (server.auth?.oauth_client_id !== prescribed.oauth_client_id) return false;
+  if (
+    (server.auth?.oauth_dcr_mode ?? 'advertised') !== (prescribed.oauth_dcr_mode ?? 'advertised')
+  ) {
+    return false;
+  }
+  const actual =
+    server.auth?.oauth_compatibility_mode ??
+    (isCurrentCatalogInstall(server, entry, prescribed, {
+      reconcileMissingCompatibilityMode: true,
+    })
+      ? (entry.oauth?.compatibility_mode ?? 'marketplace')
+      : 'strict');
+  const expected = entry.oauth?.compatibility_mode ?? 'marketplace';
+  return actual === expected;
 }
 
 /**
- * Auth fields a read of an `mcp_servers` row can carry without anyone having
- * configured them.
+ * Whether the caller holds a grant on this row that is usable right now.
  *
- * The OAuth flow never writes to the server row: an access token, its refresh
- * token, and its expiry belong to one user and live in `user_mcp_oauth_tokens`,
- * keyed by `(user_id, mcp_server_id)`. But `mcp-servers` has a read hook that
- * hydrates the caller's own token onto the payload it returns, and
- * {@link MCPCatalogConnectService} finds existing installs through that service
- * — so these three arrive on exactly the rows that reuse is most important for,
- * the ones the caller already authenticated. Comparing them would make every
- * successful authentication look like drift and mint a second row beside the
- * working one.
+ * Read off the row rather than out of `user_mcp_oauth_tokens`, and that is the
+ * load-bearing decision in this file. `mcp-servers` find runs
+ * `injectPerUserOAuthTokens`, which looks up `getToken(callerId, serverId)`,
+ * rejects a grant whose binding no longer matches the row, rejects one mid
+ * refresh, rejects an expired one, and only then writes the token onto the
+ * payload. Every question reuse needs answered is one that hook has already
+ * answered, correctly, for this exact caller.
+ *
+ * Re-deriving the answer here would mean a second copy of that rule, free to
+ * drift from the first — and the direction it would drift is the expensive one,
+ * because a reuse rule that is looser than the hydration rule hands back a row
+ * the request path will then refuse to put a token on. So the invariant is:
+ * **reuse is admitted exactly where the read path would hydrate.** Never
+ * looser, so reuse cannot reach a credential a plain `GET /mcp-servers` could
+ * not. Never tighter, so it does not silently stop firing.
+ *
+ * It also settles "whose credential" without a comparison to get wrong. The
+ * hook keys the lookup on the authenticated caller, so another user's grant is
+ * not rejected here — it is never fetched. There is no branch to reach it by.
+ *
+ * The token itself is a redaction sentinel by the time it arrives, which is
+ * why only its presence is read. Expiry is not redacted and is compared with
+ * `<=`, matching the daemon's own boundary and the UI's `mcpServerNeedsAuth`,
+ * so all three agree on the millisecond.
+ *
+ * Current SQLite OAuth flows also mint versioned configuration fingerprints,
+ * and hydration verifies them. Only grants created before that authority was
+ * introduced (or inserted directly by an operator) are unbound. Those legacy
+ * grants remain readable for migration compatibility; direct write access to
+ * a standalone SQLite database is part of the deployment trust boundary.
+ * What narrows that legacy case on both dialects is the resource comparison in
+ * {@link findReusableCredential},
+ * which reads what the endpoint declared itself to be at consent time and is
+ * recorded on every grant regardless of dialect. It is unauthenticated on
+ * SQLite — but forging it needs database write access, which on a standalone
+ * deployment is already game over.
  */
+function hasLiveCallerGrant(server: MCPServer, now: number): boolean {
+  const auth = server.auth;
+  if (!auth?.oauth_access_token) return false;
+  const expiresAt = auth.oauth_token_expires_at;
+  return !(expiresAt && expiresAt <= now);
+}
+
 const RUNTIME_HYDRATED_AUTH_FIELDS = [
   'oauth_access_token',
   'oauth_refresh_token',
   'oauth_token_expires_at',
 ] as const satisfies readonly (keyof MCPAuth)[];
 
-/**
- * Whether `auth` is the configuration `prescribed` describes, ignoring what the
- * read hook hydrated.
- *
- * Compared by difference rather than field by field: every key on the row that
- * is not runtime-hydrated must appear in the prescription with the same value,
- * and vice versa. A named-fields comparison would silently stop covering any
- * field later added to {@link MCPAuth} — and the fields most worth adding to an
- * auth block are the ones that route a credential. This way an unrecognised key
- * on the row is a mismatch, so a new field is excluded from reuse until someone
- * decides otherwise, rather than being waved through by omission.
- */
-function isPrescribedAuth(auth: MCPAuth | undefined, prescribed: MCPAuth): boolean {
-  const significant = (value: MCPAuth | undefined): Record<string, unknown> => {
-    const entries = Object.entries(value ?? { type: 'none' }).filter(
-      ([key, field]) =>
-        field !== undefined && !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(key)
-    );
-    return Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-  };
-  return JSON.stringify(significant(auth)) === JSON.stringify(significant(prescribed));
-}
-
-/**
- * Whether `server` still carries the configuration the catalog described.
- *
- * The stamp records where a row came from; this asks whether it is still that.
- * The two come apart because a member may edit their own server — which is
- * theirs to do — so a stamp on its own would let an edited row stand in for
- * the catalog's, and reuse would hand the next caller something the catalog
- * never described. A stamp nobody but the install path can write (see
- * `authorizeMcpServerWrite`) closes the forged half; this closes the half
- * where a legitimately stamped row is changed afterwards.
- *
- * What is compared is everything that decides where the session's traffic goes
- * and what it carries: the endpoint, and the credential routing. `prescribed`
- * is the auth block this same connect just derived from the entry and the
- * probe, so the comparison is against what installing right now would produce
- * rather than against a fixed shape — which is what lets an OAuth entry be
- * reused at all, and what makes a row whose owner has since pointed
- * `oauth_token_url` at their own host fail to match. That field, and
- * `oauth_authorization_url` and `oauth_client_secret` with it, are ones connect
- * never sets, so on a catalog row their mere presence is the drift: they are
- * where an authorization code and a client credential get sent.
- *
- * It also means an entry whose endpoint has changed sides — installed while it
- * was open, now answering with an OAuth challenge — does not match its old
- * unauthenticated row, and the caller gets one configured the way the endpoint
- * now answers instead of a row that can no longer work.
- *
- * Custom headers are refused wholesale rather than screened for the
- * dangerous-looking ones. Agor redacts every custom header value on read and
- * documents them as secret-bearing; the only names it classifies are the
- * reserved ones it refuses to store at all. There is no notion of a harmless
- * header anywhere in the codebase, and reuse is the wrong place to invent one
- * — a rule that has to guess which headers carry secrets is a rule that will
- * eventually guess wrong.
- *
- * Genuinely cosmetic fields stay the owner's: name, labels, description, and
- * scope. A second row for a benign edit would be its own bug.
- */
-function isInstallOf(
-  server: MCPServer,
-  entry: MCPCatalogEntry & { remote_url: string },
-  prescribed: MCPAuth
-): boolean {
-  return (
-    server.catalog_entry_name === entry.name &&
-    server.transport === toServerTransport(entry) &&
-    sameEndpoint(server.url, entry.remote_url) &&
-    isPrescribedAuth(server.auth, prescribed) &&
-    Object.keys(server.headers ?? {}).length === 0
-  );
+function carriesRowLevelSecret(auth: MCPAuth | undefined): boolean {
+  const redacted = redactMCPAuthSecrets(auth);
+  if (!redacted) return false;
+  return MCP_AUTH_SECRET_FIELDS.filter(
+    (field) => !(RUNTIME_HYDRATED_AUTH_FIELDS as readonly string[]).includes(field)
+  ).some((field) => redacted[field] !== undefined);
 }
 
 function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCatalogEntry & {
@@ -246,23 +320,11 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  * either.
  *
  * The rest is {@link MCPCatalogEntryOAuth} — the non-secret settings an entry
- * may state for a server that falls short of the spec. `curated.yaml` states
- * none of them today; each is spread only when present, so an entry that says
- * nothing produces the two-key block above and not a row full of `undefined`
- * that would then have to be compared around.
+ * may state after the production discovery boundary is reviewed. Each is
+ * spread only when present, so an entry that says nothing produces the two-key
+ * block above and not a row full of `undefined` that would then have to be
+ * compared around.
  */
-function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
-  const stated = entry.oauth;
-  return {
-    type: 'oauth',
-    oauth_mode: 'per_user',
-    ...(stated?.scope ? { oauth_scope: stated.scope } : {}),
-    ...(stated?.client_id ? { oauth_client_id: stated.client_id } : {}),
-    ...(stated?.dcr_mode ? { oauth_dcr_mode: stated.dcr_mode } : {}),
-    ...(stated?.compatibility_mode ? { oauth_compatibility_mode: stated.compatibility_mode } : {}),
-  };
-}
-
 /**
  * Decide how the entry's endpoint wants to be talked to, and produce the auth
  * block to install it with — or refuse.
@@ -287,30 +349,170 @@ function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
  *   already has a name and a button for — the user signs in from the same place
  *   as any other OAuth server. Connect is not the flow and does not start it;
  *   it produces the row the flow completes.
- * - **A non-OAuth 401/403.** An API key, which nothing can obtain on the user's
- *   behalf and which there is nowhere safe to put — the catalog is public and
- *   shared, and connect takes no input beyond a catalog key. Still refused, and
- *   the message says which of the two kinds of authentication it is so it does
- *   not read as the OAuth case being broken.
+ * - **A non-OAuth 401/403.** An bearer access token, which nothing can obtain on the user's
+ *   behalf — so the user supplies it, and {@link resolveBearerTokenAuth} decides
+ *   whether it works before anything is written.
  * - **Nothing identifiable answered.** Refused, unchanged.
+ *
+ * A key offered to either of the first two is refused rather than dropped. The
+ * endpoint did not ask for one, so storing it would put a live secret on a row
+ * that has no use for it and no reason to be read as holding one; and silently
+ * discarding it would leave a user believing a key they pasted is in use. Both
+ * are reachable honestly — an entry stating `credentials` whose vendor has
+ * since opened the endpoint up, or moved it behind OAuth — so the message says
+ * what changed rather than accusing the caller.
  */
 async function resolveAuthRequirement(
-  entry: MCPCatalogEntry & { remote_url: string }
+  entry: MCPCatalogEntry & { remote_url: string },
+  bearerToken: string | undefined
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
 
-  if (probed === 'none') return { type: 'none' };
-  if (probed === 'oauth') return catalogOAuthConfig(entry);
+  if (probed === 'none' || probed === 'oauth') {
+    if (bearerToken !== undefined) {
+      throw new BadRequest(
+        `${catalogDisplayName(entry)} is not asking for a bearer access token${
+          probed === 'oauth' ? '; it signs you in with your own account' : ''
+        }. Connect it again without one.`,
+        // The client asked with a key because the entry said to. Telling it
+        // what the endpoint actually wants is what lets the form drop the
+        // field and the user retry, rather than being held at a button that
+        // submits something the daemon will refuse again.
+        {
+          credential_requirement: probed === 'oauth' ? 'oauth' : 'not_accepted',
+        } satisfies MCPCatalogConnectErrorData
+      );
+    }
+    return probed === 'none' ? { type: 'none' } : catalogOAuthConfig(entry);
+  }
+
   if (probed === 'credentials') {
-    throw new BadRequest(
-      `${catalogDisplayName(entry)} needs an API key, which cannot be set up from the marketplace yet`
-    );
+    if (entry.credentials?.scheme !== 'bearer') {
+      throw new BadRequest(
+        `${catalogDisplayName(entry)} requires credentials, but its reviewed credential scheme is not supported by Marketplace`,
+        { credential_requirement: 'unsupported' } satisfies MCPCatalogConnectErrorData
+      );
+    }
+    return resolveBearerTokenAuth(entry, bearerToken);
   }
 
   throw new BadRequest(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
   );
+}
+
+/**
+ * The auth block to install a bearer-token-requiring entry with, or the refusal.
+ *
+ * The key is tried against the endpoint before the row exists. Not for form:
+ * a wrong key installs a server whose every tool fails, and it fails later and
+ * somewhere else — the agent reports a broken tool rather than a bad
+ * credential, and the row sits in Settings looking configured. That is the
+ * exact failure this marketplace declined to ship servers with, so producing it
+ * from a typo would be shipping it anyway. The endpoint has already answered
+ * once by this point, so the check costs one more `initialize` on a request a
+ * user is already waiting on.
+ *
+ * A `rejected` verdict is the user's to fix and says so. `unusable` is not:
+ * the endpoint answered the first probe and then did not answer this one as an
+ * MCP server, which is a fact about the endpoint, and reporting it as a bad key
+ * would send somebody to rotate a credential that is fine. Neither installs
+ * anything, because the only thing worse than refusing a good key is accepting
+ * a bad one.
+ *
+ * The key is never in the sentence. There is no branch here that puts it in a
+ * message, and the probe does not log its request — an error string is the
+ * easiest place for a secret to end up, since it travels to the client, into
+ * daemon logs, and into whatever collects them.
+ */
+async function resolveBearerTokenAuth(
+  entry: MCPCatalogEntry & { remote_url: string },
+  bearerToken: string | undefined
+): Promise<MCPAuth> {
+  const name = catalogDisplayName(entry);
+  if (bearerToken === undefined) {
+    throw new BadRequest(
+      `${name} needs a bearer access token; paste one to connect it`,
+      // The mirror of the `not_accepted` case: the client asked without a key
+      // because the entry said none was needed, and the endpoint disagreed.
+      // Without this the drawer has no field to offer and the sentence above is
+      // an instruction the user cannot follow.
+      { credential_requirement: 'required' } satisfies MCPCatalogConnectErrorData
+    );
+  }
+
+  const verdict = await probeRemoteBearerToken(entry.remote_url, bearerToken);
+  if (verdict === 'accepted') return { type: 'bearer', token: bearerToken };
+  if (verdict === 'rejected') {
+    // Still `required` — the endpoint wants a key, this one was just wrong. A
+    // client that has already revealed the field keeps it revealed, which is
+    // what lets a typo be corrected in place.
+    throw new BadRequest(
+      `${name} did not accept that bearer access token; check it and try again`,
+      {
+        credential_requirement: 'required',
+      } satisfies MCPCatalogConnectErrorData
+    );
+  }
+  throw new BadRequest(
+    `${name} did not answer as an MCP server when that bearer access token was tried, so it was not connected`
+  );
+}
+
+/**
+ * The bearer access token as the request carried it, or `undefined` for a request that
+ * carried none.
+ *
+ * Whitespace-only is `undefined`, not a key: a client that sends an untouched
+ * input field has supplied nothing, and treating that as a credential would
+ * install a server authenticating with a blank string. Trimmed because a key
+ * pasted from a terminal or a vendor's dashboard routinely arrives with a
+ * trailing newline, and `Bearer sk-…\n` is not a header value any server
+ * accepts — a paste that fails for an invisible reason is the worst kind.
+ *
+ * A non-string is refused rather than coerced. `String(value)` on an object
+ * produces `[object Object]`, which is a credential-shaped thing nobody typed.
+ */
+function readBearerToken(value: unknown, entry: MCPCatalogEntry): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') {
+    throw new BadRequest(`bearer_token must be a string to connect ${catalogDisplayName(entry)}`);
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+
+  // The redaction sentinel is not a key. It is what a read path puts where a
+  // key was, so a request carrying it is a client echoing back the absence of
+  // a value — never a value.
+  //
+  // This is the rule #2374 enforces on the write path, at the boundary it does
+  // not cover. There it is a stale edit form resubmitting what it was shown;
+  // here it is a paste out of a redacted response. Both end the same way: the
+  // row authenticates with a literal `••••••••`, and — the part that makes it
+  // worse than an ordinary bad key — every later read of that row shows the
+  // sentinel too, so a credential that cannot work is indistinguishable on
+  // screen from a real one that is being correctly hidden. Nothing in the
+  // product could tell the user which they have.
+  //
+  // Refused before the probe rather than left to it, because a probe is a fact
+  // about the endpoint: a server that accepts any syntactically-present bearer
+  // on `initialize` would answer `accepted` and the sentinel would be stored as
+  // the credential. The rule does not depend on how strict a vendor happens to
+  // be.
+  //
+  // {@link MCP_HEADER_REDACTED_SENTINEL} is imported rather than restated, so
+  // this boundary and #2374's cannot come to disagree about what the sentinel
+  // is. There is no shared predicate to reuse — #2374 adds none, comparing
+  // against the same exported constant inline — so the constant is the whole of
+  // what the two sides share, and it is enough.
+  if (trimmed === MCP_HEADER_REDACTED_SENTINEL) {
+    throw new BadRequest(
+      `That is the placeholder Agor shows in place of a hidden key, not a key. Paste the real ${catalogDisplayName(entry)} bearer access token.`
+    );
+  }
+
+  return trimmed;
 }
 
 export interface MCPCatalogConnectService {
@@ -320,9 +522,56 @@ export interface MCPCatalogConnectService {
   ): Promise<MCPCatalogConnectResult>;
 }
 
+/**
+ * The one thing connect cannot answer through a service call.
+ *
+ * Credential reuse has to know which protected resource a grant was actually
+ * minted for, and that is a column on `user_mcp_oauth_tokens`
+ * (`oauth_resource_uri`) which no read path puts on an `mcp_servers` payload —
+ * the hydrate hook copies the token and its expiry and nothing else. Rather
+ * than give this service a database handle and a tenant scope of its own, the
+ * daemon injects the one read, so everything else here stays service calls.
+ *
+ * Required rather than optional, though only credential reuse reads it. An
+ * optional version was written first and had exactly the failure mode this
+ * whole change exists to fix: a caller that constructed the service without it
+ * silently lost reuse, with nothing to notice. The compiler is a better place
+ * to catch that than a bug report about consenting twice.
+ */
+export interface MCPCatalogConnectDeps {
+  /**
+   * The protected resource the *calling user's own* grant on `serverId` was
+   * minted for, or undefined when they hold no grant or it records none.
+   *
+   * Per-user by construction: implementations key on `params.user`, never on a
+   * shared grant, so there is no argument here by which one user could name
+   * another's credential.
+   */
+  readGrantResourceUri(
+    serverId: MCPServerID,
+    params: AuthenticatedParams
+  ): Promise<string | undefined>;
+}
+
+/**
+ * How many stale grants one connect may try to revive.
+ *
+ * Each attempt is a token request to a third party, and the candidate list is
+ * every server the caller can use, so an uncapped loop turns one click into a
+ * fan-out. Three is enough for the real shape of the problem — a couple of rows
+ * left over from earlier experiments at the same endpoint — and a connect that
+ * hits the cap says so rather than reporting "nothing to reuse".
+ */
+const MAX_REVIVAL_ATTEMPTS = 3;
+type ExistingSelection = {
+  server: MCPServer;
+  kind: 'catalog_install' | 'credential_peer' | 'refreshed_credential_peer';
+};
+
 export function createMCPCatalogConnectService(
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type is complex and varies
-  app: any
+  app: any,
+  deps: MCPCatalogConnectDeps
 ): MCPCatalogConnectService {
   const service = (path: string) => app.service(path);
 
@@ -333,7 +582,8 @@ export function createMCPCatalogConnectService(
    * the entry is unique on, so there is no second normalisation to keep in
    * step and an install survives every edit to the entry except a rename.
    *
-   * The name alone does not settle it, though: see {@link isInstallOf}. A row
+   * The name alone does not settle it, though: see
+   * {@link isCurrentCatalogInstall}. A row
    * that no longer carries the entry's configuration is passed over rather
    * than handed back, so a caller who has one of those and a real install gets
    * the real one.
@@ -345,20 +595,282 @@ export function createMCPCatalogConnectService(
    * made deliberately about a possibly-shared row. Creating a fresh one grants
    * nothing the caller's `mcp_member_policy` did not already grant, and leaves
    * the disabled row exactly as its owner left it.
+   *
+   * And a row that keeps a credential in its own columns is reusable only by
+   * the user who owns it. This is the one rule the API-key install adds, and it
+   * is the whole of what stops the feature from being a credential leak between
+   * colleagues.
+   *
+   * The search is already narrowed by `usableByUserId`, which resolves to
+   * "shared rows, plus private rows owned by this user" — and every marketplace
+   * install is stamped private to its installer under every policy and at every
+   * role (`resolveCatalogInstall`), so on today's data a second user genuinely
+   * cannot see the first one's row. That is a conclusion drawn from three
+   * separate mechanisms holding at once, though, and the failure it prevents is
+   * silent: reuse handing B a row carrying A's key looks exactly like the
+   * feature working. `usableByUserId` widening, one internally-created unowned
+   * row carrying a `catalog_entry_name`, or a later policy that publishes an
+   * install would each turn a working marketplace into one that lends out
+   * credentials, with nothing failing to mark the moment.
+   *
+   * So the property is asserted here rather than inferred from over there. It
+   * costs an ownership comparison, it is expressed in terms of what the row
+   * carries rather than which entry it came from, and it applies to any future
+   * auth type that puts a secret in a column. Sharing stays available for the
+   * cases where it is sound — an unauthenticated server, or an OAuth one, whose
+   * grants are per-user in `user_mcp_oauth_tokens` and so are not the row's to
+   * lend.
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
     prescribed: MCPAuth,
     userId: UserID | undefined,
     params: AuthenticatedParams
-  ): Promise<MCPServer | undefined> => {
+  ): Promise<ExistingSelection | undefined> => {
     const result = await service('mcp-servers').find({
+      ...params,
+      provider: undefined,
+      query: {
+        ...(userId ? { usableByUserId: userId } : {}),
+        source: 'catalog',
+        catalogEntryName: entry.name,
+        $limit: 2,
+      },
+    });
+    const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
+    const owned = (server: MCPServer): boolean =>
+      userId !== undefined && server.owner_user_id === userId;
+    const current = servers.find(
+      (server) =>
+        server.enabled &&
+        isCurrentCatalogInstall(server, entry, prescribed, {
+          reconcileMissingCompatibilityMode: true,
+        }) &&
+        (!carriesRowLevelSecret(server.auth) || owned(server))
+    );
+    // New catalog installs are always private. An owned row that has been
+    // disabled or edited still occupies the database identity, so Connect
+    // reconciles that row rather than attempting an impossible second insert.
+    const catalogInstall = current ?? servers.find(owned);
+    if (catalogInstall) return { server: catalogInstall, kind: 'catalog_install' };
+
+    // Credential peers are not catalog-identity matches, so fetch the caller's
+    // broader usable set only after ruling out a current or reconcilable install.
+    const peerResult = await service('mcp-servers').find({
       ...params,
       provider: undefined,
       query: { ...(userId ? { usableByUserId: userId } : {}), $limit: 1000 },
     });
-    const servers = (Array.isArray(result) ? result : result.data) as MCPServer[];
-    return servers.find((server) => server.enabled && isInstallOf(server, entry, prescribed));
+    const peers = (Array.isArray(peerResult) ? peerResult : peerResult.data) as MCPServer[];
+    return findReusableCredential(entry, prescribed, peers, params);
+  };
+
+  /**
+   * A row the caller has already authenticated for this entry's resource, if
+   * there is one — the answer to "I signed into this vendor last week, why am I
+   * signing in again".
+   *
+   * Runs only when {@link findExistingInstall} found no install of the entry
+   * itself, so nothing above this changes. Where that predicate asks "is this
+   * row still what the catalog described", this one asks the different and
+   * looser question "is this row somewhere my existing credential already
+   * works" — looser because it must match a row nobody installed from this
+   * entry, or from any entry, which is exactly the case the requirement is
+   * about. `catalog_entry_name` is therefore not compared, on purpose: a
+   * hand-configured row in Settings holds a perfectly good Linear grant, and
+   * refusing to see it is how the user ends up consenting twice.
+   *
+   * Nothing is copied. The grant stays on its own row under its own
+   * `(user_id, mcp_server_id)` key, and reuse means the session is pointed at
+   * that row instead of at a second one. That is why this cannot widen access:
+   * the row was already in the caller's `usableByUserId` set, already readable
+   * with their token hydrated onto it, and already attachable by hand to any
+   * session they create. Reuse removes clicks, not restrictions.
+   *
+   * A candidate whose grant has expired is offered a refresh before being given
+   * up on, because an access token that outlives the hour is the exception and
+   * reuse that only fired inside one would be a feature nobody ever sees. The
+   * refresh goes through `/mcp-servers/oauth-refresh` rather than
+   * `refreshAndPersistToken` directly: that endpoint already keys per-user
+   * grants to the authenticated caller, already refuses a shared grant to a
+   * non-admin, already drops a grant whose binding stopped matching, and
+   * already turns the vendor's `invalid_grant` into `needs_reauth`. Reaching
+   * past it to the primitive would mean restating all four.
+   *
+   * That same call is what makes revocation partly answerable. A vendor that
+   * revoked the grant fails the refresh, and this moves on — the broken install
+   * never happens. It is not a general revocation check: a still-unexpired
+   * token revoked out of band is not detectable without spending an
+   * authenticated request on every connect, and it is not detected today for
+   * any already-installed server either. That case reuses, fails on first tool
+   * call, and recovers through the re-auth banner that already exists.
+   *
+   * Candidates are tried in id order until one yields a usable credential, not
+   * abandoned after the first. One row holding a dead grant with no refresh
+   * token sitting in front of another that would have refreshed cleanly is an
+   * ordinary way for a workspace to end up, and giving up there would send the
+   * user through consent while a working credential sat one row further down.
+   * Deterministic order keeps two identical connects from disagreeing.
+   */
+  const findReusableCredential = async (
+    entry: MCPCatalogEntry & { remote_url: string },
+    prescribed: MCPAuth,
+    servers: MCPServer[],
+    params: AuthenticatedParams
+  ): Promise<ExistingSelection | undefined> => {
+    if (prescribed.type !== 'oauth') return undefined;
+
+    const candidates: MCPServer[] = [];
+    for (const server of servers) {
+      if (
+        server.enabled &&
+        isCredentialPeerOf(server, entry, prescribed) &&
+        (await hasCatalogCredentialPolicy(server, entry, prescribed))
+      ) {
+        candidates.push(server);
+      }
+    }
+    candidates.sort((a, b) => (a.mcp_server_id < b.mcp_server_id ? -1 : 1));
+
+    /**
+     * Whether the caller's grant on this row was minted for the resource this
+     * entry names.
+     *
+     * The half {@link isCredentialPeerOf} cannot answer. `oauth_resource_uri`
+     * is what the endpoint declared itself to be when consent happened, so
+     * comparing it to the entry's endpoint catches a row whose URL has been
+     * repointed since — the case where the row says one thing today and the
+     * credential on it was minted for another.
+     *
+     * A grant recording no resource at all is refused rather than waved
+     * through: grants predating the column exist, and "cannot tell" is not
+     * "yes". The cost of being wrong here is one consent screen. A read that
+     * fails outright is the same answer for the same reason.
+     */
+    const grantIsForThisResource = async (server: MCPServer): Promise<boolean> => {
+      try {
+        const resourceUri = await deps.readGrantResourceUri(server.mcp_server_id, params);
+        return sameCatalogEndpoint(resourceUri, entry.remote_url);
+      } catch (error) {
+        console.warn(
+          `[mcp-catalog/connect] Could not read the grant on ${server.mcp_server_id}; not reusing it:`,
+          error instanceof Error ? error.message : error
+        );
+        return false;
+      }
+    };
+
+    // Pass one: a grant that is already live costs nothing to confirm, so no
+    // refresh is spent while one of those exists anywhere in the list.
+    for (const candidate of candidates) {
+      if (!hasLiveCallerGrant(candidate, Date.now())) continue;
+      if (await grantIsForThisResource(candidate)) {
+        return { server: candidate, kind: 'credential_peer' };
+      }
+    }
+
+    // Pass two: revive a stale one.
+    let attempts = 0;
+    for (const candidate of candidates) {
+      if (hasLiveCallerGrant(candidate, Date.now())) continue;
+      if (!(await grantIsForThisResource(candidate))) continue;
+      if (attempts >= MAX_REVIVAL_ATTEMPTS) {
+        console.warn(
+          '[mcp-catalog/connect] Stopped reviving grants at the cap; installing fresh instead ' +
+            `entry=${entry.name} tried=${attempts}`
+        );
+        break;
+      }
+      attempts++;
+      try {
+        const refreshed = (await service('/mcp-servers/oauth-refresh').create(
+          { mcp_server_id: candidate.mcp_server_id },
+          params
+        )) as { success?: boolean };
+        if (!refreshed?.success) continue;
+      } catch {
+        // A refresh that could not even be attempted is not a reason to fail
+        // the connect, nor to stop looking at the rest of the list.
+        continue;
+      }
+
+      // Re-read rather than trusting the refresh's own report: the hydrate hook
+      // is what decides a grant is usable, and this asks it the same question
+      // it will be asked on every later read of this row.
+      try {
+        const revived = (await service('mcp-servers').get(
+          candidate.mcp_server_id,
+          params
+        )) as MCPServer;
+        if (hasLiveCallerGrant(revived, Date.now())) {
+          return { server: revived, kind: 'refreshed_credential_peer' };
+        }
+      } catch {
+        // The row may be deleted or lose visibility after refresh. Continue;
+        // a concurrent lifecycle change must not abort the whole connect.
+      }
+    }
+
+    return undefined;
+  };
+
+  /**
+   * Write the key the caller just pasted onto the install being reused.
+   *
+   * Rotation is the ordinary life of an bearer access token, and re-connecting from the
+   * marketplace is where a user would do it — so the alternative is a connect
+   * that reports success while the server keeps authenticating with the key the
+   * user just replaced. Nothing surfaces that: the row reads back redacted, so
+   * both keys look identical from every screen, and the failure arrives later
+   * as a tool that stopped working.
+   *
+   * Written unconditionally rather than only when it changed, because "changed"
+   * is not knowable here — the row arrives with the sentinel in place of its
+   * token, by design. Writing the same key twice costs one update; skipping a
+   * write because the two might be equal costs the rotation.
+   *
+   * Through the service with the caller's own params, so the write authorizer
+   * decides it: the caller owns this row — {@link findExistingInstall} would not
+   * have offered it otherwise — and the after hook redacts what comes back, so
+   * the key does not travel out on the reply. It also means a patch the tenant's
+   * policy refuses fails here rather than half-installing.
+   *
+   * Called last, once the session and the attachment have both succeeded. This
+   * is the only write here that overwrites something a previous connect left
+   * behind, so it is also the only one whose failure cannot be compensated by a
+   * further write — see the call site for why ordering is the answer rather
+   * than a rollback.
+   */
+  const finalizeReusedInstall = async (
+    server: MCPServer,
+    reconcile: boolean,
+    createInput: CreateMCPServerInput,
+    prescribed: MCPAuth,
+    params: AuthenticatedParams,
+    generation?: { ownerUserId: string; catalogEntryName: string; value: number }
+  ): Promise<MCPServer> => {
+    const reconciledAuth = reconcile
+      ? preserveExplicitOAuthCompatibility(server, prescribed)
+      : prescribed;
+    const updates = reconcile
+      ? {
+          enabled: true,
+          transport: createInput.transport,
+          scope: createInput.scope,
+          url: createInput.url,
+          headers: {},
+          auth: reconciledAuth,
+        }
+      : { auth: prescribed };
+    if (!generation) {
+      return (await service('mcp-servers').patch(server.mcp_server_id, updates, {
+        ...params,
+      })) as MCPServer;
+    }
+    return (await service('mcp-servers').patch(server.mcp_server_id, updates, {
+      ...params,
+      mcpCatalogConnectGeneration: generation,
+    } as AuthenticatedParams)) as MCPServer;
   };
 
   return {
@@ -379,19 +891,34 @@ export function createMCPCatalogConnectService(
 
       assertConnectableEntry(entry);
       assertDisclosureAcknowledged(entry, data.acknowledged_disclosure);
-      // Derived from the entry and the live endpoint, never from `data`: the
-      // request names a catalog key and nothing else, so there is no input a
-      // caller could supply that reaches a URL or a credential endpoint here.
-      const auth = await resolveAuthRequirement(entry);
-
+      // Derived from the entry and the live endpoint, never from `data` — with
+      // one deliberate exception, read here and nowhere else. The request may
+      // name a secret; it may not name where the secret goes, what transport
+      // carries it, or which kind of credential it is. Every one of those still
+      // comes from the entry the catalog resolved and the answer the endpoint
+      // gave, so a caller holding a key can only ever aim it at the URL the
+      // checked-in file already points to.
       const userId = params.user?.user_id as UserID | undefined;
+      const bearerToken = readBearerToken(data.bearer_token, entry);
+      const connectGeneration =
+        bearerToken && userId
+          ? {
+              ownerUserId: userId,
+              catalogEntryName: entry.name,
+              value: await (
+                service('mcp-servers') as unknown as MCPServersService
+              ).claimCatalogConnectGeneration(userId, entry.name),
+            }
+          : undefined;
+      const auth = await resolveAuthRequirement(entry, bearerToken);
+
       const existing = await findExistingInstall(entry, auth, userId, params);
 
       const createInput: CreateMCPServerInput = {
         name: catalogServerSlug(entry.name),
         display_name: catalogDisplayName(entry),
         description: entry.benefit ?? entry.description,
-        transport: toServerTransport(entry),
+        transport: catalogServerTransport(entry),
         url: entry.remote_url,
         auth,
         // Session scope: an install is for the session it launched, not
@@ -408,20 +935,57 @@ export function createMCPCatalogConnectService(
       // one path that can produce one. Saying so is also what makes the row
       // private to the caller — an install is theirs whatever the tenant's
       // `mcp_member_policy` says. See `McpCatalogInstallParams`.
-      const mcpServer =
-        existing ??
-        ((await service('mcp-servers').create(createInput, {
-          ...params,
-          mcpCatalogInstall: { entry_name: entry.name },
-        })) as MCPServer);
+      let selection = existing;
+      let mcpServer = selection?.server;
+      let createdServer = false;
+      if (!mcpServer) {
+        try {
+          mcpServer = (await service('mcp-servers').create(createInput, {
+            ...params,
+            mcpCatalogInstall: { entry_name: entry.name },
+          })) as MCPServer;
+          createdServer = true;
+        } catch (error) {
+          // The database identity constraint is the serialization point. A
+          // concurrent connect may win between our targeted read and create;
+          // recover its row rather than creating a second credential copy.
+          if (!isDatabaseUniqueConstraintError(error)) throw error;
+          selection = await findExistingInstall(entry, auth, userId, params);
+          if (!selection) throw error;
+          mcpServer = selection.server;
+        }
+      }
+      const reusedExisting = !createdServer;
+      const needsReconciliation =
+        reusedExisting &&
+        selection?.kind === 'catalog_install' &&
+        (!mcpServer.enabled ||
+          !isCurrentCatalogInstall(mcpServer, entry, auth, {
+            reconcileMissingCompatibilityMode: true,
+          }));
+      const preservedCompatibilityOverride =
+        selection?.kind === 'catalog_install' &&
+        mcpServer.auth?.type === 'oauth' &&
+        auth.type === 'oauth' &&
+        (mcpServer.auth.oauth_compatibility_mode === 'strict' ||
+          mcpServer.auth.oauth_compatibility_mode === 'legacy') &&
+        mcpServer.auth.oauth_compatibility_mode !== auth.oauth_compatibility_mode
+          ? mcpServer.auth.oauth_compatibility_mode
+          : undefined;
 
-      // Three writes across three services, so there is no transaction to lean
-      // on. A server nobody can see is the worst thing to leave behind — it is
-      // configuration the user never asked to keep and cannot find to remove —
-      // so a failure after this point takes back the row this request created.
-      // A reused install is somebody's existing state and is left alone.
+      // Four writes across three services, so there is no transaction to lean
+      // on. What this request created, it takes back on failure: a server or a
+      // session nobody can see is configuration the user never asked to keep
+      // and cannot find to remove, and a retry that leaves one behind each time
+      // is worse than the failure it followed. A reused install is somebody's
+      // existing state and is left alone — see the `catch`.
+      // Held outside the `try` so the cleanup below can see it. A failure at
+      // the attachment or the rotation happens after this exists, and what is
+      // left behind is the difference between a retry that converges and one
+      // that adds a session each time.
+      let session: Session | undefined;
       try {
-        const session = (await service('sessions').create(
+        session = (await service('sessions').create(
           {
             branch_id: data.branch_id,
             agentic_tool: data.agentic_tool,
@@ -436,19 +1000,109 @@ export function createMCPCatalogConnectService(
           { ...params, route: { id: session.session_id } }
         );
 
+        // Rotation is last, after everything that can fail has succeeded.
+        //
+        // It is the one write in this method that changes state a *previous*
+        // connect established, and it is not undoable in any way worth trusting:
+        // there is no transaction here, so undoing it means a second write that
+        // can itself fail. Ordering removes the need. Done earlier, a connect
+        // whose session or attachment then failed told the caller it had failed
+        // while having already replaced their working key — every session still
+        // relying on the old one broken, and nothing anywhere saying so.
+        //
+        // Nothing between here and the top needs the new key: the session is a
+        // row, the attachment is a pair of ids, and neither opens the server's
+        // transport. So the only thing later ordering costs is the case where
+        // this patch itself fails — and that leaves the install exactly as its
+        // owner had it, working with the key it already held, beside a session
+        // the caller was told they did not get. That is a state the product can
+        // survive and a user can retry out of, which the alternative is not.
+        // Reconciliation, like credential rotation, overwrites state from a
+        // previous connect and therefore happens only after the new session
+        // and attachment are established. If either earlier write fails, the
+        // reused row has not been touched; cleanup can remove only this
+        // request's new session. One final patch applies drift repair and the
+        // newly validated credential together, so there is no intermediate
+        // enabled/rerouted row carrying the old auth policy or secret.
+        const installed =
+          connectGeneration ||
+          (reusedExisting && (needsReconciliation || carriesRowLevelSecret(auth)))
+            ? await finalizeReusedInstall(
+                mcpServer,
+                needsReconciliation,
+                createInput,
+                auth,
+                params,
+                connectGeneration
+              )
+            : mcpServer;
+
         return {
-          mcp_server: mcpServer,
+          mcp_server: installed,
           session,
           starter_prompt: entry.starter_prompt,
-          reused_existing_server: Boolean(existing),
+          reused_existing_server: reusedExisting,
+          reuse_kind: selection?.kind ?? 'new_catalog_install',
+          effective_oauth_policy:
+            auth.type === 'oauth'
+              ? {
+                  effective_mode:
+                    preservedCompatibilityOverride ??
+                    entry.oauth?.compatibility_mode ??
+                    'marketplace',
+                  managed_by_catalog:
+                    (!selection || selection.kind === 'catalog_install') &&
+                    preservedCompatibilityOverride === undefined,
+                }
+              : undefined,
         };
       } catch (error) {
-        if (!existing) {
+        // Take back everything this request created, so a retry lands where the
+        // first attempt meant to rather than beside it.
+        //
+        // Ordering the writes cannot fix this on its own. There are four writes
+        // across three services and no transaction, so every ordering leaves
+        // some window open — moving the rotation to the end closed the one where
+        // a failed connect had already replaced a working key, and opened one
+        // where a failed rotation left a session and an attachment the caller
+        // was told they did not get. The second attempt then made another, and
+        // the first stayed pinned to the old-key server. Accumulation, not a
+        // window, is the thing a user actually meets.
+        //
+        // Deleting is right here and reuse is not, which is worth saying plainly
+        // because reuse is what the server row does. A session is deliberately
+        // *not* deduplicated: connecting the same entry twice is an ordinary
+        // success that reuses the install and opens a second session, so there
+        // is no stable key to match a previous one on, and matching one would
+        // hand the caller somebody's earlier conversation. What this removes is
+        // a session created seconds ago by this request, never returned to
+        // anyone, holding no messages — the same argument the server row below
+        // already makes, applied to the other row this method creates.
+        //
+        // The session goes first: `session_mcp_servers.session_id` is
+        // `onDelete: 'cascade'`, so removing it takes the attachment with it and
+        // there is no third thing to undo. Internal params, because this is the
+        // daemon undoing its own write moments later rather than a new request
+        // to authorize.
+        if (session) {
           try {
-            await service('mcp-servers').remove(mcpServer.mcp_server_id, {
+            await service('sessions').remove(session.session_id, {
               ...params,
               provider: undefined,
             });
+          } catch (cleanupError) {
+            console.warn(
+              `[mcp-catalog/connect] Left session ${session.session_id} behind after a failed connect:`,
+              cleanupError instanceof Error ? cleanupError.message : cleanupError
+            );
+          }
+        }
+        if (createdServer) {
+          try {
+            // Atomic liveness/adoption check. A concurrent unique-conflict
+            // loser may now be using this row; in that case it owns the row's
+            // continued life and compensation must leave it in place.
+            await service('mcp-servers').removeIfUnattached(mcpServer.mcp_server_id);
           } catch (cleanupError) {
             console.warn(
               `[mcp-catalog/connect] Left ${mcpServer.mcp_server_id} behind after a failed connect:`,
@@ -456,6 +1110,12 @@ export function createMCPCatalogConnectService(
             );
           }
         }
+
+        // A compensating write can itself fail, and these two are the last
+        // chance to notice. Both are logged with the id rather than swallowed,
+        // because the residual — an orphan session or an orphan server row — is
+        // then something an operator can find and remove by hand. That is the
+        // documented floor: no ordering removes it, only a transaction would.
         throw error;
       }
     },

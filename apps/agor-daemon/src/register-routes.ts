@@ -10,8 +10,10 @@ import { Transform } from 'node:stream';
 import {
   type AgorConfig,
   type ResolvedDeploymentConfig,
+  type ResolvedExternalLaunchProvider,
   requireDeploymentId,
   resolveBranchStorageConfig,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
@@ -33,6 +35,7 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
   UploadRepository,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -70,6 +73,7 @@ import type {
   Task,
   TaskMetadata,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -101,6 +105,7 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
+import { registerExecutorResponseRoutes } from './executor-response-channel.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -109,6 +114,8 @@ import {
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
+import { createFeathersMetricsHook } from './metrics/feathers.js';
+import { getDaemonMetrics } from './metrics/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -123,7 +130,11 @@ import {
 } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
-import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
+import {
+  isAuthenticationUserLookup,
+  markAuthenticationUserLookup,
+  markLocalAuthenticationLookup,
+} from './services/users.js';
 import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import {
@@ -179,6 +190,7 @@ import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
+  createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
@@ -256,6 +268,7 @@ export interface RegisterRoutesContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
+  externalLaunchProvider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
@@ -335,6 +348,30 @@ export function createRequiredTenantDatabaseRunner(db: TenantScopeAwareDatabase)
     if (!tenantId) throw new Error('Missing active tenant context for database operation');
     return runWithTenantDatabaseScope(db, tenantId, work);
   };
+}
+
+/**
+ * Build the catalog-connect service exactly as the production route registers it.
+ * Kept as a named boundary so PostgreSQL integration coverage can exercise the
+ * authenticated tenant-scoped grant lookup instead of substituting a test
+ * implementation of that decisive dependency.
+ */
+export function createRegisteredMCPCatalogConnectService(
+  app: Application,
+  db: TenantScopeAwareDatabase
+) {
+  return createMCPCatalogConnectService(app, {
+    async readGrantResourceUri(serverId, params) {
+      const userId = params.user?.user_id as UserID | undefined;
+      if (!userId) return undefined;
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () =>
+        (await new UserMCPOAuthTokenRepository(db).getToken(userId, serverId))
+          ?.oauth_resource_uri ?? undefined;
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+  });
 }
 
 export function createUploadAuthMiddleware(input: {
@@ -438,6 +475,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     app,
     config,
+    externalLaunchProvider,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -461,6 +499,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
   } = ctx;
+
+  registerExecutorResponseRoutes(app);
+
+  // Health and launch auth share the exact startup-resolved provider. The
+  // public DTO is immutable and contains no verification or exchange secrets.
+  const publicLaunchAuth = Object.freeze(resolvePublicLaunchAuthSettings(externalLaunchProvider));
 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
@@ -681,6 +725,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     createLaunchAuthService({
       db,
       config,
+      provider: externalLaunchProvider,
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
@@ -2696,6 +2741,65 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+        const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
+          db,
+          getCurrentTenantId()
+        );
+        const session = await inCurrentTenantDatabaseScope(() =>
+          app.service('sessions').get(id, params)
+        );
+
+        // Stop is process control and must use the same authorization policy as
+        // prompting the target session. A session-tier collaborator may view a
+        // teammate's session but must not stop an executor running with that
+        // teammate's identity and credentials. Force-fail deliberately skips
+        // this check and applies its narrower owner-or-admin policy below.
+        if (
+          body.force_unverified !== true &&
+          branchRbacEnabled &&
+          params.provider &&
+          !(params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount
+        ) {
+          const stopUserId = params.user?.user_id as UUID | undefined;
+          if (!stopUserId) {
+            throw new NotAuthenticated('Authentication required to stop a session');
+          }
+          if (!session.branch_id) {
+            throw new Forbidden('Not authorized to stop this session');
+          }
+          const access = await inCurrentTenantDatabaseScope(async () => {
+            const branch = await branchRepository.findById(session.branch_id);
+            if (!branch) return null;
+            const isOwner = await branchRepository.isOwner(branch.branch_id, stopUserId);
+            const branchPermission = await branchRepository.resolveUserPermission(
+              branch,
+              stopUserId
+            );
+            return { branch, branchPermission, isOwner };
+          });
+          if (!access) {
+            throw new NotFound(`Branch ${session.branch_id} not found`);
+          }
+          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            branch: access.branch,
+            session,
+            userId: stopUserId,
+            isOwner: access.isOwner,
+            userRole: params.user?.role,
+            allowSuperadmin: superadminOpts.allowSuperadmin,
+            branchPermission: access.branchPermission,
+          });
+          if (!allowed) {
+            throw new Forbidden(
+              effectiveLevel === 'session'
+                ? `You have 'session' permission — you can only stop sessions you created. ` +
+                    `This session was created by another user. Ask a branch owner to upgrade ` +
+                    `your access to 'prompt' if you need to stop other users' sessions.`
+                : `You need 'prompt' permission to stop this session. You have ` +
+                    `'${effectiveLevel}' permission.`
+            );
+          }
+        }
         const triggerPreservedQueue = () => {
           deferInFreshTenantScope(params, async () => {
             try {
@@ -2728,13 +2832,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   stopRouteRepositories.branchRepo.isOwner(branchId, userId),
               });
             });
-            const failedTask = await forceFailUnverifiedTask({
-              app,
-              taskId: target.task.task_id,
-              terminationRequestedAt: target.terminationRequestedAt,
-              confirmation: target.confirmation,
-              params,
-            });
+            const failedTask = await runInFreshTerminationTenantWriteDatabase(() =>
+              forceFailUnverifiedTask({
+                app,
+                taskId: target.task.task_id,
+                terminationRequestedAt: target.terminationRequestedAt,
+                confirmation: target.confirmation,
+                params,
+              })
+            );
             return {
               success: true,
               status: failedTask.status,
@@ -2756,6 +2862,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 inCurrentTenantDatabaseScope(() =>
                   findActiveTasksForSession(stopApp, sessionId, stopParams)
                 ),
+              runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             },
             id as SessionID,
             params,
@@ -4205,10 +4312,36 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerLongAuthenticatedRoute(
     app,
     '/mcp-catalog/connect',
-    createMCPCatalogConnectService(app),
+    createRegisteredMCPCatalogConnectService(app, db),
     { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );
+
+  // A connect result is an answer to the caller, not tenant news, so it is
+  // published to nobody.
+  //
+  // The daemon's global publisher (`utils/realtime-publish.ts`) has no path
+  // allowlist: every service that emits `created` fans out to the whole
+  // tenant's authenticated channel unless it says otherwise. That put a
+  // `{ mcp_server, session }` payload on every socket in the tenant, and now
+  // that an install can carry an API key in `mcp_server.auth.token`, this is a
+  // second route out for it — one the `mcp-servers` redaction hook does not
+  // cover, because that hook is registered on `mcp-servers` and this is a
+  // different service forwarding the same object.
+  //
+  // It happens to be redacted today: connect obtains the row from
+  // `mcp-servers` with the caller's own params, so the after hook has already
+  // replaced the token by the time it lands in this result. That is a property
+  // of where the object came from rather than of where it is going, and the
+  // next person to change what connect returns has no reason to know a
+  // broadcast depends on it.
+  //
+  // Nothing is lost by silence. The rows this creates are announced by their
+  // own services — `mcp-servers` emits `created`/`patched` for the install and
+  // `sessions` for the session, both through hooks that redact — so a client
+  // watching for either still learns about them, from the service that owns
+  // them.
+  app.service('mcp-catalog/connect').publish(() => []);
 
   // ============================================================================
   // Session env selections (v0.5 env-var-access)
@@ -4346,7 +4479,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
-      const publicLaunchAuth = resolvePublicLaunchAuthSettings(config);
+      const identityAuthority = resolveIdentityAuthority(config);
       // `/health` stays 200 always (pre-login UI fetches must not throw), so the
       // DB signal rides on `status`: ok | degraded. /readyz is the one that 503s.
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
@@ -4374,6 +4507,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         auth: {
           requireAuth: true,
           externalLaunch: publicLaunchAuth,
+          identity: identityAuthority,
         },
         instance: {
           label: config.daemon?.instanceLabel,
@@ -4549,6 +4683,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   app.hooks({
+    around: {
+      all: [
+        createFeathersMetricsHook(getDaemonMetrics(app), {
+          // Health probes already have HTTP metrics; avoid doubling their
+          // high-frequency signal at the Feathers boundary.
+          excludedServicePaths: ['health'],
+          // JWT/local strategies preserve provider for the serialized entity
+          // lookup even though it is authentication framework work.
+          isInternalCall: (context) => isAuthenticationUserLookup(context.params),
+        }),
+      ],
+    },
     before: {
       all: [enforcePasswordChange],
     },

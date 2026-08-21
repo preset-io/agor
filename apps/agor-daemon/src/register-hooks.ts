@@ -83,6 +83,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  assertPublicMCPOAuthCompatibilityMode,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
@@ -116,7 +117,14 @@ import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
-import { isMCPOAuthGrantBoundToServer } from './services/mcp-oauth-grant-binding.js';
+import {
+  presentMCPOAuthCompatibilityPolicy,
+  resolveMCPOAuthCompatibilityPolicy,
+} from './services/mcp-oauth-compatibility.js';
+import {
+  isMCPOAuthGrantBoundToServer,
+  shouldVerifyMCPOAuthGrantBinding,
+} from './services/mcp-oauth-grant-binding.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -150,6 +158,7 @@ import {
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessionsSql,
+  scopeReadToAccessibleBoardsSql,
   scopeScheduleQuery,
   setSessionUnixUsername,
   validateSessionUnixUsername,
@@ -268,7 +277,7 @@ function branchEnvFieldsFromItem(item: Partial<Branch>) {
   };
 }
 
-function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
+export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
   return async (context: HookContext) => {
     const items = Array.isArray(context.data) ? context.data : [context.data];
     const shouldValidate = (items as Array<Record<string, unknown>>).some((item) =>
@@ -290,8 +299,11 @@ function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
           mode,
           'branch environment'
         );
+        // The app URL is rendered metadata consumed directly by clients, so it
+        // must be safe before persistence. The health URL is outbound runtime
+        // configuration: validate it at the observation boundary instead of
+        // making branch materialization depend on an inactive environment.
         validateRenderedManagedEnvUrlFields({
-          health: item.health_check_url,
           app: item.app_url,
         });
       } catch (error) {
@@ -627,7 +639,11 @@ export function authorizeUsersGet(context: HookContext): HookContext {
     return context;
   }
 
-  ensureMinimumRole(params, ROLES.MEMBER, 'view users');
+  // The user directory is a tenant-owned read model used by every workspace
+  // surface for attribution. Viewers already receive its redacted realtime
+  // events tenant-wide, so the initial find/get must use the same read floor or
+  // a legitimate read-only login can never hydrate the application.
+  ensureMinimumRole(params, ROLES.VIEWER, 'view users');
   return context;
 }
 
@@ -665,6 +681,66 @@ export function protectFilesystemHomeWrite(context: HookContext, config: AgorCon
   }
   return context;
 }
+
+/**
+ * Strip the owner-only fields from one user row. Pure.
+ *
+ * `agentic_tools_public_values` is decrypted plaintext that `rowToUser` fills
+ * in ONLY when `requesterId === row.user_id` (`services/users.ts`). The
+ * contract on `AGENTIC_TOOLS_PUBLIC_FIELDS` is explicit that it goes to the
+ * field's owner and to nobody else — not even to an admin reading someone
+ * else's profile — because a base URL can name an internal host.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactUserOwnerOnlyFields(user: any): any {
+  if (!user || typeof user !== 'object' || user.agentic_tools_public_values === undefined) {
+    return user;
+  }
+  const { agentic_tools_public_values: _ownerOnly, ...rest } = user;
+  return rest;
+}
+
+/** Apply the user redaction to whatever shape the payload arrived in. */
+// biome-ignore lint/suspicious/noExplicitAny: hook results are untyped payloads
+function redactUserPayload(result: any): any {
+  if (Array.isArray(result)) return result.map(redactUserOwnerOnlyFields);
+  if (result?.data && Array.isArray(result.data)) {
+    return { ...result, data: result.data.map(redactUserOwnerOnlyFields) };
+  }
+  if (result?.user_id) return redactUserOwnerOnlyFields(result);
+  return result;
+}
+
+/**
+ * Keep owner-only user fields out of the realtime broadcast.
+ *
+ * `users` is a tenant-wide fan-out path — `useAgorData` keeps the whole
+ * directory current so any row can be named in attribution — and Feathers
+ * dispatches `context.dispatch ?? context.result`. Without this hook a
+ * SELF-patch satisfies `requesterId === row.user_id`, so the result carries
+ * decrypted `agentic_tools_public_values`, and that object is what every other
+ * socket in the tenant receives. `GET /users/:id` by those same users returns
+ * the field as `undefined`, so the socket was handing over precisely what the
+ * REST path withholds.
+ *
+ * Same split as `redactMCPServerSecretFields`: `context.result` is the CALLER's
+ * copy and stays intact, because the caller is the owner and legitimately asked
+ * for their own value. `context.dispatch` is by definition everyone else, so
+ * redacting it is unconditional.
+ *
+ * Keyed off `context.event` so it only fires for the methods Feathers actually
+ * broadcasts (`created`/`updated`/`patched`/`removed`; `null` for find/get) —
+ * leaving find/get alone keeps the owner's own reads working.
+ *
+ * Module scope rather than a closure inside `registerHooks` so tests can drive
+ * the real hook instead of reproducing its body.
+ */
+export const redactUserOwnerOnlyFieldsForBroadcast = async (context: HookContext) => {
+  if (context.event) {
+    context.dispatch = redactUserPayload(context.result);
+  }
+  return context;
+};
 
 /**
  * Redact every MCP server row in a service payload, whatever shape it arrived
@@ -968,9 +1044,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  // Helper to get usersService from app
-  const usersService = app.service('users');
-
   /**
    * Authorization chain shared by the two externally-initiated prompt writes,
    * `messages.create` and `tasks.create`.
@@ -1131,18 +1204,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   safeService('board-objects')?.hooks({
     before: {
-      all: [
-        typedValidateQuery(boardObjectQueryValidator),
-        requireAuth,
-        requireMinimumRole(ROLES.MEMBER, 'manage board objects'),
-      ],
+      all: [typedValidateQuery(boardObjectQueryValidator), requireAuth],
       // Board-objects may reference a branch or may be loose board/card/layout
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
       // board visibility.
       find: [
-        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
+        ...(executionMode.appRbacEnabled ? [scopeReadToAccessibleBoardsSql(superadminOpts)] : []),
       ],
+      get: [
+        ...(executionMode.appRbacEnabled ? [scopeReadToAccessibleBoardsSql(superadminOpts)] : []),
+      ],
+      create: [requireMinimumRole(ROLES.MEMBER, 'create board objects')],
+      update: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
+      patch: [requireMinimumRole(ROLES.MEMBER, 'update board objects')],
+      remove: [requireMinimumRole(ROLES.MEMBER, 'delete board objects')],
     },
   });
 
@@ -1682,14 +1758,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       authPayloadType,
       callerUserId: context.params?.user?.user_id,
     });
-    if (!userId) {
-      return context;
-    }
-
     const injectToken = async (server: MCPServer) => {
       if (server.auth?.type !== 'oauth') {
         return server;
       }
+
+      const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(server);
+      const serverWithPolicy: MCPServer = {
+        ...server,
+        oauth_compatibility_policy: presentMCPOAuthCompatibilityPolicy(compatibilityPolicy),
+      };
+      if (!userId) return serverWithPolicy;
 
       // Tokens for both modes live in user_mcp_oauth_tokens:
       //   - per_user  → row keyed by (userId, serverId)
@@ -1703,14 +1782,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         const row = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
 
         if (!row) {
-          return server;
+          return serverWithPolicy;
         }
+        const compatibilityMode = compatibilityPolicy.mode;
         if (
-          isPostgresDatabaseHandle(db) &&
-          !isMCPOAuthGrantBoundToServer(process.env.AGOR_MASTER_SECRET!, server, row)
+          shouldVerifyMCPOAuthGrantBinding(
+            isPostgresDatabaseHandle(db),
+            row.grant_binding_version
+          ) &&
+          !isMCPOAuthGrantBoundToServer(
+            process.env.AGOR_MASTER_SECRET!,
+            server,
+            row,
+            compatibilityMode
+          )
         ) {
           console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
-          return server;
+          return serverWithPolicy;
         }
 
         // Response enrichment is a durable read only. Refresh is coordinated
@@ -1720,13 +1808,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           row.refresh_status !== 'idle' ||
           (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
         ) {
-          return server;
+          return serverWithPolicy;
         }
         const accessToken = row.oauth_access_token;
         const expiresAt = row.oauth_token_expires_at;
 
         return {
-          ...server,
+          ...serverWithPolicy,
           auth: {
             ...server.auth,
             oauth_access_token: accessToken,
@@ -1740,7 +1828,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
       }
 
-      return server;
+      return serverWithPolicy;
     };
 
     // Handle both single result and array/paginated results
@@ -1762,6 +1850,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const authorizeMcpServerWriteHook = createMcpServerWriteAuthorizationHook(db) as unknown as (
     context: HookContext
   ) => Promise<HookContext>;
+
+  const validateMcpServerOAuthCompatibility = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const items = Array.isArray(context.data) ? context.data : [context.data];
+    try {
+      for (const item of items) {
+        assertPublicMCPOAuthCompatibilityMode(
+          item && typeof item === 'object' ? (item as { auth?: unknown }).auth : undefined
+        );
+      }
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : 'Invalid MCP OAuth policy');
+    }
+    return context;
+  };
 
   const scopeMcpServerFindToUsable = async (context: HookContext): Promise<HookContext> => {
     if (!context.params.provider) return context;
@@ -1800,9 +1904,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
       find: [scopeMcpServerFindToUsable],
-      create: [authorizeMcpServerWriteHook],
-      update: [authorizeMcpServerWriteHook],
-      patch: [authorizeMcpServerWriteHook],
+      create: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
+      update: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
+      patch: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
       remove: [authorizeMcpServerWriteHook],
     },
     after: {
@@ -2207,9 +2311,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Users hooks
   // ============================================================================
 
+  /**
+   * The users service deliberately serves two unauthenticated callers — internal
+   * calls (no `provider`) and the Feathers local-auth email lookup during login —
+   * so it cannot take a blanket `requireAuth` on `all` the way other services do.
+   *
+   * But with no authenticate hook at all, `params.user` was never populated on the
+   * REST transport, so every downstream guard that reads it (the `find` hook,
+   * `authorizeUsersGet`, the role checks) rejected a perfectly valid Bearer token
+   * with "Authentication required". Socket.IO connections carry `params.user` from
+   * the authenticated connection, which is why this only ever failed over REST and
+   * only for the CLI — the UI never exercises this path.
+   *
+   * So: authenticate when the caller actually presented credentials, and leave both
+   * intentional unauthenticated paths exactly as they were.
+   */
+  const authenticateUsersRequestWhenCredentialed = async (
+    context: HookContext
+  ): Promise<HookContext> => {
+    const params = context.params as AuthenticatedParams;
+    if (!params.provider) return context;
+    if (params.user) return context;
+    if (isLocalAuthenticationLookup(params) || isAuthenticationUserLookup(params)) return context;
+    if (!params.authentication) return context;
+    return requireAuth(context);
+  };
+
   app.service('users').hooks({
     before: {
-      all: [typedValidateQuery(userQueryValidator)],
+      all: [typedValidateQuery(userQueryValidator), authenticateUsersRequestWhenCredentialed],
       find: [
         (context) => {
           const params = context.params as AuthenticatedParams;
@@ -2219,7 +2349,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           }
 
           if (params.user) {
-            ensureMinimumRole(params, ROLES.MEMBER, 'list users');
+            // Viewers need the same redacted tenant directory that realtime
+            // publishes for attribution. Tenant scoping remains owned by the
+            // shared users service hook/RLS path; this only aligns the role
+            // floor with the rest of the read-only workspace surface.
+            ensureMinimumRole(params, ROLES.VIEWER, 'list users');
             return context;
           }
 
@@ -2237,117 +2371,22 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
       get: [authorizeUsersGet],
-      create: [
-        (context) => protectFilesystemHomeWrite(context, config),
-        async (context: HookContext<Board>) => {
-          const params = context.params as AuthenticatedParams;
-
-          if (!params.provider) {
-            return context;
-          }
-
-          const existing = (await usersService.find({ query: { $limit: 1 } })) as Paginated<User>;
-          if (existing.total > 0) {
-            ensureMinimumRole(params, ROLES.ADMIN, 'create users');
-          }
-
-          // Only superadmins can create superadmin users
-          // Guard both 'superadmin' and legacy 'owner' to prevent bypass
-          // Cast to include 'owner' for legacy client compatibility (UserRole excludes 'owner')
-          const data = context.data as Partial<Omit<User, 'role'> & { role?: string }>;
-          if (hasMinimumRole(data?.role, ROLES.SUPERADMIN)) {
-            const callerRole = params.user?.role;
-            if (!hasMinimumRole(callerRole, ROLES.SUPERADMIN)) {
-              throw new Forbidden('Only superadmins can create superadmin users');
-            }
-          }
-
-          return context;
-        },
-      ],
-      patch: [
-        (context) => protectFilesystemHomeWrite(context, config),
-        async (context) => {
-          const params = context.params as AuthenticatedParams;
-          const userId = context.id as string;
-          const callerRole = params.user?.role;
-          const callerIsAdmin = hasMinimumRole(callerRole, ROLES.ADMIN);
-
-          // Field-level restrictions: only admins can modify unix_username, role, and must_change_password.
-          // filesystem_home is protected and validated by the preceding hook.
-          if (!Array.isArray(context.data)) {
-            if (context.data?.unix_username !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can modify unix_username');
-              }
-            }
-            if (context.data?.role !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can modify user roles');
-              }
-              // Only superadmins can assign the superadmin role
-              // Guard both 'superadmin' and legacy 'owner' to prevent bypass
-              if (
-                hasMinimumRole(context.data.role, ROLES.SUPERADMIN) &&
-                !hasMinimumRole(callerRole, ROLES.SUPERADMIN)
-              ) {
-                // Bootstrap: allow first superadmin promotion if none exist yet
-                // Note: usersService.find() doesn't filter by role, so filter in JS
-                const allUsers = (await usersService.find({})) as Paginated<User>;
-                const hasSuperadmin = allUsers.data.some((u) => u.role === ROLES.SUPERADMIN);
-                if (hasSuperadmin) {
-                  throw new Forbidden('Only superadmins can assign the superadmin role');
-                }
-              }
-            }
-            if (context.data?.must_change_password !== undefined) {
-              if (!callerIsAdmin) {
-                throw new Forbidden('Only admins can force password changes');
-              }
-            }
-          }
-
-          // General authorization: admins can patch any user
-          if (callerIsAdmin) {
-            return context;
-          }
-
-          // Any authenticated user can update their own profile (except unix_username and role, checked above)
-          if (params.user && params.user.user_id === userId) {
-            return context;
-          }
-
-          // Env-var-specific trusted write escape hatch. Set ONLY by the widget
-          // submit path, which has already authorized the caller via
-          // `canResolveWidget` (session-creator OR prompt-tier branch RBAC)
-          // before calling users.patch on the session creator's behalf.
-          //
-          // Deliberately narrow: only allows `env_vars` + `env_var_scopes`
-          // fields — any attempt to slip in other fields (e.g. role, unix_username)
-          // throws immediately. Field-level admin gates above run first and are
-          // NOT bypassed regardless.
-          //
-          // Grep for: trustedEnvVarWrite — to audit every site that sets it.
-          if (
-            !context.params.provider &&
-            (params as { trustedEnvVarWrite?: boolean }).trustedEnvVarWrite === true
-          ) {
-            const keys = Object.keys(context.data ?? {});
-            if (!keys.every((k) => k === 'env_vars' || k === 'env_var_scopes')) {
-              throw new Forbidden(
-                'trustedEnvVarWrite only permits env_vars and env_var_scopes updates'
-              );
-            }
-            return context;
-          }
-
-          // Otherwise forbidden
-          throw new Forbidden('You can only update your own profile');
-        },
-      ],
-      remove: [requireMinimumRole(ROLES.ADMIN, 'delete users')],
+      // UsersService owns target-aware role authorization. Keeping it in the
+      // mutation methods means REST, Socket.IO, MCP, and direct Feathers calls
+      // all compare the fresh actor role with both the target's current role
+      // and any requested role. Hooks remain responsible for transport
+      // validation only and cannot accidentally become an alternate bypass.
+      create: [(context) => protectFilesystemHomeWrite(context, config)],
+      patch: [(context) => protectFilesystemHomeWrite(context, config)],
     },
     after: {
+      // Registered on `all`, not a method list: Feathers composes
+      // `collectedAll.after` outermost, so this gets the LAST word on
+      // `context.dispatch` after the avatar hooks have run. It is also what
+      // keeps this from drifting the way the mcp-servers redaction did when it
+      // was pinned to a method list that omitted `remove` (#2374) — the hook
+      // itself no-ops on find/get by keying off `context.event`.
+      all: [redactUserOwnerOnlyFieldsForBroadcast],
       // Refresh derived profile presentation after user creation or update.
       create: [
         async (context: HookContext) => {
@@ -2825,8 +2864,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
       if (user._isServiceAccount) return context;
-      const allowSuperadmin = superadminOpts?.allowSuperadmin ?? true;
-      if (user.role === ROLES.ADMIN || (allowSuperadmin && user.role === ROLES.SUPERADMIN)) {
+      // `allow_superadmin` controls the exceptional branch/board RBAC bypass;
+      // it must never strip ordinary admin authority from a superadmin.
+      if (hasMinimumRole(user.role, ROLES.ADMIN)) {
         return context;
       }
 

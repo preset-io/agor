@@ -29,7 +29,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
-import { MCP_OAUTH_GRANT_BINDING_VERSION } from './mcp-oauth-grant-binding.js';
+import { grantBindingVersionForCompatibilityMode } from './mcp-oauth-grant-binding.js';
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 
@@ -75,7 +75,11 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     typeof material.pkceVerifier === 'string' &&
     typeof material.clientId === 'string' &&
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
-    (material.compatibilityMode === 'strict' || material.compatibilityMode === 'legacy') &&
+    (material.compatibilityMode === 'strict' ||
+      material.compatibilityMode === 'legacy' ||
+      material.compatibilityMode === 'marketplace') &&
+    (material.authorizationResponseIssuerParameterSupported === undefined ||
+      typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
     typeof material.allowLocalhostHttp === 'boolean'
   );
 }
@@ -132,7 +136,9 @@ export class MCPOAuthPendingFlowAuthority {
         mcpServerId: input.mcpServerId,
         oauthMode: input.oauthMode,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: grantBindingVersionForCompatibilityMode(
+          input.context.compatibilityMode
+        ),
         configFingerprint: input.configFingerprint,
         resourceUri: input.context.resourceUri,
         issuer: input.context.issuer,
@@ -144,6 +150,8 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: input.context.clientId,
         ...(input.context.clientSecret ? { clientSecret: input.context.clientSecret } : {}),
         compatibilityMode: input.context.compatibilityMode,
+        authorizationResponseIssuerParameterSupported:
+          input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
       };
       const sealedMaterial = sealMCPOAuthSecret(
@@ -168,7 +176,7 @@ export class MCPOAuthPendingFlowAuthority {
         oauthMode: input.oauthMode,
         subjectUserId,
         grantGeneration,
-        configFingerprintVersion: MCP_OAUTH_GRANT_BINDING_VERSION,
+        configFingerprintVersion: material.configFingerprintVersion,
         configFingerprint: input.configFingerprint,
         envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
         sealedMaterial,
@@ -281,6 +289,12 @@ export class MCPOAuthPendingFlowAuthority {
         // secret-bearing authorization URL after the browser has opened it.
         authorizationUrl: '',
         compatibilityMode: material.compatibilityMode,
+        // Older version-2 envelopes predate this explicit bit. Strict starts
+        // could only succeed when the AS advertised RFC 9207, while legacy
+        // never required it, so the mode reconstructs the old contract.
+        authorizationResponseIssuerParameterSupported:
+          material.authorizationResponseIssuerParameterSupported ??
+          material.compatibilityMode === 'strict',
         allowLocalhostHttp: material.allowLocalhostHttp,
       },
     };

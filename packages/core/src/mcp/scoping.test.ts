@@ -284,6 +284,30 @@ describe('getMcpServersForSession - tool_permissions admission gate', () => {
     expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['plain']);
   });
 
+  // Only `deny` and `ask` need enforcing. A gate that keyed off "has any
+  // tool_permissions at all" would withhold every permission-bearing server
+  // from the handlers that cannot filter, and would still pass every case
+  // above, because none of them configures a permission meant to be harmless.
+  it('admits a server whose permissions are all allow, even where nothing can filter', async () => {
+    const allowOnly = makeServer('allow-only', 'global');
+    allowOnly.tool_permissions = { read_file: 'allow', list_files: 'allow' };
+
+    const servers = await resolve(allowOnly, { toolFiltering: 'none' });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['allow-only']);
+  });
+
+  it.each(['deny', 'ask'] as const)(
+    'keeps a server carrying a %s for a handler that enforces at call time',
+    async (permission) => {
+      // `intercept` cannot pre-filter but refuses the call itself, so
+      // withholding would cost the user the whole server for no added safety.
+      const servers = await resolve(gatedServer(permission), { toolFiltering: 'intercept' });
+
+      expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['gated']);
+    }
+  );
+
   // A server that vanishes without explanation is indistinguishable, from the
   // session, from one that is broken.
   it('reports each withheld server with a reason', async () => {

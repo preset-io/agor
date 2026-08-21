@@ -2,7 +2,17 @@ import { type SdkFailure, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const beginExecutorTermination = vi.hoisted(() => vi.fn());
+const withFreshTenantWriteDatabase = vi.hoisted(() =>
+  vi.fn(async (work: () => Promise<unknown>) => work())
+);
+const createFreshTenantWriteDatabaseRunner = vi.hoisted(() =>
+  vi.fn(() => withFreshTenantWriteDatabase)
+);
 vi.mock('../termination-coordinator.js', () => ({ beginExecutorTermination }));
+vi.mock('../utils/tenant-db-scope.js', () => ({
+  createFreshTenantWriteDatabaseRunner,
+  deferWithTenantContext: vi.fn(),
+}));
 
 import { TasksService } from './tasks.js';
 
@@ -28,6 +38,7 @@ function serviceFor(current = task, observationAccepted = true) {
       ),
     },
   });
+  Object.defineProperty(service, 'db', { value: {} });
   service.app = {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
@@ -40,7 +51,11 @@ function serviceFor(current = task, observationAccepted = true) {
 }
 
 describe('TasksService SDK health reports', () => {
-  beforeEach(() => beginExecutorTermination.mockReset());
+  beforeEach(() => {
+    beginExecutorTermination.mockReset();
+    withFreshTenantWriteDatabase.mockClear();
+    createFreshTenantWriteDatabaseRunner.mockClear();
+  });
 
   it('persists observe-only evidence without lifecycle side effects', async () => {
     const service = serviceFor();
@@ -89,18 +104,23 @@ describe('TasksService SDK health reports', () => {
     const service = serviceFor(current);
     beginExecutorTermination.mockResolvedValue({ ...current, status: TaskStatus.STOPPING });
 
-    await service.reportSdkHealthFailure({
-      task_id: task.task_id,
-      reason: 'no_first_progress',
-      watchdog_action: 'enforced',
-    });
+    await service.reportSdkHealthFailure(
+      {
+        task_id: task.task_id,
+        reason: 'no_first_progress',
+        watchdog_action: 'enforced',
+      },
+      { tenant: { tenant_id: 'tenant-a' } } as never
+    );
 
+    expect(createFreshTenantWriteDatabaseRunner).toHaveBeenCalledWith({}, 'tenant-a');
     expect(beginExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: task.task_id,
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
         sdkFailure: expect.objectContaining({ termination: 'requested' }),
+        runInFreshTenantWriteDatabase: withFreshTenantWriteDatabase,
       })
     );
   });

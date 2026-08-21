@@ -45,12 +45,27 @@ describe('loadCatalog', () => {
   it('hands out entries nothing can corrupt for the next reader', async () => {
     const entries = await loadCatalog();
     const [first] = entries;
+    const oauthEntry = entries.find((candidate) => candidate.oauth);
+    const credentialEntry = entries.find((candidate) => candidate.credentials);
 
     // Every caller shares these objects, so a mutation would outlive the
     // request that made it and nothing would point back here.
     expect(Object.isFrozen(entries)).toBe(true);
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first?.capabilities)).toBe(true);
+    expect(oauthEntry?.oauth).toBeDefined();
+    expect(credentialEntry?.credentials).toBeDefined();
+    expect(Object.isFrozen(oauthEntry?.oauth)).toBe(true);
+    expect(Object.isFrozen(credentialEntry?.credentials)).toBe(true);
+
+    expect(() => {
+      (oauthEntry?.oauth as { compatibility_mode?: string }).compatibility_mode = 'marketplace';
+    }).toThrow(TypeError);
+    expect(() => {
+      (credentialEntry?.credentials as { scheme: string }).scheme = 'basic';
+    }).toThrow(TypeError);
+    expect(oauthEntry?.oauth?.compatibility_mode).not.toBe('marketplace');
+    expect(credentialEntry?.credentials?.scheme).toBe('bearer');
   });
 
   it('does not serve the held catalog to a caller that named its own file', async () => {

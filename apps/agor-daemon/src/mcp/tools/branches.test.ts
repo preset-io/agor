@@ -14,7 +14,7 @@ vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
   return {
     ...actual,
     generateScopedServiceToken: vi.fn(() => 'service-token'),
-    runExecutorCommand: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
+    requestExecutor: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
       success: true,
       data: {
         statuses: (payload.params?.branchIds ?? []).map((branchId) => ({

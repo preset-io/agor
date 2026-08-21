@@ -148,6 +148,16 @@ deployment:
       shutdown_drain_timeout_ms: 5000
 execution:
   executor_command_template: 'cell launch --tenant {tenant_id} -- {command}'
+  executor_response:
+    max_response_bytes: 8388608
+    max_active_requests: 16
+    timeout_ms:
+      default: 300000
+      by_command:
+        branch.files.read: 60000
+    external_protocol: executor-response-v1
+    # In practice prefer the per-replica environment override described below.
+    origin_url: http://agor-daemon-0.agor-daemon-headless:3030
   executor_storage:
     user_home: persistent-per-user
     branch_workspace: persistent-per-branch
@@ -164,6 +174,15 @@ daemon:
   # Required for external executors to call/reconnect through the daemon fleet.
   public_url: https://agor-daemon.internal.example
 ```
+
+`daemon.public_url` remains the fleet URL for ordinary executor Feathers and
+Socket.IO calls. It is **not** a safe request-response origin. Set
+`AGOR_EXECUTOR_RESPONSE_ORIGIN_URL` independently on every replica to an
+executor-reachable Pod IP or stable per-Pod DNS name; it overrides the shared
+YAML `origin_url`. The initiating replica owns the waiter and response bytes.
+Redis does not forward or persist them, and another replica does not take over
+after waiter loss. Timeout, disconnect, or replica restart fails the request
+without an automatic retry.
 
 For `shared-local`, replace the external template with `shared_filesystem: true` and declare the
 actual storage guarantees; its executor callback defaults to the local daemon. The Compose smoke

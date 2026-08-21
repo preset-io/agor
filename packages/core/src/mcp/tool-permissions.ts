@@ -40,16 +40,29 @@ export const PERMISSIONS_BLOCKED_WITHOUT_PROMPT: readonly ToolPermission[] = ['d
  */
 export interface HandlerPermissionCapabilities {
   /**
-   * Whether the handler can name a tool to drop in the config it hands its SDK
-   * (`exclude`) or has no per-tool control at all (`none`).
+   * How the handler can act on a per-tool permission.
+   *
+   * - `exclude` — it can name a tool to drop in the config it hands its SDK,
+   *   so a denied tool is never offered to the model.
+   * - `intercept` — it cannot pre-filter, but every MCP tool call is routed
+   *   back through Agor before it runs, so a denied tool can be refused at
+   *   call time. Equally binding, and it can additionally honour `ask`,
+   *   because the same channel carries a prompt.
+   * - `none` — neither. The server has to be withheld whole.
    *
    * Deliberately not "can express a tool set". An include-list can only say
    * "all but these" by enumerating the survivors, and the only inventory
    * available here is `server.tools` — a cached discovery snapshot that no SDK
    * reads and that nothing proves is current. Enforcing from it would turn a
    * stale cache into the authoritative tool set.
+   *
+   * An `intercept` handler carries an obligation the type cannot express: the
+   * check has to run BEFORE any permission-mode shortcut that would otherwise
+   * auto-approve. Both handlers that claim it have such a shortcut
+   * (`bypassPermissions` and friends), and enforcing after it would be no
+   * enforcement at all.
    */
-  toolFiltering: 'exclude' | 'none';
+  toolFiltering: 'exclude' | 'intercept' | 'none';
 }
 
 /** Bare tool names on `server` whose configured permission is one of `permissions`. */
@@ -80,6 +93,7 @@ export function canEnforceMcpToolPermissions(
 
   switch (caps.toolFiltering) {
     case 'exclude':
+    case 'intercept':
       return true;
     case 'none':
       return false;

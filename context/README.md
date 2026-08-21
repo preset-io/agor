@@ -44,6 +44,7 @@ Step-by-step implementation guides referenced from code.
 
 ### `guidelines/` — house rules
 
+- [`constants.md`](guidelines/constants.md) — Ownership and reuse of shared runtime identifiers.
 - [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
 - [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.

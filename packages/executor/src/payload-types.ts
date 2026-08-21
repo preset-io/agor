@@ -9,6 +9,11 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
+import {
+  type ExecutorCommandResult,
+  ExecutorCommandResultSchema,
+  ExecutorResponseDescriptorSchema,
+} from '@agor/core/executor-protocol';
 import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
 
@@ -116,6 +121,12 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const BasePayloadSchema = z.object({
   /** Executor command identifier */
   command: z.string(),
+
+  /** Invocation lifecycle selected by the daemon host. */
+  executorMode: z.enum(['autonomous', 'request']).optional(),
+
+  /** One-attempt callback capability. Required when executorMode=request. */
+  executorResponse: ExecutorResponseDescriptorSchema.optional(),
 
   /** Daemon URL for Feathers connection */
   daemonUrl: z.string().url().optional(),
@@ -809,7 +820,7 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 /**
  * All supported executor payloads
  */
-export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
+const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
   AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
@@ -840,6 +851,23 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   CodexAuthFilePayloadSchema,
 ]);
 
+export const ExecutorPayloadSchema = ExecutorPayloadUnionSchema.superRefine((payload, ctx) => {
+  if (payload.executorMode === 'request' && !payload.executorResponse) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executorResponse'],
+      message: 'executorMode=request requires an executor response descriptor',
+    });
+  }
+  if (payload.executorMode !== 'request' && payload.executorResponse) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executorResponse'],
+      message: 'executor response descriptors are valid only in request mode',
+    });
+  }
+});
+
 export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
@@ -847,25 +875,11 @@ export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Executor result - returned via stdout or Feathers
+ * Executor result returned through the authenticated response channel.
  */
-export const ExecutorResultSchema = z.object({
-  success: z.boolean(),
+export const ExecutorResultSchema = ExecutorCommandResultSchema;
 
-  /** Command-specific result data */
-  data: z.unknown().optional(),
-
-  /** Error information if success=false */
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-      details: z.unknown().optional(),
-    })
-    .optional(),
-});
-
-export type ExecutorResult = z.infer<typeof ExecutorResultSchema>;
+export type ExecutorResult = ExecutorCommandResult;
 
 // ═══════════════════════════════════════════════════════════
 // Helper Functions

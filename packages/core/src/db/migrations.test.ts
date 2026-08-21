@@ -420,3 +420,98 @@ describe('SDK session storage retirement migrations', () => {
     expect(migration).toContain('payloads are intentionally discarded');
   });
 });
+
+describe('Session recent index migrations', () => {
+  it('keeps the PostgreSQL ordering index tenant-aware and bounds lock acquisition', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0088_session_recent_index.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain(
+      '"sessions_tenant_archived_updated_idx" ON "sessions" ("tenant_id","archived","updated_at")'
+    );
+    expect(migration.trim().endsWith('SET LOCAL lock_timeout = DEFAULT;')).toBe(true);
+    expect(migration).not.toContain('"board_id"');
+  });
+
+  it('applies the equivalent standalone SQLite ordering index', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-recent-index-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+
+    try {
+      await client.execute(`
+        CREATE TABLE sessions (
+          session_id text PRIMARY KEY NOT NULL,
+          archived integer NOT NULL,
+          updated_at integer
+        )
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0091_session_recent_index.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA index_info(sessions_archived_updated_idx)');
+      expect(columns.rows.map((column) => column.name)).toEqual(['archived', 'updated_at']);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('MCP catalog install identity migration', () => {
+  it('consolidates ownerless SQLite duplicates, preserves overlapping attachments, and enforces identity', async () => {
+    const client = createClient({ url: ':memory:' });
+    await client.executeMultiple(`
+      CREATE TABLE mcp_servers (mcp_server_id text PRIMARY KEY, created_at integer NOT NULL, updated_at integer, name text NOT NULL, transport text NOT NULL, scope text NOT NULL, enabled integer NOT NULL, owner_user_id text, source text NOT NULL, data text NOT NULL);
+      CREATE TABLE session_mcp_servers (session_id text NOT NULL, mcp_server_id text NOT NULL, enabled integer NOT NULL, added_at integer NOT NULL, PRIMARY KEY(session_id,mcp_server_id));
+      INSERT INTO mcp_servers VALUES ('old',1,NULL,'x','http','session',1,NULL,'catalog','{"catalog_entry_name":"com.example/x"}');
+      INSERT INTO mcp_servers VALUES ('new',2,NULL,'x','http','session',1,NULL,'catalog','{"catalog_entry_name":"com.example/x"}');
+      INSERT INTO session_mcp_servers VALUES ('both','old',1,1),('both','new',1,2),('old-only','old',1,1);
+    `);
+    const migration = await readFile(
+      new URL('../../drizzle/sqlite/0092_mcp_catalog_install_identity.sql', import.meta.url),
+      'utf8'
+    );
+    await client.executeMultiple(migration.replaceAll('--> statement-breakpoint', ''));
+    const rows = await client.execute(
+      'SELECT mcp_server_id FROM mcp_servers ORDER BY mcp_server_id'
+    );
+    expect(rows.rows.map((row) => row.mcp_server_id)).toEqual(['new']);
+    const attachments = await client.execute(
+      'SELECT session_id,mcp_server_id FROM session_mcp_servers ORDER BY session_id'
+    );
+    expect(attachments.rows).toEqual([
+      { session_id: 'both', mcp_server_id: 'new' },
+      { session_id: 'old-only', mcp_server_id: 'new' },
+    ]);
+    await expect(
+      client.execute({
+        sql: `INSERT INTO mcp_servers (mcp_server_id,created_at,name,transport,scope,enabled,owner_user_id,source,catalog_entry_name,data) VALUES ('duplicate',3,'x','http','session',1,NULL,'catalog','com.example/x','{}')`,
+      })
+    ).rejects.toThrow(/UNIQUE/);
+    await client.close();
+  });
+
+  it('uses null-safe owner identity in both dialects', async () => {
+    const [sqlite, postgres] = await Promise.all([
+      readFile(
+        new URL('../../drizzle/sqlite/0092_mcp_catalog_install_identity.sql', import.meta.url),
+        'utf8'
+      ),
+      readFile(
+        new URL('../../drizzle/postgres/0089_mcp_catalog_install_identity.sql', import.meta.url),
+        'utf8'
+      ),
+    ]);
+    expect(sqlite).toContain('owner_user_id` IS loser.`owner_user_id');
+    expect(sqlite).toContain("coalesce(`owner_user_id`,'')");
+    expect(postgres).toContain('coalesce("owner_user_id",\'\')');
+  });
+});

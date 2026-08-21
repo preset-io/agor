@@ -67,6 +67,7 @@ export const ScheduleRunsPanel: React.FC<ScheduleRunsPanelProps> = ({
       const result = await client.service('sessions').find({
         query: {
           schedule_id: schedule.schedule_id,
+          archived: false,
           $sort: { scheduled_run_at: -1 },
           $limit: RUNS_LIMIT,
         },

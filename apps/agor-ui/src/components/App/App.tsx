@@ -36,6 +36,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
+import { findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
@@ -70,9 +71,10 @@ import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
-  buildTeammateOnboardingSessionTitle,
+  buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { getTemplateForFrameworkSource } from '../../utils/teammateTemplates';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -1026,18 +1028,26 @@ export const App: React.FC<AppProps> = ({
       );
     }
 
+    const template = getTemplateForFrameworkSource({
+      sourceBranch: result.sourceBranch,
+      selectedRepoId: result.repoId,
+      frameworkRepoId: findFrameworkRepo(agorStore.getState().repoById)?.[0],
+    });
+
     const sessionConfig: NewSessionConfig = {
       branch_id: branch.branch_id,
       agent: result.agent,
       agenticToolPresetId: result.agenticToolPresetId,
-      title: buildTeammateOnboardingSessionTitle(result),
+      title: buildTeammateFirstSessionTitle(result),
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
-        persona: user?.preferences?.onboarding?.persona,
+        // This path carries no explicit template id, so recover the persona
+        // only when the source belongs to the detected framework repository.
+        templateId: template?.id,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,

@@ -27,7 +27,12 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { ENTITY_PATH_SEGMENTS, findByShortIdPrefix, PAGINATION } from '@agor-live/client';
+import {
+  ARTIFACT_METADATA_LIST_FIELDS,
+  ENTITY_PATH_SEGMENTS,
+  findByShortIdPrefix,
+  PAGINATION,
+} from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   bumpFirstPaintMergeRevisions,
@@ -410,27 +415,7 @@ export function useAgorData(
             client.service('artifacts').findAll({
               query: {
                 $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [
-                  'artifact_id',
-                  'branch_id',
-                  'source_session_id',
-                  'board_id',
-                  'name',
-                  'description',
-                  'path',
-                  'template',
-                  'build_status',
-                  'build_errors',
-                  'content_hash',
-                  'public',
-                  'created_by',
-                  'created_at',
-                  'updated_at',
-                  'archived',
-                  'archived_at',
-                  'fullscreen_url',
-                  'url',
-                ],
+                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
               },
             }),
           (list) =>

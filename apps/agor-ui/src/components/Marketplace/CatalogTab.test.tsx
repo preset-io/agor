@@ -265,7 +265,6 @@ describe('catalog browsing', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
       target: { value: 'deep' },
     });
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
@@ -278,40 +277,26 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
+      target: { value: 'deep' },
+    });
+    expect(await screen.findByText('1 of 2 servers match')).toBeInTheDocument();
   });
 
-  it('keeps servers with no stated auth when hiding account-only ones', async () => {
-    // An entry the file says nothing about is still worth offering: connecting
-    // checks the endpoint. A filter that demanded `none` would hide it while
-    // the card beside it called it connectable.
+  it('offers every entry whatever auth it states, and no longer filters on it', async () => {
+    // The "Hide key-only" switch is gone with the thing it hid: an entry
+    // needing an API key is installed from the drawer like any other, so there
+    // is no unusable subset left for a filter to remove. A switch that cannot
+    // change the result set reads as a broken filter.
     catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...DEEPWIKI, auth_type: 'credentials' },
       { ...LINEAR, auth_type: 'unknown' },
     ];
     renderTab();
-    await findCard('DeepWiki');
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
-    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
-  });
-
-  it('drops servers known to need an API key', async () => {
-    catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
-      { ...LINEAR, auth_type: 'credentials' },
-    ];
-    renderTab();
-    await findCard('Linear');
-
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
+    expect(queryCard('Linear')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /API key/i })).not.toBeInTheDocument();
   });
 
   it('narrows on the keystroke, with no debounce and no round trip', async () => {
@@ -423,6 +408,77 @@ describe('connect', () => {
       expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
     );
     expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+  });
+
+  /**
+   * A new OAuth install with no reusable grant lands without credentials. A
+   * starter prompt is written to exercise the server it ships with, so arming
+   * the composer with one here means pressing Connect produces a loaded prompt
+   * whose only result is a tool-less answer.
+   *
+   * These pin the split. Landing in the session is unchanged: the session is
+   * where the sign-in lives (the notice above the composer, the warning MCP badge,
+   * the pill that starts OAuth on activation). Only the loaded gun is withheld.
+   */
+  async function connectAndLand(mcpServer: Record<string, unknown>) {
+    connectImpl = async () => ({
+      mcp_server: mcpServer,
+      session: { session_id: SESSION_ID },
+      starter_prompt: DEEPWIKI.starter_prompt,
+      reused_existing_server: false,
+    });
+    const drawer = await openDrawer();
+    const connect = drawer.getByRole('button', { name: /Connect/ });
+    fireEvent.click(drawer.getByRole('checkbox'));
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    await waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
+    );
+  }
+
+  it('does not arm the composer when the install still needs signing in', async () => {
+    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+  });
+
+  it('still lands in the session so the sign-in is reachable', async () => {
+    await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
+
+    // Withholding the prompt must not withhold the session: the MCP badge and
+    // the pill that starts OAuth are both inside it.
+    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
+    expect(connectCalls).toHaveLength(1);
+  });
+
+  it('arms the composer when a reused install already holds a live token', async () => {
+    // A reused install comes back through `mcp-servers` find, where the daemon
+    // injects the caller's token — redacted to a sentinel, but present, which
+    // is all "is this finished" needs.
+    await connectAndLand({
+      mcp_server_id: 'server-1',
+      auth: {
+        type: 'oauth',
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 4102444800000,
+      },
+    });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+  });
+
+  it('withholds the prompt when the token the install carries has expired', async () => {
+    await connectAndLand({
+      mcp_server_id: 'server-1',
+      auth: {
+        type: 'oauth',
+        oauth_access_token: '••••••••',
+        oauth_token_expires_at: 1,
+      },
+    });
+
+    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
   });
 
   it('keeps the drawer open and reports why when connect fails', async () => {

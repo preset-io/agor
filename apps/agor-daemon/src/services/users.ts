@@ -10,11 +10,19 @@ import {
   normalizeAgenticToolModelConfiguration,
 } from '@agor/agentic-tools/config';
 import {
+  type AgorConfig,
+  type AgorIdentityCapability,
+  AgorLocalAuthMode,
+  AgorRoleAuthority,
+  AgorUserLifecycleAuthority,
   assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
   getEnvVarBlockReason,
+  AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  type ResolvedIdentityAuthority,
+  resolveIdentityAuthority,
   resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
@@ -29,7 +37,9 @@ import {
   generateId,
   hash,
   insert,
+  isExecutionHomeKeyAvailable,
   select,
+  sql,
   type TenantScopeAwareDatabase,
   update,
   users,
@@ -57,15 +67,23 @@ import type {
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_NAMES,
+  canAssignUserRole,
   extractAgenticToolsPublicValues,
   hasMinimumRole,
+  hasRoleAuthorityOver,
+  isUserRole,
   isValidExecutionHomeKey,
   normalizeRole,
   ROLES,
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { lockUserAuthorityMutation } from './user-authority-lock.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
+import {
+  getTrustedUserMutationPurpose,
+  type TrustedUserMutationPurpose,
+} from './user-mutation-trust.js';
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -281,6 +299,57 @@ interface UpdateUserData {
   default_mcp_server_ids?: string[];
 }
 
+type UserRow = typeof users.$inferSelect;
+
+interface AuthorizedUserMutation {
+  target: UserRow;
+  actor?: UserRow;
+}
+
+const USER_AUTHORITY_DENIED = 'You do not have authority to manage this user';
+const ADMIN_OWNED_USER_FIELDS = new Set<keyof UpdateUserData>([
+  'role',
+  'unix_username',
+  'filesystem_home',
+  'must_change_password',
+]);
+const TRUSTED_USER_MUTATION_FIELDS: Readonly<
+  Record<TrustedUserMutationPurpose, ReadonlySet<keyof UpdateUserData>>
+> = {
+  'avatar-sync': new Set([
+    'avatar_url',
+    'avatar',
+    'avatar_source',
+    'avatar_source_id',
+    'avatar_synced_at',
+  ]),
+  'env-vars-widget': new Set(['env_vars', 'env_var_scopes']),
+};
+
+function canonicalizeRoleWrite(value: unknown): UserRole {
+  const normalized = value === 'owner' ? ROLES.SUPERADMIN : value;
+  if (!isUserRole(normalized)) {
+    throw new BadRequest('Invalid user role');
+  }
+  return normalized;
+}
+
+function assertSingleUserMutation(data: unknown): void {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new BadRequest('Bulk user mutations are not supported');
+  }
+}
+
+function assertTrustedMutationFields(
+  purpose: TrustedUserMutationPurpose,
+  data: UpdateUserData
+): void {
+  const allowed = TRUSTED_USER_MUTATION_FIELDS[purpose];
+  if (!Object.keys(data).every((field) => allowed.has(field as keyof UpdateUserData))) {
+    throw new Forbidden(`${purpose} cannot modify the requested user fields`);
+  }
+}
+
 function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
   if (value === undefined || isValidExecutionHomeKey(value)) return;
   throw new BadRequest(
@@ -293,13 +362,84 @@ function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
  */
 export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
+  private readonly identityAuthority: ResolvedIdentityAuthority;
 
   constructor(
     protected db: TenantScopeAwareDatabase,
-    app?: Application
+    app?: Application,
+    config?: AgorConfig
   ) {
+    const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
+    this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
       this.avatarSync = new UserAvatarSyncManager(db, app);
+    }
+  }
+
+  private externallyManaged(
+    capability: AgorIdentityCapability,
+    authority: typeof AgorUserLifecycleAuthority.EXTERNAL | typeof AgorRoleAuthority.CLAIMS
+  ): never {
+    throw new Forbidden('This user field is managed by the configured identity provider', {
+      code: 'IDENTITY_EXTERNALLY_MANAGED',
+      capability,
+      authority,
+    });
+  }
+
+  private assertCreateAllowed(): void {
+    if (!this.identityAuthority.capabilities.users.create) {
+      this.externallyManaged(IdentityCapability.USER_CREATE, AgorUserLifecycleAuthority.EXTERNAL);
+    }
+  }
+
+  private assertDeleteAllowed(): void {
+    if (!this.identityAuthority.capabilities.users.delete) {
+      this.externallyManaged(IdentityCapability.USER_DELETE, AgorUserLifecycleAuthority.EXTERNAL);
+    }
+  }
+
+  private assertPatchAllowed(data: UpdateUserData): void {
+    if (data.role !== undefined && !this.identityAuthority.capabilities.users.roleWrite) {
+      this.externallyManaged(IdentityCapability.USER_ROLE_WRITE, AgorRoleAuthority.CLAIMS);
+    }
+
+    const identityFields: Array<keyof UpdateUserData> = [
+      'email',
+      'name',
+      'unix_username',
+      'avatar_url',
+      'avatar',
+      'avatar_source',
+      'avatar_source_id',
+      'avatar_synced_at',
+    ];
+    if (
+      identityFields.some((field) => data[field] !== undefined) &&
+      !this.identityAuthority.capabilities.users.identityWrite
+    ) {
+      this.externallyManaged(
+        IdentityCapability.USER_IDENTITY_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
+
+    if (
+      (data.password !== undefined || data.must_change_password !== undefined) &&
+      !this.identityAuthority.capabilities.users.passwordWrite
+    ) {
+      this.externallyManaged(
+        IdentityCapability.USER_PASSWORD_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
+  }
+
+  private assertLocalAuthenticationAllowed(): void {
+    if (this.identityAuthority.localAuth === AgorLocalAuthMode.DISABLED) {
+      throw new NotAuthenticated('Local authentication is disabled', {
+        code: 'LOCAL_AUTH_DISABLED',
+      });
     }
   }
 
@@ -308,6 +448,166 @@ export class UsersService {
       throw new Error('User avatar sync is not available in this service context');
     }
     return this.avatarSync;
+  }
+
+  private async loadUserRow(id: string, params?: Params): Promise<UserRow | null> {
+    return select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.user_id, id)))
+      .one();
+  }
+
+  private mutationNeedsActor(params?: Params): boolean {
+    // Feathers' provider-less, actor-less form is the explicit trusted
+    // in-process persistence seam used during bootstrap/provisioning. Any call
+    // carrying a human actor is authorized even when it is in-process, so
+    // internal wrappers cannot accidentally turn a user action into a bypass.
+    return !!params?.provider || !!(params as AuthenticatedParams | undefined)?.user;
+  }
+
+  /** Resolve the actor from the database so stale token role claims grant no authority. */
+  private async loadMutationActor(params?: Params): Promise<UserRow> {
+    const claimed = (params as AuthenticatedParams | undefined)?.user;
+    if (!claimed || claimed._isServiceAccount) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const actor = await this.loadUserRow(claimed.user_id, params);
+    if (!actor) {
+      // Keep deleted/cross-tenant principals indistinguishable from an
+      // insufficiently privileged in-tenant actor.
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    return actor;
+  }
+
+  private async authorizeCreate(data: CreateUserData, params?: Params): Promise<UserRow | null> {
+    if (!this.mutationNeedsActor(params)) return null;
+
+    const actor = await this.loadMutationActor(params);
+    if (!hasMinimumRole(actor.role, ROLES.ADMIN)) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const requestedRole = canonicalizeRoleWrite(data.role ?? ROLES.MEMBER);
+    if (!canAssignUserRole(actor.role, requestedRole)) {
+      throw new Forbidden('You cannot assign a role above your own');
+    }
+    return actor;
+  }
+
+  private async authorizePatch(
+    id: UserID,
+    data: UpdateUserData,
+    params?: Params
+  ): Promise<AuthorizedUserMutation> {
+    const target = await this.loadUserRow(id, params);
+    if (!target) throw new Forbidden(USER_AUTHORITY_DENIED);
+
+    // Validation and canonicalization apply even to trusted provisioning.
+    // Trust may bypass actor authorization, never the stored role domain.
+    const requestedRole = Object.hasOwn(data, 'role')
+      ? canonicalizeRoleWrite(data.role)
+      : undefined;
+    if (requestedRole) data.role = requestedRole;
+
+    const purpose = getTrustedUserMutationPurpose(params);
+    if (purpose) {
+      assertTrustedMutationFields(purpose, data);
+      if (purpose === 'avatar-sync') return { target };
+    }
+
+    if (!this.mutationNeedsActor(params)) return { target };
+
+    const claimedActor = (params as AuthenticatedParams).user;
+    if (claimedActor?._isServiceAccount) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const actor =
+      target.user_id === claimedActor?.user_id ? target : await this.loadMutationActor(params);
+
+    // The env-vars widget is separately authorized by session/branch scope, but
+    // it must still respect role authority when it writes another user's
+    // credential-bearing environment. It does not gain general admin powers.
+    if (purpose === 'env-vars-widget') {
+      if (!hasRoleAuthorityOver(actor.role, target.role)) {
+        throw new Forbidden(USER_AUTHORITY_DENIED);
+      }
+      return { target, actor };
+    }
+
+    if (actor.user_id === target.user_id) {
+      if (requestedRole && requestedRole !== normalizeRole(target.role)) {
+        throw new Forbidden('You cannot change your own role');
+      }
+      const writesAdminField = Object.keys(data).some((field) =>
+        ADMIN_OWNED_USER_FIELDS.has(field as keyof UpdateUserData)
+      );
+      if (writesAdminField && !hasMinimumRole(actor.role, ROLES.ADMIN)) {
+        throw new Forbidden(USER_AUTHORITY_DENIED);
+      }
+      return { target, actor };
+    }
+
+    if (
+      !hasMinimumRole(actor.role, ROLES.ADMIN) ||
+      !hasRoleAuthorityOver(actor.role, target.role)
+    ) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    if (requestedRole && !canAssignUserRole(actor.role, requestedRole)) {
+      throw new Forbidden('You cannot assign a role above your own');
+    }
+    return { target, actor };
+  }
+
+  private async authorizeRemove(id: UserID, params?: Params): Promise<AuthorizedUserMutation> {
+    const target = await this.loadUserRow(id, params);
+    if (!target) throw new Forbidden(USER_AUTHORITY_DENIED);
+    if (!this.mutationNeedsActor(params)) return { target };
+
+    const claimedActor = (params as AuthenticatedParams).user;
+    if (claimedActor?._isServiceAccount) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const actor =
+      target.user_id === claimedActor?.user_id ? target : await this.loadMutationActor(params);
+    if (actor.user_id === target.user_id) {
+      throw new Forbidden('You cannot delete your own account');
+    }
+    if (
+      !hasMinimumRole(actor.role, ROLES.ADMIN) ||
+      !hasRoleAuthorityOver(actor.role, target.role)
+    ) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    return { target, actor };
+  }
+
+  private actorStillCurrentPredicate(actor: UserRow | undefined, params?: Params) {
+    if (!actor) return undefined;
+    const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
+    const tenantCheck =
+      tenantId && usersTableHasTenantColumn()
+        ? sql` AND authority_actor.tenant_id = ${tenantId}`
+        : sql``;
+    return sql`EXISTS (
+      SELECT 1 FROM ${users} authority_actor
+      WHERE authority_actor.user_id = ${actor.user_id}
+        AND authority_actor.role = ${actor.role}${tenantCheck}
+    )`;
+  }
+
+  private async assertNotLastSuperadmin(target: UserRow, params?: Params): Promise<void> {
+    if (normalizeRole(target.role) !== ROLES.SUPERADMIN) return;
+    const tenant = tenantPredicate(params);
+    const superadmins = tenant
+      ? await select(this.db).from(users).where(tenant).all()
+      : await select(this.db).from(users).all();
+    if (
+      superadmins.filter((user: UserRow) => normalizeRole(user.role) === ROLES.SUPERADMIN).length <=
+      1
+    ) {
+      throw new Forbidden('The last superadmin cannot be demoted or deleted');
+    }
   }
 
   /**
@@ -322,6 +622,7 @@ export class UsersService {
    *   `offset` for MCP/client ergonomics
    */
   async find(params?: Params): Promise<Paginated<User>> {
+    if (isLocalAuthenticationLookup(params)) this.assertLocalAuthenticationAllowed();
     const rawQuery = (params?.query ?? {}) as Record<string, unknown>;
 
     // Check if filtering by email (for authentication)
@@ -410,7 +711,15 @@ export class UsersService {
    * Create new user
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
+    assertSingleUserMutation(data);
+    this.assertCreateAllowed();
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (data.unix_username && !(await isExecutionHomeKeyAvailable(this.db, data.unix_username))) {
+      throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
+    }
+    if (Object.hasOwn(data, 'role')) data.role = canonicalizeRoleWrite(data.role);
+    await lockUserAuthorityMutation(this.db, params);
+    await this.authorizeCreate(data, params);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -428,7 +737,7 @@ export class UsersService {
     const now = new Date();
     const user_id = generateId() as UserID;
 
-    const role = data.role || ROLES.MEMBER;
+    const role = data.role ?? ROLES.MEMBER;
     const defaultEmoji = role === ROLES.ADMIN ? '⭐' : '👤';
 
     const row = await insert(this.db, users)
@@ -464,7 +773,28 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequest('Bulk user mutations are not supported');
+    }
+    assertSingleUserMutation(data);
+    this.assertPatchAllowed(data);
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (
+      data.unix_username &&
+      !(await isExecutionHomeKeyAvailable(this.db, data.unix_username, id))
+    ) {
+      throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
+    }
+    await lockUserAuthorityMutation(this.db, params);
+    const authority = await this.authorizePatch(id, data, params);
+    if (
+      Object.hasOwn(data, 'role') &&
+      data.role !== undefined &&
+      normalizeRole(authority.target.role) === ROLES.SUPERADMIN &&
+      data.role !== ROLES.SUPERADMIN
+    ) {
+      await this.assertNotLastSuperadmin(authority.target, params);
+    }
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
 
@@ -509,11 +839,13 @@ export class UsersService {
       data.default_agentic_selection ||
       data.default_mcp_server_ids !== undefined
     ) {
-      const current = await this.get(id, params);
-      const currentRow = await select(this.db)
-        .from(users)
-        .where(withTenantPredicate(params, eq(users.user_id, id)))
-        .one();
+      const current = this.rowToUser(
+        authority.target,
+        false,
+        (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined,
+        shouldIncludeAuthMetadata(params)
+      );
+      const currentRow = authority.target;
       const currentData = currentRow?.data as {
         avatar_url?: string;
         avatar?: string;
@@ -719,14 +1051,20 @@ export class UsersService {
       };
     }
 
+    const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
     const row = await update(this.db, users)
       .set(updates)
-      .where(eq(users.user_id, id))
+      .where(
+        withTenantPredicate(
+          params,
+          and(eq(users.user_id, id), eq(users.role, authority.target.role), authorityActorPredicate)
+        )
+      )
       .returning()
       .one();
 
     if (!row) {
-      throw new Error(`User not found: ${id}`);
+      throw new Forbidden(USER_AUTHORITY_DENIED);
     }
 
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
@@ -739,9 +1077,35 @@ export class UsersService {
    * Delete user
    */
   async remove(id: UserID, params?: Params): Promise<User> {
-    const user = await this.get(id, params);
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequest('Bulk user mutations are not supported');
+    }
+    this.assertDeleteAllowed();
+    await lockUserAuthorityMutation(this.db, params);
+    const authority = await this.authorizeRemove(id, params);
+    await this.assertNotLastSuperadmin(authority.target, params);
+    const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
+      | UserID
+      | undefined;
+    const user = this.rowToUser(
+      authority.target,
+      false,
+      requesterId,
+      shouldIncludeAuthMetadata(params)
+    );
 
-    await deleteFrom(this.db, users).where(eq(users.user_id, id)).run();
+    const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
+    const removed = await deleteFrom(this.db, users)
+      .where(
+        withTenantPredicate(
+          params,
+          and(eq(users.user_id, id), eq(users.role, authority.target.role), authorityActorPredicate)
+        )
+      )
+      .run();
+    if (removed.rowsAffected !== 1) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
 
     return user;
   }
@@ -892,6 +1256,12 @@ export class UsersService {
     data: Partial<UserAvatarSettings>,
     params?: Params
   ): Promise<UserAvatarSettings> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
+      this.externallyManaged(
+        IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
     return this.requireAvatarSync().updateSettings(data, params);
   }
 
@@ -899,10 +1269,17 @@ export class UsersService {
     data: UserAvatarSyncRequest = {},
     params?: Params
   ): Promise<UserAvatarSyncResult> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
+      this.externallyManaged(
+        IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
+        AgorUserLifecycleAuthority.EXTERNAL
+      );
+    }
     return this.requireAvatarSync().syncAvatars(data, params);
   }
 
   async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
+    if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) return null;
     return this.requireAvatarSync().refreshUserFromSettings(userId);
   }
 

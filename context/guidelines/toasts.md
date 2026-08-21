@@ -26,8 +26,10 @@ It's the **static** message API. It mounts outside the React tree, so it does **
 ## What the wrapper gives you for free
 
 - **Theme integration.** Themed via `App.useApp()` under the hood.
-- **Copy-to-clipboard on every toast.** A subtle copy icon appears at the right of the message. Clicking it copies the rendered text — handy for IDs, error traces, and anything else worth pasting into a bug report. No need to reach for a separate `<CopyButton>` inside the toast.
-- **Standardized durations.** Success/info: 3s. Warning: 4s. Error: 6s (longer so users can read and copy). Override per-call with `{ duration }` if you have a reason.
+- **Copy-to-clipboard on every toast.** An icon-only semantic **Copy** button copies only the rendered, user-visible text. Its accessible name (and hover title) describes the current copy state. It does not add stacks, headers, response bodies, secrets, environment values, or other hidden diagnostics. Copy success or failure is shown visually and announced to assistive technology. No need to add a separate `<CopyButton>` inside the toast.
+- **Persistent, dismissible errors.** Errors remain until the user chooses **Dismiss** or a keyed loading/error/success update replaces them. Copy and Dismiss are keyboard-focusable buttons; dismissing a focused error moves focus to an adjacent error when available, then back to the control that preceded the error. Use `{ duration }` only when a genuinely transient error should expire.
+- **Bounded, non-evicting error review.** AntD's message list scrolls within the viewport. Do not add `maxCount`: it discards undismissed errors. Do not enable the collapsed message stack unless it gains a keyboard-operable expansion path.
+- **Standardized timing.** Success/info: 3s. Warning: 4s. Loading and errors: indefinite. Override per-call with `{ duration }` if you have a reason.
 - **Keyed loading→success/error.** Pass `{ key: 'download' }` to both `showLoading(...)` and the follow-up `showSuccess(...)` / `showError(...)`; antd replaces the toast in place instead of stacking. See `apps/agor-ui/src/components/BranchModal/tabs/FilesTab.tsx`.
 - **Stable references.** The returned helpers (`showSuccess`, `showError`, etc.) are memoized over antd's stable `message` instance, so they're safe to put in `useCallback`/`useEffect` dep arrays without causing churn.
 
@@ -56,7 +58,7 @@ Until the notification system lands, **toast is the only option**, but flag dura
 ## Severity quick rules
 
 - **Success** — confirms a user-initiated action that completed.
-- **Error** — a failure tied to the user's current request. Default 6s so they can read + copy.
+- **Error** — a failure tied to the user's current request. Persistent by default so the user can read, copy, dismiss, or resolve it.
 - **Warning** — a precondition wasn't met or a soft-failure path triggered ("Refresh token no longer valid — sign in again").
 - **Info** — neutral status the user should see but not act on ("Retrying stop request…", "Complete sign-in in the new tab").
 - **Loading** — pending state. Always pair with a `key` and a follow-up success/error using the same key.

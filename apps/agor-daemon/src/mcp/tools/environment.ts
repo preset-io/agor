@@ -87,7 +87,7 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     'agor_environment_health',
     {
       description:
-        'Check the health status of a branch environment by running its configured health command. Returns started_at timestamp and uptime_seconds when environment is starting or running.',
+        'Read a branch environment health status. Starting/running environments run the configured HTTP health probe; inactive environments are not restarted or enrolled in monitoring. Returns started_at and uptime_seconds while active.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),

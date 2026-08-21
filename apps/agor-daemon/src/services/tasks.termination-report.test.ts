@@ -3,6 +3,12 @@ import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 const requestExecutorTermination = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const withFreshTenantWriteDatabase = vi.hoisted(() =>
+  vi.fn(async (work: () => Promise<unknown>) => work())
+);
+const createFreshTenantWriteDatabaseRunner = vi.hoisted(() =>
+  vi.fn(() => withFreshTenantWriteDatabase)
+);
 const deferred = vi.hoisted(
   () =>
     ({ work: undefined as (() => Promise<void>) | undefined, schedule: vi.fn() }) as {
@@ -15,6 +21,7 @@ vi.mock('../termination-coordinator.js', () => ({
   requestExecutorTermination,
 }));
 vi.mock('../utils/tenant-db-scope.js', () => ({
+  createFreshTenantWriteDatabaseRunner,
   deferWithTenantContext: (
     params: unknown,
     work: () => Promise<void>,
@@ -45,6 +52,7 @@ describe('TasksService executor termination report', () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     Reflect.set(service, 'taskRepo', { recordExecutorQuiescence });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'db', {});
 
     await expect(
       service.reportTerminationComplete(
@@ -60,6 +68,8 @@ describe('TasksService executor termination report', () => {
       task_id: task.task_id,
       requested_at: requestedAt,
     });
+    expect(createFreshTenantWriteDatabaseRunner).toHaveBeenCalledWith({}, 'tenant-a');
+    expect(withFreshTenantWriteDatabase).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
     expect(deferred.schedule).toHaveBeenCalledWith(
       expect.objectContaining({ tenant: { tenant_id: 'tenant-a' } }),
@@ -74,6 +84,7 @@ describe('TasksService executor termination report', () => {
         taskId: task.task_id,
         cause: 'user_stop',
         params: expect.objectContaining({ provider: undefined }),
+        runInFreshTenantWriteDatabase: withFreshTenantWriteDatabase,
       })
     );
   });

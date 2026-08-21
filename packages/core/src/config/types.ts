@@ -202,11 +202,11 @@ export interface AgorExternalLaunchSettings {
   /** Environment variable that contains the exchange endpoint bearer credential. */
   service_credential_env?: string;
 
-  /** Backchannel request timeout in milliseconds (default: 10000). */
+  /** Backchannel request timeout in milliseconds, from 1 to 120000 (default: 10000). */
   request_timeout_ms?: number;
 
-  /** Optional allow-list of JWT algorithms for returned launch assertions. */
-  algorithms?: string[];
+  /** Optional non-empty allow-list of supported JWT algorithms for returned assertions. */
+  algorithms?: AgorExternalLaunchAlgorithm[];
 
   /** Allow launch assertions to assign admin/superadmin roles (default: false). */
   allow_admin_roles?: boolean;
@@ -254,6 +254,121 @@ export interface AgorExternalLaunchSettings {
    * the deep-link with the host. Rejected during config validation.
    */
   return_host_param?: string;
+}
+
+/** Algorithms accepted by the launch assertion verifier. `none` is never valid. */
+export const AgorExternalLaunchAlgorithm = {
+  HS256: 'HS256',
+  HS384: 'HS384',
+  HS512: 'HS512',
+  RS256: 'RS256',
+  RS384: 'RS384',
+  RS512: 'RS512',
+  ES256: 'ES256',
+  ES384: 'ES384',
+  ES512: 'ES512',
+  PS256: 'PS256',
+  PS384: 'PS384',
+  PS512: 'PS512',
+} as const;
+export type AgorExternalLaunchAlgorithm =
+  (typeof AgorExternalLaunchAlgorithm)[keyof typeof AgorExternalLaunchAlgorithm];
+
+/** Which system may create and remove user projections in this daemon. */
+export const AgorUserLifecycleAuthority = {
+  INTERNAL: 'internal',
+  EXTERNAL: 'external',
+} as const;
+export type AgorUserLifecycleAuthority =
+  (typeof AgorUserLifecycleAuthority)[keyof typeof AgorUserLifecycleAuthority];
+
+/** Which system owns the effective Agor role. */
+export const AgorRoleAuthority = {
+  INTERNAL: 'internal',
+  CLAIMS: 'claims',
+} as const;
+export type AgorRoleAuthority = (typeof AgorRoleAuthority)[keyof typeof AgorRoleAuthority];
+
+/** Whether password-based authentication is available on this daemon. */
+export const AgorLocalAuthMode = {
+  ENABLED: 'enabled',
+  DISABLED: 'disabled',
+} as const;
+export type AgorLocalAuthMode = (typeof AgorLocalAuthMode)[keyof typeof AgorLocalAuthMode];
+
+/** Supported external projection providers. */
+export const AgorExternalIdentityProvider = {
+  EXTERNAL_LAUNCH: 'external_launch',
+} as const;
+export type AgorExternalIdentityProvider =
+  (typeof AgorExternalIdentityProvider)[keyof typeof AgorExternalIdentityProvider];
+
+/** Supported external projection provisioning strategies. */
+export const AgorExternalIdentityProvisioning = {
+  JIT: 'jit',
+} as const;
+export type AgorExternalIdentityProvisioning =
+  (typeof AgorExternalIdentityProvisioning)[keyof typeof AgorExternalIdentityProvisioning];
+
+/** External identity provisioning settings. */
+export interface AgorExternalIdentitySettings {
+  /** Verified authentication handoff that provisions users. */
+  provider?: AgorExternalIdentityProvider;
+  /** Create/update a local projection when a verified external login succeeds. */
+  provisioning?: AgorExternalIdentityProvisioning;
+}
+
+/**
+ * Deployment-owned authority contract for user identity.
+ *
+ * The section is optional. Omitting it preserves Agor's normal local user,
+ * role, and password authority. The only external profile supported in v1 is
+ * deliberately coherent: external lifecycle, claim-owned roles, disabled
+ * local login, and verified launch-time JIT provisioning.
+ */
+export interface AgorIdentitySettings {
+  user_lifecycle?: AgorUserLifecycleAuthority;
+  role_authority?: AgorRoleAuthority;
+  local_auth?: AgorLocalAuthMode;
+  external?: AgorExternalIdentitySettings;
+}
+
+export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 1 as const;
+
+/** Stable identifiers returned in externally-managed mutation errors. */
+export const AgorIdentityCapability = {
+  USER_CREATE: 'users.create',
+  USER_DELETE: 'users.delete',
+  USER_IDENTITY_WRITE: 'users.identity.write',
+  USER_ROLE_WRITE: 'users.role.write',
+  USER_PASSWORD_WRITE: 'users.password.write',
+  USER_AVATAR_SETTINGS_WRITE: 'users.avatar-settings.write',
+  USER_SELF_CONFIGURATION_WRITE: 'users.self-configuration.write',
+} as const;
+export type AgorIdentityCapability =
+  (typeof AgorIdentityCapability)[keyof typeof AgorIdentityCapability];
+
+/** Resolved identity policy and client capability contract exposed by the daemon. */
+export interface ResolvedIdentityAuthority {
+  contractVersion: typeof IDENTITY_AUTHORITY_CONTRACT_VERSION;
+  userLifecycle: AgorUserLifecycleAuthority;
+  roleAuthority: AgorRoleAuthority;
+  localAuth: AgorLocalAuthMode;
+  external?: {
+    provider: AgorExternalIdentityProvider;
+    provisioning: AgorExternalIdentityProvisioning;
+  };
+  capabilities: {
+    users: {
+      create: boolean;
+      delete: boolean;
+      identityWrite: boolean;
+      roleWrite: boolean;
+      passwordWrite: boolean;
+      avatarSettingsWrite: boolean;
+      selfConfigurationWrite: true;
+    };
+  };
 }
 
 /**
@@ -461,6 +576,9 @@ export interface AgorExecutionSettings {
 
   dispatch_connect_timeout_ms?: number | null;
 
+  /** Bounded executor-to-daemon response channel for synchronous commands. */
+  executor_response?: AgorExecutorResponseSettings;
+
   /** Execution mode: trusted local, delegated external, or local Linux sandbox. */
   unix_user_mode?: UnixUserMode;
 
@@ -664,6 +782,29 @@ export interface AgorExecutionSettings {
    * default. Global, single-policy. See `context/explorations/executor-sandboxing.md`.
    */
   sandbox?: AgorSandboxSettings;
+}
+
+export interface AgorExecutorResponseSettings {
+  /** Maximum uncompressed framed response-body bytes. Default: 8 MiB. */
+  max_response_bytes?: number;
+  /** Maximum in-flight response reservations on one daemon. Default: 16. */
+  max_active_requests?: number;
+  /** Request-mode timeout defaults and optional exact-command overrides. */
+  timeout_ms?: {
+    /** Default timeout for request-mode commands. Default: 5 minutes. */
+    default?: number;
+    /** Overrides keyed by the executor payload's exact `command` value. */
+    by_command?: Record<string, number>;
+  };
+  /**
+   * Exact initiating-daemon origin reachable by executors. In standalone
+   * local mode startup derives this from the daemon listener. HA/external
+   * deployments must configure an origin that does not load-balance to
+   * another replica.
+   */
+  origin_url?: string;
+  /** Operator assertion required for request-mode templated execution. */
+  external_protocol?: 'executor-response-v1';
 }
 
 /**
@@ -986,6 +1127,35 @@ export interface AgorTelemetrySettings {
 }
 
 /**
+ * DogStatsD transport settings for daemon operational metrics.
+ *
+ * Metrics are process-global operational signals, not tenant analytics. Keep
+ * global tags deployment-level and low-cardinality; request/resource IDs are
+ * deliberately forbidden by config validation.
+ */
+export interface AgorStatsDSettings {
+  /** Master switch. Defaults to false. */
+  enabled?: boolean;
+
+  /** Datadog Agent / StatsD UDP host. Defaults to 127.0.0.1. */
+  host?: string;
+
+  /** Datadog Agent / StatsD UDP port. Defaults to 8125. */
+  port?: number;
+
+  /** Namespace prepended to every daemon metric. Must end in a dot. */
+  prefix?: string;
+
+  /** Static, deployment-level DogStatsD tags applied to every metric. */
+  global_tags?: Record<string, string>;
+}
+
+/** Optional daemon operational metrics exporters. */
+export interface AgorMetricsSettings {
+  statsd?: AgorStatsDSettings;
+}
+
+/**
  * Backend analytics settings.
  *
  * Disabled by default. When enabled, daemon/server code sends curated
@@ -1217,6 +1387,9 @@ export interface AgorConfig {
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
 
+  /** User identity, lifecycle, role, and local-login authority. */
+  identity?: AgorIdentitySettings;
+
   /** Execution isolation settings */
   execution?: AgorExecutionSettings;
 
@@ -1235,6 +1408,9 @@ export interface AgorConfig {
   /** Public community telemetry settings. */
   telemetry?: AgorTelemetrySettings;
 
+  /** Operational daemon metrics. Disabled by default. */
+  metrics?: AgorMetricsSettings;
+
   /** App-level multi-tenancy settings. Defaults to static/default tenant. */
   multi_tenancy?: AgorMultiTenancySettings;
 
@@ -1252,11 +1428,13 @@ export type ConfigKey =
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
   | `external_launch.${keyof AgorExternalLaunchSettings}`
+  | `identity.${keyof AgorIdentitySettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
   | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`
+  | `metrics.${keyof AgorMetricsSettings}`
   | `multi_tenancy.${keyof AgorMultiTenancySettings}`
   | `uploads.${keyof AgorUploadSettings}`;

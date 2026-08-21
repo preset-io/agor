@@ -22,6 +22,9 @@ import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  type EnvironmentHealthObservation,
+  EnvironmentHealthRepository,
+  generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
@@ -72,7 +75,7 @@ import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
@@ -131,6 +134,18 @@ interface ManagedProcess {
   startedAt: Date;
   logPath: string;
 }
+
+/**
+ * Identifies whether a health observation was requested by a user-facing
+ * status action or by the background lifecycle monitor.
+ *
+ * Explicit requests may bypass the periodic cooldown and may return an
+ * ephemeral diagnostic for an errored environment. Automatic observations
+ * are restricted to active lifecycle states.
+ */
+export type EnvironmentHealthCheckOptions =
+  | { intent: 'automatic'; signal?: AbortSignal }
+  | { intent: 'explicit'; signal?: AbortSignal };
 
 /**
  * Extended branches service with custom methods
@@ -466,7 +481,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { branch, action } = options;
     const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
 
-    const result = await runExecutorCommand(payload, {
+    const result = await requestExecutor(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       delegatedHomeKey,
       preparedEnv: env,
@@ -515,7 +530,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'environment.logs',
         sessionToken,
@@ -1629,7 +1644,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const statusToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } }
     );
-    const statusResult = await runExecutorCommand(
+    const statusResult = await requestExecutor(
       {
         command: 'branch.filesystem.status',
         sessionToken: statusToken,
@@ -2297,148 +2312,161 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Check health
    */
-  async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  async checkHealth(
+    id: BranchID,
+    params?: BranchParams,
+    internalOptions?: EnvironmentHealthCheckOptions
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const _repo = await this.withTenantDatabase(
       params,
       () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
     );
 
-    // Only check active environments, plus errored environments that may have been
-    // started successfully out-of-band. Allowing explicit health checks to recover
-    // from `error` prevents stale start failures from keeping a live environment red.
     const currentStatus = branch.environment_instance?.status;
-    const canProbeHealth =
-      currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'error';
-    if (!canProbeHealth) {
+    if (
+      branch.archived ||
+      (currentStatus !== 'running' && currentStatus !== 'starting' && currentStatus !== 'error')
+    ) {
       return branch;
     }
 
-    // Check if we have a health check URL (static field, not template)
-    if (!branch.health_check_url) {
-      // No health check configured - stay in 'starting' forever (manual intervention required)
-      // Don't auto-transition to 'running' without health check confirmation
-      const managedProcess = this.processes.get(id);
-      const isProcessAlive = managedProcess?.process && !managedProcess.process.killed;
-
-      return await this.updateEnvironment(
-        id,
-        {
+    // An explicit status request may still diagnose an errored environment,
+    // but an inactive lifecycle must not acquire monitoring ownership or be
+    // revived by that observation. Return the observation ephemerally.
+    if (currentStatus === 'error') {
+      if (internalOptions?.intent === 'automatic') return branch;
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) return branch;
+      return {
+        ...branch,
+        environment_instance: {
+          ...branch.environment_instance,
+          status: currentStatus,
           last_health_check: {
             timestamp: new Date().toISOString(),
-            status: isProcessAlive ? 'healthy' : 'unknown',
-            message: isProcessAlive ? 'Process running' : 'No health check configured',
+            status: observation.status,
+            message: observation.message,
           },
         },
-        params
-      );
+      };
     }
 
-    // Use static health_check_url (initialized from template at branch creation)
-    const healthUrl = branch.health_check_url;
-
-    // Validate URL to prevent SSRF against cloud metadata or internal services
-    if (!isAllowedHealthCheckUrl(healthUrl)) {
-      console.warn(`⚠️ Blocked health check to disallowed URL: ${healthUrl}`);
-      return await this.updateEnvironment(
-        id,
-        {
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: 'Health check URL blocked by security policy',
-          },
-        },
-        params
-      );
+    // Active observations leave the database while doing HTTP. A durable
+    // one-observation claim plus lifecycle generation fences the result from a
+    // concurrent stop, archive, delete, URL change, daemon, or replica.
+    const claimToken = generateId();
+    const identity = this.app.get('distributedWorkIdentity') ?? {
+      instanceId: `branches-service-${process.pid}`,
+      bootId: `branches-service-${process.pid}`,
+    };
+    const claimResult = await this.withTenantDatabase(params, () =>
+      new EnvironmentHealthRepository(this.db).claim({
+        branchId: id,
+        claimToken,
+        leaseDurationMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
+        identity,
+        ignoreCooldown: internalOptions?.intent !== 'automatic',
+      })
+    );
+    if (claimResult.outcome !== 'claimed') {
+      return this.withTenantDatabase(params, () => this.get(id, params));
     }
-
-    // Track previous health status to detect changes
-    const previousHealthStatus = branch.environment_instance?.last_health_check?.status;
 
     try {
-      // Perform HTTP health check with timeout
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) {
+        return this.withTenantDatabase(params, () => this.get(id, params));
+      }
+      const commitResult = await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).commit({
+          branchId: id,
+          claimToken,
+          environmentGeneration: claimResult.claim.environment_generation,
+          observation,
+        })
+      );
+      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      if (commitResult.outcome === 'committed' && commitResult.stateChanged) {
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: current,
+          params,
+          id,
+        });
+      }
+      return current;
+    } finally {
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).release(id, claimToken)
+      ).catch(() => undefined);
+    }
+  }
 
+  private async fetchEnvironmentHealthObservation(
+    branch: Branch,
+    cancellationSignal?: AbortSignal
+  ): Promise<EnvironmentHealthObservation | null> {
+    const healthUrl = branch.health_check_url;
+    if (!healthUrl) {
+      const managedProcess = this.processes.get(branch.branch_id);
+      const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);
+      return {
+        status: 'unknown',
+        message: isProcessAlive
+          ? 'Process running; no health check configured'
+          : 'No health check configured',
+        recordWhileStarting: true,
+      };
+    }
+    if (!isAllowedHealthCheckUrl(healthUrl)) {
+      return {
+        status: 'unhealthy',
+        message: 'Health check URL blocked by security policy',
+        recordWhileStarting: true,
+      };
+    }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const cancel = () =>
+      controller.abort(cancellationSignal?.reason ?? new Error('Health check cancelled'));
+    if (cancellationSignal?.aborted) return null;
+    cancellationSignal?.addEventListener('abort', cancel, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Health check timeout'));
+    }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
+    timeout.unref?.();
+    try {
       const response = await fetch(healthUrl, {
         signal: controller.signal,
         method: 'GET',
       });
-
-      clearTimeout(timeout);
-
-      const isHealthy = response.ok;
-      const newHealthStatus = isHealthy ? 'healthy' : 'unhealthy';
-
-      // Only log if health status changed
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
-        );
-      }
-
-      // If health check succeeds and we're in 'starting' or 'error' state,
-      // transition/recover to 'running'. The explicit 'error' recovery path matters
-      // when a lifecycle command failed or raced but the configured app is now live.
-      const shouldTransitionToRunning =
-        isHealthy && (currentStatus === 'starting' || currentStatus === 'error');
-
-      if (shouldTransitionToRunning) {
-        console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          status: shouldTransitionToRunning ? 'running' : currentStatus,
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: newHealthStatus,
-            message: isHealthy
-              ? `HTTP ${response.status}`
-              : `HTTP ${response.status} ${response.statusText}`,
-          },
-        },
-        params
-      );
+      return {
+        status: response.ok ? 'healthy' : 'unhealthy',
+        message: response.ok
+          ? `HTTP ${response.status}`
+          : `HTTP ${response.status} ${response.statusText}`,
+        recordWhileStarting: true,
+      };
     } catch (error) {
-      // Health check failed
-      const message =
-        error instanceof Error
-          ? error.name === 'AbortError'
-            ? 'Timeout'
-            : error.message
-          : 'Unknown error';
-
-      // During 'starting' state, don't mark as unhealthy - keep retrying
-      // Only mark as unhealthy when transitioning from healthy->unhealthy in 'running' state
-      if (currentStatus === 'starting') {
-        // Don't update health check during startup - wait for first success
-        // This prevents the UI from showing unhealthy state while environment is still starting
-        return branch;
-      }
-
-      const newHealthStatus = 'unhealthy';
-
-      // Only log if health status changed or if this is an error
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
-        );
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message,
-          },
-        },
-        params
-      );
+      if (cancellationSignal?.aborted) return null;
+      return {
+        status: 'unhealthy',
+        message: timedOut ? 'Timeout' : error instanceof Error ? error.message : 'Unknown error',
+        recordWhileStarting: false,
+      };
+    } finally {
+      clearTimeout(timeout);
+      cancellationSignal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -2596,7 +2624,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     await this.validateRenderedEnvironmentActions(snapshot);
     validateRenderedManagedEnvUrlFields({
-      health: snapshot.health,
       app: snapshot.app,
     });
 

@@ -51,11 +51,7 @@ export * from './pending-migrations';
 export * from './repositories';
 export * from './sanitize-error';
 export * from './schema';
-export {
-  type DatabaseDialect,
-  detectDialectFromUrl,
-  getDatabaseDialect,
-} from './schema-factory';
+export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 // Tenant database lifecycle primitives. Filesystem-backed portability operations
@@ -71,5 +67,6 @@ export * from './tenant-scope';
 export * from './tenant-unit-of-work';
 // Tenant write gate (generation-bound per-tenant write freeze)
 export * from './tenant-write-gate';
+export * from './user-execution-home';
 // User utilities
 export * from './user-utils';

@@ -36,7 +36,10 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
+import { useAgorStore } from '@/store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import { mcpServerNeedsAuth } from '@/utils/mcpAuth';
 import { useThemedMessage } from '@/utils/message';
 import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -80,9 +83,24 @@ const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…
 const POLICY_UNREADABLE_HINT =
   "This workspace's MCP policy could not be read, so nothing is offered here.";
 
-const getServerHealth = (server: MCPServer) => {
+const getServerHealth = (
+  server: MCPServer,
+  userAuthenticatedMcpServerIds: Set<string> = new Set()
+) => {
   const toolCount = server.tools?.length || 0;
   const transport = server.transport || (server.url ? 'http' : 'stdio');
+
+  // Ahead of every other reading, because it is the one that makes the row
+  // unusable. Connecting a catalog entry writes the install before anybody
+  // signs in, so an OAuth row that was never authenticated is enabled, owned,
+  // and indistinguishable from a working server — this is the only thing in
+  // the table that says the connect never finished.
+  if (mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)) {
+    return {
+      status: 'warning' as const,
+      text: 'Not signed in',
+    };
+  }
 
   if (transport === 'stdio') {
     return {
@@ -125,6 +143,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 }) => {
   const { showError } = useThemedMessage();
   const { token } = theme.useToken();
+  // Same set the session panel and the picker read, so an install is
+  // "unfinished" in exactly one sense across all three.
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -471,7 +492,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         key: 'health',
         width: 120,
         render: (_: unknown, server: MCPServer) => {
-          const health = getServerHealth(server);
+          const health = getServerHealth(server, userAuthenticatedMcpServerIds);
           return <Badge status={health.status} text={health.text} />;
         },
       },
@@ -590,6 +611,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       policyPending,
       policyPendingHint,
       searchTerm,
+      userAuthenticatedMcpServerIds,
     ]
   );
 

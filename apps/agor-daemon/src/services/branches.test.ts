@@ -3,6 +3,7 @@ import {
   BranchRepository,
   type Database,
   GroupRepository,
+  generateId,
   KnowledgeNamespaceRepository,
   RepoRepository,
   runWithTenantDatabaseScope,
@@ -13,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
-import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
+import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
@@ -21,7 +22,7 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
   return {
     ...actual,
     spawnExecutor: vi.fn(),
-    runExecutorCommand: vi.fn(),
+    requestExecutor: vi.fn(),
     generateScopedServiceToken: vi.fn(() => 'service-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
@@ -217,12 +218,12 @@ function waitForDeferredWork(): Promise<void> {
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
-const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
+const mockedRequestExecutor = vi.mocked(requestExecutor);
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
-  mockedRunExecutorCommand.mockReset();
-  mockedRunExecutorCommand.mockResolvedValue({
+  mockedRequestExecutor.mockReset();
+  mockedRequestExecutor.mockResolvedValue({
     success: true,
     data: { exists: true, kind: 'directory' },
   });
@@ -502,14 +503,14 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { branchId: branch.branch_id, action: 'stop' },
     });
 
     await service.restartEnvironment(branch.branch_id);
 
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
         params: expect.objectContaining({
@@ -554,7 +555,7 @@ describe('BranchesService environment start async behavior', () => {
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
     } as never);
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { logs: 'line 1\nline 2', timestamp: '2026-06-19T00:00:00.000Z' },
     });
@@ -568,7 +569,7 @@ describe('BranchesService environment start async behavior', () => {
       branch.created_by,
       { branchId: branch.branch_id, maxUses: -1 }
     );
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.logs',
         sessionToken: 'executor-token',
@@ -2101,14 +2102,14 @@ describe('BranchesService.create permission defaults', () => {
   );
 });
 
-describe('BranchesService environment health recovery', () => {
+describe('BranchesService environment health requests', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     globalThis.fetch = originalFetch;
   });
 
-  it('recovers an errored environment to running when the health URL succeeds', async () => {
+  it('reports a healthy errored environment without reviving or persisting it', async () => {
     const branch = {
       branch_id: 'wt-health-recover' as BranchID,
       repo_id: 'repo-1',
@@ -2152,14 +2153,176 @@ describe('BranchesService environment health recovery', () => {
       branch.health_check_url,
       expect.objectContaining({ method: 'GET' })
     );
-    expect(updateEnvironment).toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.objectContaining({
-        status: 'running',
-        last_health_check: expect.objectContaining({ status: 'healthy', message: 'HTTP 200' }),
-      }),
-      undefined
-    );
-    expect(result.environment_instance?.status).toBe('running');
+    expect(updateEnvironment).not.toHaveBeenCalled();
+    expect(result.environment_instance).toMatchObject({
+      status: 'error',
+      last_health_check: { status: 'healthy', message: 'HTTP 200' },
+    });
+  });
+
+  it('does not probe an errored environment for an automatic observation', async () => {
+    const branch = {
+      branch_id: 'wt-health-error-automatic' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-error-automatic',
+      path: '/tmp/wt-health-error-automatic',
+      branch_unique_id: 2,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    globalThis.fetch = vi.fn();
+
+    await expect(
+      service.checkHealth(branch.branch_id, undefined, { intent: 'automatic' })
+    ).resolves.toBe(branch);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns a blocked diagnostic without logging a user-authored health URL', async () => {
+    const branch = {
+      branch_id: 'wt-health-blocked-url' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-blocked-url',
+      path: '/tmp/wt-health-blocked-url',
+      branch_unique_id: 3,
+      health_check_url: 'http://169.254.169.254/latest?credential=secret',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+    warn.mockRestore();
+  });
+
+  it.each([
+    { status: 'stopped' as const, archived: false },
+    { status: 'stopping' as const, archived: false },
+    { status: 'running' as const, archived: true },
+  ])('does not probe an inactive environment (%o)', async ({ status, archived }) => {
+    const branch = {
+      branch_id: `wt-health-${status}-${archived}` as BranchID,
+      repo_id: 'repo-1',
+      name: 'inactive-health',
+      path: '/tmp/inactive-health',
+      archived,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: { status },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    globalThis.fetch = vi.fn();
+
+    await expect(service.checkHealth(branch.branch_id)).resolves.toBe(branch);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  dbTest('fences late health success across stop and archive races', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `${generateId()}@example.com`,
+      name: 'Health race',
+    });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId(),
+      slug: `health-race-${generateId()}`,
+      name: 'Health race',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/health-race.git',
+      local_path: `/tmp/${generateId()}`,
+      default_branch: 'main',
+    });
+    const branchRepo = new BranchRepository(db);
+    const branchesService = { emit: vi.fn() };
+    const app = {
+      get(name: string) {
+        return name === 'distributedWorkIdentity'
+          ? { instanceId: 'daemon-a', bootId: 'boot-a' }
+          : {};
+      },
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => repo) };
+        if (path === 'branches') return branchesService;
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(db as never, app);
+    vi.spyOn(service, 'get').mockImplementation(async (id) => {
+      const current = await branchRepo.findById(id);
+      if (!current) throw new Error('branch disappeared');
+      return current as never;
+    });
+
+    for (const [index, transition] of (['stop', 'archive'] as const).entries()) {
+      const branch = await branchRepo.create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        name: `health-race-${transition}`,
+        ref: `health-race-${transition}`,
+        branch_unique_id: 8_800_000 + index,
+        path: `/tmp/health-race-${transition}`,
+        created_by: user.user_id,
+        health_check_url: 'https://example.invalid/health',
+        environment_instance: { status: 'running' },
+      });
+      let finishFetch: (() => void) | undefined;
+      const fetchMock = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishFetch = () => resolve(new Response('', { status: 200 }));
+          })
+      );
+      globalThis.fetch = fetchMock;
+
+      const health = service.checkHealth(branch.branch_id);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await branchRepo.update(
+        branch.branch_id,
+        transition === 'stop' ? { environment_instance: { status: 'stopped' } } : { archived: true }
+      );
+      finishFetch?.();
+
+      const result = await health;
+      expect(result).toMatchObject(
+        transition === 'stop'
+          ? { environment_instance: { status: 'stopped' } }
+          : { archived: true, environment_instance: { status: 'running' } }
+      );
+      expect(result.environment_instance?.last_health_check).toBeUndefined();
+    }
+    expect(branchesService.emit).not.toHaveBeenCalled();
   });
 });

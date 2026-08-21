@@ -323,18 +323,13 @@ async function main() {
   console.log(chalk.bold.green('✅ RBAC test environment ready!\n'));
 
   console.log(chalk.bold('Test Users:'));
-  console.log(chalk.gray(`  alice@agor.live (password: admin, unix: alice)`));
+  console.log(chalk.gray(`  alice@agor.live (password: admin, execution home key: alice)`));
   console.log(chalk.gray(`    - Owns: alice-private, team-shared (full access)`));
-  console.log(chalk.gray(`  bob@agor.live   (password: admin, unix: bob)`));
+  console.log(chalk.gray(`  bob@agor.live   (password: admin, execution home key: bob)`));
   console.log(chalk.gray(`    - Owns: bob-private`));
   console.log(
     chalk.yellow(`    - Note: bob's "prompt" permission on team-shared not yet fully implemented`)
   );
-  console.log('');
-
-  console.log(chalk.bold('SSH Access:'));
-  console.log(chalk.gray('  ssh alice@localhost -p 2222  # password: admin'));
-  console.log(chalk.gray('  ssh bob@localhost -p 2222    # password: admin'));
   console.log('');
 
   console.log(chalk.bold('Web Login:'));

@@ -225,6 +225,18 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
 
+Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
+
+### Optional session cleanup
+
+Gateway Sessions are retained until someone archives them. Agor does not currently run an automatic gateway-retention worker or expose a per-channel retention setting.
+
+For branch-wide cleanup today, use a [scheduled prompt](/guide/scheduler) for an explicit, workspace-specific policy. Have the scheduled teammate call `agor_sessions_bulk_archive` with `sessionType: "gateway"`, its `branchId`, and the desired `olderThanDays`; test the filter with `dryRun: true` before changing the schedule to `dryRun: false`.
+
+This workaround is not the same as per-channel inactivity retention. It uses the Session's last-updated time, accepts whole days, scopes to a branch rather than a gateway channel, and archives only the matching gateway Session rows—not their spawned or remote-created children. Review those children separately before setting `dryRun: false`.
+
+Archiving is reversible and preserves the Session transcript for search and audit. The tool applies the schedule owner's normal RBAC permissions and reports Sessions it cannot modify.
+
 ### Scope reference
 
 The wizard and manifest bake these in automatically. This table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
@@ -335,11 +347,11 @@ assumptions as configuration: they are not part of this contract.
 
 ### How It Works
 
-When someone mentions `@agor` (or your app's name) in a PR or issue comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`).
+When someone mentions `@agor` (or your app's name) in an issue comment or a PR conversation comment, Agor picks it up via API polling and creates a session. The session runs on the target branch, and the agent's final response is posted back as a PR/issue comment under the app's bot identity (e.g., `agor[bot]`). Opening an issue or PR, submitting a review, and adding an inline review comment do not trigger the gateway.
 
 Key differences from Slack:
 
-- **Polling, not WebSocket.** Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
+- **Polling, not WebSocket.** Agor polls the GitHub API at the channel's configured interval. No public endpoint or GitHub event subscription is needed.
 - **Per-PR/issue sessions.** Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
 - **Last-message-only responses.** Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
 - **Bot identity.** Responses are posted as the GitHub App's bot user, not as any human user.
@@ -360,9 +372,8 @@ You can create the app through Agor's setup wizard or manually:
 
 1. Go to your GitHub org's **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
 2. Set permissions: `Contents: Read`, `Issues: Read & Write`, `Pull requests: Read & Write`, `Metadata: Read`.
-3. Subscribe to events: `issue_comment`, `issues`, `pull_request`, `pull_request_review`, `pull_request_review_comment`.
-4. Disable webhooks (set `Active` to false). Agor uses polling.
-5. After creating, generate a private key and note the App ID.
+3. Disable webhooks (set `Active` to false). Agor uses API polling and does not consume GitHub App event subscriptions.
+4. After creating, generate a private key and note the App ID.
 
 ### 2. Install the App
 
@@ -380,15 +391,15 @@ You can create the app through Agor's setup wizard or manually:
    - **App ID.** Your GitHub App's ID.
    - **Private Key.** The PEM private key (encrypted at rest).
    - **Installation ID.** Found via the setup wizard or GitHub's API.
-3. Optionally configure:
-   - **Watch Repos.** Specific repos to monitor (empty = all repos in the installation).
-   - **Poll Interval.** How often to check for new mentions (default: 15 seconds).
-   - **Mention Name.** The keyword to trigger on (default: `agor`, matches `@agor`).
+3. Configure the repository scope and optional behavior:
+   - **Watch Repos.** One or more specific repositories to monitor. At least one repository is required.
+   - **Poll Interval (optional).** How often to check for new mentions.
+   - **Mention Name (optional).** The keyword to trigger on (default: `agor`, matches `@agor`).
 4. Save. Polling starts immediately.
 
 ### 4. Mention @agor on a PR
 
-Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
+Comment `@agor review this PR` on any PR in a watched repo. After the next successful poll:
 
 1. The comment gets a 👀 reaction (instant feedback).
 2. A "Processing..." comment appears with a link to the Agor session.
@@ -617,11 +628,11 @@ The `blocks` field is opaque platform-specific data. Currently only the Slack co
 
 ### GitHub
 
-- **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `[github] Watching N repos` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
+- **Bot doesn't respond to `@agor` mentions.** Check daemon logs for `event="listener_scope_ready"` and `[github] Starting poll loop`. Verify the App ID, private key, and installation ID are correct. Ensure the app is installed on the org with the right repos selected.
 - **"GitHub App authentication failed."** The private key or app ID may be wrong. Re-check credentials. If you regenerated the private key on GitHub, update it in the channel config.
 - **Mentions detected but no session created.** Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
 - **Response posted as wrong user.** GitHub comments should appear as the app's bot identity (e.g., `agor[bot]`). If comments appear as a human user, something is bypassing the connector and using a personal `GITHUB_TOKEN` instead.
-- **Rate limit errors.** At 15s polling with 5 repos, you use ~1,200 req/hour out of 5,000. If you're monitoring many repos, increase `poll_interval_ms` or use `watch_repos` to narrow scope.
+- **Rate limit errors.** At the default 15-second interval, five quiet repositories use about 1,200 polling requests per hour; paginated results and user-alignment lookups add requests. If you're monitoring many or busy repositories, increase `poll_interval_ms` or narrow `watch_repos`.
 
 ### Shortcut
 

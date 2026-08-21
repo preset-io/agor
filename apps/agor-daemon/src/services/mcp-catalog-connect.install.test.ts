@@ -20,6 +20,7 @@ import {
   runMigrations,
   setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
@@ -55,6 +56,12 @@ const CURATED = {
   auth_type: 'none',
   permission_disclosure: 'Reads public GitHub repository content only.',
 } as unknown as MCPCatalogEntry;
+
+/**
+ * A caller who holds no OAuth grant anywhere, for the tests about installing
+ * rather than about reuse. Reuse asks this first and stops when it says so.
+ */
+const NO_GRANTS = { readGrantResourceUri: async () => undefined };
 
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
@@ -114,7 +121,10 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
     }) as unknown as AuthenticatedParams;
 
   const connectAs = (caller: User, callerRole: UserRole) =>
-    createMCPCatalogConnectService(app).create(CONNECT_REQUEST, paramsFor(caller, callerRole));
+    createMCPCatalogConnectService(app, NO_GRANTS).create(
+      CONNECT_REQUEST,
+      paramsFor(caller, callerRole)
+    );
   const connect = () => connectAs(user, role);
   const installedServers = () => new MCPServerRepository(rawDb).findAll({});
   const addUser = (email: string, addedRole: UserRole) =>
@@ -237,17 +247,26 @@ describe('marketplace install, as it lands in the database', () => {
  * `around`, and `after` hooks on `mcp-servers` too, and none of them are the
  * claim under test.
  */
-function captureRegisteredMcpServerCreateHooks(
-  db: TenantScopeAwareDatabase
-): Array<(context: McpServerWriteHookContext) => Promise<unknown>> {
-  const captured: Array<(context: McpServerWriteHookContext) => Promise<unknown>> = [];
+function captureRegisteredMcpServerCreateHooks(db: TenantScopeAwareDatabase): {
+  create: Array<(context: McpServerWriteHookContext) => Promise<unknown>>;
+  patch: Array<(context: McpServerWriteHookContext) => Promise<unknown>>;
+} {
+  const captured = {
+    create: [] as Array<(context: McpServerWriteHookContext) => Promise<unknown>>,
+    patch: [] as Array<(context: McpServerWriteHookContext) => Promise<unknown>>,
+  };
   const app = {
     service(path: string) {
       return {
-        hooks(hooks: { before?: { create?: unknown[] } }) {
+        hooks(hooks: { before?: { create?: unknown[]; patch?: unknown[] } }) {
           if (path.replace(/^\//, '') !== 'mcp-servers') return;
-          captured.push(
+          captured.create.push(
             ...((hooks.before?.create ?? []) as Array<
+              (context: McpServerWriteHookContext) => Promise<unknown>
+            >)
+          );
+          captured.patch.push(
+            ...((hooks.before?.patch ?? []) as Array<
               (context: McpServerWriteHookContext) => Promise<unknown>
             >)
           );
@@ -319,11 +338,25 @@ describe('the write hook this seam depends on', () => {
           user: { user_id: caller.user_id, role: 'member' },
         } as unknown as AuthenticatedParams,
       } satisfies McpServerWriteHookContext;
-      for (const hook of registeredHooks) await hook(context);
+      for (const hook of registeredHooks.create) await hook(context);
       return context;
     };
 
-    return { bob, mallory, createAs };
+    const patchAs = async (caller: User, data: Record<string, unknown>) => {
+      const context = {
+        method: 'patch',
+        id: '01900000-0000-7000-8000-000000000099',
+        data,
+        params: {
+          provider: 'rest',
+          user: { user_id: caller.user_id, role: 'member' },
+        } as unknown as AuthenticatedParams,
+      } satisfies McpServerWriteHookContext;
+      for (const hook of registeredHooks.patch) await hook(context);
+      return context;
+    };
+
+    return { bob, mallory, createAs, patchAs };
   };
 
   it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
@@ -344,5 +377,273 @@ describe('the write hook this seam depends on', () => {
     const context = await createAs(bob, { transport: 'http' });
 
     expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(bob.user_id);
+  });
+
+  it.each(['marketplace', 'future-mode'])(
+    'rejects public create and patch compatibility mode %s before authorization',
+    async (mode) => {
+      const { bob, createAs, patchAs } = await standUpDaemonHooks();
+      const data = {
+        transport: 'http',
+        auth: { type: 'oauth', oauth_compatibility_mode: mode },
+      };
+
+      await expect(createAs(bob, data)).rejects.toThrow(/must be either strict or legacy/);
+      await expect(patchAs(bob, data)).rejects.toThrow(/must be either strict or legacy/);
+    }
+  );
+});
+
+/**
+ * Collect the read chain `registerHooks` actually leaves on `mcp-servers`.
+ *
+ * Credential reuse is decided by reading whether a token arrived on a row, and
+ * the only thing that puts one there is `injectPerUserOAuthTokens` — which is
+ * module-private, keys its lookup on the authenticated caller, and is followed
+ * by redaction. Rebuilding an equivalent here would prove reuse is safe against
+ * a copy of the rule rather than the rule, which is the exact mistake the
+ * unowned-install bug was made of. So the production registration is captured
+ * and mounted, the same way `captureRegisteredMcpServerCreateHooks` does for
+ * the write path.
+ */
+function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase) {
+  const captured = {
+    beforeAll: [] as unknown[],
+    beforeFind: [] as unknown[],
+    afterFind: [] as unknown[],
+    afterGet: [] as unknown[],
+  };
+  const app = {
+    service(path: string) {
+      return {
+        hooks(hooks: {
+          before?: { all?: unknown[]; find?: unknown[] };
+          after?: { find?: unknown[]; get?: unknown[] };
+        }) {
+          if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.beforeAll.push(...(hooks.before?.all ?? []));
+          captured.beforeFind.push(...(hooks.before?.find ?? []));
+          captured.afterFind.push(...(hooks.after?.find ?? []));
+          captured.afterGet.push(...(hooks.after?.get ?? []));
+        },
+      };
+    },
+    use() {},
+    publish() {},
+  };
+
+  registerHooks({
+    db,
+    app: app as unknown as RegisterHooksContext['app'],
+    config: { database: { dialect: 'sqlite' } } as RegisterHooksContext['config'],
+    jwtSecret: 'mcp-credential-reuse-test-secret',
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: true },
+    sessionsService: {} as RegisterHooksContext['sessionsService'],
+    messagesService: {} as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: { mode: 'standalone' } as RegisterHooksContext['deployment'],
+  });
+
+  return captured;
+}
+
+/**
+ * CONNECT-3 across two users, with real grants in a real database.
+ *
+ * The row both users can see is deliberately unowned: an owned one would be
+ * filtered out of Bob's `find` by `usableByUserId` before reuse ever looked at
+ * it, so passing that would prove only that the ownership filter works. This
+ * puts the row squarely inside Bob's reach and asks whether Alice's *credential*
+ * on it can be borrowed.
+ */
+describe('credential reuse, against real grants', () => {
+  const OAUTH_ENTRY = {
+    ...CURATED,
+    auth_type: 'oauth',
+    oauth: { compatibility_mode: 'strict' },
+  } as unknown as MCPCatalogEntry;
+  const SHARED_ROW = '00000000-0000-7000-8000-0000000005ee' as MCPServer['mcp_server_id'];
+  const RESOURCE = 'https://mcp.deepwiki.com/mcp';
+
+  /**
+   * Two members, one unowned OAuth row both can see, and a real grant on it
+   * belonging to exactly one of them.
+   *
+   * The row is deliberately unowned: an owned one would be filtered out of the
+   * other user's `find` by `usableByUserId` before reuse ever looked at it, so
+   * passing that would prove only that the ownership filter works. This puts
+   * the row squarely inside both users' reach and asks whether one's
+   * *credential* on it can be borrowed by the other.
+   */
+  async function buildTwoUserDaemon(grantResourceUri: string | undefined = RESOURCE) {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    const db = rawDb as unknown as TenantScopeAwareDatabase;
+    await runMigrations(rawDb);
+    await setMcpMemberPolicy(db, 'allow_private_only', undefined, null);
+
+    const users = new UsersRepository(rawDb);
+    const alice = (await users.create({
+      email: 'alice@agor.live',
+      name: 'Alice',
+      role: 'member',
+    })) as User;
+    const bob = (await users.create({
+      email: 'bob@agor.live',
+      name: 'Bob',
+      role: 'member',
+    })) as User;
+
+    await new MCPServerRepository(rawDb).create({
+      mcp_server_id: SHARED_ROW,
+      name: 'deepwiki-shared',
+      transport: 'http',
+      url: RESOURCE,
+      auth: { type: 'oauth', oauth_mode: 'per_user', oauth_compatibility_mode: 'strict' },
+      scope: 'session',
+      source: 'user',
+      enabled: true,
+      created_at: new Date(),
+      updated_at: new Date(),
+    } as never);
+
+    // Alice signs in. Hers, keyed `(alice, row)`, and nothing else changes.
+    // Intentionally omit `grantBinding` to model a legacy SQLite grant created
+    // before versioned fingerprints were introduced.
+    const tokens = new UserMCPOAuthTokenRepository(rawDb);
+    await tokens.saveToken(alice.user_id, SHARED_ROW, {
+      accessToken: 'alice-grant-not-a-real-token',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      ...(grantResourceUri ? { resourceUri: grantResourceUri } : {}),
+    });
+
+    const hooks = captureRegisteredMcpServerHooks(db);
+    const app = feathers();
+    app.use('mcp-servers', createMCPServersService(db));
+    app.service('mcp-servers').hooks({
+      before: {
+        all: hooks.beforeAll,
+        find: hooks.beforeFind,
+        create: [createMcpServerWriteAuthorizationHook(db)],
+      },
+      after: { find: hooks.afterFind, get: hooks.afterGet },
+    } as never);
+    app.use('mcp-catalog', {
+      async get() {
+        return OAUTH_ENTRY;
+      },
+    } as never);
+    app.use('sessions', {
+      async create(data: Record<string, unknown>) {
+        return { ...data, session_id: 'session-1' };
+      },
+    } as never);
+    app.use('/sessions/:id/mcp-servers', {
+      async create(data: unknown) {
+        return data;
+      },
+    } as never);
+    app.use('/mcp-servers/oauth-refresh', {
+      async create() {
+        return { success: false, error: 'needs_reauth' };
+      },
+    } as never);
+
+    // The real read the daemon injects, against the real table — so "whose
+    // grant" is decided by the same key the production wiring uses.
+    const deps = {
+      async readGrantResourceUri(
+        serverId: MCPServer['mcp_server_id'],
+        params: AuthenticatedParams
+      ) {
+        const userId = params.user?.user_id as User['user_id'] | undefined;
+        if (!userId) return undefined;
+        return (await tokens.getToken(userId, serverId))?.oauth_resource_uri ?? undefined;
+      },
+    };
+
+    const connectAs = (caller: User) =>
+      createMCPCatalogConnectService(app, deps).create(CONNECT_REQUEST, {
+        provider: 'rest',
+        authenticated: true,
+        user: { user_id: caller.user_id, role: 'member' },
+      } as unknown as AuthenticatedParams);
+
+    return { alice, bob, connectAs, rawDb };
+  }
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('oauth');
+  });
+
+  it('reuses the grant for the user who holds it', async () => {
+    // The positive control. Without it the negatives below would also pass if
+    // reuse were simply broken, and would keep passing after it was removed.
+    const { alice, connectAs } = await buildTwoUserDaemon();
+
+    const result = await connectAs(alice);
+
+    expect(result.reused_existing_server).toBe(true);
+    expect(result.mcp_server.mcp_server_id).toBe(SHARED_ROW);
+    expect(result.mcp_server.auth?.oauth_access_token).toBeTruthy();
+  });
+
+  it('never lends Alice’s grant to Bob', async () => {
+    const { bob, connectAs, rawDb } = await buildTwoUserDaemon();
+
+    const result = await connectAs(bob);
+
+    // Same fixtures, same row in reach, only the caller differs.
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe(SHARED_ROW);
+    expect(result.mcp_server.auth?.oauth_access_token).toBeUndefined();
+
+    // And nothing was minted, copied, or re-keyed on the way past.
+    const tokens = new UserMCPOAuthTokenRepository(rawDb);
+    expect(await tokens.getToken(bob.user_id, SHARED_ROW)).toBeNull();
+    expect(await tokens.getToken(bob.user_id, result.mcp_server.mcp_server_id)).toBeNull();
+  });
+
+  it('does not leak the grant through the row it hands Bob back', async () => {
+    // The other way a credential could travel: not as a reused row, but as a
+    // token hydrated onto whatever connect returns.
+    const { bob, connectAs } = await buildTwoUserDaemon();
+
+    const result = await connectAs(bob);
+
+    expect(JSON.stringify(result)).not.toContain('alice-grant-not-a-real-token');
+  });
+
+  /**
+   * Legacy SQLite compatibility, pinned in both directions. Current SQLite
+   * OAuth flows create versioned fingerprints; these fixtures deliberately
+   * model historical unbound grants. Such a grant is stopped
+   * instead by the resource the grant records, which every dialect writes
+   * (second test). If someone makes the fingerprint check dialect-independent,
+   * the first fails and should be deleted with the note above. If someone drops
+   * the resource comparison, the second fails and standalone loses its only
+   * check here.
+   */
+  it('reuses a legacy unbound SQLite grant when its protected resource still matches', async () => {
+    const { alice, connectAs, rawDb } = await buildTwoUserDaemon();
+
+    const grant = await new UserMCPOAuthTokenRepository(rawDb).getToken(alice.user_id, SHARED_ROW);
+    expect(grant?.grant_binding_fingerprint).toBeUndefined();
+
+    await expect(connectAs(alice)).resolves.toMatchObject({ reused_existing_server: true });
+  });
+
+  it('still refuses a SQLite grant minted for a different resource', async () => {
+    // The row points at the entry's endpoint; the credential on it does not.
+    const { alice, connectAs } = await buildTwoUserDaemon('https://mcp.deepwiki.com/some-other');
+
+    const result = await connectAs(alice);
+
+    expect(result.reused_existing_server).toBe(false);
+    expect(result.mcp_server.mcp_server_id).not.toBe(SHARED_ROW);
   });
 });

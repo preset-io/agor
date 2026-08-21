@@ -31,6 +31,10 @@ export interface MCPServerEditModalProps {
   /** The scopes this editor may switch to, on the same terms. */
   offeredScopes?: MCPScope[];
   onClose: () => void;
+  /** Runs after the portal has finished closing (for example, to restore focus). */
+  afterClose?: () => void;
+  /** Delegates focus restoration to an owner when the original trigger was unmounted. */
+  focusTriggerAfterClose?: boolean;
 }
 
 interface TestResult {
@@ -49,7 +53,8 @@ interface TestResult {
  *
  * Hydrates its own form from `server`, owns transport/authType/test state,
  * and persists updates via the `mcp-servers` Feathers service. Used by
- * both `MCPServersTable` (settings) and `MCPServerPill` (admin shortcut).
+ * both `MCPServersTable` (settings) and `SessionMcpFooterControl` (admin
+ * shortcut).
  */
 export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   server,
@@ -58,6 +63,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   offeredTransports,
   offeredScopes,
   onClose,
+  afterClose,
+  focusTriggerAfterClose,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const [form] = Form.useForm();
@@ -66,6 +73,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [preserveAbsentDcrMode, setPreserveAbsentDcrMode] = useState(false);
+  const [preserveAbsentCompatibilityMode, setPreserveAbsentCompatibilityMode] = useState(false);
+  const [preserveAbsentGrantType, setPreserveAbsentGrantType] = useState(false);
   // The form is filled in an effect, so its fields read blank on the first
   // render. Gating on this keeps Save from flashing disabled while the modal
   // animates in.
@@ -90,6 +99,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
 
     setTestResult(null);
     setPreserveAbsentDcrMode(false);
+    setPreserveAbsentCompatibilityMode(false);
+    setPreserveAbsentGrantType(false);
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
     setAuthType(serverAuthType);
     setTransport(server.transport || (server.url ? 'http' : 'stdio'));
@@ -120,7 +131,12 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.jwt_api_token = server.auth?.api_token;
       formValues.jwt_api_secret = server.auth?.api_secret;
     } else if (serverAuthType === 'oauth') {
+      const managedCompatibilityMode = server.oauth_compatibility_policy?.managed_by_catalog
+        ? server.oauth_compatibility_policy.effective_mode
+        : undefined;
       setPreserveAbsentDcrMode(server.auth?.oauth_dcr_mode === undefined);
+      setPreserveAbsentCompatibilityMode(server.auth?.oauth_compatibility_mode === undefined);
+      setPreserveAbsentGrantType(server.auth?.oauth_grant_type === undefined);
       formValues.oauth_authorization_url = server.auth?.oauth_authorization_url;
       formValues.oauth_token_url = server.auth?.oauth_token_url;
       formValues.oauth_client_id = server.auth?.oauth_client_id;
@@ -128,14 +144,21 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       formValues.oauth_scope = server.auth?.oauth_scope;
       formValues.oauth_grant_type = server.auth?.oauth_grant_type || 'client_credentials';
       formValues.oauth_mode = server.auth?.oauth_mode || 'per_user';
-      formValues.oauth_compatibility_mode = server.auth?.oauth_compatibility_mode || 'strict';
+      formValues.oauth_compatibility_mode =
+        managedCompatibilityMode ?? server.auth?.oauth_compatibility_mode ?? 'strict';
       formValues.oauth_dcr_mode = server.auth?.oauth_dcr_mode || 'advertised';
     }
 
     form.setFieldsValue(formValues);
     setFormHydrated(true);
     bumpFormRevision();
-  }, [open, server?.mcp_server_id, form]);
+  }, [
+    open,
+    server?.mcp_server_id,
+    server?.oauth_compatibility_policy?.effective_mode,
+    server?.oauth_compatibility_policy?.managed_by_catalog,
+    form,
+  ]);
 
   const closeAndReset = () => {
     form.resetFields();
@@ -143,6 +166,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
     setAuthType('none');
     setTestResult(null);
     setPreserveAbsentDcrMode(false);
+    setPreserveAbsentCompatibilityMode(false);
+    setPreserveAbsentGrantType(false);
     setFormHydrated(false);
     onClose();
   };
@@ -181,7 +206,11 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         mcp_server_id: server.mcp_server_id,
         url: values.url,
         transport: values.transport || 'http',
-        auth: buildAuthFromValues(values),
+        auth: buildAuthFromValues(values, {
+          preserveAbsentDcrMode,
+          preserveAbsentCompatibilityMode,
+          preserveAbsentGrantType,
+        }),
         headers: parseHeadersJSON(values.headers),
       })) as {
         success: boolean;
@@ -251,7 +280,11 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       const env = parseEnvJSON(values.env);
       if (env) updates.env = env;
 
-      updates.auth = buildAuthFromValues(values, { preserveAbsentDcrMode });
+      updates.auth = buildAuthFromValues(values, {
+        preserveAbsentDcrMode,
+        preserveAbsentCompatibilityMode,
+        preserveAbsentGrantType,
+      });
 
       await client.service('mcp-servers').patch(server.mcp_server_id, updates);
       return true;
@@ -283,6 +316,8 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
       title="Edit MCP Server"
       open={open}
       onCancel={closeAndReset}
+      afterClose={afterClose}
+      focusable={focusTriggerAfterClose === undefined ? undefined : { focusTriggerAfterClose }}
       width={600}
       destroyOnHidden
       footer={
@@ -305,6 +340,10 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
         style={{ marginTop: 16 }}
         onValuesChange={(changedValues) => {
           if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+          if ('oauth_compatibility_mode' in changedValues) {
+            setPreserveAbsentCompatibilityMode(false);
+          }
+          if ('oauth_grant_type' in changedValues) setPreserveAbsentGrantType(false);
           bumpFormRevision();
         }}
       >
@@ -324,6 +363,13 @@ export const MCPServerEditModal: React.FC<MCPServerEditModalProps> = ({
           testResult={testResult}
           onPrepareOAuthStart={prepareOAuthStart}
           formRevision={formRevision}
+          managedOAuthCompatibilityMode={
+            server?.oauth_compatibility_policy?.managed_by_catalog &&
+            (server.oauth_compatibility_policy.effective_mode === 'strict' ||
+              server.oauth_compatibility_policy.effective_mode === 'marketplace')
+              ? server.oauth_compatibility_policy.effective_mode
+              : undefined
+          }
         />
       </Form>
     </Modal>

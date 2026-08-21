@@ -24,6 +24,7 @@ import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
+import { isExecutionHomeKeyAvailable } from '../user-execution-home';
 import {
   type BaseRepository,
   EntityNotFoundError,
@@ -34,6 +35,12 @@ import {
 
 /**
  * Users repository implementation
+ *
+ * Security boundary: this is a persistence primitive for trusted bootstrap,
+ * external-identity provisioning, and background jobs. It intentionally has
+ * no actor context. Request-driven REST, Socket.IO, MCP, and CLI mutations must
+ * go through the daemon UsersService, which enforces actor/target role
+ * authority before calling the database.
  */
 export class UsersRepository implements BaseRepository<InternalUser, Partial<InternalUser>> {
   constructor(private db: Database) {}
@@ -169,30 +176,6 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   }
 
   /**
-   * Check if unix_username is already taken by another user
-   */
-  private async isUnixUsernameTaken(
-    unixUsername: string,
-    excludeUserId?: string
-  ): Promise<boolean> {
-    const result = await select(this.db)
-      .from(users)
-      .where(eq(users.unix_username, unixUsername))
-      .one();
-
-    if (!result) {
-      return false;
-    }
-
-    // If excluding a user ID (for updates), check if it's a different user
-    if (excludeUserId && result.user_id === excludeUserId) {
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
    * Create a new user
    */
   async create(data: Partial<InternalUser>): Promise<InternalUser> {
@@ -201,8 +184,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
     }
     // Validate unix_username uniqueness if provided
     if (data.unix_username) {
-      const isTaken = await this.isUnixUsernameTaken(data.unix_username);
-      if (isTaken) {
+      if (!(await isExecutionHomeKeyAvailable(this.db, data.unix_username))) {
         throw new RepositoryError(
           `Execution home key "${data.unix_username}" is already in use by another user`
         );
@@ -326,8 +308,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
 
     // Validate unix_username uniqueness if being changed
     if (updates.unix_username && updates.unix_username !== current.unix_username) {
-      const isTaken = await this.isUnixUsernameTaken(updates.unix_username, fullId);
-      if (isTaken) {
+      if (!(await isExecutionHomeKeyAvailable(this.db, updates.unix_username, fullId))) {
         throw new RepositoryError(
           `Execution home key "${updates.unix_username}" is already in use by another user`
         );

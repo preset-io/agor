@@ -255,7 +255,7 @@ docker compose up
 ```
 
 Prefer running locally without Docker? The two-process workflow (daemon in watch mode + UI dev
-server) and the `.agor.yml` variants (sqlite / postgres / full / docs) are documented in the
+server) and the `.agor.yml` variants (sqlite / postgres / rich / HA / docs) are documented in the
 [Development Guide](https://agor.live/guide/development). It also covers running Agor _inside_ Agor
 for dogfooding.
 

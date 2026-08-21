@@ -1,8 +1,12 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
 /**
- * OnboardingWizard — redesigned 5-step first-run flow.
+ * OnboardingWizard — redesigned 4-step first-run flow.
  *
- * Steps: persona → workspace → llm → integrations → done
+ * Steps: goals → workspace (name + template gallery) → llm → done
+ *
+ * The in-wizard recommendations step was removed; goal-tailored tools still
+ * feed the first-session prompt with their real Agor setup routes, so the
+ * teammate can propose them accurately in-session.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -11,7 +15,6 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
-  Board,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -20,42 +23,28 @@ import {
   CheckCircleOutlined,
   CheckOutlined,
   CloseOutlined,
-  CodeOutlined,
   LeftOutlined,
   LoadingOutlined,
-  ProjectOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Divider,
-  Input,
-  List,
-  Modal,
-  Spin,
-  Tag,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
+import {
+  MAX_ONBOARDING_GOALS,
+  mergeGoalIntegrationRecs,
+  ONBOARDING_GOALS,
+  type OnboardingIntegrationRecommendation,
+} from '../../utils/onboardingGoals';
+import {
+  BLANK_TEMPLATE_ID,
+  getTeammateTemplate,
+  resolveTemplateSourceBranch,
+  type TeammateGalleryCardId,
+} from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
-import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
-import { McpLogo } from '../McpLogo';
 import { ToolIcon } from '../ToolIcon';
-
-/** AntD icon per onboarding persona id — keeps the persona cards on-brand with the rest of the app. */
-const PERSONA_ICONS: Record<string, ReactNode> = {
-  developer: <CodeOutlined />,
-  pm: <ProjectOutlined />,
-  lead: <TeamOutlined />,
-  solo: <ThunderboltOutlined />,
-};
+import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -63,7 +52,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
+export type WizardStep = 'goals' | 'workspace' | 'llm' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-subscription-token'
@@ -91,29 +80,16 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['persona', 'llm', 'workspace', 'integrations', 'done'];
+const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'done'];
 
-// Prefilled so the required workspace step never blocks on an empty field; the
-// user can rename it. Named the teammate and the board the wizard creates.
-const DEFAULT_TEAMMATE_NAME = 'Scout';
-
-// Surfaced when the workspace step needs the API but the socket client isn't
-// available. That step is required and has no Skip, so a bare early return
-// would leave its only button doing nothing at all.
-const NO_CLIENT_BOARD_ERROR =
-  "Can't reach the server right now - check your connection and try again.";
-
-// The workspace step creates the user's board + first teammate, so it is NOT
-// skippable — completing the wizard must always yield a board to land on.
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
-  persona: { number: 1, label: 'You', skippable: true },
-  llm: { number: 2, label: 'AI', skippable: true },
-  workspace: { number: 3, label: 'Workspace', skippable: false },
-  integrations: { number: 4, label: 'Tools', skippable: false },
-  done: { number: 5, label: "You're ready", skippable: false },
+  goals: { number: 1, label: 'Goals', skippable: true },
+  workspace: { number: 2, label: 'Teammate', skippable: true },
+  llm: { number: 3, label: 'AI', skippable: true },
+  done: { number: 4, label: "You're ready", skippable: false },
 };
 
-const PERSONAS = ONBOARDING_PERSONAS;
+const GOALS = ONBOARDING_GOALS;
 
 interface LlmOption {
   id: string;
@@ -171,158 +147,23 @@ const LLM_OPTIONS: LlmOption[] = [
   },
 ];
 
-interface McpRecommendation {
-  id: string;
-  name: string;
-  description: string;
-  docsUrl: string;
-  featured?: boolean;
-}
+// Why an unselected goal card is disabled once two are picked. Surfaced both as
+// an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
+// the reason isn't a hover-only affordance (see frontend.md a11y guidance).
+const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
 
-const PERSONA_MCP_RECS: Record<string, McpRecommendation[]> = {
-  developer: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that post daily build reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Your AI opens PRs, reviews code, and syncs issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'sentry',
-      name: 'Sentry',
-      description: 'Let your AI read error traces and fix bugs straight from the issue.',
-      docsUrl: 'https://agor.live/docs/mcp/sentry',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Query metrics, read alerts, and have your AI investigate anomalies for you.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  pm: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Post standup summaries, unblock threads, and set up agents that DM you scheduled status reports.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description: 'Pull customer context into sessions - your AI knows who you are building for.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'amplitude',
-      name: 'Amplitude',
-      description: 'Ask your AI what the data says without writing a single query.',
-      docsUrl: 'https://agor.live/docs/mcp/amplitude',
-    },
-    {
-      id: 'figma',
-      name: 'Figma',
-      description: 'Read design files and write feedback without switching tabs.',
-      docsUrl: 'https://agor.live/docs/mcp/figma',
-    },
-  ],
-  lead: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Broadcast outcomes, surface blockers, and schedule weekly digest agents that report to your team channel.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Keep an eye on the pipeline without leaving your session - revenue visibility in context.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description:
-        'See what is in progress, what is blocked, and what shipped - without chasing updates.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'datadog',
-      name: 'Datadog',
-      description: 'Get a live health read on your systems without pinging the on-call engineer.',
-      docsUrl: 'https://agor.live/docs/mcp/datadog',
-    },
-  ],
-  solo: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get pinged when sessions finish and run agents that talk to you on Slack - like a personal AI assistant.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, push commits, and manage your repos hands-free.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'stripe',
-      name: 'Stripe',
-      description: 'Ask your AI what revenue looks like today - no dashboard needed.',
-      docsUrl: 'https://agor.live/docs/mcp/stripe',
-    },
-    {
-      id: 'hubspot',
-      name: 'HubSpot',
-      description:
-        'Let your AI handle follow-ups, log calls, and keep your pipeline moving while you build.',
-      docsUrl: 'https://agor.live/docs/mcp/hubspot',
-    },
-  ],
-  _default: [
-    {
-      id: 'slack',
-      name: 'Slack',
-      description:
-        'Get notified when sessions finish, send prompts from Slack, and schedule agents that report back to you.',
-      docsUrl: 'https://agor.live/docs/mcp/slack',
-      featured: true,
-    },
-    {
-      id: 'github',
-      name: 'GitHub',
-      description: 'Open PRs, review code, and sync issues automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/github',
-    },
-    {
-      id: 'linear',
-      name: 'Linear',
-      description: 'Pick up issues and update status automatically.',
-      docsUrl: 'https://agor.live/docs/mcp/linear',
-    },
-    {
-      id: 'notion',
-      name: 'Notion',
-      description: 'Write and update docs as your AI works.',
-      docsUrl: 'https://agor.live/docs/mcp/notion',
-    },
-  ],
+// Visually hidden but exposed to assistive tech — carries the cap hint text
+// rendered inside disabled cards so it joins their accessible name.
+const SR_ONLY_STYLE: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
 };
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
@@ -423,9 +264,23 @@ const ONB_ANIM_CSS = `
   @keyframes onb-p6 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-72px,0px) scale(0);opacity:0} }
   @keyframes onb-p7 { 0%{transform:translate(0,0);opacity:1} 100%{transform:translate(-51px,-51px) scale(0);opacity:0} }
 
+  /* Success hero: a soft accent glow fades in behind the avatar, and a single
+     accent ring expands + fades once on entry — a brief celebratory settle. */
+  @keyframes onb-glow {
+    from { opacity: 0; transform: scale(0.7); }
+    to   { opacity: 1; transform: scale(1);   }
+  }
+  @keyframes onb-ring {
+    0%   { opacity: 0.55; transform: scale(0.72); }
+    70%  { opacity: 0;    transform: scale(1.9);  }
+    100% { opacity: 0;    transform: scale(1.9);  }
+  }
+
   .onb-step  { animation: onb-fade-in 0.22s cubic-bezier(0.16,1,0.3,1) both; }
   .onb-check { animation: onb-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) both; }
   .onb-draw  { animation: onb-draw 0.75s cubic-bezier(0.4,0,0.2,1) 0.1s both; }
+  .onb-glow  { animation: onb-glow 0.5s ease-out both; }
+  .onb-ring  { animation: onb-ring 1.1s cubic-bezier(0.16,1,0.3,1) 0.15s both; }
 
   /* Glass hover — only on unselected cards; no transform (per UX preference) */
   button.onb-card[aria-pressed='false']:hover {
@@ -434,20 +289,32 @@ const ONB_ANIM_CSS = `
     box-shadow: 0 6px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18) !important;
   }
 
-  /* Skip link — plain text link; suppress antd text-button hover/active fill box */
-  button.onb-skip.ant-btn:hover,
-  button.onb-skip.ant-btn:active,
-  button.onb-skip.ant-btn:focus-visible {
-    background: transparent !important;
+  /* Inline layout cannot switch the goal grid at the narrow-phone boundary or
+     trim nonessential workspace help on short landscape screens. These rules
+     target only wizard-owned classes; no AntD internals are overridden. */
+  @media (max-width: 480px) {
+    .onb-goal-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  }
+
+  @media (max-height: 600px) {
+    .onb-workspace-intro-copy,
+    .onb-workspace-helper { display: none !important; }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .onb-step,
     .onb-check,
     .onb-draw,
+    .onb-glow,
+    .onb-ring,
     .onb-particle {
       animation: none !important;
     }
+    .onb-workspace-collapsible { transition: none !important; }
+    /* Keep the accent glow visible (just un-animated); hide the one-shot ring
+       and the particle burst, which only read as motion. */
+    .onb-ring,
+    .onb-particle { display: none !important; }
   }
 `;
 
@@ -466,27 +333,34 @@ const PARTICLE_DIRS = [
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+export interface OnboardingCompletionResult {
+  branchId: string;
+  sessionId: string;
+  boardId: string;
+  path: 'teammate';
+  /** Name of the first AI teammate to create on completion. */
+  teammateName?: string;
+  /** Avatar emoji for the first AI teammate (defaults to 🤖). */
+  teammateEmoji?: string;
+  /** Framework source branch from the chosen template; undefined = repo default. */
+  sourceBranch?: string;
+  /** Chosen gallery template id (persona); null/undefined = blank starter. */
+  templateId?: string | null;
+  /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
+  agent?: AgenticToolName | null;
+  /** Goal-tailored tools/connections with their real Agor setup surface. */
+  suggestedIntegrations?: OnboardingIntegrationRecommendation[];
+  /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
+   * skipped), threaded straight through so the completion handler never has
+   * to wait on the async preference save. */
+  goals?: string[];
+  // May run async (teammate creation) — the wizard awaits it and shows a
+  // loading state until it resolves, so the modal covers the whole operation.
+}
+
 export interface OnboardingWizardProps {
   open: boolean;
-  onComplete: (result: {
-    branchId: string;
-    sessionId: string;
-    boardId: string;
-    path: 'teammate';
-    /** Name of the first AI teammate to create on completion. */
-    teammateName?: string;
-    /** Avatar emoji for the first AI teammate (defaults to 🤖). */
-    teammateEmoji?: string;
-    /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
-    agent?: AgenticToolName | null;
-    /** Persona-tailored MCP integration names to seed into the bootstrap prompt. */
-    suggestedIntegrations?: string[];
-    /** Persona chosen in step 1, threaded straight through so the completion
-     * handler never has to wait on the async preference save. */
-    persona?: string | null;
-    // May run async (teammate creation) — the wizard awaits it and shows a
-    // loading state until it resolves, so the modal covers the whole operation.
-  }) => void | Promise<void>;
+  onComplete: (result: OnboardingCompletionResult) => void | Promise<void>;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
 
@@ -518,6 +392,10 @@ const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,25
 const WIZARD_SELECTED_BG =
   'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 100%)';
 const WIZARD_SELECTED_BORDER = '1.5px solid rgba(46,154,146,0.95)';
+// Unselected border for *selectable* cards (goals, LLM providers). Same 1.5px
+// width as WIZARD_SELECTED_BORDER so selecting only changes the border COLOR,
+// never the width — no box-model change, no layout shift on select/deselect.
+const SELECTABLE_CARD_BORDER = '1.5px solid rgba(255,255,255,0.16)';
 const WIZARD_SELECTED_SHADOW =
   '0 0 0 3px rgba(46,154,146,0.38), 0 6px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18)';
 
@@ -534,6 +412,13 @@ export function OnboardingWizard({
   initialStep,
 }: OnboardingWizardProps) {
   const { token } = useToken();
+  const savedOnboarding = user?.preferences?.onboarding;
+  const savedBoardId = savedOnboarding?.boardId;
+  // Resume only from a board the current tenant-scoped store can actually see.
+  // A stale/deleted preference must never be treated as a valid durable step.
+  const savedBoard = useAgorStore((state) =>
+    savedBoardId ? state.boardById.get(savedBoardId) : undefined
+  );
 
   // ── Token-derived styles (live, theme-aware) ────────────────────────────
   const PRIMARY = token.colorPrimary;
@@ -546,12 +431,19 @@ export function OnboardingWizard({
   const CARD_SELECTED_SHADOW = WIZARD_SELECTED_SHADOW;
 
   // ── Step state ──────────────────────────────────────────────────────────
-  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'persona');
+  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'goals');
 
-  // ── Step 1: persona ─────────────────────────────────────────────────────
-  const [selectedPersona, setSelectedPersona] = useState<string | null>(null);
+  // ── Step 1: goals — multi-select, order-preserving (primary first), max 2 ──
+  const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
+  const toggleGoal = useCallback((id: string) => {
+    setSelectedGoals((prev) => {
+      if (prev.includes(id)) return prev.filter((goalId) => goalId !== id);
+      if (prev.length >= MAX_ONBOARDING_GOALS) return prev;
+      return [...prev, id];
+    });
+  }, []);
 
-  // ── Step 2: LLM ─────────────────────────────────────────────────────────
+  // ── Step 3: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
@@ -562,22 +454,22 @@ export function OnboardingWizard({
     {}
   );
 
-  // ── Step 3: workspace — name the user's first AI teammate ─────────────────
+  // ── Step 2: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
-  const [teammateName, setTeammateName] = useState(DEFAULT_TEAMMATE_NAME);
+  const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
-  const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
-  const [boardCreating, setBoardCreating] = useState(false);
+  // Chosen gallery template id (null = nothing picked yet). Sets the default
+  // avatar and the teammate's framework source branch — never the name.
+  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
+  const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
+  // The teammate's board is created ONLY at completion (the `done` handler) — a
+  // fresh board named after the teammate, never before, so an abandoned run
+  // leaves no orphan board. Errors from that final creation surface on step 4.
   const [boardError, setBoardError] = useState<string | null>(null);
-  // Server-verified board: populated by a one-shot fetch so the board-reuse
-  // check doesn't depend on Zustand store hydration timing.
-  const [verifiedBoard, setVerifiedBoard] = useState<Board | null>(null);
-  const [boardVerifying, setBoardVerifying] = useState(false);
+  const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
 
-  // ── Step 4: integrations ─────────────────────────────────────────────────
-
-  // ── Step 5: completion ────────────────────────────────────────────────────
+  // ── Step 4: completion ────────────────────────────────────────────────────
   // True while the async onComplete (teammate creation + navigation) runs, so
   // the final step shows a spinner + copy instead of vanishing the modal.
   const [completing, setCompleting] = useState(false);
@@ -587,8 +479,8 @@ export function OnboardingWizard({
   // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
   useEffect(() => {
     if (!open) return;
-    setCurrentStep(initialStep || 'persona');
-    setSelectedPersona(null);
+    setCurrentStep(initialStep || 'goals');
+    setSelectedGoals([]);
     setSelectedAgent(null);
     setApiKey('');
     setAuthMethod('api-key');
@@ -596,13 +488,12 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
-    setTeammateName(DEFAULT_TEAMMATE_NAME);
+    setTeammateName('');
     setTeammateEmoji('🤖');
-    setCreatedBoardId(null);
+    setSelectedTemplateId(null);
+    setInvalidSavedTemplateId(null);
     setBoardError(null);
-    setBoardCreating(false);
-    setVerifiedBoard(null);
-    setBoardVerifying(false);
+    setCreatedBoardId(null);
     setCompleting(false);
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
@@ -620,7 +511,7 @@ export function OnboardingWizard({
       userSeedRef.current = null;
       return;
     }
-    const seedKey = user?.user_id ?? '__no_user__';
+    const seedKey = `${user?.user_id ?? '__no_user__'}:${savedBoard?.board_id ?? ''}`;
     if (userSeedRef.current === seedKey) return;
     userSeedRef.current = seedKey;
     // Pre-select LLM if user already has one configured
@@ -646,14 +537,29 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    setTeammateName(DEFAULT_TEAMMATE_NAME);
-    setCreatedBoardId(null);
-  }, [open, user]);
+    if (savedBoard) {
+      setSelectedGoals(savedOnboarding?.goals ?? []);
+      setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
+      setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard.icon ?? '🤖');
+      const savedTemplateId = savedOnboarding?.teammateTemplateId;
+      const savedTemplate = getTeammateTemplate(savedTemplateId);
+      setSelectedTemplateId(savedTemplate?.id ?? null);
+      setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
+      setCreatedBoardId(savedBoard.board_id);
+      if (!initialStep) setCurrentStep('done');
+    } else {
+      setTeammateName('');
+    }
+  }, [open, user, savedBoard, savedOnboarding, initialStep]);
 
   // ─── Derived values ──────────────────────────────────────────────────────
 
   const stepIndex = STEPS.indexOf(currentStep);
   const meta = STEP_META[currentStep];
+  const staleTemplateError = invalidSavedTemplateId
+    ? `Saved teammate template "${invalidSavedTemplateId}" is no longer available. Go back and choose another template.`
+    : null;
+  const completionError = staleTemplateError ?? boardError;
 
   const agentHasKey = useCallback(
     (agent: AgenticToolName): boolean => {
@@ -732,51 +638,10 @@ export function OnboardingWizard({
     }
   }, [currentStep, onCheckAuth, agentHasKey, user?.agentic_auth_methods?.codex]);
 
-  const existingBoardId = user?.preferences?.mainBoardId || null;
-  // Subscribe to only THIS board rather than the whole boardById map, so the
-  // wizard re-renders on changes to the user's own board, not on every board
-  // write anywhere. Self-subscribing (vs a prop) still keeps the App shell out.
-  const existingBoard = useAgorStore((store) =>
-    existingBoardId ? (store.boardById.get(existingBoardId) ?? null) : null
-  );
-
-  // Server-verify the user's mainBoardId. The Zustand boardById store may not be
-  // hydrated when onboarding runs (fresh session or restart-onboarding), so a
-  // direct server fetch avoids the false-negative that creates a duplicate board.
-  useEffect(() => {
-    if (!open || !existingBoardId || !client) {
-      setVerifiedBoard(null);
-      setBoardVerifying(false);
-      return;
-    }
-    if (existingBoard) {
-      setVerifiedBoard(existingBoard);
-      setBoardVerifying(false);
-      return;
-    }
-    setBoardVerifying(true);
-    let cancelled = false;
-    (client.service('boards').get(existingBoardId) as Promise<Board>)
-      .then((board) => {
-        if (!cancelled) setVerifiedBoard(board);
-      })
-      .catch(() => {
-        // Board deleted or inaccessible — fall through to creating a new one
-      })
-      .finally(() => {
-        if (!cancelled) setBoardVerifying(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, existingBoardId, client, existingBoard]);
-
-  const hasExistingBoard = !!(verifiedBoard || createdBoardId);
-
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
-        return !!selectedPersona;
+      case 'goals':
+        return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -799,31 +664,28 @@ export function OnboardingWizard({
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
-        if (boardVerifying) return false;
+        // A teammate name is required — it names the new board we always create.
         return teammateName.trim().length > 0;
-      case 'integrations':
-        return true;
       case 'done':
         return true;
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
     llmAuthVerified,
     apiKey,
     authMethod,
-    boardVerifying,
     teammateName,
   ]);
 
   const disabledReason = useMemo((): string | null => {
-    if (llmSaving || boardCreating) return null;
+    if (llmSaving || completing) return null;
     switch (currentStep) {
-      case 'persona':
-        return selectedPersona ? null : 'Pick one, or skip for now';
+      case 'goals':
+        return selectedGoals.length > 0 ? null : 'Pick up to two, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -843,29 +705,27 @@ export function OnboardingWizard({
         return err ?? null;
       }
       case 'workspace':
-        if (boardVerifying) return null;
         return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
       default:
         return null;
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
     llmAuthVerified,
     apiKey,
     authMethod,
-    boardVerifying,
     teammateName,
     llmSaving,
-    boardCreating,
+    completing,
   ]);
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
-      case 'persona':
+      case 'goals':
         return 'Continue →';
       case 'llm': {
         if (
@@ -879,10 +739,14 @@ export function OnboardingWizard({
       }
       case 'workspace':
         return 'Continue →';
-      case 'integrations':
-        return 'Continue →';
-      case 'done':
-        return completing ? 'Setting up your AI teammate…' : 'Open my board →';
+      case 'done': {
+        const name = teammateName.trim();
+        if (completing) return 'Setting up…';
+        if (completionError) return 'Try again →';
+        // Verb-first primary action into the activation moment — the teammate's
+        // first session — named when we have a name, generic board-open otherwise.
+        return name ? `Meet ${name} →` : 'Open my board →';
+      }
     }
   }, [
     currentStep,
@@ -891,6 +755,8 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     agentIsVerifiedConnected,
+    teammateName,
+    completionError,
   ]);
 
   const canGoBack = stepIndex > 0;
@@ -899,18 +765,20 @@ export function OnboardingWizard({
   // ─── Handlers ────────────────────────────────────────────────────────────
 
   const saveOnboardingProgress = useCallback(
-    (updates: Record<string, unknown>) => {
-      if (!user) return;
-      const current = (user.preferences?.onboarding ?? {}) as Record<string, unknown>;
+    async (updates: Record<string, unknown>) => {
+      if (!user || !client) throw new Error('Not connected - try again when Agor reconnects.');
+      // Preferences are a whole JSON object. Fetch immediately before the patch
+      // so an unrelated settings write made while the wizard was open is not
+      // replaced by the user snapshot captured at mount time.
+      const latestUser = (await client.service('users').get(user.user_id)) as User;
+      const current = (latestUser.preferences?.onboarding ?? {}) as Record<string, unknown>;
       const prefs: UserPreferences = {
-        ...user.preferences,
+        ...latestUser.preferences,
         onboarding: { ...current, ...updates },
       } as UserPreferences;
-      onUpdateUser(user.user_id, { preferences: prefs }).catch((e) => {
-        console.warn('onboarding progress save failed', e);
-      });
+      await onUpdateUser(user.user_id, { preferences: prefs });
     },
-    [onUpdateUser, user]
+    [client, onUpdateUser, user]
   );
 
   const goToStep = useCallback((step: WizardStep) => {
@@ -933,7 +801,7 @@ export function OnboardingWizard({
   // marking codex verified so the primary button advances to the next step.
   const handleCodexImported = useCallback(() => {
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
-    goToStep('workspace');
+    goToStep('done');
   }, [goToStep]);
 
   const handleBack = useCallback(() => {
@@ -942,6 +810,17 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (currentStep === 'done') return;
+    // Skip means "decide later", even if the user experimented with a card
+    // first. Do not silently submit a selection they explicitly skipped.
+    if (currentStep === 'goals') setSelectedGoals([]);
+    // The teammate step is optional. Skip is authoritative: do not carry a
+    // typed name or an experimental template into completion after the user
+    // explicitly chose to continue without creating a teammate.
+    if (currentStep === 'workspace') {
+      setTeammateName('');
+      setTeammateEmoji('🤖');
+      setSelectedTemplateId(null);
+    }
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
     // and completion reads a non-null agent as "there is a model to run on" —
@@ -957,17 +836,17 @@ export function OnboardingWizard({
 
   const handlePrimary = useCallback(async () => {
     switch (currentStep) {
-      case 'persona': {
-        if (selectedPersona) {
-          saveOnboardingProgress({ persona: selectedPersona });
-        }
-        goToStep('llm');
+      case 'goals': {
+        // Goals are persisted once, authoritatively and awaited, by the
+        // completion handler. An intermediate whole-preferences write here can
+        // race later onboarding saves and resurrect stale data.
+        goToStep('workspace');
         break;
       }
       case 'llm': {
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
-          goToStep('workspace');
+          goToStep('done');
           return;
         }
         // Device sign-in and login-file import both complete inside their own
@@ -977,12 +856,12 @@ export function OnboardingWizard({
           selectedAgent === 'codex' &&
           (authMethod === 'codex-device-auth' || authMethod === 'codex-auth-json')
         ) {
-          if (llmAuthVerified.codex === true) goToStep('workspace');
+          if (llmAuthVerified.codex === true) goToStep('done');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) {
-          goToStep('workspace');
+          goToStep('done');
           return;
         }
         if (!user || !apiKey.trim()) return;
@@ -1021,7 +900,7 @@ export function OnboardingWizard({
               [selectedAgent]: { [keyName]: apiKey.trim() },
             } as UpdateUserInput['agentic_tools'],
           });
-          goToStep('workspace');
+          goToStep('done');
         } catch (err) {
           setLlmError(
             `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
@@ -1032,87 +911,70 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        if (!teammateName.trim()) return;
-        // Board created earlier this pass (Back → edit → forward): rename the
-        // same board instead of creating a duplicate.
-        if (createdBoardId) {
-          if (!client) {
-            setBoardError(NO_CLIENT_BOARD_ERROR);
-            return;
-          }
-          setBoardCreating(true);
-          setBoardError(null);
-          try {
-            await client
-              .service('boards')
-              .patch(createdBoardId, { name: teammateName.trim(), icon: teammateEmoji });
-            if (user) saveOnboardingProgress({ boardId: createdBoardId });
-            goToStep('integrations');
-          } catch (err) {
-            setBoardError(err instanceof Error ? err.message : 'Failed to rename board');
-          } finally {
-            setBoardCreating(false);
-          }
-          return;
-        }
-        // A board the user already had before onboarding is theirs — carry the
-        // teammate name forward without renaming their board.
-        if (verifiedBoard) {
-          goToStep('integrations');
-          return;
-        }
-        if (!client) {
-          setBoardError(NO_CLIENT_BOARD_ERROR);
-          return;
-        }
-        setBoardCreating(true);
-        setBoardError(null);
-        try {
-          const board = await client.service('boards').create({
-            name: teammateName.trim(),
-            icon: teammateEmoji,
-          });
-          const newBoardId = board?.board_id ?? null;
-          if (!newBoardId) {
-            setBoardError('Board was created but returned no ID - try again.');
-            return;
-          }
-          setCreatedBoardId(newBoardId);
-          if (user) saveOnboardingProgress({ boardId: newBoardId });
-          goToStep('integrations');
-        } catch (err) {
-          setBoardError(err instanceof Error ? err.message : 'Failed to create board');
-        } finally {
-          setBoardCreating(false);
-        }
-        break;
-      }
-      case 'integrations': {
-        goToStep('done');
+        // Step 2 no longer creates the board — that happens ONLY at completion
+        // (the `done` case below), so an abandoned run never leaves an orphan
+        // board. Continue requires a name; Skip remains the explicit no-teammate
+        // path. When present, the name is also what the board is named after.
+        goToStep('llm');
         break;
       }
       case 'done': {
-        const boardIdToUse = createdBoardId || verifiedBoard?.board_id || '';
-        // Suggested MCP integrations for the chosen persona (same set shown on
-        // the integrations step) — threaded into the teammate's bootstrap prompt.
-        const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
-        const suggestedIntegrations = recs.map((rec) => rec.name);
+        if (invalidSavedTemplateId) return;
+        const name = teammateName.trim();
+        // Merged MCP integrations for the chosen goals, threaded into the
+        // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
+        // this still powers the teammate proposing connections in its first session.
+        const suggestedIntegrations = mergeGoalIntegrationRecs(selectedGoals);
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
+        setBoardError(null);
         try {
+          if (!client) throw new Error('Not connected - try again when Agor reconnects.');
+
+          // This is a small resumable saga: retain the board id before any later
+          // preference/teammate work. A retry in this mounted wizard or a reload
+          // (via the progress preferences below) reuses the durable board rather
+          // than issuing another create.
+          let boardId = createdBoardId ?? '';
+          if (!boardId) {
+            const board = await client.service('boards').create({
+              name: name || (user?.name ? `${user.name}'s board` : 'My board'),
+              icon: teammateEmoji,
+            });
+            boardId = board?.board_id ?? '';
+            if (!boardId) {
+              setBoardError('Board was created but returned no ID - try again.');
+              return;
+            }
+            setCreatedBoardId(boardId);
+          }
+          await saveOnboardingProgress({
+            path: 'teammate',
+            boardId,
+            goals: selectedGoals,
+            teammateDisplayName: name || undefined,
+            teammateEmoji: name ? teammateEmoji : undefined,
+            teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+          });
           await onComplete({
             branchId: '',
             sessionId: '',
-            boardId: boardIdToUse,
+            boardId,
             path: 'teammate',
             // Naming details for the first AI teammate, seeded on completion.
-            teammateName: teammateName.trim() || undefined,
+            teammateName: name || undefined,
             teammateEmoji,
+            // Framework source branch from the chosen gallery template; undefined
+            // (blank / no pick) falls back to the repo default branch.
+            sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
+            templateId: selectedTemplateId,
             agent: selectedAgent,
             suggestedIntegrations,
-            persona: selectedPersona,
+            goals: selectedGoals,
           });
+        } catch (err) {
+          setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
         } finally {
           setCompleting(false);
         }
@@ -1121,7 +983,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedPersona,
+    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -1134,23 +996,41 @@ export function OnboardingWizard({
     client,
     teammateName,
     teammateEmoji,
-    saveOnboardingProgress,
+    selectedTemplateId,
+    invalidSavedTemplateId,
     createdBoardId,
-    verifiedBoard,
+    saveOnboardingProgress,
     onComplete,
     goToStep,
   ]);
+
+  // A wizard step is a navigation event. Move focus to its heading after the
+  // keyed transition mounts so keyboard and screen-reader users hear the new
+  // context instead of remaining on the reused footer button.
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (stepHeadingRef.current?.dataset.step === currentStep) {
+        stepHeadingRef.current.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, currentStep]);
 
   // ─── Progress stepper ────────────────────────────────────────────────────
 
   const renderProgressDots = () => (
     <div style={{ textAlign: 'center', marginBottom: 4 }}>
-      <div
+      <ol
+        aria-label="Onboarding progress"
         style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: 0,
           marginBottom: 10,
+          listStyle: 'none',
+          padding: 0,
         }}
       >
         {STEPS.map((step, index) => {
@@ -1158,8 +1038,17 @@ export function OnboardingWizard({
           const isCurrent = index === stepIndex;
           const isLast = index === STEPS.length - 1;
           return (
-            <Fragment key={step}>
-              <div
+            <li
+              key={step}
+              aria-current={isCurrent ? 'step' : undefined}
+              style={{ display: 'flex', alignItems: 'center' }}
+            >
+              <span style={SR_ONLY_STYLE}>
+                Step {index + 1} of {STEPS.length}: {STEP_META[step].label}.{' '}
+                {isCompleted ? 'Completed' : isCurrent ? 'Current step' : 'Not started'}.
+              </span>
+              <span
+                aria-hidden="true"
                 style={{
                   width: 26,
                   height: 26,
@@ -1192,9 +1081,10 @@ export function OnboardingWizard({
                 }}
               >
                 {isCompleted ? <CheckOutlined style={{ fontSize: 9 }} /> : STEP_META[step].number}
-              </div>
+              </span>
               {!isLast && (
-                <div
+                <span
+                  aria-hidden="true"
                   style={{
                     height: 1,
                     width: 22,
@@ -1204,10 +1094,10 @@ export function OnboardingWizard({
                   }}
                 />
               )}
-            </Fragment>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </div>
   );
 
@@ -1215,64 +1105,132 @@ export function OnboardingWizard({
 
   const renderStepBadge = (title: string) => (
     <div style={{ marginBottom: 12 }}>
-      <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
+      <Title
+        ref={stepHeadingRef}
+        data-step={currentStep}
+        level={3}
+        tabIndex={-1}
+        style={{ color: TEXT_PRIMARY, margin: 0, outline: 'none' }}
+      >
         {title}
       </Title>
     </div>
   );
 
-  const renderPersona = () => {
+  const renderGoals = () => {
     const firstName = user?.name?.split(' ')[0];
-    const personaTitle = firstName
-      ? `${firstName}, let's make this yours.`
-      : "Let's make this yours.";
+    const goalsTitle = firstName
+      ? `${firstName}, what do you want to get done?`
+      : 'What do you want to get done?';
+    const atCap = selectedGoals.length >= MAX_ONBOARDING_GOALS;
     return (
       <div>
-        {renderStepBadge(personaTitle)}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          How do you work? We'll tailor your setup to what you actually need.
+        {renderStepBadge(goalsTitle)}
+        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
+          Pick up to two, and we'll shape your first session around them. You can skip this.
         </Paragraph>
 
         <div
+          className="onb-goal-grid"
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr 1fr',
-            gap: 12,
+            gap: 10,
           }}
         >
-          {PERSONAS.map((persona) => {
-            const isSelected = selectedPersona === persona.id;
+          {GOALS.map((goal) => {
+            const isSelected = selectedGoals.includes(goal.id);
+            // At the cap, unselected cards can't be added until one is dropped.
+            const isDisabled = !isSelected && atCap;
+            const GoalIcon = goal.icon;
+            // aria-disabled (not the native `disabled` attribute) keeps the card
+            // focusable and lets the Tooltip trigger on hover AND keyboard focus;
+            // the click is guarded to a no-op instead.
             return (
-              <button
-                key={persona.id}
-                type="button"
-                aria-pressed={isSelected}
-                className="onb-card"
-                onClick={() => setSelectedPersona(persona.id)}
-                style={{
-                  background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  borderRadius: 12,
-                  padding: '16px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-                  transition: 'all 0.15s ease',
-                  width: '100%',
-                }}
-              >
-                <div style={{ fontSize: 24, marginBottom: 8, color: TEXT_SECONDARY }}>
-                  {PERSONA_ICONS[persona.id]}
-                </div>
-                <div
-                  style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14, marginBottom: 6 }}
+              <Tooltip key={goal.id} title={isDisabled ? GOAL_CAP_HINT : undefined}>
+                <button
+                  type="button"
+                  aria-pressed={isSelected}
+                  aria-disabled={isDisabled || undefined}
+                  className="onb-card"
+                  onClick={() => {
+                    if (!isDisabled) toggleGoal(goal.id);
+                  }}
+                  style={{
+                    position: 'relative',
+                    background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
+                    // Constant 1.5px width in both states — only the color changes
+                    // on select, so the card never resizes/shifts (no re-click bait).
+                    border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
+                    backdropFilter: 'blur(20px)',
+                    WebkitBackdropFilter: 'blur(20px)',
+                    borderRadius: 12,
+                    // Tightened vertical rhythm (esp. the bottom) so all six cards
+                    // fit above the footer without internal scroll; sides unchanged.
+                    padding: '13px 13px 11px',
+                    cursor: isDisabled ? 'not-allowed' : 'pointer',
+                    opacity: isDisabled ? 0.45 : 1,
+                    textAlign: 'left',
+                    boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
+                    transition: 'all 0.15s ease',
+                    width: '100%',
+                  }}
                 >
-                  {persona.title}
-                </div>
-                <div style={{ color: TEXT_MUTED, fontSize: 12 }}>{persona.desc}</div>
-              </button>
+                  {/* Selection is shown by the border + background highlight alone
+                      (no checkmark) — the border/highlight already read clearly. */}
+                  {/* A single subtle accent tile — goals have no category, so it's an
+                      understated neutral glass chip (no per-goal color), rendered as a
+                      <span> so the title stays the card's first <div>. */}
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 30,
+                      height: 30,
+                      borderRadius: 8,
+                      marginBottom: 8,
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                    }}
+                  >
+                    <GoalIcon style={{ fontSize: 15, color: 'rgba(255,255,255,0.72)' }} />
+                  </span>
+                  {/* Title flows at its natural height (one or two lines) with a
+                      single consistent gap to the description below. No min-height:
+                      reserving a blank second line made one-line-title cards show a
+                      larger title→description gap than two-line ones. Equal card
+                      height comes from the grid, not from padding the title. */}
+                  <div
+                    style={{
+                      color: TEXT_PRIMARY,
+                      fontWeight: 600,
+                      fontSize: 14,
+                      lineHeight: 1.3,
+                      marginBottom: 5,
+                    }}
+                  >
+                    {goal.title}
+                  </div>
+                  {/* One-line floor (not two): every goal description now fits on a
+                      single line at the 2-col modal width, so reserving a second
+                      line only added dead space below and clipped the bottom row.
+                      Row-mates still equalize via the grid's default stretch. */}
+                  <div
+                    style={{
+                      color: TEXT_MUTED,
+                      fontSize: 11.5,
+                      lineHeight: 1.4,
+                      minHeight: '1.4em',
+                    }}
+                  >
+                    {goal.description}
+                  </div>
+                  {/* Screen-reader-only cap reason — joins the disabled card's
+                      accessible name so it isn't a hover-only affordance. */}
+                  {isDisabled && <span style={SR_ONLY_STYLE}>{GOAL_CAP_HINT}</span>}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
@@ -1285,7 +1243,7 @@ export function OnboardingWizard({
       <div>
         {renderStepBadge('Connect your AI')}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
-          Choose a model and connect it. This powers everything - you can change it anytime in
+          Choose a model and connect it. It powers your teammate, and you can change it anytime in
           Settings.
         </Paragraph>
 
@@ -1310,7 +1268,8 @@ export function OnboardingWizard({
                 key={option.id}
                 style={{
                   background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                  border: isSelected ? CARD_SELECTED_BORDER : GLASS_CARD_BORDER,
+                  // Constant border width in both states — no layout shift on select.
+                  border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
                   backdropFilter: 'blur(20px)',
                   WebkitBackdropFilter: 'blur(20px)',
                   borderRadius: 10,
@@ -1465,9 +1424,9 @@ export function OnboardingWizard({
                     {keyBroken && (
                       <Alert
                         type="warning"
-                        message={
+                        title={
                           subscriptionBroken
-                            ? 'Codex login no longer found on this server — sign in with ChatGPT or import it again.'
+                            ? 'Codex login no longer found on this server. Sign in with ChatGPT or import it again.'
                             : 'Key stored but not working - enter a new one.'
                         }
                         showIcon
@@ -1563,7 +1522,7 @@ export function OnboardingWizard({
                           type="info"
                           showIcon
                           style={{ marginBottom: 10, fontSize: 12 }}
-                          message={
+                          title={
                             <span>
                               For claude.ai Pro or Max subscribers. In any terminal with Claude Code
                               installed, run <code>claude setup-token</code>, then paste the printed
@@ -1622,7 +1581,7 @@ export function OnboardingWizard({
                     {llmError && (
                       <Alert
                         type="error"
-                        message={llmError}
+                        title={llmError}
                         showIcon
                         style={{ marginTop: 10, fontSize: 12 }}
                       />
@@ -1637,181 +1596,108 @@ export function OnboardingWizard({
     );
   };
 
-  const renderWorkspace = () => (
-    <div>
-      {renderStepBadge('Name your AI teammate')}
-      <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        An AI teammate is your assistant for getting work done. Each board is recommended to have
-        one primary teammate — give yours a name and an avatar. You can change everything anytime.
-      </Paragraph>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div>
-          <Text style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}>
-            Teammate name
-          </Text>
-          <div style={{ display: 'flex', gap: 0 }}>
-            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
-            <Input
-              aria-label="Teammate name"
-              placeholder="e.g. Rusty, Ada, Scout…"
-              value={teammateName}
-              onChange={(e) => setTeammateName(e.target.value)}
-              style={{
-                background: 'rgba(0,0,0,0.3)',
-                borderColor: 'rgba(255,255,255,0.12)',
-                borderTopLeftRadius: 0,
-                borderBottomLeftRadius: 0,
-                flex: 1,
-              }}
-            />
-          </div>
-          {hasExistingBoard && (
-            <Text style={{ color: TEXT_MUTED, fontSize: 12, display: 'block', marginTop: 6 }}>
-              They'll join your existing board
-              {verifiedBoard?.name ? ` "${verifiedBoard.name}"` : ''}.
-            </Text>
-          )}
-        </div>
-      </div>
-
-      {/* Glossary — reference text, not interactive */}
-      <Divider titlePlacement="start" plain style={{ margin: '24px 0 12px' }}>
-        <Text
-          style={{
-            color: TEXT_MUTED,
-            fontSize: 11,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-          }}
-        >
-          Quick reference
-        </Text>
-      </Divider>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {[
-          { term: 'Branch', def: 'isolated workspace per task' },
-          { term: 'Session', def: 'conversation with your AI' },
-          { term: 'Board', def: 'kanban view of all branches' },
-        ].map(({ term, def }) => (
-          <Text key={term} style={{ color: TEXT_SECONDARY, fontSize: 12 }}>
-            <span style={{ color: TEXT_PRIMARY, fontWeight: 500 }}>{term}</span> — {def}
-          </Text>
-        ))}
-      </div>
-
-      {boardError && <Alert type="error" message={boardError} showIcon style={{ marginTop: 16 }} />}
-    </div>
-  );
-
-  const renderIntegrations = () => {
-    const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
-    return (
-      <div>
-        {renderStepBadge('Recommended tools')}
-
-        {/* General MCP intro — plain helper text, not a card */}
-        <div
-          style={{
-            marginBottom: 16,
-            fontSize: 12,
-            color: TEXT_SECONDARY,
-            lineHeight: 1.6,
-          }}
-        >
-          These are the tools we recommend for your work. You can connect any of them via MCP — just
-          ask your AI teammate to help set them up.
-        </div>
-
-        {/* Persona-curated MCP recommendations — informational list, no selection */}
-        <List
-          dataSource={recs}
-          renderItem={(rec) => (
-            <List.Item style={{ padding: '10px 4px', gap: 12 }}>
-              <McpLogo id={rec.id} name={rec.name} size={20} color={TEXT_PRIMARY} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 13 }}>
-                    {rec.name}
-                  </span>
-                  {rec.featured && (
-                    <Tag
-                      color="processing"
-                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px', margin: 0 }}
-                    >
-                      Recommended
-                    </Tag>
-                  )}
-                </div>
-                <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 1 }}>
-                  {rec.description}
-                </div>
-              </div>
-            </List.Item>
-          )}
-        />
-      </div>
-    );
+  // Selecting a template sets the default avatar (and later the source branch),
+  // but never the name — the name stays personal and user-chosen. Passing null
+  // clears the pick (deselect) and restores the default avatar.
+  const applyTemplate = (templateId: TeammateGalleryCardId | null) => {
+    setSelectedTemplateId(templateId);
+    setInvalidSavedTemplateId(null);
+    setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
   };
 
+  const renderWorkspace = () => (
+    <OnboardingTeammateGalleryStep
+      goals={selectedGoals}
+      selectedTemplateId={selectedTemplateId}
+      onTemplateChange={applyTemplate}
+      teammateName={teammateName}
+      onTeammateNameChange={setTeammateName}
+      teammateEmoji={teammateEmoji}
+      onTeammateEmojiChange={setTeammateEmoji}
+      headingRef={stepHeadingRef}
+    />
+  );
+
   const renderDone = () => {
-    const aiConnected = hasAnyLlmKey(user) || (selectedAgent !== null && apiKey.trim().length > 0);
-    // The checklist sits under "You're ready to build.", the one place in the
-    // wizard that should sound like a welcome, so it names the teammate. The
-    // wizard itself has only created/confirmed the board here — the teammate is
-    // seeded by the app shell right after this step resolves, best-effort — but
-    // the friendlier word is the deliberate call. The board still gates it:
-    // without one there is nowhere to seed a teammate into.
-    const teammateReady = hasExistingBoard;
+    const name = teammateName.trim();
+    // Role = the picked template's title; the blank starter is a starting point,
+    // not a role, so it never reads as a job title on the hero.
+    const template =
+      selectedTemplateId && selectedTemplateId !== BLANK_TEMPLATE_ID
+        ? getTeammateTemplate(selectedTemplateId)
+        : undefined;
+    const roleTitle = template?.title;
+
+    // Adaptive, teammate-centric copy. An unnamed teammate can't be heroed, so it
+    // keeps the warm generic headline; a named one is celebrated by name (+ role).
+    let headline: string;
+    let subline: string;
+    if (completionError) {
+      headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
+      subline = 'Nothing was lost. Review the error below, then try again.';
+    } else if (!name) {
+      headline = completing ? 'Almost ready…' : "You're ready to build.";
+      subline = "Your board is ready. Open it and start whenever you're ready.";
+    } else {
+      // One warm line for every named variant — the headline (${name} is ready.)
+      // and the role pill already carry the specifics, so the subline just lands
+      // "the teammate is yours; shape it by talking to it." No goal-listing.
+      headline = completing ? `${name} is almost ready.` : `${name} is ready.`;
+      subline = `${name} is all yours. Start a chat and tell them what you need. You'll shape how they work as you go.`;
+    }
 
     return (
-      <div style={{ textAlign: 'center', padding: '8px 0' }}>
-        {/* Animated success circle + particles */}
-        <div style={{ position: 'relative', width: 90, height: 90, margin: '0 auto 20px' }}>
-          <svg
-            width="90"
-            height="90"
-            viewBox="0 0 90 90"
-            role="img"
-            aria-label="Success"
-            style={{ position: 'absolute', inset: 0 }}
-          >
-            <title>Success</title>
-            <circle
-              cx="45"
-              cy="45"
-              r="38"
-              fill="none"
-              stroke="rgba(46,154,146,0.15)"
-              strokeWidth="2"
-            />
-            <circle
-              cx="45"
-              cy="45"
-              r="38"
-              fill="none"
-              stroke="#2e9a92"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeDasharray="239"
-              strokeDashoffset="239"
-              className="onb-draw"
-              style={{ transform: 'rotate(-90deg)', transformOrigin: '45px 45px' }}
-            />
-          </svg>
+      // Vertically centered within the step body (see the `done` branch of the
+      // step container): auto margins balance the hero above the pinned footer.
+      <div style={{ textAlign: 'center', padding: '6px 0', margin: 'auto 0' }}>
+        {/* Teammate hero — the avatar (their own emoji) IS the celebration: a soft
+            accent glow + a one-shot ring pulse + a particle burst frame it. */}
+        <div style={{ position: 'relative', width: 92, height: 92, margin: '0 auto 18px' }}>
+          {/* Soft radial accent glow behind the avatar. */}
           <div
+            aria-hidden="true"
+            className="onb-glow"
+            style={{
+              position: 'absolute',
+              inset: -34,
+              borderRadius: '50%',
+              background:
+                'radial-gradient(circle, rgba(46,154,146,0.45) 0%, rgba(46,154,146,0.14) 42%, transparent 70%)',
+              filter: 'blur(4px)',
+              pointerEvents: 'none',
+            }}
+          />
+          {/* One-shot accent ring that expands + fades on entry. */}
+          <div
+            aria-hidden="true"
+            className="onb-ring"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: '50%',
+              border: '2px solid rgba(46,154,146,0.6)',
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            className="onb-check"
             style={{
               position: 'absolute',
               inset: 0,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              borderRadius: '50%',
+              fontSize: 46,
+              lineHeight: 1,
+              background: GLASS_CARD_BG,
+              border: GLASS_CARD_BORDER,
+              boxShadow: GLASS_CARD_SHADOW,
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
             }}
           >
-            <CheckCircleOutlined
-              className="onb-check"
-              style={{ color: SUCCESS_GREEN, fontSize: 36, animationDelay: '0.6s' }}
-            />
+            <span aria-hidden="true">{teammateEmoji || '🤖'}</span>
           </div>
           {PARTICLE_DIRS.map(([px, py], i) => (
             <div
@@ -1834,99 +1720,63 @@ export function OnboardingWizard({
           ))}
         </div>
 
-        <Title level={2} style={{ color: TEXT_PRIMARY, marginBottom: 8, marginTop: 0 }}>
-          You're ready to build.
-        </Title>
-        <Paragraph
-          style={{ color: TEXT_SECONDARY, marginBottom: 28, maxWidth: 380, margin: '0 auto 28px' }}
+        {/* Role pill — reads like the job title you just hired for. */}
+        {roleTitle && (
+          <div
+            style={{
+              display: 'inline-block',
+              color: PRIMARY,
+              background: 'rgba(46,154,146,0.14)',
+              border: '1px solid rgba(46,154,146,0.4)',
+              borderRadius: 999,
+              padding: '2px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              marginBottom: 10,
+            }}
+          >
+            {roleTitle}
+          </div>
+        )}
+
+        <Title
+          ref={stepHeadingRef}
+          data-step={currentStep}
+          level={2}
+          tabIndex={-1}
+          style={{ color: TEXT_PRIMARY, margin: '0 0 8px', outline: 'none' }}
         >
-          {/* Without a model there is no first session to open — the completion
-              handler deliberately stops at the board. Don't promise one. */}
-          {aiConnected
-            ? 'Open your board to start your first AI session.'
-            : 'Open your board to get started. Connect an AI model in Settings whenever you are ready.'}
+          {headline}
+        </Title>
+        <Paragraph style={{ color: TEXT_SECONDARY, maxWidth: 400, margin: '0 auto' }}>
+          {subline}
         </Paragraph>
 
-        {/* Summary checklist */}
-        <div
-          style={{
-            background: GLASS_CARD_BG,
-            border: GLASS_CARD_BORDER,
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            boxShadow: GLASS_CARD_SHADOW,
-            borderRadius: 10,
-            padding: '16px 20px',
-            textAlign: 'left',
-            marginBottom: 8,
-          }}
-        >
-          {[
-            {
-              label: 'AI connected',
-              done: aiConnected,
-              hint: 'Add in Settings - AI & Agents',
-            },
-            {
-              label: 'Teammate ready',
-              done: teammateReady,
-              hint: 'Create a board anytime from the sidebar',
-            },
-            {
-              label: 'MCP tools',
-              done: false,
-              hint: 'Connect anytime via Settings - MCP',
-            },
-          ].map(({ label, done, hint }) => (
-            <div
-              key={label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '6px 0',
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 14,
-                  color: done ? SUCCESS_GREEN : TEXT_MUTED,
-                  fontWeight: 600,
-                  width: 16,
-                  textAlign: 'center',
-                }}
-              >
-                {done ? '✓' : '·'}
-              </span>
-              <Text
-                style={{
-                  color: done ? TEXT_PRIMARY : TEXT_SECONDARY,
-                  flex: 1,
-                  fontSize: 13,
-                }}
-              >
-                {label}
-              </Text>
-              {!done && <Text style={{ color: TEXT_MUTED, fontSize: 11 }}>{hint}</Text>}
-            </div>
-          ))}
-        </div>
+        {completionError && (
+          <Alert
+            type="error"
+            title={completionError}
+            showIcon
+            style={{ marginTop: 18, textAlign: 'left' }}
+          />
+        )}
       </div>
     );
   };
 
   // ─── Footer ───────────────────────────────────────────────────────────────
 
-  const isPrimaryLoading = llmSaving || boardCreating || completing;
+  const isPrimaryLoading = llmSaving || completing;
   const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
 
   const footer = (
     <div
+      className="onb-footer"
       style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: '14px 32px',
+        padding: '14px clamp(16px, 4.4vw, 32px)',
         boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.07)',
         position: 'relative',
         zIndex: 1,
@@ -1948,8 +1798,7 @@ export function OnboardingWizard({
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         {isSkippable && (
           <Button
-            type="text"
-            className="onb-skip"
+            type="link"
             onClick={handleSkip}
             style={{
               color: TEXT_MUTED,
@@ -1987,10 +1836,20 @@ export function OnboardingWizard({
       <Modal
         open={open}
         closable={false}
-        mask={true}
-        keyboard={false}
+        mask={{ closable: false }}
+        keyboard={Boolean(onDismiss)}
+        onCancel={() => {
+          if (onDismiss && !completing && currentStep !== 'done') onDismiss();
+        }}
         footer={null}
-        width={600}
+        // Widened from 600 → 730 so step-2's gallery fits 3 cards per row while
+        // the step-1 goal cards (explicit 2-col grid) simply get more room, keeping
+        // their titles on one line.
+        width={730}
+        // Vertically center instead of antd's default fixed top:100 so the
+        // footer stays on-screen on shorter laptop viewports (the content
+        // region's vh cap keeps header + grid + footer within the viewport).
+        centered
         style={{
           background: MODAL_BG,
           borderRadius: 20,
@@ -2013,10 +1872,13 @@ export function OnboardingWizard({
 
           {/* Dismiss button — only shown when onDismiss is provided and not on the final step */}
           {onDismiss && currentStep !== 'done' && (
-            <button
-              type="button"
+            <Button
+              type="text"
+              size="small"
               aria-label="Close"
               onClick={onDismiss}
+              disabled={completing}
+              icon={<CloseOutlined style={{ fontSize: 12 }} />}
               style={{
                 position: 'absolute',
                 top: 16,
@@ -2038,13 +1900,18 @@ export function OnboardingWizard({
                 boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
                 transition: 'background 0.15s ease',
               }}
-            >
-              <CloseOutlined style={{ fontSize: 12 }} />
-            </button>
+            />
           )}
 
           {/* Progress indicator */}
-          <div style={{ padding: '24px 32px 0', position: 'relative', zIndex: 1 }}>
+          <div
+            className="onb-progress"
+            style={{
+              padding: '18px clamp(16px, 4.4vw, 32px) 0',
+              position: 'relative',
+              zIndex: 1,
+            }}
+          >
             {renderProgressDots()}
           </div>
 
@@ -2053,20 +1920,31 @@ export function OnboardingWizard({
             key={currentStep}
             className="onb-step"
             style={{
-              padding: '16px 32px 20px',
+              padding: '14px clamp(16px, 4.4vw, 32px) 18px',
               // Fixed height keeps the modal from jumping between steps; the viewport
-              // cap + scroll keeps it usable on short/mobile viewports.
-              height: 460,
-              maxHeight: '62vh',
-              overflowY: 'auto',
+              // cap + scroll keeps it usable on short/mobile viewports. The cap is
+              // high enough that the fixed height is honored on typical laptop
+              // viewports so the goals grid + footer are never clipped.
+              boxSizing: 'border-box',
+              height: 'min(460px, calc(100dvh - 192px))',
               position: 'relative',
               zIndex: 1,
+              // Step 2 owns its scrolling via an inner two-region layout (fixed
+              // header + a card region that is the only scroller), so this
+              // container must NOT scroll — it becomes a flex column that clips.
+              // Step 4 (done) is a flex column too, so the success hero can center
+              // vertically via auto margins (and still scroll if it ever overflows).
+              // Every other step scrolls as one block here.
+              ...(currentStep === 'workspace'
+                ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+                : currentStep === 'done'
+                  ? { display: 'flex', flexDirection: 'column', overflowY: 'auto' }
+                  : { overflowY: 'auto' }),
             }}
           >
-            {currentStep === 'persona' && renderPersona()}
+            {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
-            {currentStep === 'integrations' && renderIntegrations()}
             {currentStep === 'done' && renderDone()}
           </div>
 

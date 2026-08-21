@@ -6,6 +6,7 @@ import { getBaseUrl } from '@agor/core/config';
 import {
   executeRaw,
   isPostgresDatabaseHandle,
+  KnowledgeAttributionRepository,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
   type KnowledgeSearchQuery,
@@ -40,6 +41,7 @@ export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & Authenti
 
 export class KnowledgeSearchService {
   private repo: KnowledgeSearchRepository;
+  private attribution: KnowledgeAttributionRepository;
   private documents: KnowledgeDocumentRepository;
   private namespaces: KnowledgeNamespaceRepository;
   private semanticSettings: KnowledgeSemanticSettingsRepository;
@@ -47,6 +49,7 @@ export class KnowledgeSearchService {
 
   constructor(private db: TenantScopeAwareDatabase) {
     this.repo = new KnowledgeSearchRepository(db);
+    this.attribution = new KnowledgeAttributionRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
     this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
@@ -132,6 +135,41 @@ export class KnowledgeSearchService {
       ...result,
       document: docsWithIndexing[index],
     }));
+  }
+
+  private async attachAttributionToResults<T extends KnowledgeSearchResult>(
+    results: T[]
+  ): Promise<T[]> {
+    const versions = results.flatMap((result) =>
+      result.current_version ? [result.current_version] : []
+    );
+    const projected = await this.attribution.attachToDocumentsAndVersions(
+      results.map((result) => result.document),
+      versions
+    );
+    const documentsById = new Map(
+      projected.documents.map((document) => [document.document_id, document])
+    );
+    const versionsById = new Map(
+      projected.versions.map((version) => [version.version_id, version])
+    );
+    return results.map((result) => ({
+      ...result,
+      document: documentsById.get(result.document.document_id) ?? result.document,
+      current_version: result.current_version
+        ? (versionsById.get(result.current_version.version_id) ?? result.current_version)
+        : null,
+    }));
+  }
+
+  private async prepareReadableResults<T extends KnowledgeSearchResult>(
+    results: T[],
+    user: User | undefined,
+    query: KnowledgeSearchQuery
+  ): Promise<T[]> {
+    const readable = (await this.filterReadable(results, user)) as T[];
+    const attributed = await this.attachAttributionToResults(readable);
+    return this.attachIndexingToResults(attributed, query);
   }
 
   private async semanticSearch(
@@ -221,6 +259,9 @@ export class KnowledgeSearchService {
           d.created_by,
           d.created_at,
           d.updated_by,
+          d.updated_by_session_id,
+          d.updated_by_agentic_tool,
+          d.updated_by_teammate_name,
           d.updated_at,
           ns.slug AS namespace_slug,
           ns.display_name AS namespace_display_name,
@@ -313,6 +354,9 @@ export class KnowledgeSearchService {
           created_by: (row.created_by as never) ?? null,
           created_at: new Date(row.created_at as string | number | Date),
           updated_by: (row.updated_by as never) ?? null,
+          updated_by_session_id: (row.updated_by_session_id as never) ?? null,
+          updated_by_agentic_tool: (row.updated_by_agentic_tool as never) ?? null,
+          updated_by_teammate_name: (row.updated_by_teammate_name as string | null) ?? null,
           updated_at: row.updated_at ? new Date(row.updated_at as string | number | Date) : null,
           archived: false,
           archived_at: null,
@@ -344,8 +388,11 @@ export class KnowledgeSearchService {
         chunks: [chunk],
       });
     }
-    const values = await this.filterReadable([...byDoc.values()], user);
-    return this.attachIndexingToResults(values.slice(0, rawQuery.limit ?? 25), rawQuery);
+    const readable = await this.filterReadable([...byDoc.values()], user);
+    const attributed = await this.attachAttributionToResults(
+      readable.slice(0, rawQuery.limit ?? 25)
+    );
+    return this.attachIndexingToResults(attributed, rawQuery);
   }
 
   private hybridMerge(
@@ -358,7 +405,14 @@ export class KnowledgeSearchService {
         const id = result.document.document_id;
         const current = scores.get(id) ?? { result, score: 0 };
         current.score += weight / (index + 1);
-        current.result = { ...current.result, ...result, mode: 'hybrid' };
+        current.result = {
+          ...current.result,
+          ...result,
+          // Semantic results intentionally omit full version content. Preserve
+          // the text result's projected current version when both modes hit.
+          current_version: result.current_version ?? current.result.current_version,
+          mode: 'hybrid',
+        };
         scores.set(id, current);
       });
     };
@@ -374,16 +428,16 @@ export class KnowledgeSearchService {
     const query = await this.scopedQuery(params?.query, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
-    const textResults = await this.filterReadable(
+    const textResults = await this.prepareReadableResults(
       await this.repo.search({ ...query, mode: 'text' }),
-      user
+      user,
+      query
     );
-    const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
-      return this.hybridMerge(textResultsWithIndexing, semanticResults).slice(0, query.limit ?? 25);
+      return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);
     }
-    return textResultsWithIndexing;
+    return textResults;
   }
 
   async create(data: KnowledgeSearchQuery, params?: KnowledgeSearchParams) {
@@ -391,16 +445,16 @@ export class KnowledgeSearchService {
     const query = await this.scopedQuery(data, user);
     if ((query.mode ?? 'text') === 'semantic') return this.semanticSearch(query, user);
 
-    const textResults = await this.filterReadable(
+    const textResults = await this.prepareReadableResults(
       await this.repo.search({ ...query, mode: 'text' }),
-      user
+      user,
+      query
     );
-    const textResultsWithIndexing = await this.attachIndexingToResults(textResults, query);
     if (query.mode === 'hybrid') {
       const semanticResults = await this.semanticSearch(query, user);
-      return this.hybridMerge(textResultsWithIndexing, semanticResults).slice(0, query.limit ?? 25);
+      return this.hybridMerge(textResults, semanticResults).slice(0, query.limit ?? 25);
     }
-    return textResultsWithIndexing;
+    return textResults;
   }
 }
 

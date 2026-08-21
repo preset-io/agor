@@ -18,8 +18,9 @@ import {
 } from '@agor/core/config';
 import { type Database, SessionEnvSelectionRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { User, UserID } from '@agor/core/types';
+import type { Params, User, UserID } from '@agor/core/types';
 import { z } from 'zod';
+import { markTrustedUserMutation } from '../../services/user-mutation-trust.js';
 import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '../registry.js';
 
 /** Mirror of the regex used by the users service. */
@@ -233,11 +234,7 @@ async function applyEnvVarsSubmit(
         env_vars?: Record<string, string>;
         env_var_scopes?: Record<string, 'global' | 'session'>;
       },
-      params?: {
-        user: { user_id: UserID; role: string | undefined };
-        authenticated: true;
-        trustedEnvVarWrite?: boolean;
-      }
+      params?: Params
     ): Promise<unknown>;
   };
 
@@ -268,26 +265,29 @@ async function applyEnvVarsSubmit(
   }
 
   // The widget submit endpoint already authorized the caller via
-  // `canResolveWidget` (session-creator OR prompt-tier branch RBAC), so
-  // we set `trustedEnvVarWrite` on the users.patch hook to bypass its
-  // self-only check (`register-hooks.ts`). Field-level admin gates for
-  // unix_username/role/must_change_password run first and are NOT bypassed.
-  // The hook also enforces that only env_vars/env_var_scopes fields are
-  // written — this escape hatch cannot be used to patch other user fields.
+  // `canResolveWidget` (session-creator OR prompt-tier branch RBAC). The
+  // in-process purpose marker permits only env_vars/env_var_scopes and the
+  // users service still compares the submitter's fresh role with the session
+  // creator's current role. A lower-authority collaborator therefore cannot
+  // use a widget to mutate a higher-authority user's credential environment.
   //
   // submitter identity is still threaded through for audit; the widget
   // submit handler records it separately as `metadata.widget.submitted_by`.
   //
-  // Grep for: trustedEnvVarWrite — to audit every site that sets it.
+  // Grep for: markTrustedUserMutation — to audit every trusted mutation site.
   if (submittedNames.length > 0) {
+    const mutationParams = {
+      user: {
+        user_id: ctx.submitterUserId,
+        role: ctx.submitterRole,
+      },
+      authenticated: true,
+    } as unknown as Params;
+    markTrustedUserMutation(mutationParams, 'env-vars-widget');
     await usersService.patch(
       ctx.sessionCreatorUserId,
       { env_vars: orderedValues, env_var_scopes },
-      {
-        user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-        authenticated: true,
-        trustedEnvVarWrite: true,
-      }
+      mutationParams
     );
   }
 

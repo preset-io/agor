@@ -88,6 +88,7 @@ export function useGlobalSearch({
 
     // Sessions (timestamp field is `last_updated`, not `updated_at`)
     const sessions = Array.from(sessionById.values())
+      .filter((s) => !s.archived)
       .filter((s) => !ownedByMe || s.created_by === currentUserId)
       .filter((s) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s)))
       .sort(byTimestamp((s) => s.last_updated));

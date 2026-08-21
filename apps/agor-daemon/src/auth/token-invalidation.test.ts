@@ -130,18 +130,27 @@ async function createUser(service: UsersService, email: string): Promise<User> {
 
 dbTest('redacts token invalidation marker from external user service responses', async ({ db }) => {
   const usersService = createUsersService(db);
+  const admin = await usersService.create({
+    email: 'redaction-admin@example.test',
+    password: 'password-1234',
+    role: ROLES.ADMIN,
+  });
+  const adminParams = {
+    provider: 'rest',
+    user: { user_id: admin.user_id, email: admin.email, role: admin.role },
+  };
   const user = await createUser(usersService, 'redacted-users@example.test');
 
   const createResult = await usersService.create(
     { email: 'redacted-create@example.test', password: 'password-1234', role: ROLES.MEMBER },
-    { provider: 'rest' }
+    adminParams
   );
   expectNoTokenMarker(createResult);
 
   const patchResult = await usersService.patch(
     user.user_id,
     { password: 'new-password-1234' },
-    { provider: 'rest' }
+    adminParams
   );
   expectNoTokenMarker(patchResult);
 
@@ -152,7 +161,7 @@ dbTest('redacts token invalidation marker from external user service responses',
   expectNoTokenMarker(getResult);
 
   const findResult = await usersService.find({ provider: 'rest' });
-  expect(findResult.data).toHaveLength(2);
+  expect(findResult.data).toHaveLength(3);
   for (const publicUser of findResult.data) {
     expectNoTokenMarker(publicUser);
   }
@@ -257,6 +266,11 @@ dbTest(
       usersService,
     });
     const target = await createUser(usersService, 'admin-reset-target@example.test');
+    const admin = await usersService.create({
+      email: 'admin@example.test',
+      password: 'admin-password-1234',
+      role: ROLES.ADMIN,
+    });
     const issuedBefore = Date.now() - 10_000;
     const oldTokens = issueRuntimeTokenPair(
       target,
@@ -272,7 +286,7 @@ dbTest(
       {
         provider: 'rest',
         authenticated: true,
-        user: { user_id: 'admin-user' as UserID, email: 'admin@example.test', role: ROLES.ADMIN },
+        user: { user_id: admin.user_id, email: admin.email, role: admin.role },
       }
     );
 

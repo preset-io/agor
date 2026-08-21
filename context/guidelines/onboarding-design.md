@@ -4,13 +4,12 @@
 
 This is the house decision for the onboarding wizard
 ([`OnboardingWizard.tsx`](../../apps/agor-ui/src/components/OnboardingWizard/OnboardingWizard.tsx),
-personas in [`onboardingPersonas.ts`](../../apps/agor-ui/src/utils/onboardingPersonas.ts)).
+goals in [`onboardingGoals.ts`](../../apps/agor-ui/src/utils/onboardingGoals.ts)).
 It replaces the shipped role/persona framing. Read it before touching that surface —
 it's the fixed reference so the implementation isn't re-derived from scattered chat and KB docs.
 
-The step's badge label in `OnboardingWizard.tsx` must change from **"You"** to **"Goals"**. "You"
-encoded the old "who are you" framing; "Goals" matches both the new framing and the one-word style
-of the other step labels (e.g. "Workspace").
+The step's badge label is **"Goals"**, not **"You"**. "You" encoded the old "who are you"
+framing; "Goals" matches both the new framing and the one-word style of the other step labels.
 
 ---
 
@@ -33,23 +32,22 @@ prompt. Don't carry that framing forward.
 
 ## The six goal cards (locked copy)
 
-These went through several rounds of copywriting. **Do not rewrite them.** The one exception on
-record: card 1's noun was changed from "assistant" to "teammate" per an explicit resolved decision
-(see "Resolved: it's 'teammate'" below) — a one-word correction to match the product noun, not an
-ad hoc rewrite. The "locked copy" rule still holds for everything else.
+These went through several rounds of copywriting. **Do not rewrite them.** Card 1 has two recorded
+exceptions: its noun changed from "assistant" to "teammate" to match the product noun, and its
+description changed from an unsupported inbox/news promise to Slack and recurring updates (see the
+resolved capability note below). The "locked copy" rule still holds for everything else.
 
-**House test for titles:** every title must pass the **"I want to \___"** test — it should read
-naturally as something a user would say they want ("I want to _hand off the build_"). This is the
-convention for this surface, not a one-off polish pass; hold new or edited titles to it.
+**House test for titles:** each title must name a concrete outcome in language a user would say,
+not a job title or an abstract capability. Keep it short enough to scan as a card heading.
 
-| #   | Card                                     | Description                                                                |
-| --- | ---------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | 🔍 **Get my own personal teammate**      | Reads your inbox, Slack, and news so you don't have to.                    |
-| 2   | ✍️ **Never chase a status update again** | Meeting notes, action items, and project updates — drafted for you.        |
-| 3   | 🛠️ **Ship without the busywork**         | PRs, bug triage, release notes — handled.                                  |
-| 4   | 👥 **Give my team an AI teammate**       | One helper who knows everyone's Slack, docs, and boards — not just yours.  |
-| 5   | 🧱 **Hand off the build**                | A working app, dashboard, or prototype — live on your board, ready to use. |
-| 6   | 🔬 **Dig into anything**                 | Ask a question, get real research back — competitors, markets, data.       |
+| #   | Card                          | Description                                      |
+| --- | ----------------------------- | ------------------------------------------------ |
+| 1   | **Get a personal teammate**   | Keeps up with Slack so you don’t have to.        |
+| 2   | **Never chase an update**     | Meeting notes and status, drafted for you.       |
+| 3   | **Ship without the busywork** | PRs, bug triage, and release notes, all handled. |
+| 4   | **A teammate for the team**   | Knows the whole team's Slack, docs, and boards.  |
+| 5   | **Build me an app**           | A working app or dashboard on a live test env.   |
+| 6   | **Dig into anything**         | Ask a question, get real research back.          |
 
 ---
 
@@ -85,9 +83,10 @@ the old string shape.
 
 Each goal is a small reusable **block** with two parts:
 
-1. **MCP recs** — a short list of integration recommendations.
-2. **Bootstrap strategy** — the goal's outcome plus a concrete primary-goal opening. The outcome
-   is also the text used when that goal is secondary; its opening is not run in that case.
+1. **Tool/connection recs** — a short list whose entries name their real setup surface
+   (Marketplace, Settings → MCP Servers, or an already-connected Agor repository).
+2. **Bootstrap guidance** — the desired outcome plus a concrete first win. The shared prompt owns
+   the only opening strategy, so goal blocks never introduce competing ask-vs-act instructions.
 
 When a user picks two goals, **merge the two blocks with one shared rule** — never write bespoke
 copy per combination. With six goals capped at two picks there are **21** possible selections
@@ -99,7 +98,7 @@ Selection order matters: the **first-picked** goal is the **primary**, the secon
 selections in an **order-preserving array** (append on select, splice on deselect) — not a `Set` or
 any unordered structure, which would silently break "first-picked = primary."
 
-**MCP-rec merge** — the union routinely exceeds 4 (e.g. goal 2 + goal 4 = 6 unique), so "cap at 4"
+**Recommendation merge** — the union routinely exceeds 4 (e.g. goal 2 + goal 4 = 6 unique), so "cap at 4"
 must say _which_ 4 survive. Build the list of **4 shown** in this exact order:
 
 1. Take the first **2** recs from the **primary** goal's list (in the order listed).
@@ -111,40 +110,35 @@ must say _which_ 4 survive. Build the list of **4 shown** in this exact order:
 **Bootstrap-prompt composition** — render one canonical opening, rather than concatenating two
 competing opening instructions:
 
-1. Use the first-picked goal's **primary opening**. Its first sentence must commit to the concrete
-   artifact or action shown in the table below; it must not be a question.
-2. Act immediately when the connected context is sufficient. When a required input is unavailable,
-   do not invent it: after the action-first sentence, ask the single targeted question named by the
-   strategy. This is still action-first, not an open-ended interview.
-3. For two goals, append the secondary goal's **outcome only**, using this bridge: "Once that's
-   underway, I can also help with [secondary outcome]." Do not run the secondary goal's primary
-   opening, ask its question, or ask which goal matters more.
+1. Treat the first-picked goal as primary and include its desired outcome and first win.
+2. If live context is sufficient, perform one concrete first-win action immediately and report the
+   result. If essential context is missing, ask exactly one specific question and act on the answer.
+   Do not conduct an interview.
+3. For two goals, include the secondary goal's outcome and first win, but keep the first goal
+   primary until its first win is delivered or clearly underway. Offer the secondary goal next;
+   never ask the user which selected goal matters more.
 
 This makes selection order executable: one primary determines the first win, while the secondary
 is acknowledged without competing for the opening. For a single goal, apply steps 1–2 and omit the
 bridge.
 
 **Skip / 0 goals** — the step is skippable, so cover the empty case. When the user selects no goals,
-fall back to a **generic default block** — the same spirit as the existing
-`PERSONA_MCP_RECS['_default']` fallback already in the codebase: **no goal-specific bias** in the MCP
-recs, and a generic bootstrap line that follows the user rather than assuming a goal (along the lines
+fall back to a **generic default block** — the same spirit as the old
+`PERSONA_MCP_RECS['_default']` fallback: **no goal-specific bias** in the recommended
+tools, and a generic bootstrap line that follows the user rather than assuming a goal (along the lines
 of "ask what they're working on right now and follow their lead"). This completes the 0 / 1 / 2-goal
 coverage.
 
 ### Per-goal blocks (reference)
 
-The **primary opening** column follows the canonical action-first strategy above. Text before the
-semicolon is the required opening commitment. Text after it is the one targeted question permitted
-only when the teammate lacks the input needed to act.
-
-| Goal                              | MCP recs                                                                                    | Outcome (for secondary bridge)                                  | Primary opening                                                                                                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Get my own personal teammate      | Slack, + existing web-search / knowledge-base tools (no email/news connector yet — see gap) | Set up a recurring brief across scattered sources.              | Offer to assemble a first brief now; if the available sources do not reveal a focus, ask which source or topic is most overwhelming.                                                 |
-| Never chase a status update again | Linear, Shortcut/Jira, Slack, Calendar                                                      | Draft recaps, action items, and project updates.                | Offer to draft a recap with owners and next steps now; if no current project or meeting is available, ask which one to use.                                                          |
-| Ship without the busywork         | GitHub, Sentry, Datadog                                                                     | Find and handle a quick shipping win.                           | Offer to scan open issues and PRs and take the clearest quick win; if no repository is available, ask which repo to use.                                                             |
-| Give my team an AI teammate       | Slack, HubSpot, Linear, Datadog                                                             | Seed a shared teammate for the team's repeated work.            | Offer to turn one repeated team workflow into a shared teammate; if the connected context does not reveal one, ask which task the team repeats most.                                 |
-| Hand off the build                | GitHub, Figma                                                                               | Build a working app, dashboard, or prototype live on the board. | State that you will start the first working version on the board; if no build brief exists, ask what to build and give the concrete examples from the card.                          |
-| Dig into anything                 | Amplitude, HubSpot                                                                          | Deliver a real research finding on demand.                      | Offer to investigate a concrete subject and return the first sourced finding, not a to-do list; if no subject is available, ask which competitor, market, or dataset to investigate. |
+| Goal                      | MCP recs                         | Desired outcome                                  | First win                                                                     |
+| ------------------------- | -------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Get a personal teammate   | Slack                            | A useful recurring brief from connected sources. | A Slack digest based on the channels the user cares about.                    |
+| Never chase an update     | Linear, Atlassian, Notion, Slack | Fewer status chases.                             | A draft recap and action list for the current project or latest meeting.      |
+| Ship without the busywork | GitHub, Sentry, Datadog          | Less shipping busywork.                          | Scan the relevant repo for an actionable issue or pull request.               |
+| A teammate for the team   | Slack, Notion, Linear, Datadog   | A shared teammate for repeated team work.        | Identify one repeated workflow to run from the team board.                    |
+| Build me an app           | GitHub, Figma                    | A working build, not a spec.                     | Start the requested prototype, internal tool, or dashboard live on the board. |
+| Dig into anything         | Amplitude, Firecrawl             | Active research on demand.                       | One evidence-backed finding about the competitor, market, or dataset.         |
 
 ---
 
@@ -159,7 +153,7 @@ Copy on these cards and in bootstrap lines follows three rules:
 - **Second person, short lines, no hedging adjectives.** Drop "robust", "seamless", "powerful".
 
 The canonical source for user-facing voice is the Agor team Knowledge base doc
-`marketing/messaging-and-positioning.md` ("Agor — Messaging & Positioning (v2 draft)"), which
+`marketing/messaging-and-positioning.md` ("Agor — Messaging & Positioning"), which
 CLAUDE.md names as the source of truth for this repo's copy. The rules above are consistent with it;
 the cross-checks below reconcile the three places this surface touches that doc.
 
@@ -191,15 +185,11 @@ assumed.
 
 ---
 
-## Known gap: card 1 promises connectors that don't exist
+## Resolved capability alignment for card 1
 
-Card 1 ("Get my own personal teammate") promises reading your **inbox and news**, but there is
-**no email or news-source MCP connector in the codebase today**. Existing integrations are Slack,
-GitHub, HubSpot, Linear, Sentry, Datadog, Figma, Stripe, and Amplitude.
-
-**Open follow-up — do not silently build a fake capability.** Before card 1's promise ships,
-either land a real email/news connector or adjust the copy to match what actually connects. Flag
-this in the implementation PR.
+Card 1 deliberately promises Slack and recurring updates rather than inbox/news access. Its first
+win is a Slack digest, matching the integration the goal actually recommends. Do not reintroduce an
+email or news promise until the product has a supported connector for it.
 
 ---
 
@@ -208,16 +198,17 @@ this in the implementation PR.
 - [ ] First question asks goal/outcome, not role/job title.
 - [ ] The step badge label is "Goals", not "You".
 - [ ] All six card titles and descriptions match the locked copy exactly.
-- [ ] Every card title passes the "I want to ___" test.
+- [ ] Every card title names a concrete outcome in the user's language.
 - [ ] Selection is multi-select capped at 2, and the step is still skippable.
 - [ ] Selections stored in `preferences.onboarding.goals: string[]` (order-preserving, max 2); legacy `persona` left untouched and not migrated.
 - [ ] Selection state is an order-preserving array (append/splice), not a `Set`, so first-picked = primary holds.
-- [ ] Each goal is a reusable block (MCP recs + outcome + primary opening) — no per-combination copy.
-- [ ] Two-goal MCP recs follow the ordered 4-slot rule (2 primary, 2 secondary, dedup, refill from primary).
-- [ ] Bootstrap uses only the primary goal's action-first opening; it asks at most its one targeted input question when context is missing and never invents the answer.
-- [ ] Two-goal bootstrap adds only the secondary outcome bridge — it does not run the secondary opening, ask its question, or ask the user to reprioritize.
+- [ ] Each goal is a reusable block (routed tool/connection recs + desired outcome + first win) — no per-combination copy.
+- [ ] Every recommendation names a real current setup surface; removed catalog entries are never sent to Marketplace.
+- [ ] Two-goal recommendations follow the ordered 4-slot rule (2 primary, 2 secondary, dedup, refill from primary).
+- [ ] Bootstrap has one canonical ask-or-act strategy; it acts when context is sufficient and otherwise asks exactly one specific question.
+- [ ] Two-goal bootstrap keeps the first selection primary and offers the secondary after the first win is delivered or underway; it never asks the user to reprioritize.
 - [ ] Skip / 0-goal path falls back to a generic default block (no goal bias, follow-the-user bootstrap line); 0/1/2-goal cases all covered.
 - [ ] Card/bootstrap copy names concrete artifacts, stays plain and second-person, and avoids hedging adjectives.
 - [ ] No card headline/subtext uses reserved technical jargon ("git branches", "sessions", "isolation modes").
 - [ ] Card 1 says "teammate" (not "assistant") — a copy-consistency check against the product's established noun, not a decision awaiting sign-off.
-- [ ] Card 1's inbox/news promise is backed by a real connector or the copy was adjusted; the gap is flagged in the PR.
+- [ ] Card 1 promises only supported Slack/recurring-update behavior unless a real email/news connector has landed.

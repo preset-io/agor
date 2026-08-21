@@ -370,27 +370,58 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ## MCP catalog
 
-Agor ships a browsable catalog of MCP servers. It is a file in the repository —
-around fifty reviewed entries — loaded by the daemon at startup, so the
-marketplace works with no network access and there is nothing to configure.
+Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
+on the daemon's first catalog read and then cached for the life of the process, so browsing the
+marketplace requires no external catalog service and there is nothing to configure.
 
 What the catalog offers is therefore a function of the deployed binary: rolling
 back to an older release withdraws entries added since, until you roll forward
 again. That is intended, but it is not something to discover during an incident.
 
-Each entry records whether its endpoint needs an account. Only servers that need
-none can be connected from the marketplace today; the rest are shown with what
-they would ask for, and Connect is not offered. Connecting always checks the
-endpoint first, so an entry whose vendor has since started requiring an account
-is refused rather than installed broken.
+Each entry records whether its endpoint needs an account, but Connect checks the live endpoint rather
+than trusting that record. A completed MCP handshake is installed ready to use. An OAuth challenge is
+installed as a per-user connection. A non-OAuth challenge can be installed when the catalog includes a
+reviewed bearer-token recipe: the drawer asks for the token, and the daemon first durably claims this
+user's connect generation so a slower, older reconnect cannot overwrite a newer token. It then tests the
+token against the catalog URL and writes the server/session only after the probe accepts it. A stale
+catalog auth label therefore does not silently install a connection that the live endpoint will reject.
+
+Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
+accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,
+resource and issuer binding, the exact MCP URL in authorization and token requests, PKCE S256, and
+callback issuer checks. This profile is derived by the daemon; it cannot be selected or persisted as a
+general OAuth mode. An explicit **Strict** or **Legacy** choice on the saved connection remains
+authoritative; Legacy is the deliberately broader operator override. Entries that have passed the
+strict boundary can require it in the catalog — Monday, Cloudflare, and ClickUp currently do — and an
+edited or imported connection, a removed entry, or catalog-configuration drift falls back to Strict.
+
+Agor removed GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi from the catalog. The
+review could not establish a safely bound client-registration or issuer path for those endpoints. Their
+absence is not the earlier state where OAuth cards were offered but failed after Connect; unsupported
+providers are removed from the shelf instead.
+
+Connect may reuse an OAuth credential the caller already holds when it is a live per-user grant for the
+same endpoint, protected resource, requested scope, and catalog OAuth policy. It never reuses another
+user's or a shared grant, and declines rows with custom headers, credential-routing overrides, or stale
+configuration. An expired matching grant may be refreshed before reuse. Reconnecting a bearer-token
+entry reuses only that user's catalog connection and rotates the token after the new session and
+attachment have succeeded.
+
+Every successful Connect creates a new idle session, attaches the server, and opens that session. For an
+open server, a bearer-token server, or OAuth with a reusable live grant, the starter prompt is loaded in
+the composer. A new OAuth connection that still needs sign-in lands in the same session without the
+starter prompt. The dismissible notice above the composer and the warning MCP badge identify the
+unfinished connection; open the badge and activate the server pill to sign in. Agor does not auto-open
+OAuth after navigation because browsers require a short-lived user activation for a reliable popup.
 
 If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
 or delete it — either works. The daemon still accepts the section so an upgrade
 cannot fail on it, and ignores every setting in it.
 
-That connect-time check is a single request, to the entry's own URL and nowhere
-else, and it only connects to public addresses: the hostname is resolved first
-and refused unless every resolved address is globally reachable.
+The unauthenticated connect-time check is a single request to the entry's own URL. A bearer token adds
+one authenticated check to that same URL. Both resolve the hostname first, require every resolved
+address to be globally reachable, pin the checked address, bound the response, and refuse redirects so
+a credential is never forwarded to a destination the catalog did not name.
 
 ---
 

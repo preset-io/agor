@@ -1683,20 +1683,23 @@ describe('ArtifactsService.find SQL pushdown', () => {
       branch_id: branch1,
       name: 'a-branch1',
       files,
+      entry: '/b.js',
     });
-    await artifactRepo.create({
+    const onBranch2 = await artifactRepo.create({
       artifact_id: generateId(),
       board_id: boardA,
       branch_id: branch2,
       name: 'a-branch2',
       files,
+      entry: '/a.js',
     });
-    await artifactRepo.create({
+    const orphan = await artifactRepo.create({
       artifact_id: generateId(),
       board_id: boardA,
       branch_id: null,
       name: 'a-orphan',
       files,
+      entry: '/c.js',
     });
     // boardB: branch1 — must be excluded by a boardA-scoped query.
     await artifactRepo.create({
@@ -1705,10 +1708,11 @@ describe('ArtifactsService.find SQL pushdown', () => {
       branch_id: branch1,
       name: 'b-branch1',
       files,
+      entry: '/d.js',
     });
 
     const service = new ArtifactsService(db, makeFakeApp());
-    return { service, boardA, boardB, branch1, branch2, onBranch1 };
+    return { service, boardA, boardB, branch1, branch2, onBranch1, onBranch2, orphan };
   }
 
   dbTest('pushes board_id into the repository read (rbac off)', async ({ db }) => {
@@ -1730,6 +1734,109 @@ describe('ArtifactsService.find SQL pushdown', () => {
     expect(result.data.every((a) => a.board_id === boardA)).toBe(true);
     // Per-row enrichment ran on the reduced set (rowToArtifact populates files).
     expect(result.data.every((a) => a.files !== undefined)).toBe(true);
+  });
+
+  dbTest('pushes metadata-only $select into the SQL projection', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        board_id: boardA,
+        $select: ['artifact_id', 'name', 'updated_at'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id' | 'name' | 'updated_at'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA, projection: 'metadata' });
+    expect(result.total).toBe(3);
+    expect(result.data).toHaveLength(3);
+    expect(result.data.every((artifact) => Object.keys(artifact).length === 3)).toBe(true);
+  });
+
+  dbTest('keeps non-file runtime fields when only files are excluded', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        board_id: boardA,
+        $select: ['artifact_id', 'dependencies'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id' | 'dependencies'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      board_id: boardA,
+      projection: 'without-files',
+    });
+    expect(result.total).toBe(3);
+    expect(result.data).toHaveLength(3);
+  });
+
+  dbTest('materializes fields used by residual filters before applying $select', async ({ db }) => {
+    const { service, onBranch1 } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        entry: '/b.js',
+        $select: ['artifact_id'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ projection: 'without-files' });
+    expect(result.total).toBe(1);
+    expect(result.data).toEqual([{ artifact_id: onBranch1.artifact_id }]);
+  });
+
+  dbTest('materializes fields used by $sort before applying $select', async ({ db }) => {
+    const { service, boardA, onBranch1, onBranch2, orphan } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: {
+        board_id: boardA,
+        $sort: { entry: 1 },
+        $select: ['artifact_id'],
+      },
+    })) as { data: Array<Pick<Artifact, 'artifact_id'>>; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({
+      board_id: boardA,
+      projection: 'without-files',
+    });
+    expect(result.data.map((artifact) => artifact.artifact_id)).toEqual([
+      onBranch2.artifact_id,
+      onBranch1.artifact_id,
+      orphan.artifact_id,
+    ]);
+  });
+
+  dbTest('keeps the full-row contract for an empty $select', async ({ db }) => {
+    const { service, boardA } = await seedPushdownFixture(db);
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      query: { board_id: boardA, $select: [] },
+    })) as { data: Artifact[]; total: number };
+
+    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
+    expect(result.total).toBe(3);
+    expect(result.data.every((artifact) => artifact.files !== undefined)).toBe(true);
   });
 
   dbTest(

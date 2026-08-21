@@ -151,6 +151,8 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     leaseDurationMs: number;
     identity: DistributedWorkIdentity;
+    /** Explicit user probes may bypass cadence cooldown, never a live owner. */
+    ignoreCooldown?: boolean;
   }): Promise<EnvironmentHealthClaimResult> {
     this.validateClaimInput(input);
     return runDatabaseTransaction(
@@ -182,6 +184,7 @@ export class EnvironmentHealthRepository {
         // fleet-wide cooldown. An expired token means its owner died, so
         // takeover is admitted after lease expiry regardless of the cooldown.
         if (
+          !input.ignoreCooldown &&
           !row.environment_health_claim_token &&
           row.environment_health_next_observation_at &&
           new Date(row.environment_health_next_observation_at).getTime() > now.getTime()

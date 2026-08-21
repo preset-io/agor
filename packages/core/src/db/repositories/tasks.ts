@@ -236,6 +236,7 @@ export interface TaskFindPageOptions {
   sessionIds?: SessionID[];
   status?: Task['status'];
   createdAt?: Date;
+  createdBy?: UUID;
   visibleToUserId?: UUID;
   sort?: Record<string, 1 | -1>;
   selectTaskIdOnly?: boolean;
@@ -592,6 +593,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
     if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
+    if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
     if (opts.visibleToUserId) {
       conditions.push(
         visibleSessionReferenceAccessExists(this.db, opts.visibleToUserId, tasks.session_id)

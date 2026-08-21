@@ -6,12 +6,21 @@
  * renders one page at a time; only the round trip per page is gone.
  */
 
-import type { AgenticToolName, MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
+import type {
+  AgenticToolName,
+  MCPCatalogCategory,
+  MCPCatalogCredentialRequirement,
+  MCPCatalogEntry,
+} from '@agor/core/types';
+import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import { Alert, Button, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAgorStore } from '../../store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { savePromptDraft } from '../../utils/promptDrafts';
 import { CatalogCard } from './CatalogCard';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
@@ -33,7 +42,6 @@ const GRID_SPANS = { xs: 24, sm: 12, lg: 8, xxl: 6 } as const;
 
 const INITIAL_FILTERS: CatalogFilterState = {
   search: '',
-  connectableOnly: false,
   sort: DEFAULT_SORT,
 };
 
@@ -86,12 +94,25 @@ export interface CatalogTabProps {
 export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
+  // Same set the session panel reads, so "is this install finished?" is one
+  // question with one answer wherever it is asked. On this surface it is
+  // usually empty — the marketplace is standalone chrome and does not hydrate
+  // the workspace store — which costs nothing: `mcpServerNeedsAuth` falls back
+  // to the token the daemon injects on the read that produced `mcp_server`.
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // What the live endpoint said it wanted, when a refusal contradicted the
+  // catalog entry the drawer built its form from. Held here rather than in the
+  // drawer because it arrives with the connect response, which is this
+  // component's to make.
+  const [keyRequirement, setKeyRequirement] = useState<MCPCatalogCredentialRequirement | null>(
+    null
+  );
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
@@ -122,10 +143,6 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
     (capability?: string) => applyFilter({ capability }),
     [applyFilter]
   );
-  const onConnectableOnlyChange = useCallback(
-    (connectableOnly: boolean) => applyFilter({ connectableOnly }),
-    [applyFilter]
-  );
   const onSortChange = useCallback(
     (sort: CatalogFilterState['sort']) => applyFilter({ sort }),
     [applyFilter]
@@ -133,10 +150,13 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
 
   const openEntry = useCallback((entry: MCPCatalogEntry) => {
     setConnectError(null);
+    // A requirement learned about one entry says nothing about the next.
+    setKeyRequirement(null);
     setSelected(entry);
   }, []);
 
   const closeDrawer = useCallback(() => {
+    setKeyRequirement(null);
     setSelected(null);
     setConnectError(null);
   }, []);
@@ -156,10 +176,12 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
       branchId,
       agenticTool,
       acknowledgedDisclosure,
+      bearerToken,
     }: {
       branchId: string;
       agenticTool: AgenticToolName;
       acknowledgedDisclosure: string;
+      bearerToken?: string;
     }) => {
       if (!selected || !client) return;
       setConnecting(true);
@@ -170,20 +192,44 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           branch_id: branchId,
           agentic_tool: agenticTool,
           acknowledged_disclosure: acknowledgedDisclosure,
+          // Spread rather than sent as `undefined`: the request carries a key
+          // or it carries no such field, and the daemon reads absence as "the
+          // user supplied nothing" rather than having to unpick which kind of
+          // empty arrived.
+          ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
         rememberConnectBranchId(branchId);
-        if (result.starter_prompt) {
+        // A starter prompt is written to exercise the server it ships with, so
+        // it is only worth arming the composer with once that server can answer
+        // it. A new OAuth install with no reusable grant lands without
+        // credentials: staging the prompt there hands the user a loaded
+        // composer whose only outcome is a tool-less answer, turning a
+        // recoverable state into an invitation to hit the failure. The session
+        // says what is missing instead — see the unauthenticated-server notice
+        // above the composer and the warning MCP badge beside it.
+        if (
+          result.starter_prompt &&
+          !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
+        ) {
           savePromptDraft(result.session.session_id, result.starter_prompt);
         }
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
       } catch (err: unknown) {
         setConnectError(err instanceof Error ? err.message : 'Could not connect this server');
+        // The catalog file is presentational; the endpoint decides. When those
+        // disagree the daemon says so on the refusal, and taking it here is
+        // what turns a dead end — a form demanding a key the endpoint no longer
+        // wants, or offering none where it now does — into one more attempt.
+        // Left alone when the refusal carries no requirement, so an unrelated
+        // failure does not reshape the form.
+        const requirement = readCredentialRequirement(err);
+        if (requirement) setKeyRequirement(requirement);
       } finally {
         setConnecting(false);
       }
     },
-    [client, navigate, selected]
+    [client, navigate, selected, userAuthenticatedMcpServerIds]
   );
 
   return (
@@ -192,12 +238,10 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         search={filters.search}
         category={filters.category}
         capability={filters.capability}
-        connectableOnly={filters.connectableOnly}
         sort={filters.sort}
         onSearchChange={onSearchChange}
         onCategoryChange={onCategoryChange}
         onCapabilityChange={onCapabilityChange}
-        onConnectableOnlyChange={onConnectableOnlyChange}
         onSortChange={onSortChange}
         matchSummary={matchSummary}
       />
@@ -273,6 +317,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         defaultBranchId={getLastConnectBranchId()}
         connecting={connecting}
         connectError={connectError}
+        credentialRequirement={keyRequirement}
         onConnect={handleConnect}
       />
     </Flex>

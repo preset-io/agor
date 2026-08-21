@@ -58,7 +58,7 @@ describe('HealthMonitor tenant context', () => {
       query: { $limit: 1000 },
       paginate: false,
     });
-    monitor.cleanup();
+    await monitor.cleanup();
   });
 
   it('discovers active environments by tenant metadata on startup', async () => {
@@ -91,13 +91,17 @@ describe('HealthMonitor tenant context', () => {
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
 
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(2));
-    expect(branches.checkHealth).toHaveBeenCalledWith('branch-tenant-a', {
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    });
-    expect(branches.checkHealth).toHaveBeenCalledWith('branch-tenant-b', {
-      tenant: { tenant_id: 'tenant-b', source: 'auth_claim' },
-    });
-    monitor.cleanup();
+    expect(branches.checkHealth).toHaveBeenCalledWith(
+      'branch-tenant-a',
+      { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      { signal: expect.any(AbortSignal), intent: 'automatic' }
+    );
+    expect(branches.checkHealth).toHaveBeenCalledWith(
+      'branch-tenant-b',
+      { tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } },
+      { signal: expect.any(AbortSignal), intent: 'automatic' }
+    );
+    await monitor.cleanup();
   });
 
   it('uses the configured static tenant for startup discovery refs without tenant metadata', async () => {
@@ -112,7 +116,25 @@ describe('HealthMonitor tenant context', () => {
     expect(branches.get).toHaveBeenCalledWith('branch-static', {
       tenant: { tenant_id: 'default', source: 'static' },
     });
-    monitor.cleanup();
+    await monitor.cleanup();
+  });
+
+  it('revalidates startup discovery refs and excludes an archived active row', async () => {
+    const branches = new BranchServiceMock();
+    branches.get.mockResolvedValue(
+      makeBranch({ archived: true, environment_instance: { status: 'running' } })
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never, {
+      tenantId: 'default',
+      discoverActiveEnvironmentRefs: async () => [{ branchId: 'branch-archived' as never }],
+    });
+
+    await monitor.initialize();
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    await monitor.cleanup();
   });
 
   it('fails closed when required tenant metadata is missing for event-driven monitoring', async () => {
@@ -133,7 +155,7 @@ describe('HealthMonitor tenant context', () => {
 
     expect(branches.get).not.toHaveBeenCalled();
     expect(branches.checkHealth).not.toHaveBeenCalled();
-    monitor.cleanup();
+    await monitor.cleanup();
   });
 
   it('uses branch tenant_id for event-driven background health checks', async () => {
@@ -158,10 +180,12 @@ describe('HealthMonitor tenant context', () => {
     expect(branches.get).toHaveBeenCalledWith('branch-tenant-a', {
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     });
-    expect(branches.checkHealth).toHaveBeenCalledWith('branch-tenant-a', {
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    });
-    monitor.cleanup();
+    expect(branches.checkHealth).toHaveBeenCalledWith(
+      'branch-tenant-a',
+      { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      { signal: expect.any(AbortSignal), intent: 'automatic' }
+    );
+    await monitor.cleanup();
   });
 
   it('enters the branch tenant DB scope instead of inheriting stale timer scope', async () => {
@@ -199,7 +223,7 @@ describe('HealthMonitor tenant context', () => {
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
 
     expect(ambientTenantIds).toEqual(['tenant-a', 'tenant-a']);
-    monitor.cleanup();
+    await monitor.cleanup();
   });
 
   it('deduplicates repeated lifecycle patches during the startup grace period', async () => {
@@ -221,7 +245,7 @@ describe('HealthMonitor tenant context', () => {
 
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS * 2);
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(3));
-    monitor.cleanup();
+    await monitor.cleanup();
   });
 
   it('cancels a pending grace check when the environment stops', async () => {
@@ -243,8 +267,72 @@ describe('HealthMonitor tenant context', () => {
       ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
     );
     expect(branches.checkHealth).not.toHaveBeenCalled();
-    monitor.cleanup();
+    await monitor.cleanup();
   });
+
+  it('cancels a pending grace check when an active environment is archived', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+    const branch = makeBranch({ environment_instance: { status: 'starting' } });
+
+    branches.emit('patched', branch);
+    branches.emit('patched', makeBranch({ ...branch, archived: true }));
+
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(
+      ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
+    );
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    await monitor.cleanup();
+  });
+
+  it('cancels a pending grace check when the branch is deleted', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+    const branch = makeBranch({ environment_instance: { status: 'running' } });
+
+    branches.emit('patched', branch);
+    branches.emit('removed', branch);
+
+    await vi.advanceTimersByTimeAsync(
+      ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
+    );
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    await monitor.cleanup();
+  });
+
+  it.each(['stopped', 'stopping', 'error'] as const)(
+    'does not monitor an environment in %s state',
+    async (status) => {
+      const branches = new BranchServiceMock();
+      const monitor = new HealthMonitor(makeApp(branches) as never);
+
+      branches.emit('patched', makeBranch({ environment_instance: { status } }));
+      await vi.advanceTimersByTimeAsync(
+        ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
+      );
+
+      expect(monitor.getStatus().monitoringCount).toBe(0);
+      expect(branches.checkHealth).not.toHaveBeenCalled();
+      await monitor.cleanup();
+    }
+  );
+
+  it.each(['starting', 'running'] as const)(
+    'monitors an environment in %s state',
+    async (status) => {
+      const branches = new BranchServiceMock();
+      branches.get.mockResolvedValue(makeBranch({ environment_instance: { status } }));
+      const monitor = new HealthMonitor(makeApp(branches) as never);
+
+      branches.emit('patched', makeBranch({ environment_instance: { status } }));
+      await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+
+      await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+      await monitor.cleanup();
+    }
+  );
 
   it('does not overlap slow health checks for the same branch', async () => {
     const branches = new BranchServiceMock();
@@ -268,7 +356,9 @@ describe('HealthMonitor tenant context', () => {
     await vi.runAllTicks();
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(2));
-    monitor.cleanup();
+    releaseCheck?.();
+    await vi.runAllTicks();
+    await monitor.cleanup();
   });
 
   it('cleanup cancels pending grace timers', async () => {
@@ -276,10 +366,101 @@ describe('HealthMonitor tenant context', () => {
     const monitor = new HealthMonitor(makeApp(branches) as never);
 
     branches.emit('patched', makeBranch({ environment_instance: { status: 'running' } }));
-    monitor.cleanup();
+    await monitor.cleanup();
 
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
     expect(branches.checkHealth).not.toHaveBeenCalled();
     expect(monitor.getStatus().monitoringCount).toBe(0);
+  });
+
+  it('stop aborts an in-flight check and cleanup unregisters lifecycle listeners', async () => {
+    const branches = new BranchServiceMock();
+    let signal: AbortSignal | undefined;
+    branches.checkHealth.mockImplementation(
+      async (_id: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        await new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve()));
+      }
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+    const running = makeBranch({ environment_instance: { status: 'running' } });
+
+    branches.emit('patched', running);
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+
+    branches.emit(
+      'patched',
+      makeBranch({ branch_id: running.branch_id, environment_instance: { status: 'stopped' } })
+    );
+    expect(signal?.aborted).toBe(true);
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+
+    await monitor.cleanup();
+    branches.emit('patched', running);
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+  });
+
+  it('cleanup aborts and drains an in-flight check', async () => {
+    const branches = new BranchServiceMock();
+    let signal: AbortSignal | undefined;
+    let releaseCheck: (() => void) | undefined;
+    branches.checkHealth.mockImplementation(
+      async (_id: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        await new Promise<void>((resolve) => {
+          releaseCheck = resolve;
+        });
+      }
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+
+    branches.emit('patched', makeBranch({ environment_instance: { status: 'running' } }));
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+
+    let cleanupSettled = false;
+    const cleanup = monitor.cleanup().then(() => {
+      cleanupSettled = true;
+    });
+
+    expect(signal?.aborted).toBe(true);
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    await Promise.resolve();
+    expect(cleanupSettled).toBe(false);
+
+    releaseCheck?.();
+    await cleanup;
+    expect(cleanupSettled).toBe(true);
+  });
+
+  it('bounds cleanup draining when in-flight work ignores cancellation', async () => {
+    const branches = new BranchServiceMock();
+    let signal: AbortSignal | undefined;
+    branches.checkHealth.mockImplementation(
+      async (_id: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        await new Promise<void>(() => undefined);
+      }
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never, {
+      shutdownDrainTimeoutMs: 100,
+    });
+
+    branches.emit('patched', makeBranch({ environment_instance: { status: 'running' } }));
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+
+    let cleanupSettled = false;
+    const cleanup = monitor.cleanup().then(() => {
+      cleanupSettled = true;
+    });
+    expect(signal?.aborted).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(cleanupSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await cleanup;
+    expect(cleanupSettled).toBe(true);
   });
 });

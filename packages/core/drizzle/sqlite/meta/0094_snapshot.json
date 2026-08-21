@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "98498ece-f5a9-47a2-a17a-d5eb2fe7c6f3",
-  "prevId": "0d7fea39-1a29-417c-9233-fa8d437040cd",
+  "id": "7f690586-24e6-458c-bf89-bbfb9d604c90",
+  "prevId": "98498ece-f5a9-47a2-a17a-d5eb2fe7c6f3",
   "tables": {
     "agentic_tool_presets": {
       "name": "agentic_tool_presets",
@@ -4819,6 +4819,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "catalog_entry_name": {
+          "name": "catalog_entry_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "data": {
           "name": "data",
           "type": "text",
@@ -4847,6 +4854,12 @@
           "name": "mcp_servers_enabled_idx",
           "columns": ["enabled"],
           "isUnique": false
+        },
+        "mcp_servers_catalog_owner_uq": {
+          "name": "mcp_servers_catalog_owner_uq",
+          "columns": ["coalesce(\"owner_user_id\", '')", "catalog_entry_name"],
+          "isUnique": true,
+          "where": "\"mcp_servers\".\"source\" = 'catalog' AND \"mcp_servers\".\"catalog_entry_name\" IS NOT NULL"
         }
       },
       "foreignKeys": {},
@@ -5723,6 +5736,11 @@
           "columns": ["created_at"],
           "isUnique": false
         },
+        "sessions_archived_updated_idx": {
+          "name": "sessions_archived_updated_idx",
+          "columns": ["archived", "updated_at"],
+          "isUnique": false
+        },
         "sessions_parent_idx": {
           "name": "sessions_parent_idx",
           "columns": ["parent_session_id"],
@@ -6321,6 +6339,107 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "user_external_identities": {
+      "name": "user_external_identities",
+      "columns": {
+        "identity_key": {
+          "name": "identity_key",
+          "type": "text(64)",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "issuer": {
+          "name": "issuer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_login_at": {
+          "name": "last_login_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "user_external_identities_provider_subject_unique": {
+          "name": "user_external_identities_provider_subject_unique",
+          "columns": ["provider", "issuer", "subject"],
+          "isUnique": true
+        },
+        "user_external_identities_user_idx": {
+          "name": "user_external_identities_user_idx",
+          "columns": ["user_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "user_external_identities_user_id_users_user_id_fk": {
+          "name": "user_external_identities_user_id_users_user_id_fk",
+          "tableFrom": "user_external_identities",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "user_mcp_oauth_tokens": {
       "name": "user_mcp_oauth_tokens",
       "columns": {
@@ -6646,6 +6765,11 @@
           "name": "users_email_idx",
           "columns": ["email"],
           "isUnique": false
+        },
+        "users_unix_username_unique": {
+          "name": "users_unix_username_unique",
+          "columns": ["unix_username"],
+          "isUnique": true
         }
       },
       "foreignKeys": {},
@@ -6662,6 +6786,14 @@
     "columns": {}
   },
   "internal": {
-    "indexes": {}
+    "indexes": {
+      "mcp_servers_catalog_owner_uq": {
+        "columns": {
+          "coalesce(\"owner_user_id\", '')": {
+            "isExpression": true
+          }
+        }
+      }
+    }
   }
 }

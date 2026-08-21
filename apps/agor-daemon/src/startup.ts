@@ -7,6 +7,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   type AgorConfig,
   getAgorHome,
@@ -28,7 +29,9 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
-import { containAllTrackedExecutors } from './executor-tracking.js';
+import { beginExecutorResponseDrain } from './executor-response-channel.js';
+import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
+import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { GatewayMessageDeliveryWorker } from './services/gateway-message-delivery-worker.js';
@@ -43,7 +46,7 @@ import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-
 import {
   generateScopedServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from './utils/spawn-executor.js';
 
 const DEBUG_STARTUP =
@@ -577,23 +580,41 @@ async function injectRestartNoticesInTenantScope(
   }
 }
 
-export function runPostStartJob(name: string, job: () => Promise<void> | void): void {
+export function runPostStartJob(
+  name: string,
+  job: () => Promise<void> | void,
+  metrics: DaemonMetrics = NOOP_METRICS
+): void {
+  const startedAt = performance.now();
   void Promise.resolve()
     .then(() => job())
     .then(() => {
+      metrics.increment('background_job.runs', 1, { job: name, outcome: 'success' });
+      metrics.distribution(
+        'background_job.duration_ms',
+        Math.max(0, performance.now() - startedAt),
+        { job: name, outcome: 'success' }
+      );
       startupDebug(`[startup] post-start job completed: ${name}`);
     })
     .catch((error: unknown) => {
+      metrics.increment('background_job.runs', 1, { job: name, outcome: 'failure' });
+      metrics.distribution(
+        'background_job.duration_ms',
+        Math.max(0, performance.now() - startedAt),
+        { job: name, outcome: 'failure' }
+      );
       console.warn(`[startup] post-start job failed: ${name}`, error);
     });
 }
 
 /** Schedule the initial scan only when the monitor exists for this topology. */
 export function initializeEnvironmentHealthMonitor(
-  monitor: EnvironmentHealthMonitor | null
+  monitor: EnvironmentHealthMonitor | null,
+  metrics: DaemonMetrics = NOOP_METRICS
 ): boolean {
   if (!monitor) return false;
-  runPostStartJob('health-monitor-initialize', () => monitor.initialize());
+  runPostStartJob('health-monitor-initialize', () => monitor.initialize(), metrics);
   return true;
 }
 
@@ -656,9 +677,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
     `   health=/health auth=required services=/sessions,/tasks,/messages,/boards,/repos,/mcp-servers,/users`
   );
 
-  initializeEnvironmentHealthMonitor(healthMonitor);
+  const metrics = getDaemonMetrics(app);
+  initializeEnvironmentHealthMonitor(healthMonitor, metrics);
   if (orphanCleanupResult) {
-    runPostStartJob('daemon-restart-notices', () => injectRestartNotices(ctx, orphanCleanupResult));
+    runPostStartJob(
+      'daemon-restart-notices',
+      () => injectRestartNotices(ctx, orphanCleanupResult),
+      metrics
+    );
   }
 
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
@@ -667,39 +693,50 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // accepting requests. This is best-effort; filesystem config scrubbing
   // deliberately skips registered local repos to avoid surprising writes
   // outside Agor-managed storage.
-  runPostStartJob('git-remote-credential-scrub', () =>
-    runStartupTenantDatabaseScope(ctx, async () => {
-      await scrubManagedGitRemoteCredentials(db);
-      if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
-        // A later Cell/storage-admin reconciler must scrub physical configs:
-        // one global executor cannot assume every tenant checkout is mounted.
-        return;
-      }
-      const result = await runExecutorCommand(
-        {
-          command: 'git.managed-credentials.reconcile',
-          sessionToken: generateScopedServiceToken(
-            app as unknown as { settings: { authentication?: { secret?: string } } }
-          ),
-          daemonUrl: getDaemonUrl(),
-          params: {},
-        },
-        { logPrefix: '[startup.git-credential-reconcile]' }
-      );
-      if (!result.success) {
-        throw new Error(result.error?.message ?? 'Managed Git credential reconciliation failed');
-      }
-    })
+  runPostStartJob(
+    'git-remote-credential-scrub',
+    () =>
+      runStartupTenantDatabaseScope(ctx, async () => {
+        await scrubManagedGitRemoteCredentials(db);
+        if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
+          // A later Cell/storage-admin reconciler must scrub physical configs:
+          // one global executor cannot assume every tenant checkout is mounted.
+          return;
+        }
+        const result = await requestExecutor(
+          {
+            command: 'git.managed-credentials.reconcile',
+            sessionToken: generateScopedServiceToken(
+              app as unknown as { settings: { authentication?: { secret?: string } } }
+            ),
+            daemonUrl: getDaemonUrl(),
+            params: {},
+          },
+          { logPrefix: '[startup.git-credential-reconcile]' }
+        );
+        if (!result.success) {
+          throw new Error(result.error?.message ?? 'Managed Git credential reconciliation failed');
+        }
+      }),
+    metrics
   );
 
   // Log the host IP that will be frozen into env command templates as
   // {{host.ip_address}}. Explicit config overrides autodetection.
-  runPostStartJob('host-ip-log', async () => {
-    const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
-    const hostIp = resolveHostIpAddress(config.daemon?.host_ip_address);
-    const source = config.daemon?.host_ip_address ? 'config' : hostIp ? 'autodetected' : 'unknown';
-    startupDebug(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
-  });
+  runPostStartJob(
+    'host-ip-log',
+    async () => {
+      const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
+      const hostIp = resolveHostIpAddress(config.daemon?.host_ip_address);
+      const source = config.daemon?.host_ip_address
+        ? 'config'
+        : hostIp
+          ? 'autodetected'
+          : 'unknown';
+      startupDebug(`🌐 Host IP for env templates: ${hostIp ?? '(none)'} (source: ${source})`);
+    },
+    metrics
+  );
 
   // Security warning: web terminal + simple unix mode = daemon-user shell access.
   // `allow_web_terminal` defaults to true, so the check treats undefined as enabled.
@@ -830,27 +867,31 @@ export async function startup(ctx: StartupContext): Promise<void> {
   console.log('📨 Gateway message delivery worker started');
 
   // 11. Graceful shutdown handler
+  let shutdownStarted = false;
   const shutdown = async (signal: string) => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
     console.log(`\n⏳ Received ${signal}, shutting down gracefully...`);
-
-    // Fail readiness before waiting on any worker drain so ingress stops
-    // assigning new HTTP/Engine.IO sessions immediately.
-    ctx.realtimeRuntime?.beginDrain();
-
-    // Refuse new cost-bearing claims before any other shutdown work can wait.
-    // stop() also aborts the local provider wait and drains its active DB step.
-    if (knowledgeEmbeddingIndexer) {
-      console.log('🧠 Stopping Knowledge embedding indexer...');
-      await knowledgeEmbeddingIndexer.stop();
-    }
-
-    // The process-global sentinel is meaningful only for a standalone daemon.
-    // In shared mode it cannot identify which replica owned any Task.
-    if (ctx.taskRuntimePolicy === 'standalone') {
-      await writeCleanShutdownSentinel(signal);
-    }
-
+    let exitCode = 0;
     try {
+      // Fail readiness before waiting on any worker drain so ingress stops
+      // assigning new HTTP/Engine.IO sessions immediately.
+      ctx.realtimeRuntime?.beginDrain();
+      beginExecutorResponseDrain();
+
+      // Refuse new cost-bearing claims before any other shutdown work can wait.
+      // stop() also aborts the local provider wait and drains its active DB step.
+      if (knowledgeEmbeddingIndexer) {
+        console.log('🧠 Stopping Knowledge embedding indexer...');
+        await knowledgeEmbeddingIndexer.stop();
+      }
+
+      // The process-global sentinel is meaningful only for a standalone daemon.
+      // In shared mode it cannot identify which replica owned any Task.
+      if (ctx.taskRuntimePolicy === 'standalone') {
+        await writeCleanShutdownSentinel(signal);
+      }
+
       // Clean up health monitor
       await healthMonitor?.cleanup();
 
@@ -943,11 +984,25 @@ export async function startup(ctx: StartupContext): Promise<void> {
         console.log('🔌 Closing Redis realtime clients...');
         await ctx.realtimeRuntime.close();
       }
-
-      process.exit(0);
     } catch (error) {
       console.error('❌ Error during shutdown:', error);
-      process.exit(1);
+      exitCode = 1;
+    } finally {
+      try {
+        // A DogStatsD gauge is last-value, so explicitly overwrite this
+        // instance's process-local executor count before closing the socket.
+        clearTrackedExecutorGauge(app);
+      } catch (error) {
+        // The built-in adapter resolves failures, but preserve the shutdown
+        // contract if a test/future adapter violates that boundary.
+        console.warn('[metrics.statsd] Failed to reset executor gauge:', error);
+      }
+      try {
+        await getDaemonMetrics(app).close();
+      } catch (error) {
+        console.warn('[metrics.statsd] Failed to close metrics exporter:', error);
+      }
+      process.exit(exitCode);
     }
   };
 

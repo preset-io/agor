@@ -124,16 +124,20 @@ describe('determineSpawnIdentity', () => {
     expect(result.created_by).toBe(SUPER);
   });
 
-  it('allowSuperadmin=false demotes superadmin to regular user (caller-as-owner)', () => {
-    const result = determineSpawnIdentity(
-      { created_by: BOB },
-      { user_id: SUPER, role: ROLES.SUPERADMIN },
-      WT_FLAG_OFF,
-      { allowSuperadmin: false }
-    );
-    // Without superadmin powers, falls into the "non-admin caller" branch
-    // and the safe default still attributes to caller.
-    expect(result.created_by).toBe(SUPER);
+  it('allowSuperadmin=false preserves ordinary admin authority for superadmins', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = determineSpawnIdentity(
+        { created_by: BOB },
+        { user_id: SUPER, role: ROLES.SUPERADMIN },
+        WT_FLAG_ON,
+        { allowSuperadmin: false }
+      );
+      expect(result).toEqual({ created_by: SUPER, usedLegacySharing: false });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('service accounts preserve parent attribution (no human caller)', () => {

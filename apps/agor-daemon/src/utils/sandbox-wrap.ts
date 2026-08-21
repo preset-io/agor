@@ -4,7 +4,7 @@
  * `spawnExecutorLocal` — the chokepoint for agent workloads: prompt tasks and
  * web terminals, across all agentic tools (tool-agnostic).
  *
- * NOT applied to daemon-internal command spawns (`runExecutorCommand` /
+ * NOT applied to daemon-internal command spawns (`requestExecutor` /
  * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
  * flows) — those are Agor's own trusted code with no agent-authored payload,
  * analogous to repo-level ops running unwrapped.

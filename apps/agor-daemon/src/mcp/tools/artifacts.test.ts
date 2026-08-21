@@ -159,6 +159,43 @@ describe('artifact MCP tool input schemas', () => {
   });
 });
 
+describe('artifact MCP list projection', () => {
+  it('requests the legacy list shape without source files', async () => {
+    const find = vi.fn(async () => ({
+      total: 1,
+      limit: 25,
+      skip: 0,
+      data: [
+        {
+          artifact_id: 'artifact-1',
+          name: 'Artifact',
+          dependencies: { react: '18.3.1' },
+        },
+      ],
+    }));
+    const ctx = {
+      app: {
+        service: vi.fn(() => ({ find })),
+      },
+      baseServiceParams: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+    } as unknown as Parameters<typeof registerArtifactTools>[1];
+
+    await captureHandler('agor_artifacts_list', ctx)({});
+
+    expect(find).toHaveBeenCalledWith({
+      query: expect.objectContaining({
+        $limit: 25,
+        $skip: 0,
+        $select: expect.arrayContaining(['artifact_id', 'dependencies', 'url']),
+      }),
+      ...ctx.baseServiceParams,
+    });
+    expect(find.mock.calls[0]?.[0]?.query.$select).not.toContain('files');
+  });
+});
+
 describe('artifact MCP transaction boundaries', () => {
   it('leaves publish filesystem work and browser waiting outside the DB scope', async () => {
     const publishArtifact = vi.fn(async () => {

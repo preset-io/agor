@@ -54,7 +54,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
 });
 
 const executorMocks = vi.hoisted(() => ({
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
   spawnExecutorFireAndForget: vi.fn(),
 }));
 const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
@@ -63,7 +63,7 @@ vi.mock('../utils/executor-delegated-home.js', () => ({
 }));
 vi.mock('../utils/spawn-executor.js', () => {
   return {
-    runExecutorCommand: executorMocks.runExecutorCommand,
+    requestExecutor: executorMocks.requestExecutor,
     generateScopedServiceToken: vi.fn(() => 'scoped-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon'),
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
@@ -72,7 +72,7 @@ vi.mock('../utils/spawn-executor.js', () => {
 
 describe('ReposService.addLocalRepository executor boundary', () => {
   it('persists sanitized executor metadata with an explicit slug and no remote URL', async () => {
-    executorMocks.runExecutorCommand.mockResolvedValueOnce({
+    executorMocks.requestExecutor.mockResolvedValueOnce({
       success: true,
       data: {
         path: '/trusted/repo',
@@ -91,7 +91,7 @@ describe('ReposService.addLocalRepository executor boundary', () => {
       user: { user_id: '550e8400-e29b-41d4-a716-446655440000' },
     } as never);
 
-    expect(executorMocks.runExecutorCommand).toHaveBeenCalledWith(
+    expect(executorMocks.requestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'git.repo.inspect',
         params: { path: '/submitted/repo' },
@@ -109,7 +109,7 @@ describe('ReposService.addLocalRepository executor boundary', () => {
   });
 
   it('does not persist when executor inspection fails', async () => {
-    executorMocks.runExecutorCommand.mockResolvedValueOnce({
+    executorMocks.requestExecutor.mockResolvedValueOnce({
       success: false,
       error: { code: 'GIT_REPO_INSPECT_FAILED', message: 'Not a valid git repository' },
     });
