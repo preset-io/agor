@@ -40,6 +40,7 @@ import {
   RepoRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   type SaveTokenInput,
   SessionMCPServerRepository,
   SessionRepository,
@@ -55,7 +56,7 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
@@ -236,6 +237,8 @@ import { renderOAuthResultPage } from './utils/html.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
 import {
+  bindMCPDiscoveryOAuthGrant,
+  bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
   type MCPDiscoveryAuthoritySnapshot,
   persistDiscoveredMCPCapabilities,
@@ -4905,11 +4908,15 @@ export async function registerMCPServices(
           // Capture the exact authority/configuration used by this probe before
           // the first provider-controlled await. Persistence re-locks and
           // compares it after discovery; the request never carries this stamp.
-          discoveryAuthority = await captureMCPDiscoveryAuthority(
-            db,
-            tenantId,
-            userId,
-            authoritativeServer
+          discoveryAuthority = await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            runWithTenantDatabaseScope(db, tenantId, (scopedDb) =>
+              captureMCPDiscoveryAuthority(
+                scopedDb,
+                tenantId,
+                userId,
+                authoritativeServer as MCPServer
+              )
+            )
           );
         }
 
@@ -4946,6 +4953,18 @@ export async function registerMCPServices(
           const recheck = validateUrl(resolution.resolved.url);
           if (!recheck.valid) return { success: false, error: recheck.error };
           serverConfig.url = resolution.resolved.url;
+        }
+        if (discoveryAuthority) {
+          discoveryAuthority = bindMCPDiscoveryResolvedConfiguration(
+            discoveryAuthority,
+            {
+              url: resolution.resolved.url,
+              transport: resolution.resolved.transport,
+              auth: resolution.resolved.auth,
+              headers: resolution.resolved.headers,
+            },
+            process.env.AGOR_MASTER_SECRET ?? ''
+          );
         }
 
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
@@ -5049,6 +5068,28 @@ export async function registerMCPServices(
             // The callback durably persisted the token row. The access token
             // is returned only to this in-flight request and is never cached
             // in an origin-only process namespace.
+            if (serverId && discoveryAuthority) {
+              const grantSubject =
+                (serverConfig.auth?.oauth_mode ?? 'per_user') === 'shared' ? null : userId;
+              const persistedGrant = await runWithTenantDatabaseScope(db, tenantId, (scopedDb) =>
+                new UserMCPOAuthTokenRepository(scopedDb, process.env.AGOR_MASTER_SECRET).getToken(
+                  grantSubject,
+                  serverId as MCPServerID
+                )
+              );
+              if (
+                !persistedGrant ||
+                persistedGrant.oauth_access_token !== tokenResponse.access_token
+              ) {
+                throw new Conflict('OAuth authorization changed during MCP discovery. Retry.');
+              }
+              discoveryAuthority = bindMCPDiscoveryOAuthGrant(
+                discoveryAuthority,
+                grantSubject,
+                persistedGrant,
+                process.env.AGOR_MASTER_SECRET ?? ''
+              );
+            }
             return tokenResponse.access_token;
           } catch (error) {
             // A provider/DB rejection is allowed to degrade to "no fresh
@@ -5061,7 +5102,7 @@ export async function registerMCPServices(
             // surface it to the caller instead of silently falling through to
             // an unauthenticated MCP probe.
             if (error instanceof PublicBaseUrlNotConfiguredError) throw error;
-            if (error instanceof Forbidden) throw error;
+            if (error instanceof Forbidden || error instanceof Conflict) throw error;
             console.error(
               `[MCP Discovery] OAuth token acquisition failed category=${
                 error instanceof Error ? error.name : 'unknown'
@@ -5075,14 +5116,12 @@ export async function registerMCPServices(
           // Durable token rows are the only daemon authority. The old cache
           // keyed solely by MCP origin could cross tenant/server/user grants.
           let oauthToken: string | undefined;
+          let selectedGrant: UserMCPOAuthToken | undefined;
+          const lookupUserId = serverConfig.auth?.oauth_mode === 'shared' ? null : userId;
           if (serverId) {
-            oauthToken = await runWithinOAuthBrowserReservation(browserReservation, () =>
-              runInOAuthTenantScope(db, tenantId, async () => {
-                const tokenRepo = new UserMCPOAuthTokenRepository(db);
-                const lookupUserId =
-                  serverConfig.auth?.oauth_mode === 'shared'
-                    ? null
-                    : ((params?.user?.user_id as UserID | undefined) ?? null);
+            selectedGrant = await runWithinOAuthBrowserReservation(browserReservation, () =>
+              runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
+                const tokenRepo = new UserMCPOAuthTokenRepository(scopedDb);
                 const grant = await runWithinOAuthBrowserReservation(browserReservation, () =>
                   tokenRepo.getToken(lookupUserId, serverId as MCPServerID)
                 );
@@ -5123,9 +5162,18 @@ export async function registerMCPServices(
                 if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
                   return undefined;
                 }
-                return grant.oauth_access_token;
+                return grant;
               })
             );
+            oauthToken = selectedGrant?.oauth_access_token;
+            if (selectedGrant && discoveryAuthority) {
+              discoveryAuthority = bindMCPDiscoveryOAuthGrant(
+                discoveryAuthority,
+                lookupUserId,
+                selectedGrant,
+                process.env.AGOR_MASTER_SECRET ?? ''
+              );
+            }
           }
           if (!oauthToken) {
             const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
@@ -5248,27 +5296,35 @@ export async function registerMCPServices(
 
           if (serverId && discoveryAuthority) {
             await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
-              persistDiscoveredMCPCapabilities(db, tenantId, discoveryAuthority, {
-                tools: toolsResult.tools.map((t) => ({
-                  name: t.name,
-                  description: t.description || '',
-                  input_schema: t.inputSchema,
-                })),
-                resources: resourcesResult.resources.map((r) => ({
-                  uri: r.uri,
-                  name: r.name,
-                  mimeType: r.mimeType,
-                })),
-                prompts: promptsResult.prompts.map((p) => ({
-                  name: p.name,
-                  description: p.description || '',
-                  arguments: p.arguments?.map((a) => ({
-                    name: a.name,
-                    description: a.description || '',
-                    required: a.required,
-                  })),
-                })),
-              })
+              runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
+                persistDiscoveredMCPCapabilities(
+                  scopedDb,
+                  tenantId,
+                  discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
+                  {
+                    tools: toolsResult.tools.map((t) => ({
+                      name: t.name,
+                      description: t.description || '',
+                      input_schema: t.inputSchema,
+                    })),
+                    resources: resourcesResult.resources.map((r) => ({
+                      uri: r.uri,
+                      name: r.name,
+                      mimeType: r.mimeType,
+                    })),
+                    prompts: promptsResult.prompts.map((p) => ({
+                      name: p.name,
+                      description: p.description || '',
+                      arguments: p.arguments?.map((a) => ({
+                        name: a.name,
+                        description: a.description || '',
+                        required: a.required,
+                      })),
+                    })),
+                  },
+                  process.env.AGOR_MASTER_SECRET ?? ''
+                )
+              )
             );
             // Discovery writes through a short repository transaction rather
             // than the generic MCP service. Refresh every device belonging to

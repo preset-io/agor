@@ -16,9 +16,9 @@ import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { loadConfigSync } from '../config/config-manager';
 import type { AgorConfig } from '../config/types';
+import { coordinateInMemorySQLiteClient } from './in-memory-sqlite-coordinator';
 import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
-
 // Import both schemas explicitly
 import * as sqliteSchema from './schema.sqlite';
 import { detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
@@ -141,7 +141,8 @@ function createLibSQLClient(config: DbConfig): Client {
       clientConfig.syncInterval = config.syncInterval ?? 60;
     }
 
-    return createClient(clientConfig);
+    const client = createClient(clientConfig);
+    return isInMemorySQLiteUrl(config.url) ? coordinateInMemorySQLiteClient(client) : client;
   } catch (error) {
     throw new DatabaseConnectionError(
       `Failed to create LibSQL client: ${error instanceof Error ? error.message : String(error)}`,

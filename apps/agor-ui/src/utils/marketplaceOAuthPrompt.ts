@@ -23,9 +23,15 @@ export interface PendingMarketplaceOAuthPrompt extends MarketplaceOAuthHandoffAu
 const key = (sessionId: string) => `${KEY_PREFIX}${sessionId}`;
 const suggestionKey = (sessionId: string) => `${SUGGESTION_KEY_PREFIX}${sessionId}`;
 
-function remove(sessionId: string): void {
+type PromptStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function tabStorage(storage?: PromptStorage): PromptStorage {
+  return storage ?? sessionStorage;
+}
+
+function remove(sessionId: string, storage?: PromptStorage): void {
   try {
-    localStorage.removeItem(key(sessionId));
+    tabStorage(storage).removeItem(key(sessionId));
   } catch {
     // ignore unavailable storage
   }
@@ -35,28 +41,33 @@ function remove(sessionId: string): void {
 export function discardPendingMarketplaceOAuthPrompt(
   sessionId: string,
   attemptId: string,
-  popupOperationId: string
+  popupOperationId: string,
+  storage?: PromptStorage
 ): void {
-  const pending = readPendingMarketplaceOAuthPrompt(sessionId);
+  const pending = readPendingMarketplaceOAuthPrompt(sessionId, storage);
   if (pending?.attemptId === attemptId && pending.popupOperationId === popupOperationId) {
-    remove(sessionId);
+    remove(sessionId, storage);
   }
 }
 
 /** Nonsecret handoff only; OAuth protocol data and credentials never enter it. */
-export function savePendingMarketplaceOAuthPrompt(value: PendingMarketplaceOAuthPrompt): void {
+export function savePendingMarketplaceOAuthPrompt(
+  value: PendingMarketplaceOAuthPrompt,
+  storage?: PromptStorage
+): void {
   try {
-    localStorage.setItem(key(value.sessionId), JSON.stringify(value));
+    tabStorage(storage).setItem(key(value.sessionId), JSON.stringify(value));
   } catch {
     // OAuth still succeeds; only prompt seeding is skipped.
   }
 }
 
 export function readPendingMarketplaceOAuthPrompt(
-  sessionId: string
+  sessionId: string,
+  storage?: PromptStorage
 ): PendingMarketplaceOAuthPrompt | null {
   try {
-    const raw = localStorage.getItem(key(sessionId));
+    const raw = tabStorage(storage).getItem(key(sessionId));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<PendingMarketplaceOAuthPrompt>;
     if (
@@ -71,12 +82,12 @@ export function readPendingMarketplaceOAuthPrompt(
       typeof value.createdAt !== 'number' ||
       Date.now() - value.createdAt > MAX_AGE_MS
     ) {
-      remove(sessionId);
+      remove(sessionId, storage);
       return null;
     }
     return value as PendingMarketplaceOAuthPrompt;
   } catch {
-    remove(sessionId);
+    remove(sessionId, storage);
     return null;
   }
 }
@@ -84,12 +95,25 @@ export function readPendingMarketplaceOAuthPrompt(
 /** Attempt-scoped compare-and-delete prevents one flow consuming another. */
 export function consumePendingMarketplaceOAuthPrompt(
   sessionId: string,
-  attemptId: string
+  attemptId: string,
+  storage?: PromptStorage
 ): PendingMarketplaceOAuthPrompt | null {
-  const value = readPendingMarketplaceOAuthPrompt(sessionId);
+  const value = readPendingMarketplaceOAuthPrompt(sessionId, storage);
   if (!value || value.attemptId !== attemptId) return null;
-  remove(sessionId);
+  remove(sessionId, storage);
   return value;
+}
+
+function restorePendingMarketplaceOAuthPrompt(
+  pending: PendingMarketplaceOAuthPrompt,
+  storage: PromptStorage | undefined,
+  isCurrent: () => boolean
+): void {
+  if (!isCurrent()) return;
+  // Never overwrite a newer attempt installed while this status read was in
+  // flight. sessionStorage makes this synchronous within the initiating tab.
+  if (readPendingMarketplaceOAuthPrompt(pending.sessionId, storage)) return;
+  savePendingMarketplaceOAuthPrompt(pending, storage);
 }
 
 /**
@@ -104,15 +128,19 @@ export async function claimMarketplaceOAuthPrompt(input: {
   authenticatedServerIds: ReadonlySet<string>;
   authority: MarketplaceOAuthHandoffAuthority;
   isCurrent: () => boolean;
+  storage?: PromptStorage;
 }): Promise<string | null> {
-  const pending = readPendingMarketplaceOAuthPrompt(input.sessionId);
+  const pending = readPendingMarketplaceOAuthPrompt(input.sessionId, input.storage);
   if (!pending) return null;
+  // Claim synchronously before the first await. A second consumer in this tab
+  // cannot observe or duplicate it. Transient/pending outcomes restore only
+  // if authority is still current and no newer attempt has taken its place.
+  remove(input.sessionId, input.storage);
   if (
     pending.userId !== input.authority.userId ||
     pending.role !== input.authority.role ||
     pending.authGeneration !== input.authority.authGeneration
   ) {
-    remove(input.sessionId);
     return null;
   }
   if (!input.isCurrent()) return null;
@@ -127,23 +155,30 @@ export async function claimMarketplaceOAuthPrompt(input: {
     // success. Remove it now rather than allowing unrelated authentication of
     // the same server to keep retrying it until the general TTL.
     const error = cause as { code?: number; name?: string };
-    if (error.code === 404 || error.name === 'NotFound') remove(input.sessionId);
+    if (error.code !== 404 && error.name !== 'NotFound') {
+      restorePendingMarketplaceOAuthPrompt(pending, input.storage, input.isCurrent);
+    }
     return null;
   }
   if (!input.isCurrent()) return null;
+  if (attempt.attempt_id !== pending.attemptId) return null;
   if (attempt.status === 'succeeded' && attempt.mcp_server_id === pending.serverId) {
     // The attempt row and the authoritative authenticated-server projection
     // can land in either event order. Keep the exact-attempt handoff until both
     // agree, but never let success on another server consume it.
-    if (!input.authenticatedServerIds.has(pending.serverId)) return null;
-    return consumePendingMarketplaceOAuthPrompt(input.sessionId, pending.attemptId)?.prompt ?? null;
+    if (!input.authenticatedServerIds.has(pending.serverId)) {
+      restorePendingMarketplaceOAuthPrompt(pending, input.storage, input.isCurrent);
+      return null;
+    }
+    return pending.prompt;
   }
   if (
     (attempt.status === 'succeeded' && attempt.mcp_server_id !== pending.serverId) ||
     (attempt.status !== 'pending' && attempt.status !== 'exchanging')
   ) {
-    remove(input.sessionId);
+    return null;
   }
+  restorePendingMarketplaceOAuthPrompt(pending, input.storage, input.isCurrent);
   return null;
 }
 
@@ -156,14 +191,17 @@ export async function claimMarketplaceOAuthPrompt(input: {
  * is the fail-closed guarantee: an OAuth completion cannot overwrite text,
  * even when another tab writes at the exact final read/write boundary.
  */
-export function saveMarketplacePromptSuggestion(input: {
-  sessionId: string;
-  prompt: string;
-  authority: MarketplaceOAuthHandoffAuthority;
-}): void {
+export function saveMarketplacePromptSuggestion(
+  input: {
+    sessionId: string;
+    prompt: string;
+    authority: MarketplaceOAuthHandoffAuthority;
+  },
+  storage?: PromptStorage
+): void {
   if (!input.prompt.trim()) return;
   try {
-    sessionStorage.setItem(
+    tabStorage(storage).setItem(
       suggestionKey(input.sessionId),
       JSON.stringify({
         sessionId: input.sessionId,
@@ -179,10 +217,12 @@ export function saveMarketplacePromptSuggestion(input: {
 
 export function consumeMarketplacePromptSuggestion(
   sessionId: string,
-  authority: MarketplaceOAuthHandoffAuthority
+  authority: MarketplaceOAuthHandoffAuthority,
+  storage?: PromptStorage
 ): string | null {
   try {
-    const raw = sessionStorage.getItem(suggestionKey(sessionId));
+    const promptStorage = tabStorage(storage);
+    const raw = promptStorage.getItem(suggestionKey(sessionId));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<PendingMarketplaceOAuthPrompt>;
     if (
@@ -194,14 +234,14 @@ export function consumeMarketplacePromptSuggestion(
       typeof value.createdAt !== 'number' ||
       Date.now() - value.createdAt > MAX_AGE_MS
     ) {
-      sessionStorage.removeItem(suggestionKey(sessionId));
+      promptStorage.removeItem(suggestionKey(sessionId));
       return null;
     }
-    sessionStorage.removeItem(suggestionKey(sessionId));
+    promptStorage.removeItem(suggestionKey(sessionId));
     return value.prompt;
   } catch {
     try {
-      sessionStorage.removeItem(suggestionKey(sessionId));
+      tabStorage(storage).removeItem(suggestionKey(sessionId));
     } catch {
       // ignore unavailable storage
     }
@@ -209,9 +249,12 @@ export function consumeMarketplacePromptSuggestion(
   }
 }
 
-export function discardMarketplacePromptSuggestion(sessionId: string): void {
+export function discardMarketplacePromptSuggestion(
+  sessionId: string,
+  storage?: PromptStorage
+): void {
   try {
-    sessionStorage.removeItem(suggestionKey(sessionId));
+    tabStorage(storage).removeItem(suggestionKey(sessionId));
   } catch {
     // ignore unavailable storage
   }

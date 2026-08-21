@@ -21,7 +21,10 @@ function clientWith(answer: unknown) {
 }
 
 describe('Marketplace OAuth launch', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
 
   it('names only the authoritative saved server and stages a nonsecret prompt handoff', async () => {
     const { client, create } = clientWith({
@@ -49,7 +52,7 @@ describe('Marketplace OAuth launch', () => {
     expect(replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(close).not.toHaveBeenCalled();
     expect(
-      JSON.parse(localStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')!)
+      JSON.parse(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')!)
     ).toMatchObject({
       sessionId: 'session-oauth',
       serverId: 'server-oauth',
@@ -72,7 +75,7 @@ describe('Marketplace OAuth launch', () => {
       })
     ).resolves.toBe(false);
     expect(close).toHaveBeenCalledOnce();
-    expect(localStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
+    expect(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
   });
 
   it('closes without handoff or navigation when authority changes during oauth-start', async () => {
@@ -95,6 +98,7 @@ describe('Marketplace OAuth launch', () => {
     expect(popup.close).toHaveBeenCalledOnce();
     expect(popup.navigate).not.toHaveBeenCalled();
     expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
   });
 
   it.each(['closed', 'replace-throw'] as const)(
@@ -122,7 +126,7 @@ describe('Marketplace OAuth launch', () => {
         })
       ).rejects.toBeInstanceOf(MarketplaceOAuthPopupNavigationError);
       expect(close).toHaveBeenCalledOnce();
-      expect(localStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
+      expect(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
       // No cancellation call is made: the durable attempt remains recoverable
       // from the already-created session.
       expect(client.service('mcp-servers/oauth-start')).toBeDefined();

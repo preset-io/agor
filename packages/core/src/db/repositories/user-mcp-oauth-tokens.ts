@@ -14,7 +14,14 @@ import { randomUUID } from 'node:crypto';
 import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
 import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  executeRaw,
+  insert,
+  lockRowForUpdate,
+  select,
+  update,
+} from '../database-wrapper';
 import { openBoundSecret, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
@@ -266,6 +273,20 @@ export class UserMCPOAuthTokenRepository {
   }
 
   /**
+   * Lock and read the exact grant inside an existing authority transaction.
+   * Discovery uses this only at its final persistence boundary so a refresh,
+   * replacement, or disconnect cannot commit between comparison and the
+   * capability write.
+   */
+  async getTokenForUpdate(
+    userId: UserID | null,
+    serverId: MCPServerID
+  ): Promise<UserMCPOAuthToken | null> {
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    return this.getToken(userId, serverId);
+  }
+
+  /**
    * Read only the protected-resource binding used for catalog credential
    * matching. Unlike `getToken`, this projection never loads or decrypts token
    * or client material into the caller's process.
@@ -339,7 +360,7 @@ export class UserMCPOAuthTokenRepository {
         if (!tenantId || !this.masterSecret) {
           throw new RepositoryError('PostgreSQL MCP OAuth client decryption is not configured');
         }
-        return openMCPOAuthSecret(
+        return openBoundSecret(
           String(value),
           this.masterSecret,
           purpose,

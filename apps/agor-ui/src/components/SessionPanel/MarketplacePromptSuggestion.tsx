@@ -1,0 +1,65 @@
+import { Alert, Button, Space, Typography } from 'antd';
+import React from 'react';
+import { copyToClipboard } from '../../utils/clipboard';
+
+export interface MarketplacePromptSuggestionProps {
+  prompt: string;
+  onInsert: () => void;
+  onDismiss: () => void;
+  style?: React.CSSProperties;
+}
+
+/**
+ * A starter prompt is a suggestion, not a draft mutation. It reaches the
+ * composer only from the explicit Insert action; Copy and Dismiss never touch
+ * composer state.
+ */
+export function MarketplacePromptSuggestion({
+  prompt,
+  onInsert,
+  onDismiss,
+  style,
+}: MarketplacePromptSuggestionProps) {
+  const [copyStatus, setCopyStatus] = React.useState('');
+  const handleCopy = React.useCallback(async () => {
+    const copied = await copyToClipboard(prompt);
+    setCopyStatus(copied ? 'Starter prompt copied' : 'Could not copy starter prompt');
+  }, [prompt]);
+
+  return (
+    <Alert
+      type="info"
+      showIcon
+      style={style}
+      title="Starter prompt suggestion"
+      description={
+        <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+          <Typography.Paragraph
+            style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+          >
+            {prompt}
+          </Typography.Paragraph>
+          <Space size="small" wrap>
+            <Button
+              type="primary"
+              size="small"
+              aria-label="Insert starter prompt in composer"
+              onClick={onInsert}
+            >
+              Insert in composer
+            </Button>
+            <Button size="small" aria-label="Copy starter prompt" onClick={() => void handleCopy()}>
+              Copy
+            </Button>
+            <Button size="small" aria-label="Dismiss starter prompt" onClick={onDismiss}>
+              Dismiss
+            </Button>
+          </Space>
+          <span role="status" aria-live="polite" style={{ position: 'absolute', opacity: 0 }}>
+            {copyStatus}
+          </span>
+        </Space>
+      }
+    />
+  );
+}

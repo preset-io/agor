@@ -46,7 +46,7 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).toContain('loadMcpServerForCaller');
   });
 
-  it('persists capabilities through the helper that opens a tenant unit of work', () => {
+  it('captures and persists only inside explicit tenant database boundaries', () => {
     // Discover is a tenant-identity-only service (see
     // TENANT_IDENTITY_ONLY_SERVICE_PATHS): it performs network I/O, so it
     // never inherits a request-long tenant transaction and each database
@@ -54,10 +54,12 @@ describe('register-services /mcp-servers/discover wiring', () => {
     // scope-requiring handle, which this endpoint's try/catch would report as
     // a discovery failure — after the outbound probe already ran.
     //
-    // `persistDiscoveredMCPCapabilities` opens that scope and is where the
-    // reason this write bypasses `mcp-servers` configuration CRUD is
-    // documented. Reaching a repository directly from here would skip both.
+    // The authority helper accepts only a TenantScopedDatabase and the
+    // persistence helper additionally rejects a non-transactional scope.
+    // Reaching a repository directly from here would skip both boundaries.
     expect(discoverBlock).toContain('persistDiscoveredMCPCapabilities(');
+    expect(discoverBlock).toContain('runWithTenantDatabaseScope(');
+    expect(discoverBlock).toContain('runWithTenantDatabaseTransaction(');
     expect(discoverBlock).not.toMatch(/\bMCPServerRepository\s*\(/);
   });
 

@@ -10,12 +10,15 @@ import {
   isPostgresDatabase,
   MCPServerRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { Conflict } from '@agor/core/feathers';
 import type { MCPServer, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
   persistDiscoveredMCPCapabilities,
 } from './mcp-discovered-capabilities.js';
@@ -26,10 +29,12 @@ const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'discovery authority/configuration CAS (PostgreSQL)',
   () => {
-    let db: Database;
+    let db: TenantScopeAwareDatabase;
+    const masterSecret = 'postgres-mcp-discovery-test-secret';
 
     beforeAll(async () => {
-      db = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      process.env.AGOR_MASTER_SECRET = masterSecret;
+      db = createDatabase({ dialect: 'postgresql', url: postgresUrl! }) as TenantScopeAwareDatabase;
       await initializeDatabase(db);
       if (!isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
     });
@@ -56,28 +61,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         });
         return { ownerId: owner.user_id as UserID, server };
       });
+      const capabilities = { tools: [{ name: 'search' }], resources: [], prompts: [] };
 
-      const stale = await captureMCPDiscoveryAuthority(
-        db,
-        tenantId,
-        seeded.ownerId,
-        seeded.server as MCPServer
-      );
+      const capture = (current: MCPServer) =>
+        runWithTenantDatabaseScope(db, tenantId, async (scoped) =>
+          bindMCPDiscoveryResolvedConfiguration(
+            await captureMCPDiscoveryAuthority(scoped, tenantId, seeded.ownerId, current),
+            {
+              url: current.url ?? '',
+              transport: current.transport,
+              auth: current.auth,
+              headers: current.headers,
+            },
+            masterSecret
+          )
+        );
+      const persist = (
+        snapshot: Awaited<ReturnType<typeof capture>>,
+        discovered: typeof capabilities
+      ) =>
+        runWithTenantDatabaseTransaction(db, tenantId, (scoped) =>
+          persistDiscoveredMCPCapabilities(scoped, tenantId, snapshot, discovered, masterSecret)
+        );
+      const stale = await capture(seeded.server as MCPServer);
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         await new MCPServerRepository(scoped).update(seeded.server.mcp_server_id, {
           url: 'https://b.example.test/mcp',
         });
       });
-      const capabilities = { tools: [{ name: 'search' }], resources: [], prompts: [] };
-      await expect(
-        persistDiscoveredMCPCapabilities(db, tenantId, stale, capabilities)
-      ).rejects.toBeInstanceOf(Conflict);
+      await expect(persist(stale, capabilities)).rejects.toBeInstanceOf(Conflict);
 
       const current = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
         new MCPServerRepository(scoped).findById(seeded.server.mcp_server_id)
       );
-      const fresh = await captureMCPDiscoveryAuthority(db, tenantId, seeded.ownerId, current!);
-      await persistDiscoveredMCPCapabilities(db, tenantId, fresh, capabilities);
+      const fresh = await capture(current!);
+      await persist(fresh, capabilities);
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         await expect(
           new MCPServerRepository(scoped).findById(seeded.server.mcp_server_id)

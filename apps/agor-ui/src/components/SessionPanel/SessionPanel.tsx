@@ -88,6 +88,8 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
+import { appendComposerText } from './composerText';
+import { MarketplacePromptSuggestion } from './MarketplacePromptSuggestion';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
@@ -203,9 +205,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         },
         insertText: (text: string) => {
           setValue((prev) => {
-            const trimmed = prev.trim();
-            const separator = trimmed ? ' ' : '';
-            const nextValue = `${trimmed}${separator}${text}`;
+            const nextValue = appendComposerText(prev, text);
             valueRef.current = nextValue;
             inputValueRef.current = nextValue;
             return nextValue;
@@ -501,6 +501,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     session,
     userAuthenticatedMcpServerIds,
   ]);
+
+  const dismissMarketplacePromptSuggestion = React.useCallback(() => {
+    if (marketplaceSuggestionSessionId) {
+      discardMarketplacePromptSuggestion(marketplaceSuggestionSessionId);
+    }
+    setMarketplacePromptSuggestion(null);
+  }, [marketplaceSuggestionSessionId]);
+
+  const insertMarketplacePromptSuggestion = React.useCallback(() => {
+    if (!marketplacePromptSuggestion || !promptRef.current) return;
+    // PromptInput.insertText appends to (and never replaces) the current
+    // composer value. This mutation occurs only from this explicit click.
+    promptRef.current.insertText(marketplacePromptSuggestion);
+    dismissMarketplacePromptSuggestion();
+  }, [dismissMarketplacePromptSuggestion, marketplacePromptSuggestion]);
 
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local
@@ -912,23 +927,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return (
       <>
         {marketplacePromptSuggestion && (
-          <Alert
-            type="info"
-            showIcon
-            closable
-            message="Starter prompt suggestion"
-            description={
-              <Typography.Paragraph
-                copyable
-                style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
-              >
-                {marketplacePromptSuggestion}
-              </Typography.Paragraph>
-            }
-            onClose={() => {
-              discardMarketplacePromptSuggestion(session.session_id);
-              setMarketplacePromptSuggestion(null);
-            }}
+          <MarketplacePromptSuggestion
+            prompt={marketplacePromptSuggestion}
+            onInsert={insertMarketplacePromptSuggestion}
+            onDismiss={dismissMarketplacePromptSuggestion}
             style={{ marginBottom: token.marginXS, borderRadius: token.borderRadius }}
           />
         )}
@@ -1019,6 +1021,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     token.borderRadius,
     token.marginXS,
     marketplacePromptSuggestion,
+    dismissMarketplacePromptSuggestion,
+    insertMarketplacePromptSuggestion,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).

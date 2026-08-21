@@ -1,4 +1,6 @@
-import { sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { eq, sql } from 'drizzle-orm';
+import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { createDatabaseAsync } from './client';
@@ -11,6 +13,15 @@ import {
 import { runMigrations } from './migrate';
 import { AppVariableRepository } from './repositories/app-variables';
 import { tasks } from './schema.postgres';
+import * as sqliteSchema from './schema.sqlite';
+
+const sqliteAppVariables = sqliteSchema.appVariables;
+type SQLiteDatabase = LibSQLDatabase<typeof sqliteSchema>;
+
+function asSQLite(db: unknown): SQLiteDatabase {
+  return db as SQLiteDatabase;
+}
+
 import { dbTest } from './test-helpers';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -24,7 +35,24 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 async function memoryDatabase() {
   const db = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(db);
-  return db;
+  return asSQLite(db);
+}
+
+function directVariable(key: string, value: string) {
+  const now = new Date();
+  return {
+    variable_id: randomUUID(),
+    namespace: 'direct-isolation',
+    key,
+    value_text: value,
+    value_encrypted: null,
+    is_encrypted: false,
+    content_type: 'text/plain',
+    metadata: null,
+    updated_by: null,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 describe('dateTruncUtc', () => {
@@ -57,6 +85,43 @@ describe('raw query result normalization', () => {
 });
 
 describe('literal-memory SQLite transaction ownership', () => {
+  it('excludes a direct base Drizzle insert from a paused rollback', async () => {
+    const db = await memoryDatabase();
+    const entered = deferred();
+    const finish = deferred();
+    const transaction = runDatabaseTransaction(db, async (tx) => {
+      await asSQLite(tx)
+        .insert(sqliteAppVariables)
+        .values(directVariable('tx-direct', 'discard'))
+        .run();
+      entered.resolve();
+      await finish.promise;
+      throw new Error('direct rollback');
+    });
+    await entered.promise;
+
+    let outsideFinished = false;
+    const outside = db
+      .insert(sqliteAppVariables)
+      .values(directVariable('base-direct', 'keep'))
+      .run()
+      .then(() => {
+        outsideFinished = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(outsideFinished).toBe(false);
+
+    finish.resolve();
+    await expect(transaction).rejects.toThrow('direct rollback');
+    await outside;
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'tx-direct')).get()
+    ).resolves.toBeUndefined();
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'base-direct')).get()
+    ).resolves.toMatchObject({ value_text: 'keep' });
+  });
+
   it('excludes an unrelated base insert until rollback has finished', async () => {
     const db = await memoryDatabase();
     const entered = deferred();
@@ -194,6 +259,116 @@ describe('literal-memory SQLite transaction ownership', () => {
     await expect(repository.getPlain('nested', 'outer-before')).resolves.toBe('kept');
     await expect(repository.getPlain('nested', 'inner')).resolves.toBeNull();
     await expect(repository.getPlain('nested', 'outer-after')).resolves.toBe('kept');
+  });
+
+  it('serializes sibling savepoints so a paused rollback cannot erase a sibling commit', async () => {
+    const db = await memoryDatabase();
+    const entered = deferred();
+    const finish = deferred();
+    const order: string[] = [];
+
+    await runDatabaseTransaction(db, async (outer) => {
+      const first = runDatabaseTransaction(outer, async (nested) => {
+        order.push('a-enter');
+        await asSQLite(nested)
+          .insert(sqliteAppVariables)
+          .values(directVariable('sibling-a', 'discard'))
+          .run();
+        entered.resolve();
+        await finish.promise;
+        order.push('a-rollback');
+        throw new Error('rollback sibling A');
+      });
+      await entered.promise;
+      const second = runDatabaseTransaction(outer, async (nested) => {
+        order.push('b-enter');
+        await asSQLite(nested)
+          .insert(sqliteAppVariables)
+          .values(directVariable('sibling-b', 'keep'))
+          .run();
+        order.push('b-commit');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(order).toEqual(['a-enter']);
+      finish.resolve();
+      await expect(first).rejects.toThrow('rollback sibling A');
+      await second;
+    });
+
+    expect(order).toEqual(['a-enter', 'a-rollback', 'b-enter', 'b-commit']);
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'sibling-a')).get()
+    ).resolves.toBeUndefined();
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'sibling-b')).get()
+    ).resolves.toMatchObject({ value_text: 'keep' });
+  });
+
+  it('serializes the inverse sibling outcome without rolling back an earlier commit', async () => {
+    const db = await memoryDatabase();
+    const entered = deferred();
+    const finish = deferred();
+    const order: string[] = [];
+
+    await runDatabaseTransaction(db, async (outer) => {
+      const first = runDatabaseTransaction(outer, async (nested) => {
+        order.push('a-enter');
+        await asSQLite(nested)
+          .insert(sqliteAppVariables)
+          .values(directVariable('inverse-a', 'keep'))
+          .run();
+        entered.resolve();
+        await finish.promise;
+        order.push('a-commit');
+      });
+      await entered.promise;
+      const second = runDatabaseTransaction(outer, async (nested) => {
+        order.push('b-enter');
+        await asSQLite(nested)
+          .insert(sqliteAppVariables)
+          .values(directVariable('inverse-b', 'discard'))
+          .run();
+        order.push('b-rollback');
+        throw new Error('rollback sibling B');
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(order).toEqual(['a-enter']);
+      finish.resolve();
+      await first;
+      await expect(second).rejects.toThrow('rollback sibling B');
+    });
+
+    expect(order).toEqual(['a-enter', 'a-commit', 'b-enter', 'b-rollback']);
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'inverse-a')).get()
+    ).resolves.toMatchObject({ value_text: 'keep' });
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'inverse-b')).get()
+    ).resolves.toBeUndefined();
+  });
+
+  it('coordinates direct builder run/get/all/execute and releases after errors', async () => {
+    const db = await memoryDatabase();
+    await db.insert(sqliteAppVariables).values(directVariable('builder', 'one')).run();
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'builder')).get()
+    ).resolves.toMatchObject({ value_text: 'one' });
+    await expect(db.select().from(sqliteAppVariables).all()).resolves.toHaveLength(1);
+
+    await db
+      .update(sqliteAppVariables)
+      .set({ value_text: 'two' })
+      .where(eq(sqliteAppVariables.key, 'builder'))
+      .execute();
+    await expect(
+      db.select().from(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'builder')).execute()
+    ).resolves.toEqual([expect.objectContaining({ value_text: 'two' })]);
+
+    await expect(
+      db.insert(sqliteAppVariables).values(directVariable('builder', 'duplicate')).run()
+    ).rejects.toThrow();
+    await db.delete(sqliteAppVariables).where(eq(sqliteAppVariables.key, 'builder')).run();
+    await expect(db.select().from(sqliteAppVariables).all()).resolves.toEqual([]);
   });
 
   dbTest('leaves normal file SQLite on the native transaction path', async ({ db }) => {

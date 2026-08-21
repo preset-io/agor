@@ -28,6 +28,24 @@ const clientWith = (answer: unknown) =>
     service: () => ({ get: vi.fn(async () => answer) }),
   }) as unknown as AgorClient;
 
+function storageContext(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+}
+
 describe('Marketplace OAuth prompt handoff', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -43,9 +61,10 @@ describe('Marketplace OAuth prompt handoff', () => {
       pending
     );
     expect(consumePendingMarketplaceOAuthPrompt(pending.sessionId, pending.attemptId)).toBeNull();
-    expect(JSON.stringify(localStorage)).not.toMatch(
+    expect(JSON.stringify(sessionStorage)).not.toMatch(
       /access.token|refresh.token|secret|issuer|resource/i
     );
+    expect(localStorage.length).toBe(0);
   });
 
   it('requires durable authentication and this exact succeeded attempt', async () => {
@@ -53,7 +72,11 @@ describe('Marketplace OAuth prompt handoff', () => {
     savePendingMarketplaceOAuthPrompt(pending);
     await expect(
       claimMarketplaceOAuthPrompt({
-        client: clientWith({ status: 'succeeded', mcp_server_id: pending.serverId }),
+        client: clientWith({
+          attempt_id: pending.attemptId,
+          status: 'succeeded',
+          mcp_server_id: pending.serverId,
+        }),
         sessionId: pending.sessionId,
         authenticatedServerIds: new Set(),
         authority,
@@ -64,7 +87,11 @@ describe('Marketplace OAuth prompt handoff', () => {
 
     await expect(
       claimMarketplaceOAuthPrompt({
-        client: clientWith({ status: 'succeeded', mcp_server_id: pending.serverId }),
+        client: clientWith({
+          attempt_id: pending.attemptId,
+          status: 'succeeded',
+          mcp_server_id: pending.serverId,
+        }),
         sessionId: pending.sessionId,
         authenticatedServerIds: new Set([pending.serverId]),
         authority,
@@ -138,13 +165,115 @@ describe('Marketplace OAuth prompt handoff', () => {
     expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBeNull();
   });
 
+  it('keeps both handoff and suggestion invisible to another tab storage context', () => {
+    const initiatingTab = storageContext();
+    const otherTab = storageContext();
+    const pending = value();
+    savePendingMarketplaceOAuthPrompt(pending, initiatingTab);
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId, initiatingTab)).toEqual(pending);
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId, otherTab)).toBeNull();
+
+    saveMarketplacePromptSuggestion(
+      { sessionId: pending.sessionId, prompt: pending.prompt, authority },
+      initiatingTab
+    );
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority, otherTab)).toBeNull();
+    expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority, initiatingTab)).toBe(
+      pending.prompt
+    );
+  });
+
+  it('removes before await so concurrent consumers in one tab cannot duplicate a prompt', async () => {
+    const initiatingTab = storageContext();
+    const pending = value();
+    savePendingMarketplaceOAuthPrompt(pending, initiatingTab);
+    let resolveAttempt!: (value: MCPOAuthAttemptResult) => void;
+    const held = new Promise<MCPOAuthAttemptResult>((resolve) => (resolveAttempt = resolve));
+    const client = {
+      service: () => ({ get: vi.fn(() => held) }),
+    } as unknown as AgorClient;
+    const input = {
+      client,
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set([pending.serverId]),
+      authority,
+      isCurrent: () => true,
+      storage: initiatingTab,
+    };
+
+    const first = claimMarketplaceOAuthPrompt(input);
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId, initiatingTab)).toBeNull();
+    await expect(claimMarketplaceOAuthPrompt(input)).resolves.toBeNull();
+    resolveAttempt({
+      attempt_id: pending.attemptId,
+      mcp_server_id: pending.serverId,
+      status: 'succeeded',
+    } as MCPOAuthAttemptResult);
+    await expect(first).resolves.toBe(pending.prompt);
+    await expect(claimMarketplaceOAuthPrompt(input)).resolves.toBeNull();
+  });
+
+  it('restores a transiently unreadable exact attempt only while authority remains current', async () => {
+    const pending = value();
+    const transientClient = {
+      service: () => ({ get: vi.fn(async () => Promise.reject(new Error('temporarily offline'))) }),
+    } as unknown as AgorClient;
+    savePendingMarketplaceOAuthPrompt(pending);
+    await expect(
+      claimMarketplaceOAuthPrompt({
+        client: transientClient,
+        sessionId: pending.sessionId,
+        authenticatedServerIds: new Set([pending.serverId]),
+        authority,
+        isCurrent: () => true,
+      })
+    ).resolves.toBeNull();
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toEqual(pending);
+
+    let current = true;
+    const heldClient = {
+      service: () => ({
+        get: vi.fn(async () => {
+          current = false;
+          throw new Error('identity changed');
+        }),
+      }),
+    } as unknown as AgorClient;
+    await claimMarketplaceOAuthPrompt({
+      client: heldClient,
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set([pending.serverId]),
+      authority,
+      isCurrent: () => current,
+    });
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
+  });
+
   it('removes cancelled, stale, or wrong-authority handoffs', async () => {
     const pending = value();
     savePendingMarketplaceOAuthPrompt(pending);
     await claimMarketplaceOAuthPrompt({
-      client: clientWith({ status: 'failed', mcp_server_id: pending.serverId }),
+      client: clientWith({
+        attempt_id: pending.attemptId,
+        status: 'failed',
+        mcp_server_id: pending.serverId,
+      }),
       sessionId: pending.sessionId,
       authenticatedServerIds: new Set(),
+      authority,
+      isCurrent: () => true,
+    });
+    expect(readPendingMarketplaceOAuthPrompt(pending.sessionId)).toBeNull();
+
+    savePendingMarketplaceOAuthPrompt(pending);
+    await claimMarketplaceOAuthPrompt({
+      client: clientWith({
+        attempt_id: 'unrelated-later-attempt',
+        status: 'succeeded',
+        mcp_server_id: pending.serverId,
+      }),
+      sessionId: pending.sessionId,
+      authenticatedServerIds: new Set([pending.serverId]),
       authority,
       isCurrent: () => true,
     });
@@ -155,7 +284,11 @@ describe('Marketplace OAuth prompt handoff', () => {
 
     savePendingMarketplaceOAuthPrompt(pending);
     await claimMarketplaceOAuthPrompt({
-      client: clientWith({ status: 'succeeded', mcp_server_id: pending.serverId }),
+      client: clientWith({
+        attempt_id: pending.attemptId,
+        status: 'succeeded',
+        mcp_server_id: pending.serverId,
+      }),
       sessionId: pending.sessionId,
       authenticatedServerIds: new Set([pending.serverId]),
       authority: { ...authority, userId: 'bob' },

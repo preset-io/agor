@@ -1,28 +1,40 @@
+import { resolveUserEnvironment } from '@agor/core/config';
 import {
   createDatabaseAsync,
+  encryptApiKey,
   eq,
   MCPServerRepository,
   mcpServers,
   runMigrations,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
   update,
+  users,
 } from '@agor/core/db';
 import { Conflict, Forbidden } from '@agor/core/feathers';
 import type { MCPServer, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  bindMCPDiscoveryOAuthGrant,
+  bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
   fingerprintMCPDiscoveryConfiguration,
   persistDiscoveredMCPCapabilities,
 } from './mcp-discovered-capabilities.js';
+import { resolveProbeServerTemplates } from './mcp-probe-templates.js';
 
 let db: TenantScopeAwareDatabase;
 let ownerId: UserID;
 let server: MCPServer;
+const masterSecret = 'mcp-discovery-test-master-secret';
 
 async function seed(): Promise<void> {
+  process.env.AGOR_MASTER_SECRET = masterSecret;
   db = (await createDatabaseAsync({
     dialect: 'sqlite',
     url: ':memory:',
@@ -47,6 +59,37 @@ async function seed(): Promise<void> {
   });
 }
 
+async function captureSnapshot(currentServer: MCPServer = server) {
+  return runWithTenantDatabaseScope(db, undefined, async (scopedDb) => {
+    const snapshot = await captureMCPDiscoveryAuthority(
+      scopedDb,
+      undefined,
+      ownerId,
+      currentServer
+    );
+    const environment = await resolveUserEnvironment(ownerId, scopedDb);
+    const resolution = resolveProbeServerTemplates(
+      {
+        url: currentServer.url ?? '',
+        transport: currentServer.transport,
+        auth: currentServer.auth,
+        headers: currentServer.headers,
+        name: currentServer.name,
+        mcpServerId: currentServer.mcp_server_id,
+      },
+      environment
+    );
+    if (!resolution.ok) throw new Error(resolution.error);
+    return bindMCPDiscoveryResolvedConfiguration(snapshot, resolution.resolved, masterSecret);
+  });
+}
+
+async function persistSnapshot(snapshot: Awaited<ReturnType<typeof captureSnapshot>>) {
+  return runWithTenantDatabaseTransaction(db, undefined, (scopedDb) =>
+    persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, capabilities, masterSecret)
+  );
+}
+
 const capabilities = {
   tools: [{ name: 'search', description: 'Search' }],
   resources: [{ uri: 'file:///a', name: 'a' }],
@@ -57,8 +100,8 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
   beforeEach(seed);
 
   it('persists only capability paths after an unchanged held network phase', async () => {
-    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
-    await persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities);
+    const snapshot = await captureSnapshot();
+    await persistSnapshot(snapshot);
 
     await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
       {
@@ -74,12 +117,12 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
   });
 
   it('rejects endpoint A to B while provider I/O is held and writes no stale capabilities', async () => {
-    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const snapshot = await captureSnapshot();
     let releaseNetwork!: () => void;
     const network = new Promise<void>((resolve) => (releaseNetwork = resolve));
     const heldDiscovery = (async () => {
       await network;
-      await persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities);
+      await persistSnapshot(snapshot);
     })();
 
     await new MCPServerRepository(db).update(server.mcp_server_id, {
@@ -97,15 +140,13 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
   });
 
   it('rejects HTTP to stdio before persistence', async () => {
-    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const snapshot = await captureSnapshot();
     await new MCPServerRepository(db).update(server.mcp_server_id, {
       transport: 'stdio',
       command: 'unsafe-new-command',
     });
 
-    await expect(
-      persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities)
-    ).rejects.toBeInstanceOf(Forbidden);
+    await expect(persistSnapshot(snapshot)).rejects.toBeInstanceOf(Forbidden);
     await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
       {
         transport: 'stdio',
@@ -116,22 +157,18 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
 
   it('rejects role demotion and policy changes made during discovery', async () => {
     await setMcpMemberPolicy(db, 'allow_private_only', undefined);
-    const roleSnapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const roleSnapshot = await captureSnapshot();
     await new UsersRepository(db).update(ownerId, { role: 'viewer' });
-    await expect(
-      persistDiscoveredMCPCapabilities(db, undefined, roleSnapshot, capabilities)
-    ).rejects.toBeInstanceOf(Forbidden);
+    await expect(persistSnapshot(roleSnapshot)).rejects.toBeInstanceOf(Forbidden);
 
     await new UsersRepository(db).update(ownerId, { role: 'member' });
-    const policySnapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const policySnapshot = await captureSnapshot();
     await setMcpMemberPolicy(db, 'use_existing_only', undefined);
-    await expect(
-      persistDiscoveredMCPCapabilities(db, undefined, policySnapshot, capabilities)
-    ).rejects.toBeInstanceOf(Conflict);
+    await expect(persistSnapshot(policySnapshot)).rejects.toBeInstanceOf(Conflict);
   });
 
   it('rejects an ownership change made while discovery is in flight', async () => {
-    const snapshot = await captureMCPDiscoveryAuthority(db, undefined, ownerId, server);
+    const snapshot = await captureSnapshot();
     const replacement = await new UsersRepository(db).create({
       email: 'replacement-owner@example.test',
       name: 'Replacement owner',
@@ -142,9 +179,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
       .where(eq(mcpServers.mcp_server_id, server.mcp_server_id))
       .run();
 
-    await expect(
-      persistDiscoveredMCPCapabilities(db, undefined, snapshot, capabilities)
-    ).rejects.toBeInstanceOf(Forbidden);
+    await expect(persistSnapshot(snapshot)).rejects.toBeInstanceOf(Forbidden);
   });
 
   it('binds ownership and every secret-bearing configuration field into an internal-only stamp', () => {
@@ -160,5 +195,138 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
         auth: { type: 'bearer', token: 'rotated-secret' },
       })
     ).not.toBe(fingerprintMCPDiscoveryConfiguration(server));
+  });
+
+  it('rejects unscoped and non-transactional use even if a caller casts around the type', async () => {
+    await expect(
+      captureMCPDiscoveryAuthority(
+        db as unknown as TenantScopedDatabase,
+        undefined,
+        ownerId,
+        server
+      )
+    ).rejects.toThrow('explicit tenant database scope');
+
+    const snapshot = await captureSnapshot();
+    await expect(
+      runWithTenantDatabaseScope(db, undefined, (scopedDb) =>
+        persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, capabilities, masterSecret)
+      )
+    ).rejects.toThrow('tenant-scoped transaction');
+  });
+
+  it('rejects same-millisecond user environment rotation with an HMAC fence', async () => {
+    server = (await new MCPServerRepository(db).update(server.mcp_server_id, {
+      url: '{{ user.env.MCP_DISCOVERY_URL }}',
+    })) as MCPServer;
+    const stableUpdatedAt = new Date('2026-08-21T00:00:00.000Z');
+    const storedEnv = (value: string) => ({
+      MCP_DISCOVERY_URL: { value_encrypted: encryptApiKey(value), scope: 'global' },
+    });
+    await update(db, users)
+      .set({
+        data: { env_vars: storedEnv('https://a.example.test/mcp') },
+        updated_at: stableUpdatedAt,
+      })
+      .where(eq(users.user_id, ownerId))
+      .run();
+
+    const snapshot = await captureSnapshot(server);
+    expect(JSON.stringify(snapshot)).not.toContain('https://a.example.test/mcp');
+    await update(db, users)
+      .set({
+        data: { env_vars: storedEnv('https://b.example.test/mcp') },
+        updated_at: stableUpdatedAt,
+      })
+      .where(eq(users.user_id, ownerId))
+      .run();
+
+    await expect(persistSnapshot(snapshot)).rejects.toBeInstanceOf(Conflict);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      {
+        tools: undefined,
+      }
+    );
+  });
+
+  it('rejects OAuth account replacement, generation, binding, and refresh rotation', async () => {
+    server = (await new MCPServerRepository(db).update(server.mcp_server_id, {
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    })) as MCPServer;
+    const saveGrant = (generation: number, suffix: string) =>
+      runWithTenantDatabaseScope(db, undefined, (scopedDb) =>
+        new UserMCPOAuthTokenRepository(scopedDb, masterSecret).saveToken(
+          ownerId,
+          server.mcp_server_id,
+          {
+            accessToken: `access-${suffix}`,
+            refreshToken: `refresh-${suffix}`,
+            clientId: `client-${suffix}`,
+            clientSecret: `client-secret-${suffix}`,
+            grantBinding: {
+              generation,
+              version: 4,
+              fingerprint: `binding-${suffix}`,
+              metadataUri: `https://${suffix}.example.test/oauth/resource`,
+              resourceUri: `https://${suffix}.example.test/mcp`,
+              issuer: `https://${suffix}.example.test`,
+              authorizationEndpoint: `https://${suffix}.example.test/oauth/authorize`,
+              tokenEndpoint: `https://${suffix}.example.test/oauth/token`,
+              redirectUri: 'https://agor.example.test/oauth/callback',
+            },
+          }
+        )
+      );
+    await saveGrant(1, 'account-a');
+    let snapshot = await captureSnapshot(server);
+    snapshot = await runWithTenantDatabaseScope(db, undefined, async (scopedDb) => {
+      const grant = await new UserMCPOAuthTokenRepository(scopedDb, masterSecret).getToken(
+        ownerId,
+        server.mcp_server_id
+      );
+      if (!grant) throw new Error('expected OAuth grant');
+      return bindMCPDiscoveryOAuthGrant(snapshot, ownerId, grant, masterSecret);
+    });
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /access-account-a|refresh-account-a|client-secret/
+    );
+
+    await saveGrant(2, 'account-b');
+    await expect(persistSnapshot(snapshot)).rejects.toBeInstanceOf(Conflict);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      {
+        tools: undefined,
+      }
+    );
+  });
+
+  it('rejects deletion of the exact OAuth grant used for the provider probe', async () => {
+    server = (await new MCPServerRepository(db).update(server.mcp_server_id, {
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    })) as MCPServer;
+    await runWithTenantDatabaseScope(db, undefined, (scopedDb) =>
+      new UserMCPOAuthTokenRepository(scopedDb, masterSecret).saveToken(
+        ownerId,
+        server.mcp_server_id,
+        { accessToken: 'access-before-delete', refreshToken: 'refresh-before-delete' }
+      )
+    );
+    let snapshot = await captureSnapshot(server);
+    snapshot = await runWithTenantDatabaseScope(db, undefined, async (scopedDb) => {
+      const grant = await new UserMCPOAuthTokenRepository(scopedDb, masterSecret).getToken(
+        ownerId,
+        server.mcp_server_id
+      );
+      if (!grant) throw new Error('expected OAuth grant');
+      return bindMCPDiscoveryOAuthGrant(snapshot, ownerId, grant, masterSecret);
+    });
+    await runWithTenantDatabaseScope(db, undefined, (scopedDb) =>
+      new UserMCPOAuthTokenRepository(scopedDb, masterSecret).deleteToken(
+        ownerId,
+        server.mcp_server_id
+      )
+    );
+
+    await expect(persistSnapshot(snapshot)).rejects.toBeInstanceOf(Conflict);
   });
 });

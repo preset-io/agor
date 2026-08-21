@@ -35,27 +35,16 @@ import { getCurrentTenantId } from './tenant-context';
  * handle observes the same ownership boundary, though: otherwise an unrelated
  * base query can accidentally join, commit, or roll back the open transaction.
  *
- * The coordinator is stored on the database handle (and consequently follows
- * the tenant-scoped proxies that wrap it). It is not process-global: two
- * databases, including two tenant database handles, never wait on each other.
+ * The coordinator lives below Drizzle on the one libsql client. It is not
+ * process-global: two database handles never wait on each other.
  */
-const IN_MEMORY_SQLITE_COORDINATOR = Symbol('agor.db.sqlite.in-memory.coordinator');
 const IN_MEMORY_SQLITE_TRANSACTION_SCOPE = Symbol('agor.db.sqlite.in-memory.transaction-scope');
 
-interface InMemorySQLiteCoordinator {
-  tail: Promise<void>;
-  owner?: symbol;
-  savepointSequence: number;
-}
-
 interface InMemorySQLiteTransactionScope {
-  base: Database;
-  coordinator: InMemorySQLiteCoordinator;
-  owner: symbol;
-}
-
-async function runInMemorySQLiteStatement(db: Database, statement: SQL): Promise<void> {
-  await (db as LibSQLDatabase<typeof sqliteSchema>).run(statement);
+  /** The current Drizzle transaction/savepoint handle. */
+  current: Database;
+  /** Serializes sibling savepoint callbacks on the one connection. */
+  tail: Promise<void>;
 }
 
 function readInMemoryTransactionScope(db: Database): InMemorySQLiteTransactionScope | undefined {
@@ -64,67 +53,41 @@ function readInMemoryTransactionScope(db: Database): InMemorySQLiteTransactionSc
     | undefined;
 }
 
-function getInMemorySQLiteCoordinator(db: Database): InMemorySQLiteCoordinator | undefined {
-  const scope = readInMemoryTransactionScope(db);
-  if (scope) return scope.coordinator;
-  if ((db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] !== true) {
-    return undefined;
-  }
-
-  const holder = db as unknown as Record<PropertyKey, unknown>;
-  let coordinator = holder[IN_MEMORY_SQLITE_COORDINATOR] as InMemorySQLiteCoordinator | undefined;
-  if (!coordinator) {
-    coordinator = { tail: Promise.resolve(), savepointSequence: 0 };
-    Object.defineProperty(db, IN_MEMORY_SQLITE_COORDINATOR, { value: coordinator });
-  }
-  return coordinator;
-}
-
-async function acquireInMemorySQLiteCoordinator(
-  coordinator: InMemorySQLiteCoordinator
+async function acquireNestedTransactionScope(
+  scope: InMemorySQLiteTransactionScope
 ): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const previous = coordinator.tail;
-  coordinator.tail = previous.then(() => gate);
+  const previous = scope.tail;
+  scope.tail = previous.then(() => gate);
   await previous;
   return release;
 }
 
 /** Execute one query without allowing it to cross a literal-memory tx boundary. */
 async function coordinateDatabaseOperation<T>(
-  db: Database,
+  _db: Database,
   operation: () => Promise<T>
 ): Promise<T> {
-  const coordinator = getInMemorySQLiteCoordinator(db);
-  if (!coordinator) return operation();
-
-  const scope = readInMemoryTransactionScope(db);
-  if (scope && scope.owner === coordinator.owner) {
-    // Work using the transaction-scoped handle already owns the connection.
-    // Re-acquiring here would deadlock on its own outer transaction.
-    return operation();
-  }
-
-  const release = await acquireInMemorySQLiteCoordinator(coordinator);
-  try {
-    return await operation();
-  } finally {
-    release();
-  }
+  // Literal-memory operation ownership is enforced below Drizzle by the
+  // decorated libsql Client, so direct builders and wrapper helpers share the
+  // same boundary. Keep this helper as the unified execution seam.
+  return operation();
 }
 
 function createInMemorySQLiteTransactionHandle(
-  base: Database,
-  coordinator: InMemorySQLiteCoordinator,
-  owner: symbol
+  current: Database,
+  scope: InMemorySQLiteTransactionScope
 ): Database {
-  const scope: InMemorySQLiteTransactionScope = { base, coordinator, owner };
-  return new Proxy(base as object, {
+  return new Proxy(current as object, {
     get(target, property) {
       if (property === IN_MEMORY_SQLITE_TRANSACTION_SCOPE) return scope;
+      if (property === 'transaction') {
+        return <T>(work: (tx: Database) => Promise<T>) =>
+          runNestedInMemorySQLiteTransaction(scope, work);
+      }
       // Drizzle/libsql methods may use private receiver state. Bind them to the
       // real database while wrapper execution still sees this scoped handle.
       const value = Reflect.get(target, property, target);
@@ -134,25 +97,26 @@ function createInMemorySQLiteTransactionHandle(
 }
 
 async function runNestedInMemorySQLiteTransaction<T>(
-  db: Database,
   scope: InMemorySQLiteTransactionScope,
   work: (tx: Database) => Promise<T>
 ): Promise<T> {
-  const savepoint = `agor_nested_${++scope.coordinator.savepointSequence}`;
-  await runInMemorySQLiteStatement(scope.base, sql.raw(`SAVEPOINT ${savepoint}`));
+  const release = await acquireNestedTransactionScope(scope);
   try {
-    const result = await work(db);
-    await runInMemorySQLiteStatement(scope.base, sql.raw(`RELEASE SAVEPOINT ${savepoint}`));
-    return result;
-  } catch (error) {
-    try {
-      await runInMemorySQLiteStatement(scope.base, sql.raw(`ROLLBACK TO SAVEPOINT ${savepoint}`));
-      await runInMemorySQLiteStatement(scope.base, sql.raw(`RELEASE SAVEPOINT ${savepoint}`));
-    } catch {
-      // Preserve the operation error; the outer transaction will still own
-      // final rollback if SQLite has made the savepoint unusable.
-    }
-    throw error;
+    const transaction = (
+      scope.current as unknown as {
+        transaction(callback: (tx: unknown) => Promise<T>): Promise<T>;
+      }
+    ).transaction.bind(scope.current);
+    return await transaction((tx) => {
+      const nested = txAsDb(tx);
+      const nestedScope: InMemorySQLiteTransactionScope = {
+        current: nested,
+        tail: Promise.resolve(),
+      };
+      return work(createInMemorySQLiteTransactionHandle(nested, nestedScope));
+    });
+  } finally {
+    release();
   }
 }
 
@@ -182,35 +146,8 @@ export async function runDatabaseTransaction<T>(
   // remain visible after commit. Production file SQLite and PostgreSQL retain
   // their native transaction handles below.
   const existingMemoryScope = readInMemoryTransactionScope(db);
-  if (existingMemoryScope && existingMemoryScope.owner === existingMemoryScope.coordinator.owner) {
-    return runNestedInMemorySQLiteTransaction(db, existingMemoryScope, work);
-  }
-  const memoryCoordinator = isSQLiteDatabase(db) ? getInMemorySQLiteCoordinator(db) : undefined;
-  if (memoryCoordinator) {
-    const release = await acquireInMemorySQLiteCoordinator(memoryCoordinator);
-    const owner = Symbol('in-memory-sqlite-transaction');
-    const base = existingMemoryScope?.base ?? db;
-    const tx = createInMemorySQLiteTransactionHandle(base, memoryCoordinator, owner);
-    memoryCoordinator.owner = owner;
-    try {
-      await runInMemorySQLiteStatement(
-        base,
-        sql.raw(options.sqliteImmediate ? 'BEGIN IMMEDIATE' : 'BEGIN')
-      );
-      const result = await work(tx);
-      await runInMemorySQLiteStatement(base, sql.raw('COMMIT'));
-      return result;
-    } catch (error) {
-      try {
-        await runInMemorySQLiteStatement(base, sql.raw('ROLLBACK'));
-      } catch {
-        // Preserve the operation error if SQLite already rolled the unit back.
-      }
-      throw error;
-    } finally {
-      if (memoryCoordinator.owner === owner) memoryCoordinator.owner = undefined;
-      release();
-    }
+  if (existingMemoryScope) {
+    return runNestedInMemorySQLiteTransaction(existingMemoryScope, work);
   }
   const transaction = (
     db as unknown as {
@@ -221,7 +158,17 @@ export async function runDatabaseTransaction<T>(
     }
   ).transaction.bind(db);
   return transaction(
-    (tx) => work(txAsDb(tx)),
+    (tx) => {
+      const transactionDb = txAsDb(tx);
+      if ((db as unknown as Record<PropertyKey, unknown>)[IN_MEMORY_SQLITE_DATABASE] !== true) {
+        return work(transactionDb);
+      }
+      const scope: InMemorySQLiteTransactionScope = {
+        current: transactionDb,
+        tail: Promise.resolve(),
+      };
+      return work(createInMemorySQLiteTransactionHandle(transactionDb, scope));
+    },
     isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
   );
 }
