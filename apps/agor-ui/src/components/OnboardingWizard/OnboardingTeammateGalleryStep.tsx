@@ -41,6 +41,7 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
     <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
       <div style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}>
         <div
+          className="onb-workspace-collapsible"
           data-collapsible-header=""
           style={{
             overflow: 'hidden',

@@ -171,6 +171,13 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     const collapsible = document.querySelector('[data-collapsible-header]') as HTMLElement | null;
     expect(collapsible, 'the collapsible title+intro block should exist').toBeTruthy();
+    expect(collapsible).toHaveClass('onb-workspace-collapsible');
+    expect(
+      Array.from(document.querySelectorAll('style')).some((style) =>
+        style.textContent?.includes('.onb-workspace-collapsible { transition: none !important; }')
+      ),
+      'reduced-motion CSS should disable the scroll-driven collapse transition'
+    ).toBe(true);
     const grid = document.querySelector(
       'fieldset[aria-label="Teammate template"]'
     ) as HTMLElement | null;

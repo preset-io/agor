@@ -908,6 +908,29 @@ describe('OnboardingWizard', () => {
     expect(onComplete).not.toHaveBeenCalled();
     expect(boardsService.create).not.toHaveBeenCalled();
     expect(screen.getByText(/removed-template.*no longer available/i)).toBeInTheDocument();
+
+    // Recovery clears the derived validation error immediately rather than
+    // leaving a stale copy in the independent board-creation error state.
+    clickButton('Back');
+    await screen.findByText('Connect your AI');
+    clickButton('Back');
+    await screen.findByText('Build your teammate');
+    fireEvent.click(screen.getByText('Start blank').closest('[role="button"]') as HTMLElement);
+    clickButton(/^continue →$/i);
+    await screen.findByText('Connect your AI');
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
+    clickButton(/meet rusty/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boardId: 'board-resume',
+        templateId: 'blank',
+        sourceBranch: undefined,
+      })
+    );
   });
 
   it('exposes progress semantics and moves focus to the new step heading', async () => {

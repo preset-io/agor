@@ -310,6 +310,7 @@ const ONB_ANIM_CSS = `
     .onb-particle {
       animation: none !important;
     }
+    .onb-workspace-collapsible { transition: none !important; }
     /* Keep the accent glow visible (just un-animated); hide the one-shot ring
        and the particle burst, which only read as motion. */
     .onb-ring,
@@ -544,11 +545,6 @@ export function OnboardingWizard({
       const savedTemplate = getTeammateTemplate(savedTemplateId);
       setSelectedTemplateId(savedTemplate?.id ?? null);
       setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
-      if (savedTemplateId && !savedTemplate) {
-        setBoardError(
-          `Saved teammate template "${savedTemplateId}" is no longer available. Go back and choose another template.`
-        );
-      }
       setCreatedBoardId(savedBoard.board_id);
       if (!initialStep) setCurrentStep('done');
     } else {
@@ -560,6 +556,10 @@ export function OnboardingWizard({
 
   const stepIndex = STEPS.indexOf(currentStep);
   const meta = STEP_META[currentStep];
+  const staleTemplateError = invalidSavedTemplateId
+    ? `Saved teammate template "${invalidSavedTemplateId}" is no longer available. Go back and choose another template.`
+    : null;
+  const completionError = staleTemplateError ?? boardError;
 
   const agentHasKey = useCallback(
     (agent: AgenticToolName): boolean => {
@@ -742,7 +742,7 @@ export function OnboardingWizard({
       case 'done': {
         const name = teammateName.trim();
         if (completing) return 'Setting up…';
-        if (boardError) return 'Try again →';
+        if (completionError) return 'Try again →';
         // Verb-first primary action into the activation moment — the teammate's
         // first session — named when we have a name, generic board-open otherwise.
         return name ? `Meet ${name} →` : 'Open my board →';
@@ -756,7 +756,7 @@ export function OnboardingWizard({
     llmAuthVerified,
     agentIsVerifiedConnected,
     teammateName,
-    boardError,
+    completionError,
   ]);
 
   const canGoBack = stepIndex > 0;
@@ -919,12 +919,7 @@ export function OnboardingWizard({
         break;
       }
       case 'done': {
-        if (invalidSavedTemplateId) {
-          setBoardError(
-            `Saved teammate template "${invalidSavedTemplateId}" is no longer available. Go back and choose another template.`
-          );
-          return;
-        }
+        if (invalidSavedTemplateId) return;
         const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
@@ -1637,7 +1632,7 @@ export function OnboardingWizard({
     // keeps the warm generic headline; a named one is celebrated by name (+ role).
     let headline: string;
     let subline: string;
-    if (boardError) {
+    if (completionError) {
       headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
       subline = 'Nothing was lost. Review the error below, then try again.';
     } else if (!name) {
@@ -1757,10 +1752,10 @@ export function OnboardingWizard({
           {subline}
         </Paragraph>
 
-        {boardError && (
+        {completionError && (
           <Alert
             type="error"
-            title={boardError}
+            title={completionError}
             showIcon
             style={{ marginTop: 18, textAlign: 'left' }}
           />
