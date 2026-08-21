@@ -97,7 +97,7 @@ jobs:
             test ! -L "$RUNNER_TEMP/inspect/package/node_modules/@agor/$package"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: agor-live-release
           path: packages/agor-live/release/*.tgz
