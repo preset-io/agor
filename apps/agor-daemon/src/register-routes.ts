@@ -3472,12 +3472,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       app,
       '/board-comments/:id/toggle-reaction',
       {
-        async create(data: { user_id: string; emoji: string }, params: RouteParams) {
+        async create(data: { emoji: string }, params: RouteParams) {
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
-          if (!data.user_id) throw new Error('user_id required');
           if (!data.emoji) throw new Error('emoji required');
-          const updated = await boardCommentsService.toggleReaction(id, data, params);
+          // Derive the reactor from the authenticated caller; never trust a
+          // client-supplied user_id (previously spoofable: react as any user).
+          const userId = params.user?.user_id as string | undefined;
+          if (!userId) throw new Error('Authentication required');
+          const updated = await boardCommentsService.toggleReaction(
+            id,
+            { user_id: userId, emoji: data.emoji },
+            params
+          );
           emitServiceEvent(app, {
             path: 'board-comments',
             event: 'patched',

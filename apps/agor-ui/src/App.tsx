@@ -1874,8 +1874,9 @@ function AppContent() {
     if (!client) return;
     try {
       // Use the custom route for toggling reactions
+      // The server derives the reactor from the authenticated session; do not
+      // send a client user_id (it is ignored).
       await client.service(`board-comments/${commentId}/toggle-reaction`).create({
-        user_id: user?.user_id || 'unknown',
         emoji,
       });
     } catch (error) {
