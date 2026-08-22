@@ -74,7 +74,11 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     );
   }
 
-  const handleSendPrompt = (prompt: string) => onSendPrompt?.(sessionId, prompt);
+  // Responsive cold navigation may preserve a canonical short token in the
+  // route until data arrives. Once resolved, all mutations and draft storage
+  // must use the full durable ID rather than creating a second short-ID key.
+  const canonicalSessionId = session.session_id;
+  const handleSendPrompt = (prompt: string) => onSendPrompt?.(canonicalSessionId, prompt);
 
   const handlePermissionDecision = async (
     _sessionId: string,
@@ -139,13 +143,13 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         />
       </div>
       <MobilePromptInput
-        key={`${currentUser?.user_id ?? 'anonymous'}:${sessionId}`}
+        key={`${currentUser?.user_id ?? 'anonymous'}:${canonicalSessionId}`}
         onSend={handleSendPrompt}
         disabled={session.status === 'running'}
         placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}
         currentUserId={currentUser?.user_id}
         client={client}
-        sessionId={(sessionId as SessionID) || null}
+        sessionId={canonicalSessionId as SessionID}
         userById={userById}
       />
     </div>

@@ -119,6 +119,7 @@ export const MobilePromptInput: React.FC<MobilePromptInputProps> = ({
       </div>
       <Button
         type="primary"
+        aria-label="Send prompt"
         icon={<SendOutlined />}
         onClick={() => void handleSend()}
         disabled={disabled || !prompt.trim()}

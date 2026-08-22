@@ -218,6 +218,28 @@ function deferred() {
 }
 
 describe('useAgorData — socket-event bailouts', () => {
+  it('scopes the real cold mobile board load before fetching board entities', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const { client, fetchArguments } = makeMockClient({
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      'board-objects': [makeBoardObject({ board_id: boardId })],
+    });
+    window.history.pushState({}, '', `/m/board/${boardId}`);
+
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+
+      for (const service of ['branches', 'sessions', 'board-objects', 'board-comments', 'cards']) {
+        expect(fetchArguments(service, 'findAll')).toContainEqual({
+          query: expect.objectContaining({ board_id: boardId }),
+        });
+      }
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('heals a cold mobile session outside the recent slice before resolving board scope', async () => {
     const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
     const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';

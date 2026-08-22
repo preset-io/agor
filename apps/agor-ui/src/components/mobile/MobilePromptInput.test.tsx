@@ -52,6 +52,7 @@ describe('MobilePromptInput', () => {
 
     const textarea = screen.getByRole('textbox');
     expect(Number.parseFloat(textarea.style.fontSize)).toBeGreaterThanOrEqual(16);
+    expect(screen.getByRole('button', { name: 'Send prompt' })).toBeInTheDocument();
   });
 
   // The @-mention highlights are painted on a separate layer behind the

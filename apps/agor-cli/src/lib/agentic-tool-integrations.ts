@@ -175,7 +175,19 @@ export async function acquireAgenticToolInstallLock(): Promise<() => Promise<voi
       realpath: false,
       stale: 10_000,
       update: 5_000,
-      retries: 0,
+      // Two contenders can observe the same stale directory and race while
+      // proper-lockfile removes it. One may briefly see ENOENT if the other
+      // contender replaces the directory during the stale-lock probe. A few
+      // short, randomized retries let that transient race settle; a genuinely
+      // live lock still fails quickly with ELOCKED and the user-facing message
+      // below.
+      retries: {
+        retries: 3,
+        factor: 1,
+        minTimeout: 10,
+        maxTimeout: 25,
+        randomize: true,
+      },
     });
     try {
       await chmod(lock, PRIVATE_MANAGED_DIRECTORY_MODE);

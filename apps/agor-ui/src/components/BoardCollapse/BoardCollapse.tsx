@@ -18,18 +18,24 @@ export interface BoardCollapseItem {
 interface BoardCollapseProps {
   items: BoardCollapseItem[];
   defaultActiveKey?: string[];
+  destroyOnHidden?: boolean;
 }
 
 /**
  * Reusable Board-level collapse component with panel styling
  * Matches CommentsPanel aesthetic with board icon + name in header
  */
-export const BoardCollapse: React.FC<BoardCollapseProps> = ({ items, defaultActiveKey }) => {
+export const BoardCollapse: React.FC<BoardCollapseProps> = ({
+  items,
+  defaultActiveKey,
+  destroyOnHidden,
+}) => {
   const { token } = theme.useToken();
 
   return (
     <Collapse
       defaultActiveKey={defaultActiveKey}
+      destroyOnHidden={destroyOnHidden}
       expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
       style={{
         border: 'none',

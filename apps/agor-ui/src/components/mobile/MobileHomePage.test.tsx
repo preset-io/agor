@@ -1,12 +1,17 @@
 import type { Board, Branch, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileHomePage } from './MobileHomePage';
+
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>;
+}
 
 describe('MobileHomePage', () => {
   it('shows workspace actions, stats, sessions, boards, knowledge, and setup', () => {
     const onOpenSettings = vi.fn();
+    const onMenuClick = vi.fn();
     render(
       <MemoryRouter>
         <MobileHomePage
@@ -45,9 +50,10 @@ describe('MobileHomePage', () => {
               ],
             ])
           }
-          onMenuClick={vi.fn()}
+          onMenuClick={onMenuClick}
           onOpenSettings={onOpenSettings}
         />
+        <LocationProbe />
       </MemoryRouter>
     );
 
@@ -56,9 +62,13 @@ describe('MobileHomePage', () => {
     expect(screen.getByText('Shipping')).toBeInTheDocument();
     expect(screen.getByText('Knowledge Base')).toBeInTheDocument();
     expect(screen.getByText('Workspace setup')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    expect(onMenuClick).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: /New board/ }));
     expect(onOpenSettings).toHaveBeenCalledWith('boards');
     fireEvent.click(screen.getByRole('button', { name: /Configure MCP tools/ }));
     expect(onOpenSettings).toHaveBeenCalledWith('mcp');
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/knowledge');
   });
 });

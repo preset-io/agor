@@ -20,6 +20,7 @@ import {
   Typography,
   theme,
 } from 'antd';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { formatRelativeTime } from '@/utils/time';
@@ -48,14 +49,30 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
-  const boards = Array.from(boardById.values()).filter((board) => !board.archived);
-  const sessions = Array.from(sessionById.values())
-    .filter((session) => !session.archived && (!user || session.created_by === user.user_id))
-    .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime());
+  const boards = useMemo(
+    () => Array.from(boardById.values()).filter((board) => !board.archived),
+    [boardById]
+  );
+  const sessions = useMemo(
+    () =>
+      Array.from(sessionById.values())
+        .filter((session) => !session.archived && (!user || session.created_by === user.user_id))
+        .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()),
+    [sessionById, user]
+  );
+  const { activeBranches, branchCountByBoard } = useMemo(() => {
+    let count = 0;
+    const byBoard = new Map<string, number>();
+    for (const branch of branchById.values()) {
+      if (branch.archived) continue;
+      count += 1;
+      if (branch.board_id) {
+        byBoard.set(branch.board_id, (byBoard.get(branch.board_id) ?? 0) + 1);
+      }
+    }
+    return { activeBranches: count, branchCountByBoard: byBoard };
+  }, [branchById]);
   const running = sessions.filter((session) => session.status === 'running').length;
-  const activeBranches = Array.from(branchById.values()).filter(
-    (branch) => !branch.archived
-  ).length;
 
   return (
     <>
@@ -165,9 +182,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
             ) : (
               <Flex vertical gap={token.marginSM}>
                 {boards.map((board) => {
-                  const branchCount = Array.from(branchById.values()).filter(
-                    (branch) => !branch.archived && branch.board_id === board.board_id
-                  ).length;
+                  const branchCount = branchCountByBoard.get(board.board_id) ?? 0;
                   return (
                     <Card
                       key={board.board_id}
@@ -211,7 +226,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   <Text type="secondary">Browse team context and documentation</Text>
                 </div>
               </Space>
-              <Button type="link" href="/knowledge">
+              <Button type="link" onClick={() => navigate('/knowledge')}>
                 Open
               </Button>
             </Flex>
