@@ -72,6 +72,31 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toThrow(/requires multi_tenancy\.filesystem_isolation_enabled: true/);
   });
 
+  it('requires clone-only branch storage in required_from_auth mode', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+    const multiTenantConfig = {
+      database: { dialect: 'postgresql' as const },
+      multi_tenancy: {
+        mode: 'required_from_auth' as const,
+        auth_claim: 'tenant_id',
+        filesystem_isolation_enabled: true,
+      },
+    };
+
+    expect(() => assertValidMultiTenancyConfig(multiTenantConfig)).toThrow(
+      /requires clone-only execution\.branch_storage/
+    );
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        ...multiTenantConfig,
+        execution: {
+          branch_storage: { default_mode: 'clone', allowed_modes: ['clone'] },
+        },
+      })
+    ).not.toThrow();
+  });
+
   it('rejects reserved JWT claims as the tenant auth claim', () => {
     vi.stubEnv('AGOR_DB_DIALECT', '');
     vi.stubEnv('DATABASE_URL', '');

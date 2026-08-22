@@ -659,12 +659,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
-    const { defaultMode } = resolveBranchStorageConfig();
+    const config = this.app.get('config');
+    const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode = withDefaults.storage_mode ?? defaultMode;
-    ensureBranchStorageModeAllowed(storageMode);
+    ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(config).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -678,7 +679,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('clone_depth must be a positive integer when set.');
       }
       try {
-        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth, config);
       } catch (error) {
         throw new BadRequest(error instanceof Error ? error.message : String(error));
       }

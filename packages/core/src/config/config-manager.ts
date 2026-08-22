@@ -2010,14 +2010,19 @@ export function isBranchRbacEnabled(): boolean {
  * forgot to add `clone` to `allowed_modes`) — load-time normalisation
  * keeps service code from needing to defensively re-validate.
  */
-export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
+export function resolveBranchStorageConfig(config?: AgorConfig): ResolvedBranchStorageConfig {
   let raw: import('./types').AgorBranchStorageSettings | undefined;
-  try {
-    raw = loadConfigSync().execution?.branch_storage;
-  } catch {
-    // Config unloadable (no file, parse error, etc.) — fall through to
-    // the safe legacy default.
-    raw = undefined;
+  if (config) {
+    raw = config.execution?.branch_storage;
+  } else {
+    try {
+      raw = loadConfigSync().execution?.branch_storage;
+    } catch {
+      // Preserve the standalone helper's safe legacy fallback when no
+      // effective config is supplied. Daemon boundaries pass app config
+      // explicitly so their policy never depends on an ambient config file.
+      raw = undefined;
+    }
   }
   const allowed: BranchStorageMode[] =
     raw?.allowed_modes && raw.allowed_modes.length > 0
@@ -2040,8 +2045,11 @@ export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
  * Centralised so the same wording appears across the daemon service, the
  * REST route, and the MCP tool.
  */
-export function ensureBranchStorageModeAllowed(mode: import('./types').BranchStorageMode): void {
-  const { allowedModes } = resolveBranchStorageConfig();
+export function ensureBranchStorageModeAllowed(
+  mode: import('./types').BranchStorageMode,
+  config?: AgorConfig
+): void {
+  const { allowedModes } = resolveBranchStorageConfig(config);
   if (!allowedModes.includes(mode)) {
     throw new Error(
       `storage_mode='${mode}' is not enabled on this Agor instance. ` +
@@ -2052,9 +2060,12 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
 }
 
 /** Reject shallow branch clones when the operator requires complete history. */
-export function ensureBranchCloneDepthAllowed(cloneDepth: number | undefined): void {
+export function ensureBranchCloneDepthAllowed(
+  cloneDepth: number | undefined,
+  config?: AgorConfig
+): void {
   if (cloneDepth === undefined) return;
-  if (!resolveBranchStorageConfig().allowShallowClones) {
+  if (!resolveBranchStorageConfig(config).allowShallowClones) {
     throw new Error(
       'clone_depth is unavailable on this Agor instance because execution.branch_storage.allow_shallow_clones is false. Omit clone_depth to create a full clone.'
     );

@@ -2199,6 +2199,29 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     expect(resolved.allowedModes).toEqual(['worktree', 'clone']);
   });
 
+  it('can resolve the daemon-owned effective config without consulting ambient files', () => {
+    const effectiveConfig: AgorConfig = {
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    };
+
+    expect(resolveBranchStorageConfig(effectiveConfig)).toEqual({
+      defaultMode: 'clone',
+      allowedModes: ['clone'],
+      allowShallowClones: false,
+    });
+    expect(() => ensureBranchStorageModeAllowed('clone', effectiveConfig)).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('worktree', effectiveConfig)).toThrow(
+      /not enabled/
+    );
+    expect(() => ensureBranchCloneDepthAllowed(1, effectiveConfig)).toThrow(/full clone/);
+  });
+
   it('falls back default_mode into allowed_modes when operator misconfigures them', async () => {
     // Operator set default_mode: clone but forgot to add 'clone' to
     // allowed_modes. Resolver must not hand out a default that the gate

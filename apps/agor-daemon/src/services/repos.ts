@@ -645,12 +645,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // shape; everything else (git/filesystem inspection, conflict detection,
     // path-exists checks) belongs to the executor (see operator's layering
     // rule: "daemon/client = database, executor = filesystem").
-    const { defaultMode } = resolveBranchStorageConfig();
+    const config = this.app.get('config');
+    const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
-    ensureBranchStorageModeAllowed(storageMode);
+    ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(config).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -670,7 +671,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Omit to make a full clone, or pass a positive int for --depth.`
         );
       }
-      ensureBranchCloneDepthAllowed(cloneDepth);
+      ensureBranchCloneDepthAllowed(cloneDepth, config);
     }
     // Auth hooks (`requireMinimumRole`) guarantee `params.user` exists by
     // the time we get here. The identity is forwarded so executor-local Git
@@ -680,11 +681,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Delegated routing is configuration/auth validation, not filesystem
     // materialization. Resolve it before persisting a branch intent so an
     // invalid or missing home key cannot leave a row stuck in `creating`.
-    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-      this.db,
-      userId,
-      this.app.get('config')
-    );
+    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(this.db, userId, config);
 
     if (storageMode === 'clone') {
       if (!repo.remote_url) {

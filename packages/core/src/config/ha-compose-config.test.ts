@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertValidEffectiveExecutionConfig,
   loadConfigFromFile,
+  resolveBranchStorageConfig,
   resolveEffectiveConfig,
 } from './config-manager';
 import { resolveDeploymentConfig } from './deployment';
@@ -79,6 +80,11 @@ describe('checked-in HA Compose configuration', () => {
       branch_rbac: true,
       unix_user_mode: 'sandbox',
       sandbox: { enabled: true, home_mode: 'per_user', fail_if_unavailable: true },
+    });
+    expect(resolveBranchStorageConfig(effective)).toEqual({
+      defaultMode: 'clone',
+      allowedModes: ['clone'],
+      allowShallowClones: true,
     });
     expect(effective.external_launch).toMatchObject({
       enabled: true,

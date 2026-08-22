@@ -122,7 +122,7 @@ export function resolveMultiTenancyConfig(
 }
 
 export function assertValidMultiTenancyConfig(
-  config: Pick<AgorConfig, 'multi_tenancy' | 'database'>
+  config: Pick<AgorConfig, 'multi_tenancy' | 'database' | 'execution'>
 ): void {
   const resolved = resolveMultiTenancyConfig(config);
   if (resolved.mode !== 'static' && resolved.mode !== 'required_from_auth') {
@@ -150,6 +150,17 @@ export function assertValidMultiTenancyConfig(
     if (config.multi_tenancy?.filesystem_isolation_enabled !== true) {
       throw new Error(
         'Config error: multi_tenancy.required_from_auth requires multi_tenancy.filesystem_isolation_enabled: true'
+      );
+    }
+    const branchStorage = config.execution?.branch_storage;
+    if (
+      branchStorage?.default_mode !== 'clone' ||
+      branchStorage.allowed_modes?.length !== 1 ||
+      branchStorage.allowed_modes[0] !== 'clone'
+    ) {
+      throw new Error(
+        'Config error: multi_tenancy.required_from_auth requires clone-only execution.branch_storage ' +
+          '(default_mode: clone, allowed_modes: [clone]); worktree storage is unavailable in hosted multi-tenant mode.'
       );
     }
   }

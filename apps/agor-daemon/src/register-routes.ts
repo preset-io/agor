@@ -4844,7 +4844,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
-          branchStorage: resolveBranchStorageConfig(),
+          branchStorage: resolveBranchStorageConfig(config),
           uploadPolicy: getUploadLimits(),
         },
       };
