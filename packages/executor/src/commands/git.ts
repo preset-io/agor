@@ -14,7 +14,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
@@ -676,8 +676,14 @@ export async function handleGitClone(
 
     // Determine output path. Prefer the daemon-supplied path; otherwise use
     // the Agor slug when present so same-basename remotes do not collide.
-    const reposDir = getReposDir();
     const outputPath = cloneOutputPath;
+    // Managed clone requests carry the canonical tenant-scoped destination
+    // selected by the daemon. Do not consult the executor's ambient config in
+    // that path: an auth-resolved tenant belongs to the verified service
+    // capability, not to process-global state. Direct/ad-hoc invocations that
+    // omit outputPath retain the configured fallback and therefore still fail
+    // closed when filesystem isolation requires tenant context.
+    const reposDir = outputPath ? dirname(outputPath) : getReposDir();
 
     // The daemon selects this canonical, tenant-scoped destination. Trust only
     // that exact path for this one-purpose executor process so an existing

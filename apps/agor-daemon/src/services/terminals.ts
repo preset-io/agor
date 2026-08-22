@@ -21,7 +21,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest, Forbidden } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Branch,
@@ -39,7 +39,7 @@ import {
   type TerminalRequestConnection,
 } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
-import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { isSuperAdmin } from '../utils/branch-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   generateScopedServiceToken,
@@ -185,34 +185,19 @@ export class TerminalsService {
     if (!data.branchId) throw new BadRequest('branchId is required to open a terminal');
 
     const config = this.app.get('config');
+    const enforceBranchAccess =
+      config.execution?.branch_rbac === true &&
+      !isSuperAdmin(userRole, config.execution?.allow_superadmin === true);
     const branch = await this.withTenantDatabase((tenantDb) =>
-      new BranchRepository(tenantDb).findById(data.branchId!)
+      new BranchRepository(tenantDb).findAccessibleById(data.branchId!, userId, {
+        minimumPermission: 'session',
+        enforceAccess: enforceBranchAccess,
+      })
     );
-    if (!branch) throw new BadRequest(`Branch not found: ${data.branchId}`);
+    // Missing and inaccessible branches deliberately share one response. The
+    // terminal acknowledgement must not be a branch-existence oracle.
+    if (!branch) throw new NotFound('Branch not found');
     if (branch.archived) throw new BadRequest(`Branch is archived: ${branch.name}`);
-
-    if (config.execution?.branch_rbac === true) {
-      await this.withTenantDatabase(async (tenantDb) => {
-        const branchRepo = new BranchRepository(tenantDb);
-        const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
-        const permission = await branchRepo.resolveUserPermission(branch, userId);
-        if (
-          !hasBranchPermission(
-            branch,
-            userId,
-            isOwner,
-            'session',
-            userRole,
-            config.execution?.allow_superadmin === true,
-            permission
-          )
-        ) {
-          throw new Forbidden(
-            `You need 'session' permission on branch ${branch.name} to open a terminal there.`
-          );
-        }
-      });
-    }
 
     const scopeKey = `${tenantId}:${userId}:${branch.branch_id}`;
     const pending = this.starting.get(scopeKey);

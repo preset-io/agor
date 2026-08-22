@@ -44,11 +44,14 @@ vi.mock('@agor/core/db', () => ({
     async findById(branchId: string) {
       return mocks.branchesById.get(branchId) ?? null;
     }
-    async isOwner() {
-      return true;
-    }
-    async resolveUserPermission() {
-      return 'session';
+    async findAccessibleById(
+      branchId: string,
+      _userId: string,
+      options: { enforceAccess?: boolean }
+    ) {
+      const branch = mocks.branchesById.get(branchId) ?? null;
+      if (!branch || (options.enforceAccess !== false && !mocks.canOpen)) return null;
+      return branch;
     }
   },
   getCurrentTenantId: () => mocks.tenantId,
@@ -80,7 +83,7 @@ vi.mock('@agor/core/unix', () => ({
 }));
 
 vi.mock('../utils/branch-authorization.js', () => ({
-  hasBranchPermission: () => mocks.canOpen,
+  isSuperAdmin: (role: string | undefined, allow: boolean) => allow && role === 'superadmin',
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
@@ -291,16 +294,25 @@ describe('process-affine attachment creation', () => {
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(2);
   });
 
-  it('enforces branch session permission', async () => {
+  it('makes missing and inaccessible branch acknowledgements indistinguishable', async () => {
     mocks.canOpen = false;
     mocks.config = {
       daemon: { port: 3030 },
       execution: { branch_rbac: true, unix_user_mode: 'simple' },
     };
     const service = new TerminalsService(makeApp() as never, {} as never);
-    await expect(
-      service.create({ branchId: 'branch-1' as BranchID }, params as never)
-    ).rejects.toThrow("need 'session' permission");
+    const inaccessible = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const missing = service.create({ branchId: 'missing' as BranchID }, params as never);
+    await expect(inaccessible).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: 'Branch not found',
+    });
+    await expect(missing).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: 'Branch not found',
+    });
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 });

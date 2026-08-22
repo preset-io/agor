@@ -53,7 +53,11 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { sessionBranchAccessCondition, visibleBranchAccessCondition } from './branch-access';
+import {
+  minimumBranchAccessCondition,
+  sessionBranchAccessCondition,
+  visibleBranchAccessCondition,
+} from './branch-access';
 import { GroupRepository } from './groups';
 import { deepMerge } from './merge-utils';
 
@@ -1316,15 +1320,41 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       enforceAccess?: boolean;
     } = {}
   ): Promise<Branch | null> {
-    const branch = await this.findById(branchId);
-    if (!branch) return null;
-    if (options.enforceAccess === false) return branch;
+    if (options.enforceAccess === false) return this.findById(branchId);
 
-    const effectivePermission = await this.resolveUserPermission(branch, userId);
     const minimumPermission = options.minimumPermission ?? 'view';
-    return BRANCH_PERMISSION_RANK[effectivePermission] >= BRANCH_PERMISSION_RANK[minimumPermission]
-      ? branch
-      : null;
+    const accessCondition = minimumBranchAccessCondition(this.db, userId, minimumPermission);
+    try {
+      const fullId = await resolveByShortIdPrefix(branchId, 'Branch', async (pattern) => {
+        const rows = await select(this.db, { branch_id: branches.branch_id })
+          .from(branches)
+          .leftJoin(
+            branchOwners,
+            and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+          )
+          .where(and(like(branches.branch_id, pattern), accessCondition))
+          .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+          .all();
+        return rows.map((row: { branch_id: string }) => row.branch_id);
+      });
+
+      // Reapply the authorization predicate on retrieval. Besides keeping the
+      // point lookup self-contained, this fails closed if access changes after
+      // short-ID resolution but before the row is read.
+      const row = await select(this.db, getTableColumns(branches))
+        .from(branches)
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(eq(branches.branch_id, fullId), accessCondition))
+        .one();
+      if (!row) return null;
+      return this.rowToBranch(row as BranchRow, await getBaseUrl());
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw error;
+    }
   }
 
   /**

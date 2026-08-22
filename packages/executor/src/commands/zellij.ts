@@ -51,6 +51,14 @@ let currentTabName: string | undefined;
  */
 const DISCONNECT_GRACE_MS = 30_000;
 
+/** Quiet output window that proves the PTY-attached shell finished its first draw. */
+const ZELLIJ_PTY_OUTPUT_QUIET_MS = 250;
+/** Do not hold readiness forever when a terminal produces continuous startup output. */
+const ZELLIJ_PTY_OUTPUT_SETTLE_MAX_MS = 3_000;
+
+/** Bound input received while the PTY-attached shell is starting. */
+const MAX_PENDING_TERMINAL_INPUT_BYTES = 64 * 1024;
+
 /** Active grace controller for the running attach, so cleanup can cancel it. */
 let graceController: ReturnType<typeof createReconnectGrace> | null = null;
 
@@ -101,6 +109,19 @@ export function buildZellijLaunchArgs(sessionName: string, sessionKnown: boolean
     '1000',
     '--serialization-interval',
     '1',
+    // An isolated per-user home may not have inherited the image's optional
+    // Zellij config yet. Keep first attach usable for both typed input and
+    // server-supplied initial commands instead of letting a startup overlay
+    // consume them.
+    '--show-startup-tips',
+    'false',
+    '--show-release-notes',
+    'false',
+    // The browser is the terminal frontend. Start locked so ordinary input is
+    // delivered to the shell rather than interpreted as a Zellij command;
+    // Ctrl-g still unlocks the normal Zellij controls when needed.
+    '--default-mode',
+    'locked',
   ];
   if (sessionKnown) return ['attach', sessionName, ...lifecycleOptions];
 
@@ -188,6 +209,91 @@ export function createReconnectGrace(opts: {
     cancel: clear,
     isPending: () => timer !== null,
   };
+}
+
+export interface TerminalInputGate {
+  /** Returns false when accepting the input would exceed the startup bound. */
+  write(input: string): boolean;
+  /** Flush pending input in order, then pass all future input straight through. */
+  open(): void;
+  /** Drop pending input during failure/exit cleanup. */
+  clear(): void;
+  isOpen(): boolean;
+}
+
+/**
+ * Preserve input that arrives after the executor joins its terminal room but
+ * before Zellij's PTY-attached shell is ready. This is deliberately bounded:
+ * startup must not become an unbounded client-controlled memory queue.
+ */
+export function createTerminalInputGate(
+  write: (input: string) => void,
+  maxPendingBytes: number = MAX_PENDING_TERMINAL_INPUT_BYTES,
+  shouldPassThroughDuringStartup: (input: string) => boolean = () => false
+): TerminalInputGate {
+  let open = false;
+  let pending: string[] = [];
+  let pendingBytes = 0;
+
+  return {
+    write(input) {
+      if (open || shouldPassThroughDuringStartup(input)) {
+        write(input);
+        return true;
+      }
+      const bytes = Buffer.byteLength(input, 'utf8');
+      if (pendingBytes + bytes > maxPendingBytes) return false;
+      pending.push(input);
+      pendingBytes += bytes;
+      return true;
+    },
+    open() {
+      if (open) return;
+      open = true;
+      const queued = pending;
+      pending = [];
+      pendingBytes = 0;
+      for (const input of queued) write(input);
+    },
+    clear() {
+      pending = [];
+      pendingBytes = 0;
+    },
+    isOpen: () => open,
+  };
+}
+
+/**
+ * Wait until the attached PTY has produced output and then stayed quiet long
+ * enough for its initial Zellij/shell draw to finish. A Zellij control action
+ * can succeed before this data-plane boundary is ready, which previously made
+ * `terminal:ready` race and swallow the first browser command.
+ */
+export async function waitForTerminalOutputSettled(
+  getLastOutputAt: () => number | null,
+  opts: {
+    quietMs?: number;
+    maxWaitMs?: number;
+    pollMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
+): Promise<boolean> {
+  const quietMs = opts.quietMs ?? ZELLIJ_PTY_OUTPUT_QUIET_MS;
+  const maxWaitMs = opts.maxWaitMs ?? ZELLIJ_PTY_OUTPUT_SETTLE_MAX_MS;
+  const pollMs = opts.pollMs ?? 25;
+  const now = opts.now ?? Date.now;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const startedAt = now();
+
+  while (true) {
+    const current = now();
+    const lastOutputAt = getLastOutputAt();
+    if (lastOutputAt !== null && current - lastOutputAt >= quietMs) return true;
+    const elapsed = current - startedAt;
+    if (elapsed >= maxWaitMs) return false;
+    await sleep(Math.min(pollMs, maxWaitMs - elapsed));
+  }
 }
 
 /**
@@ -465,9 +571,9 @@ export async function handleZellijAttach(
     const sessionKnown = await isZellijSessionKnown(sessionName, cwd, zellijEnv);
     const zellijArgs = buildZellijLaunchArgs(sessionName, sessionKnown);
 
-    // Zellij will use ~/.config/zellij/config.kdl by default
-    // The docker entrypoint copies Agor's default config there on user creation
-    // Users can customize their config as needed
+    // Zellij will use ~/.config/zellij/config.kdl by default. Users can
+    // customize it; the launch arguments above retain only Agor's attachment
+    // lifecycle and first-input invariants for empty/isolated homes.
 
     console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
     console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
@@ -496,13 +602,37 @@ export async function handleZellijAttach(
     const outputCoalescer = createOutputCoalescer((data) => {
       socket.emit('terminal:output', { userId, terminalId, data });
     });
-    pty.onData((chunk) => outputCoalescer.push(chunk));
+    // Terminal emulators answer Zellij's OSC/CSI capability queries through
+    // the same input stream as keystrokes. Pass those ESC-prefixed responses
+    // through during startup while retaining ordinary user/initial-command
+    // input until the first complete Zellij frame is visible.
+    const inputGate = createTerminalInputGate(
+      (input) => pty.write(input),
+      MAX_PENDING_TERMINAL_INPUT_BYTES,
+      (input) => input.startsWith('\u001b')
+    );
+    let lastPtyOutputAt: number | null = null;
+    let startupOutputTail = '';
+    let sawCompleteZellijFrame = false;
+    pty.onData((chunk) => {
+      lastPtyOutputAt = Date.now();
+      if (!sawCompleteZellijFrame) {
+        startupOutputTail = `${startupOutputTail}${chunk}`.slice(-16 * 1024);
+        // `--default-mode locked` renders this action in Zellij's standard
+        // status bar only after its terminal capability handshake and pane
+        // frame are complete. Custom status bars fall back to the bounded
+        // readiness deadline below.
+        sawCompleteZellijFrame = startupOutputTail.includes('UNLOCK');
+      }
+      outputCoalescer.push(chunk);
+    });
 
     // Handle PTY exit
     pty.onExit(({ exitCode, signal }) => {
       console.log(`[zellij.attach] PTY exited: code=${exitCode}, signal=${signal}`);
       // Emit any buffered tail before the socket tears down.
       outputCoalescer.dispose();
+      inputGate.clear();
       ptyProcess = null;
 
       // Notify daemon that terminal ended
@@ -536,7 +666,11 @@ export async function handleZellijAttach(
     // Listen for input from browser via channel
     socket.on('terminal:input', (data: { userId: string; terminalId: string; input: string }) => {
       if (data.userId === userId && data.terminalId === terminalId && ptyProcess) {
-        ptyProcess.write(data.input);
+        if (!inputGate.write(data.input)) {
+          console.warn(
+            `[zellij.attach] Dropping terminal input while startup buffer is full for ${shortId(terminalId)}`
+          );
+        }
       }
     });
 
@@ -602,13 +736,6 @@ export async function handleZellijAttach(
         ptyProcess?.kill();
         return;
       }
-      zellijAttached = true;
-      emitTerminalReady(socket, userId, terminalId);
-
-      // Reattaching to an existing session does not repaint on its own; nudge a
-      // resize so the frame and pane content draw without the user hitting Enter.
-      forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
-
       // Create the initial tab now that the session is confirmed up. Keep a
       // bounded retry as belt-and-suspenders against a residual boot race:
       // without the catch, a rejection here crashes the executor (Node 22+).
@@ -631,6 +758,28 @@ export async function handleZellijAttach(
           }
         }
       }
+
+      // Reattaching/new-session startup may not paint the complete shell frame
+      // until a SIGWINCH or keypress. Trigger that repaint before the readiness
+      // boundary; doing it after terminal:ready lets the browser's first input
+      // race (and get consumed by) the repaint transition.
+      forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
+
+      // The control socket can answer before the attached PTY finishes its
+      // first draw. Wait for the data plane to produce and settle the repaint,
+      // retaining a bounded timeout for continuously noisy shells.
+      const outputSettled = await waitForTerminalOutputSettled(() =>
+        sawCompleteZellijFrame ? lastPtyOutputAt : null
+      );
+      if (!ptyProcess) return;
+      if (!outputSettled) {
+        console.warn(
+          `[zellij.attach] PTY startup output did not settle before the readiness deadline for ${shortId(terminalId)}`
+        );
+      }
+      zellijAttached = true;
+      inputGate.open();
+      emitTerminalReady(socket, userId, terminalId);
     })();
 
     // Return success - executor stays running until PTY exits

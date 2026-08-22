@@ -161,6 +161,18 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       currentTerminalId = payload.terminalId;
     };
 
+    const sendInitialCommands = () => {
+      if (!currentTerminalId || initialCommandsSent || initialCommands.length === 0) return;
+      initialCommandsSent = true;
+      for (const cmd of initialCommands) {
+        socket.emit('terminal:input', {
+          userId: user?.user_id,
+          terminalId: currentTerminalId,
+          input: `${cmd}\r`,
+        });
+      }
+    };
+
     // Channel-based event handlers
     const handleChannelOutput = (payload: { userId: string; terminalId: string; data: string }) => {
       if (!terminalRef.current) return;
@@ -191,6 +203,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     const handleChannelReady = (payload: { userId: string; terminalId: string }) => {
       if (payload.userId !== user?.user_id || payload.terminalId !== currentTerminalId) return;
       if (failedTerminalIds.has(payload.terminalId)) return;
+      sendInitialCommands();
       setIsConnected(true);
       setReconnecting(false);
       setNeedsReconnect(false);
@@ -379,22 +392,10 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           rows: terminal.rows,
         });
 
-        // Execute initial commands once, on the first successful attach — not
-        // on every reconnect, which would re-run them against the live session.
-        if (initialCommands.length > 0 && !initialCommandsSent) {
-          initialCommandsSent = true;
-          for (const cmd of initialCommands) {
-            socket.emit('terminal:input', {
-              userId: user?.user_id,
-              terminalId: result.terminalId,
-              input: `${cmd}\r`,
-            });
-          }
-        }
-
         // Warm path: the executor is already attached, so connect right away.
         // Cold path: wait for the executor's `terminal:ready` ack.
         if (result.ready) {
+          sendInitialCommands();
           setIsConnected(true);
           setReconnecting(false);
           setNeedsReconnect(false);

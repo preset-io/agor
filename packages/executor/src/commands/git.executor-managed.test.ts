@@ -500,6 +500,39 @@ describe('managed executor git/fs commands', () => {
     }
   });
 
+  it('uses a daemon-selected clone output path without resolving an ambient tenant root', async () => {
+    createClient({ repo: { repo_id: repoId }, patchedRepos: [] });
+    mocks.getReposDir.mockImplementationOnce(() => {
+      throw new Error('missing ambient tenant context');
+    });
+    mocks.cloneRepo.mockResolvedValueOnce({
+      path: '/tenant/acme/repos/preset-io/agor-teammate',
+      repoName: 'agor-teammate',
+      defaultBranch: 'main',
+    });
+
+    const result = await handleGitClone(
+      {
+        command: 'git.clone',
+        sessionToken: 'tenant-bound-service-token',
+        params: {
+          url: 'https://github.com/preset-io/agor-teammate.git',
+          outputPath: '/tenant/acme/repos/preset-io/agor-teammate',
+          slug: 'preset-io/agor-teammate',
+          repoId,
+          createDbRecord: true,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.getReposDir).not.toHaveBeenCalled();
+    expect(mocks.cloneRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ targetDir: '/tenant/acme/repos/preset-io/agor-teammate' })
+    );
+  });
+
   it('pages through every branch before deleting repo directories', async () => {
     const branches = Array.from({ length: 1002 }, (_, index) => ({
       branch_id: `branch-${index}`,

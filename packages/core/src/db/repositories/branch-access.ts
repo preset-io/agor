@@ -187,6 +187,23 @@ export function sessionBranchAccessCondition(db: Database, userId: UUID): SQL {
 }
 
 /**
+ * Branch access at an arbitrary minimum application permission.
+ *
+ * Point lookups use this predicate while resolving caller-supplied short IDs,
+ * so inaccessible rows cannot make an otherwise-visible prefix ambiguous or
+ * disclose their existence through a different authorization response.
+ */
+export function minimumBranchAccessCondition(
+  db: Database,
+  userId: UUID,
+  minimumPermission: (typeof BRANCH_PERMISSION_LEVELS)[number]
+): SQL {
+  const minimumIndex = BRANCH_PERMISSION_LEVELS.indexOf(minimumPermission);
+  if (minimumIndex <= 0) return sql`true`;
+  return branchAccessCondition(db, userId, BRANCH_PERMISSION_LEVELS.slice(minimumIndex));
+}
+
+/**
  * Board visibility predicate correlated against the `boards` table in scope.
  *
  * A board is visible if the user owns it, is an explicit board owner, the board

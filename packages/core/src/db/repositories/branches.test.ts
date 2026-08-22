@@ -1633,6 +1633,78 @@ describe('BranchRepository findExplicitFsAccessBranchIdsForGroup', () => {
   });
 });
 
+describe('BranchRepository.findAccessibleById', () => {
+  dbTest(
+    'resolves short IDs only among branches meeting the caller permission threshold',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const branches = new BranchRepository(db);
+      const owner = await users.create({
+        email: `accessible-branch-owner-${Date.now()}@example.com`,
+        name: 'Accessible Branch Owner',
+        role: 'member',
+      });
+      const outsider = await users.create({
+        email: `accessible-branch-outsider-${Date.now()}@example.com`,
+        name: 'Accessible Branch Outsider',
+        role: 'member',
+      });
+      const repo = await repos.create(createRepoData({ slug: `accessible-point-${Date.now()}` }));
+      const visibleId = '019f1234-5678-7000-8000-000000000001' as BranchID;
+      const hiddenId = '019f1234-5678-7000-8000-000000000002' as BranchID;
+      const visible = await branches.create(
+        createBranchData({
+          branch_id: visibleId,
+          repo_id: repo.repo_id,
+          name: 'visible-session-branch',
+          branch_unique_id: 9101,
+          created_by: owner.user_id as UUID,
+          permission_source: 'override',
+          others_can: 'session',
+        })
+      );
+      const hidden = await branches.create(
+        createBranchData({
+          branch_id: hiddenId,
+          repo_id: repo.repo_id,
+          name: 'hidden-branch',
+          branch_unique_id: 9102,
+          created_by: owner.user_id as UUID,
+          permission_source: 'override',
+          others_can: 'none',
+        })
+      );
+      await branches.addOwner(hidden.branch_id, owner.user_id as UUID);
+
+      // Both rows share this prefix. The hidden row must not make the visible
+      // branch ambiguous or disclose its full ID to the outsider.
+      const collidingPrefix = visible.branch_id.slice(0, -1);
+      await expect(
+        branches.findAccessibleById(collidingPrefix, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toMatchObject({ branch_id: visible.branch_id });
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toBeNull();
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, owner.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toMatchObject({ branch_id: hidden.branch_id });
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+          enforceAccess: false,
+        })
+      ).resolves.toMatchObject({ branch_id: hidden.branch_id });
+    }
+  );
+});
+
 describe('BranchRepository.findTeammateBranches', () => {
   dbTest(
     'finds marker teammates and enabled-schedule legacy teammates without scanning all branches',
