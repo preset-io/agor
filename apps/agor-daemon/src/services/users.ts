@@ -50,7 +50,13 @@ import {
   update,
   users,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+} from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git/pure';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
@@ -748,7 +754,7 @@ export class UsersService {
       .one();
 
     if (!row) {
-      throw new Error(`User not found: ${id}`);
+      throw new NotFound(`User not found: ${id}`);
     }
 
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
@@ -1675,7 +1681,7 @@ class UsersServiceWithAuth extends UsersService {
     const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
 
     if (!row) {
-      throw new Error(`User not found: ${id}`);
+      throw new NotFound(`User not found: ${id}`);
     }
 
     const data = row.data as {

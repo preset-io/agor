@@ -33,6 +33,7 @@ import {
   normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { createTwoFilesPatch } from 'diff';
 import { z } from 'zod';
@@ -643,16 +644,6 @@ function versionToken(version: KnowledgeDocumentVersion | null | undefined) {
     content_sha256: version.content_sha256 ?? null,
     etag: `kbv:${version.version_id}`,
   };
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof NotFound ||
-    (typeof error === 'object' &&
-      error !== null &&
-      ((error as { code?: unknown }).code === 404 ||
-        (error as { name?: unknown }).name === 'NotFound'))
-  );
 }
 
 function namespaceSlugForDocument(result: HydratedKnowledgeDocumentResult): string | undefined {

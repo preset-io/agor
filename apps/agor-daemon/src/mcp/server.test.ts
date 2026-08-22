@@ -8,6 +8,8 @@ import type { Request, Response } from 'express';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { createUsersService } from '../services/users.js';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
 
@@ -491,6 +493,70 @@ describe('POST /mcp with personal API keys', () => {
       });
     }
   });
+
+  dbTest('rejects an API key whose user was deleted after key verification', async ({ db }) => {
+    await mockPersonalApiKeyUser('deleted-user');
+
+    await withMcpServer({ users: createUsersService(db) }, async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 101, method: 'tools/list' }),
+      });
+
+      expect(resp.status).toBe(401);
+      expect((await resp.json()) as unknown).toMatchObject({
+        error: { message: 'Invalid personal API key' },
+      });
+    });
+  });
+
+  dbTest(
+    'rejects a session token whose user was deleted after token validation',
+    async ({ db }) => {
+      initMcpTokens({
+        db: testSqliteDb(),
+        multiTenancy: resolveMultiTenancyConfig({}),
+      });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      const now = Math.floor(Date.now() / 1000);
+      const token = jwt.sign(
+        {
+          sub: 'session-for-deleted-user',
+          uid: 'deleted-user',
+          tid: 'default',
+          aud: MCP_TOKEN_AUDIENCE,
+          iss: MCP_TOKEN_ISSUER,
+          iat: now,
+          exp: now + 60,
+          jti: 'deleted-user-session-token-test',
+        },
+        'mcp-server-test-secret',
+        { algorithm: 'HS256' }
+      );
+
+      await withMcpServer({ users: createUsersService(db) }, async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 102, method: 'tools/list' }),
+        });
+
+        expect(resp.status).toBe(401);
+        expect((await resp.json()) as unknown).toMatchObject({
+          error: { message: 'Invalid or expired session token' },
+        });
+      });
+    }
+  );
 
   it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {
     await mockPersonalApiKeyUser();

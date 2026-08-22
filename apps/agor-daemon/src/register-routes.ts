@@ -94,6 +94,7 @@ import {
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-capability.js';
@@ -2965,7 +2966,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   try {
                     return await app.service('tasks').get(taskId, params);
                   } catch (error) {
-                    if ((error as { code?: number }).code === 404) return undefined;
+                    if (isNotFoundError(error)) return undefined;
                     throw error;
                   }
                 },
