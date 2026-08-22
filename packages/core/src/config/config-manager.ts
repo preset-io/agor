@@ -252,7 +252,10 @@ async function ensureAgorHome(): Promise<void> {
   try {
     await fs.access(agorHome);
   } catch {
-    await fs.mkdir(agorHome, { recursive: true });
+    // Owner-only: ~/.agor holds the SQLite DB, config, and secrets. mode 0o700
+    // has no group/other bits for the umask to add, so the dir is created
+    // rwx------ and is not group/other-readable on a shared host.
+    await fs.mkdir(agorHome, { recursive: true, mode: 0o700 });
   }
 }
 
