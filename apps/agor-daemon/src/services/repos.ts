@@ -582,7 +582,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   /**
    * Custom method: Create branch
    *
-   * Delegates git worktree add to executor process for Unix isolation.
+   * Delegates Git workspace materialization (worktree or clone) to the executor
+   * process for Unix isolation.
    * Executor handles filesystem operations, daemon handles DB record creation
    * and template rendering.
    */

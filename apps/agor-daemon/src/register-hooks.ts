@@ -28,7 +28,6 @@ import {
   type BranchRepository,
   CardRepository,
   isPostgresDatabaseHandle,
-  isTenantWriteMethodName,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
