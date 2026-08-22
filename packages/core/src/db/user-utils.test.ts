@@ -10,6 +10,7 @@ import { generateId } from '../lib/ids';
 import { dbTest } from './test-helpers';
 import {
   assertUsableBootstrapAdminPassword,
+  assertUsablePassword,
   type CreateUserData,
   createDefaultAdminUser,
   createUser,
@@ -455,6 +456,26 @@ describe('assertUsableBootstrapAdminPassword', () => {
 
   it('accepts a usable password', () => {
     expect(() => assertUsableBootstrapAdminPassword('explicit-secret')).not.toThrow();
+  });
+});
+
+describe('assertUsablePassword (configurable policy)', () => {
+  it('rejects the legacy default and short passwords with the strong default', () => {
+    expect(() => assertUsablePassword('admin')).toThrow(/legacy fixed default password/);
+    expect(() => assertUsablePassword('short')).toThrow(/at least 8 characters/);
+    expect(() => assertUsablePassword('explicit-secret')).not.toThrow();
+  });
+
+  it('honours a configured minimum length', () => {
+    expect(() => assertUsablePassword('elevenchars', { minLength: 12 })).toThrow(
+      /at least 12 characters/
+    );
+    expect(() => assertUsablePassword('twelve-chars', { minLength: 12 })).not.toThrow();
+  });
+
+  it('accepts weak passwords when allowWeak is set (dev relaxation)', () => {
+    expect(() => assertUsablePassword('admin', { allowWeak: true })).not.toThrow();
+    expect(() => assertUsablePassword('x', { allowWeak: true })).not.toThrow();
   });
 });
 

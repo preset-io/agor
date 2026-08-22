@@ -29,6 +29,7 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  assertUsablePassword,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -728,6 +729,15 @@ export class UsersService {
     return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
   }
 
+  /** Resolve the configured password policy (security.password_policy). */
+  private passwordPolicy(): { minLength?: number; allowWeak?: boolean } {
+    // Services instantiated without an Application (focused tests) get the
+    // strong default policy.
+    if (!this.app) return {};
+    const policy = this.app.get('config')?.security?.password_policy;
+    return { minLength: policy?.min_length, allowWeak: policy?.allow_weak };
+  }
+
   /**
    * Create new user
    */
@@ -751,7 +761,8 @@ export class UsersService {
       throw new Error(`User with email ${data.email} already exists`);
     }
 
-    // Hash password
+    // Validate strength, then hash
+    assertUsablePassword(data.password, this.passwordPolicy());
     const hashedPassword = await hash(data.password, 10);
 
     // Create user
@@ -824,6 +835,7 @@ export class UsersService {
 
     // Handle password separately (needs hashing)
     if (data.password) {
+      assertUsablePassword(data.password, this.passwordPolicy());
       updates.password = await hash(data.password, 10);
       // Any password change requires fresh browser authentication; previously
       // issued access and refresh tokens are rejected after this marker.

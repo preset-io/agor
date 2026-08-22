@@ -180,18 +180,39 @@ export const DEVELOPMENT_DEFAULT_ADMIN_USER = {
   unix_username: 'admin',
 };
 
-export const MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8;
+const DEFAULT_MIN_PASSWORD_LENGTH = 8;
+
+/** Runtime password policy, resolved from `security.password_policy` config. */
+interface PasswordPolicy {
+  /** Minimum length. Default {@link DEFAULT_MIN_PASSWORD_LENGTH}. */
+  minLength?: number;
+  /** Accept weak passwords incl. the legacy fixed default (dev only). */
+  allowWeak?: boolean;
+}
+
+export function assertUsablePassword(
+  password: string,
+  policy: PasswordPolicy = {},
+  label: string = 'Password'
+): void {
+  // Dev/test relaxation: accept anything non-empty so the legacy `admin`
+  // credential and short dev passwords keep working (security.password_policy).
+  if (policy.allowWeak) return;
+  if (password === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
+    throw new Error(`${label} must not be the legacy fixed default password.`);
+  }
+  const minLength = policy.minLength ?? DEFAULT_MIN_PASSWORD_LENGTH;
+  if (password.length < minLength) {
+    throw new Error(`${label} must be at least ${minLength} characters.`);
+  }
+}
 
 export function assertUsableBootstrapAdminPassword(
   password: string,
   label: string = 'Bootstrap admin password'
 ): void {
-  if (password === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
-    throw new Error(`${label} must not be the legacy fixed default password.`);
-  }
-  if (password.length < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH) {
-    throw new Error(`${label} must be at least ${MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH} characters.`);
-  }
+  // Bootstrap admin credential is always held to the strong default.
+  assertUsablePassword(password, {}, label);
 }
 
 export interface CreateDefaultAdminUserOptions {

@@ -1083,6 +1083,28 @@ export interface AgorGitConfigParametersSettings {
 }
 
 /**
+ * Password strength policy applied when a user password is set through the
+ * users service (create / patch). Strong by default; dev and test deployments
+ * can relax it in `~/.agor/config.yaml` so the legacy `admin` credential and
+ * short passwords keep working without disruption.
+ *
+ * @example Tighten the default:
+ * security:
+ *   password_policy:
+ *     min_length: 12
+ * @example Dev relaxation (accept any non-empty password):
+ * security:
+ *   password_policy:
+ *     allow_weak: true
+ */
+export interface AgorPasswordPolicySettings {
+  /** Minimum password length. Default 8. */
+  min_length?: number;
+  /** Accept weak passwords, incl. the legacy fixed default. Dev only. Default false. */
+  allow_weak?: boolean;
+}
+
+/**
  * Top-level security config block.
  */
 export interface AgorSecuritySettings {
@@ -1094,6 +1116,9 @@ export interface AgorSecuritySettings {
 
   /** Git config hardening — see {@link AgorGitConfigParametersSettings}. */
   git_config_parameters?: AgorGitConfigParametersSettings;
+
+  /** Password strength policy for user create/patch — see {@link AgorPasswordPolicySettings}. */
+  password_policy?: AgorPasswordPolicySettings;
 }
 
 /**
