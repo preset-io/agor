@@ -1,9 +1,8 @@
-import { mkdir, mkdtemp, readdir, readFile, stat, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleCodexAuthFile } from './codex-auth-file.js';
-import { executeInteractiveCommand } from './index.js';
 
 const originalCodexHome = process.env.CODEX_HOME;
 afterEach(() => {
@@ -12,21 +11,6 @@ afterEach(() => {
 });
 
 describe('codex.auth-file executor boundary', () => {
-  it('is available through the contained interactive transport used by HA', async () => {
-    process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), 'agor-codex-auth-'));
-
-    await expect(
-      executeInteractiveCommand(
-        { command: 'codex.auth-file', params: { operation: 'inspect' } },
-        {},
-        {
-          emit: () => undefined,
-          read: () => Promise.reject(new Error('codex auth does not read control frames')),
-        }
-      )
-    ).resolves.toEqual({ success: true, data: { status: 'not-found' } });
-  });
-
   it('atomically writes 0600, reads, and idempotently deletes in its own runtime home', async () => {
     process.env.CODEX_HOME = await mkdtemp(join(tmpdir(), 'agor-codex-auth-'));
     const content = '{"tokens":{"refresh_token":"secret"}}\n';
@@ -69,12 +53,16 @@ describe('codex.auth-file executor boundary', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 
-  it('does not follow a symlinked CODEX_HOME during credential mutation', async () => {
+  it('does not follow a symlinked CODEX_HOME during mutation or inspection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-codex-home-boundary-'));
     const callerHome = join(root, 'caller');
     const otherCodexHome = join(root, 'other', '.codex');
     await mkdir(callerHome, { recursive: true });
     await mkdir(otherCodexHome, { recursive: true });
+    await writeFile(
+      join(otherCodexHome, 'auth.json'),
+      '{"auth_mode":"chatgpt","tokens":{"refresh_token":"other-user-secret"}}'
+    );
     await symlink(otherCodexHome, join(callerHome, '.codex'));
     process.env.CODEX_HOME = join(callerHome, '.codex');
 
@@ -86,8 +74,13 @@ describe('codex.auth-file executor boundary', () => {
         },
         {}
       )
-    ).rejects.toThrow('Credential directory must be a real directory');
-    await expect(readdir(otherCodexHome)).resolves.toEqual([]);
+    ).rejects.toThrow();
+    await expect(
+      handleCodexAuthFile({ command: 'codex.auth-file', params: { operation: 'inspect' } }, {})
+    ).resolves.toMatchObject({ success: false, error: { code: 'AUTH_FILE_UNREADABLE' } });
+    await expect(readFile(join(otherCodexHome, 'auth.json'), 'utf8')).resolves.toContain(
+      'other-user-secret'
+    );
   });
 
   it('fences delayed writes and logout with a durable per-home generation', async () => {

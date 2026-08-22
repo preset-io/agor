@@ -28,7 +28,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
-import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import {
   ExecutionCredentialHomeResolutionError,
   resolveExecutionCredentialHome,
@@ -179,8 +179,8 @@ export async function resolveCodexCredentialRoute(
 }
 
 /**
- * Persist a validated auth.json for a user: write it 0600 as the target Unix
- * user, verify by reading it back, then flip the user's Codex auth method to
+ * Persist a validated auth.json for a user: write it 0600 through the selected
+ * credential route, verify it, then flip the user's Codex auth method to
  * `subscription` so executors resolve native auth. Shared by the paste-import
  * and device-code sign-in flows. Throws `BadRequest` with user-facing,
  * secret-free messages.
@@ -193,7 +193,7 @@ export async function persistVerifiedCodexAuth(options: {
   authUser: NonNullable<AuthenticatedParams['user']>;
   /** Per-user store `.codex` for sandbox mode (see CodexCredentialRouteResolution.codexHome). */
   codexHome?: string;
-  /** PostgreSQL authority generation for delayed-executor filesystem fencing. */
+  /** PostgreSQL authority generation for HA filesystem fencing. */
   authorityGeneration?: number;
 }): Promise<CodexAuthSummary> {
   const { app, normalized, delegatedHomeKey, userId, authUser, codexHome, authorityGeneration } =
@@ -201,7 +201,7 @@ export async function persistVerifiedCodexAuth(options: {
 
   let summary: CodexAuthSummary;
   try {
-    summary = await writeCodexAuthViaExecutor(
+    summary = await writeCodexAuthCredential(
       normalized,
       {
         delegatedHomeKey,

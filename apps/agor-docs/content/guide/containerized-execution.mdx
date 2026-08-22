@@ -294,14 +294,14 @@ to execute the template when the value is malformed — it is rendered into a
 In `unix_user_mode: delegated` it carries the session user's `unix_username`;
 in delegated mode it carries the compatibility home key.
 
-> **Codex subscription credentials caveat:** Codex auth-file operations already run through an
-> executor, but correctness requires every auth helper and Task for one trusted tenant/user identity
-> to receive the same persistent home. Declare that guarantee as
+> **Codex subscription credentials caveat:** correctness requires every auth-file operation and Task
+> for one trusted tenant/user identity to use the same persistent home. Declare that guarantee as
 > `execution.executor_storage.user_home: persistent-per-user`; the launcher must actually implement
 > it. The constrained HA profile admits auth-file check/import/logout with a consistent declared
 > home. Device sign-in is narrower: it currently requires Agor's local sandbox per-user home and is
-> not enabled for a delegated launcher. Ambiguous exchange or credential-write outcomes surface to
-> the user and are retried by starting a new code, not by automatic side-effect replay.
+> not enabled for a delegated launcher. Its generation-fenced mutation runs in the authority-owning
+> daemon, not a detached writer. Ambiguous exchange or credential-write outcomes surface to the user
+> and are retried by starting a new code, not by automatic side-effect replay.
 
 ### How It Works
 

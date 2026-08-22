@@ -60,12 +60,14 @@ replayed automatically.
   lock as new attempts, cancel, import, and logout; it rechecks attempt,
   generation, and exchange claim before writing. Provider waits never occur in
   that transaction.
-- The executor additionally stores a per-home generation tombstone under an
-  atomic filesystem lock. In the admitted sandbox profile, the daemon retains
-  its database authority lock until the credential-writer process group is
-  proven absent during normal request handling, so a timed-out writer cannot
-  race a newer login/logout/import while that daemon remains alive. File and
-  directory fsync make successful local responses durable.
+- The credential store additionally keeps a per-home generation tombstone
+  under an atomic filesystem lock. In the admitted sandbox profile, the
+  authority-owning daemon performs the short local mutation itself while it
+  retains the database lock; there is no detached credential writer that can
+  survive that daemon. Linux file operations are anchored to an opened
+  directory capability, so replacing `.codex` with a symlink cannot redirect
+  them into another home. File and directory fsync make successful local
+  responses durable.
 - A new attempt is latest-wins. Overlapping creates serialize before generation
   allocation, and only the newest row remains current. UI cancellation names
   the exact attempt UUID, so a stale tab cannot cancel a newer code. A replica
@@ -79,17 +81,18 @@ This is an authentication convenience flow, not an exactly-once transaction.
 Provider calls, local credential persistence, and UI polling are bounded and
 surface terminal failures, but Agor does not automatically replay an ambiguous
 authorization-code exchange or reconcile every possible daemon-crash point.
-A daemon crash after a local credential helper starts may leave the filesystem
-and attempt row temporarily disagreeing. The supported recovery is explicit:
-the user starts over, which supersedes the previous attempt and issues a new
-code.
+A daemon crash between the local credential mutation and the database state
+transition may leave the filesystem and attempt row temporarily disagreeing,
+but it cannot leave a detached writer that later overwrites a retry. The
+supported recovery is explicit: the user starts over, which supersedes the
+previous attempt and issues a new code.
 
 The OpenAI device code remains valid for 15 minutes to allow human sign-in.
 That is not a 15-minute request timeout: each provider request is bounded to 15
-seconds, HA poll ownership is leased for 25 seconds, credential persistence is
-bounded to 10 seconds, and the UI checks status every two seconds. The pending
-UI always offers **Start over**, so a user who has returned from OpenAI but sees
-no progress need not wait for code expiry.
+seconds, HA poll ownership is leased for 25 seconds, executor-routed auth-file
+requests are bounded to 10 seconds, and the UI checks status every two seconds.
+The pending UI always offers **Start over**, so a user who has returned from
+OpenAI but sees no progress need not wait for code expiry.
 
 ## Boundaries
 
@@ -111,9 +114,9 @@ declared `persistent-per-user` while `simple` execution would still use the
 daemon's home. Local HA admission therefore requires `sandbox`; HA Codex auth
 also rejects admin `filesystem_home` overrides because the schema does not
 prove those paths unique across users. Delegated device auth remains gated:
-this implementation intentionally supports only the local bounded helper and
-simple user-visible retry contract. The checked-in HA smoke profile uses
-sandbox per-user homes on its shared Agor volume.
+this implementation intentionally supports only the local sandbox credential
+mutation and simple user-visible retry contract. The checked-in HA smoke
+profile uses sandbox per-user homes on its shared Agor volume.
 
 Executor native-auth resolution uses the Task creator's saved auth method but
 the filesystem sandbox mounts the Session owner's home. The resolver now

@@ -16,17 +16,17 @@ import {
 } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 import { createDurableCodexDeviceAuthService } from './codex-device-auth-durable.js';
 import type { CodexDeviceAuthProvider } from './codex-device-auth-provider.js';
 
 vi.mock('../utils/executor-codex-auth.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/executor-codex-auth.js')>();
-  return { ...actual, writeCodexAuthViaExecutor: vi.fn() };
+  return { ...actual, writeCodexAuthCredential: vi.fn() };
 });
 
-const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
+const writeCodexAuthCredentialMock = vi.mocked(writeCodexAuthCredential);
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -155,7 +155,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         get: () => config,
         service: () => usersService,
       };
-      writeCodexAuthViaExecutorMock.mockResolvedValueOnce({
+      writeCodexAuthCredentialMock.mockResolvedValueOnce({
         authMode: 'chatgpt',
         planType: 'team',
       });
@@ -185,8 +185,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(completed).toMatchObject({ phase: 'success', planType: 'team' });
       expect(pollDeviceToken).toHaveBeenCalledTimes(1);
       expect(exchangeCodeForTokens).toHaveBeenCalledTimes(1);
-      expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
-      expect(writeCodexAuthViaExecutorMock).toHaveBeenCalledWith(
+      expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
+      expect(writeCodexAuthCredentialMock).toHaveBeenCalledWith(
         expect.stringContaining('refresh-service-flow'),
         expect.objectContaining({
           userId: owner.userId,

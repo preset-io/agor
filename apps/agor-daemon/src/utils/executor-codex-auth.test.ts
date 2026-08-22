@@ -1,17 +1,23 @@
+import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  deleteCodexAuthViaExecutor,
+  deleteCodexAuthCredential,
   inspectCodexAuthViaExecutor,
-  writeCodexAuthViaExecutor,
+  writeCodexAuthCredential,
 } from './executor-codex-auth.js';
-import { requestExecutor, startContainedExecutorCommand } from './spawn-executor.js';
+import { requestExecutor } from './spawn-executor.js';
+
+vi.mock('@agor/core/codex/credential-file', () => ({
+  mutateCredentialFile: vi.fn(),
+  readCredentialFile: vi.fn(),
+}));
 
 vi.mock('./spawn-executor.js', () => ({
   requestExecutor: vi.fn(),
-  startContainedExecutorCommand: vi.fn(),
 }));
 const runMock = vi.mocked(requestExecutor);
-const containedMock = vi.mocked(startContainedExecutorCommand);
+const mutateCredentialFileMock = vi.mocked(mutateCredentialFile);
+const readCredentialFileMock = vi.mocked(readCredentialFile);
 
 describe('executor Codex auth dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -23,7 +29,7 @@ describe('executor Codex auth dispatch', () => {
         success: true,
         data: { status: 'written', authMode: 'chatgpt' },
       });
-      await writeCodexAuthViaExecutor('credential-json', {
+      await writeCodexAuthCredential('credential-json', {
         delegatedHomeKey,
         userId: 'user-1',
       });
@@ -62,7 +68,7 @@ describe('executor Codex auth dispatch', () => {
 
   it('routes external auth helpers by trusted user and delegated home key', async () => {
     runMock.mockResolvedValue({ success: true, data: { status: 'deleted' } });
-    await deleteCodexAuthViaExecutor({
+    await deleteCodexAuthCredential({
       delegatedHomeKey: 'alice',
       userId: '019fda98-8206-7eb5-8e77-f95d6c8cd6c1',
     });
@@ -76,17 +82,12 @@ describe('executor Codex auth dispatch', () => {
     });
   });
 
-  it('contains generation-fenced sandbox mutations before releasing authority', async () => {
-    containedMock.mockReturnValue({
-      result: Promise.resolve({
-        success: true,
-        data: { status: 'written', authMode: 'chatgpt' },
-      }),
-      verifyAbsence: vi.fn(),
-      retainContainmentFence: vi.fn(),
-    });
-    await writeCodexAuthViaExecutor(
-      'credential-json',
+  it('keeps generation-fenced HA mutations in the authority-owning daemon', async () => {
+    const content = '{"tokens":{"refresh_token":"credential-json"}}';
+    mutateCredentialFileMock.mockResolvedValue('applied');
+    readCredentialFileMock.mockResolvedValue(content);
+    await writeCodexAuthCredential(
+      content,
       {
         delegatedHomeKey: null,
         userId: 'user-1',
@@ -96,22 +97,18 @@ describe('executor Codex auth dispatch', () => {
     );
 
     expect(runMock).not.toHaveBeenCalled();
-    expect(containedMock).toHaveBeenCalledWith(
-      {
-        command: 'codex.auth-file',
-        params: { operation: 'write', content: 'credential-json', generation: 42 },
-      },
-      expect.objectContaining({
-        env: expect.objectContaining({ CODEX_HOME: '/tenant/user/.codex' }),
-        sensitiveOutput: true,
-      })
-    );
+    expect(mutateCredentialFileMock).toHaveBeenCalledWith({
+      target: '/tenant/user/.codex/auth.json',
+      content,
+      generation: 42,
+    });
+    expect(readCredentialFileMock).toHaveBeenCalledWith('/tenant/user/.codex/auth.json');
   });
 
   it('dispatches idempotent deletion and throws a secret-free failure', async () => {
     runMock.mockResolvedValueOnce({ success: true, data: { status: 'deleted' } });
     const routing = { delegatedHomeKey: 'alice', userId: 'user-1' };
-    await deleteCodexAuthViaExecutor(routing);
+    await deleteCodexAuthCredential(routing);
     expect(runMock.mock.calls[0]?.[0]).toEqual({
       command: 'codex.auth-file',
       params: { operation: 'delete' },
@@ -121,7 +118,7 @@ describe('executor Codex auth dispatch', () => {
       success: false,
       error: { code: 'FAIL', message: 'top-secret' },
     });
-    const error = await deleteCodexAuthViaExecutor(routing).catch((caught: unknown) => caught);
+    const error = await deleteCodexAuthCredential(routing).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe('Executor credential delete failed');
     expect((error as Error).message).not.toContain('top-secret');

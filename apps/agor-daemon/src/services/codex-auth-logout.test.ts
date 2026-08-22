@@ -1,7 +1,7 @@
 import { loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import { createCodexAuthLogoutService } from './codex-auth-logout';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
@@ -19,11 +19,11 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
   const actual = await vi.importActual<typeof import('../utils/executor-codex-auth.js')>(
     '../utils/executor-codex-auth.js'
   );
-  return { ...actual, deleteCodexAuthViaExecutor: vi.fn() };
+  return { ...actual, deleteCodexAuthCredential: vi.fn() };
 });
 
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
-const deleteCodexAuthViaExecutorMock = vi.mocked(deleteCodexAuthViaExecutor);
+const deleteCodexAuthCredentialMock = vi.mocked(deleteCodexAuthCredential);
 
 const TEST_DB = { run: vi.fn() } as never;
 const AUTH_PARAMS = {
@@ -51,7 +51,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps implementations — reset the delete mock so a throwing
   // impl from one test can't leak into the next (its default is a no-op void).
-  deleteCodexAuthViaExecutorMock.mockReset();
+  deleteCodexAuthCredentialMock.mockReset();
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
 });
 
@@ -59,14 +59,14 @@ describe('codex-auth-logout', () => {
   it('rejects unauthenticated callers before touching anything', async () => {
     const { app } = makeApp();
     await expect(service(app).create({})).rejects.toThrow(/Sign in/);
-    expect(deleteCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(deleteCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('deletes the login and clears the codex method for the caller only', async () => {
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
 
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith({
+    expect(deleteCodexAuthCredentialMock).toHaveBeenCalledWith({
       delegatedHomeKey: null,
       userId: 'user-1',
       codexHome: undefined,
@@ -84,11 +84,11 @@ describe('codex-auth-logout', () => {
   });
 
   it('is idempotent — deletes and clears regardless of prior state', async () => {
-    // deleteCodexAuthViaExecutor is itself idempotent (rm -f / rmSync force); the
+    // deleteCodexAuthCredential is itself idempotent (rm -f / rmSync force); the
     // service always deletes then clears, with no read/revoke branch.
     const { app, usersService } = makeApp();
     const result = await service(app).create({}, AUTH_PARAMS);
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledTimes(1);
+    expect(deleteCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
     expect(usersService.patch).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ status: 'removed' });
   });
@@ -109,7 +109,7 @@ describe('codex-auth-logout', () => {
 
     await runWithTenantContext('tenant-test', () => delegate.create({}, AUTH_PARAMS));
 
-    expect(deleteCodexAuthViaExecutorMock).toHaveBeenCalledWith(
+    expect(deleteCodexAuthCredentialMock).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1' }),
       42
     );
@@ -120,7 +120,7 @@ describe('codex-auth-logout', () => {
   });
 
   it('surfaces a friendly error and does NOT clear the method if the delete fails', async () => {
-    deleteCodexAuthViaExecutorMock.mockImplementation(async () => {
+    deleteCodexAuthCredentialMock.mockImplementation(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -143,7 +143,7 @@ describe('codex-auth-logout', () => {
     } as never);
     const { app, usersService } = makeApp();
     await expect(service(app).create({}, AUTH_PARAMS)).rejects.toThrow(/hosted multi-tenant/);
-    expect(deleteCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(deleteCodexAuthCredentialMock).not.toHaveBeenCalled();
     expect(usersService.patch).not.toHaveBeenCalled();
   });
 

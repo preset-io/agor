@@ -255,7 +255,7 @@ export class ConfigService {
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
         );
       }
-      await this.assertNativeAuthHomeMatchesSession(userId, sessionId, internalParams);
+      await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
     }
 
     // Map KeyResolutionResult to service response type
@@ -274,18 +274,12 @@ export class ConfigService {
    * the owner's credential or silently missing the prompter's login.
    */
   private async assertNativeAuthHomeMatchesSession(
+    tool: AgenticToolName | undefined,
     promptingUserId: UserID | undefined,
     sessionId: string | undefined,
     internalParams: AuthenticatedParams
   ): Promise<void> {
-    if (!promptingUserId || !sessionId) return;
-    const sessionsService = this.app?.service('sessions');
-    if (!sessionsService) return;
-    const session = (await sessionsService.get(sessionId, internalParams)) as
-      | { created_by?: string }
-      | undefined;
-    const ownerUserId = session?.created_by;
-    if (!ownerUserId || ownerUserId === promptingUserId) return;
+    if (!promptingUserId) return;
 
     const tenantId = internalParams.tenant?.tenant_id;
     const homeOf = (userId: UserID) =>
@@ -295,10 +289,32 @@ export class ConfigService {
         config: this.config,
         withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
       });
-    const [prompterHome, ownerHome] = await Promise.all([
-      homeOf(promptingUserId),
-      homeOf(ownerUserId as UserID),
-    ]);
+    const requireCanonicalCodexHome = tool === 'codex' && this.config.deployment?.mode === 'ha';
+    let prompterHome = requireCanonicalCodexHome ? await homeOf(promptingUserId) : undefined;
+    if (prompterHome?.homeStoreSource === 'override') {
+      throw new BadRequest(
+        'HA Codex subscription auth requires Agor’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override for this account or use an API key.'
+      );
+    }
+
+    if (!sessionId) return;
+    const sessionsService = this.app?.service('sessions');
+    if (!sessionsService) return;
+    const session = (await sessionsService.get(sessionId, internalParams)) as
+      | { created_by?: string }
+      | undefined;
+    const ownerUserId = session?.created_by;
+    if (!ownerUserId || ownerUserId === promptingUserId) return;
+
+    prompterHome ??= await homeOf(promptingUserId);
+    const ownerHome = await homeOf(ownerUserId as UserID);
+    if (requireCanonicalCodexHome && ownerHome.homeStoreSource === 'override') {
+      throw new BadRequest(
+        'HA Codex subscription auth requires the session owner’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override or use an API key.'
+      );
+    }
     if (sameExecutionCredentialHome(prompterHome, ownerHome)) return;
 
     throw new Forbidden(

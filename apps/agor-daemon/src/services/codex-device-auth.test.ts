@@ -1,7 +1,7 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import { createCodexDeviceAuthService } from './codex-device-auth';
 
 vi.mock('@agor/core/config', async () => {
@@ -19,13 +19,13 @@ vi.mock('../utils/executor-codex-auth.js', async () => {
   );
   return {
     ...actual,
-    writeCodexAuthViaExecutor: vi.fn(),
+    writeCodexAuthCredential: vi.fn(),
   };
 });
 
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
-const writeCodexAuthViaExecutorMock = vi.mocked(writeCodexAuthViaExecutor);
+const writeCodexAuthCredentialMock = vi.mocked(writeCodexAuthCredential);
 
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -71,7 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  writeCodexAuthViaExecutorMock.mockResolvedValue({ authMode: 'chatgpt' });
+  writeCodexAuthCredentialMock.mockResolvedValue({ authMode: 'chatgpt' });
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -118,7 +118,7 @@ describe('codex-device-auth', () => {
   });
 
   it('polls until approval, exchanges the code, persists auth.json, and reports success', async () => {
-    writeCodexAuthViaExecutorMock.mockResolvedValue({
+    writeCodexAuthCredentialMock.mockResolvedValue({
       authMode: 'chatgpt',
       planType: 'pro',
     });
@@ -155,7 +155,7 @@ describe('codex-device-auth', () => {
     expect(JSON.stringify(status)).not.toContain('refresh-tok');
     expect(JSON.stringify(status)).not.toContain('access-tok');
 
-    const written = JSON.parse(writeCodexAuthViaExecutorMock.mock.calls[0][0]);
+    const written = JSON.parse(writeCodexAuthCredentialMock.mock.calls[0][0]);
     expect(written).toMatchObject({
       auth_mode: 'chatgpt',
       OPENAI_API_KEY: null,
@@ -257,7 +257,7 @@ describe('codex-device-auth', () => {
     await vi.advanceTimersByTimeAsync(2100);
     const status = await withTenant(() => service.find(AUTH_PARAMS));
     expect(status.phase).toBe('error');
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('overlapping create calls do not leave an orphaned poll loop', async () => {
@@ -310,7 +310,7 @@ describe('codex-device-auth', () => {
 
     const status = await withTenant(() => service.find(AUTH_PARAMS));
     expect(status.phase).toBe('expired');
-    expect(writeCodexAuthViaExecutorMock).not.toHaveBeenCalled();
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
   it('starting a new attempt cancels and replaces the previous one', async () => {

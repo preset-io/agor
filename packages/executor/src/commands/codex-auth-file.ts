@@ -1,8 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
+import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
 import type { CodexAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveCodexAuthPath } from '../user-runtime-paths.js';
-import { mutateCredentialFile } from './credential-file-io.js';
 import type { CommandOptions } from './index.js';
 
 export async function handleCodexAuthFile(
@@ -15,7 +14,7 @@ export async function handleCodexAuthFile(
   const target = resolveCodexAuthPath();
   if (operation === 'inspect') {
     try {
-      const parsed = parseCodexAuthJson(await readFile(target, 'utf8'));
+      const parsed = parseCodexAuthJson(await readCredentialFile(target));
       if (!parsed.ok) return { success: true, data: { status: 'malformed' } };
       const inspection = parsed.summary;
       if (inspection.authMode !== 'api_key') {
@@ -98,9 +97,9 @@ export async function handleCodexAuthFile(
   }
   let readBack: string;
   try {
-    readBack = await readFile(target, 'utf8');
+    readBack = await readCredentialFile(target);
   } catch {
-    readBack = await readFile(target, 'utf8');
+    readBack = await readCredentialFile(target);
   }
   if (readBack !== payload.params.content) {
     return {

@@ -39,7 +39,7 @@ import type {
   CodexAuthLogoutResult,
   UserID,
 } from '@agor/core/types';
-import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
+import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import {
   type AppLike,
   CODEX_AUTH_DEFER_USER_REALTIME,
@@ -98,8 +98,8 @@ export function createCodexAuthLogoutService(
             userId: identity.userId,
             codexHome: identity.codexHome,
           };
-          if (authorityGeneration === undefined) await deleteCodexAuthViaExecutor(routing);
-          else await deleteCodexAuthViaExecutor(routing, authorityGeneration);
+          if (authorityGeneration === undefined) await deleteCodexAuthCredential(routing);
+          else await deleteCodexAuthCredential(routing, authorityGeneration);
         } catch (err) {
           console.error(
             `[CodexAuth] Failed to delete auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`

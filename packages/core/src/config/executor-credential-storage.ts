@@ -22,9 +22,10 @@ export function hasTenantSafeExecutorCredentialHome(
  * behalf of an individual browser user.
  *
  * Local isolation is concrete only in `sandbox` mode, where Agor selects the
- * tenant/user-keyed home store, explicitly points auth helpers at its `.codex`
- * directory, and bounds normal credential-writer timeouts locally. Ambiguous
- * crash outcomes are user-retryable rather than automatically replayed.
+ * tenant/user-keyed home store and points Codex at its `.codex` directory. HA
+ * mutations run in the authority-owning daemon, so a daemon crash cannot leave
+ * a detached stale writer; ambiguous outcomes remain user-retryable rather
+ * than automatically replayed.
  * Delegated execution can declare an exact home but is outside this deliberately
  * local device-flow implementation, so the capability fails closed there. Merely declaring
  * `persistent-per-user` while running in `simple` mode does not change the
