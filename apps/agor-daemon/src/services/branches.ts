@@ -2449,6 +2449,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const response = await fetch(healthUrl, {
         signal: controller.signal,
         method: 'GET',
+        // Do not follow redirects: an otherwise-allowed health URL could 302 to
+        // a link-local metadata endpoint (169.254.169.254), bypassing
+        // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
+        // unhealthy. Mirrors the managed-env webhook fetch.
+        redirect: 'manual',
       });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',

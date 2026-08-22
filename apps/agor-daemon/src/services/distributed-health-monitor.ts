@@ -483,6 +483,9 @@ export class DistributedHealthMonitor {
       const response = await this.fetchHealth(healthUrl, {
         method: 'GET',
         signal: controller.signal,
+        // Do not follow redirects (see branches.ts): the distributed/managed
+        // path is where a 302 to a link-local metadata endpoint matters most.
+        redirect: 'manual',
       });
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
