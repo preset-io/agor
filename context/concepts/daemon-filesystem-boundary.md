@@ -37,13 +37,19 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 - Call identity uses the nearest named function/method plus an occurrence number. Refactors can require registry updates even when authority is unchanged.
 - The checker verifies declared syntactic capabilities, not path provenance, tenant scoping, authorization, cleanup correctness, TOCTOU safety, or command argument safety. Those require runtime design and negative tests at the owning boundary.
 
-## Closure status (2026-08-17)
+## Closure status (2026-08-22)
 
-The registry contains **117** exact capabilities (**90 A, 27 B, 0 C, 0 D**).
+The registry contains **124** exact capabilities (**97 A, 27 B, 0 C, 0 D**).
 The only B entries remain the local upload staging adapter. Obsolete declarations
 for Unix account/group management, sudo wrappers, env-file ownership, and local
 OpenCode command execution were removed with those code paths. Sandbox path
 canonicalization remains an explicit daemon-host capability.
+
+The Agor state-home bootstrap is one system/global class-A boundary shared by
+CLI initialization, CLI-managed daemon files, initial config publication, and
+the daemon's canonical SQLite parent. It creates Agor-owned state privately but
+does not apply that policy to custom database parents or silently rewrite an
+existing operator-managed directory's group/ACL policy.
 
 Runtime Git lifecycle work uses typed executor payloads. Application RBAC is
 projected into sandbox mounts at launch rather than POSIX groups or ACL repair;

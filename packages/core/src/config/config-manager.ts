@@ -14,6 +14,7 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
+import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
@@ -230,34 +231,8 @@ function parseAndValidateConfig(content: string): AgorConfig {
   return finalConfig;
 }
 
-/**
- * Get Agor home directory (~/.agor)
- */
-export function getAgorHome(): string {
-  return path.join(os.homedir(), '.agor');
-}
-
-/**
- * Get config file path (~/.agor/config.yaml)
- */
-export function getConfigPath(): string {
-  return path.join(getAgorHome(), 'config.yaml');
-}
-
-/**
- * Ensure ~/.agor directory exists
- */
-async function ensureAgorHome(): Promise<void> {
-  const agorHome = getAgorHome();
-  try {
-    await fs.access(agorHome);
-  } catch {
-    // Owner-only: ~/.agor holds the SQLite DB, config, and secrets. mode 0o700
-    // has no group/other bits for the umask to add, so the dir is created
-    // rwx------ and is not group/other-readable on a shared host.
-    await fs.mkdir(agorHome, { recursive: true, mode: 0o700 });
-  }
-}
+/** Shared state-home paths and creation policy. */
+export { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath };
 
 /**
  * Validate config and throw helpful errors for deprecated/invalid settings
@@ -1248,7 +1223,10 @@ async function syncContainingDirectory(filePath: string): Promise<void> {
  */
 export async function createInitialConfig(config: AgorConfig = getDefaultConfig()): Promise<void> {
   validateConfig(config);
-  await ensureAgorHome();
+  // Initial publication establishes an Agor-managed deployment boundary, so
+  // an empty/pre-created mount is brought under the private-home contract.
+  // Runtime reads and rewrites do not repair operator policy implicitly.
+  await ensureAgorHome(getAgorHome(), { enforceExistingMode: true });
   const configPath = getConfigPath();
   const content = [
     '# Agor operator configuration',

@@ -31,6 +31,7 @@ describe('initial deployment config', () => {
   });
 
   it('creates and reuses a complete bootable config with mode 0600', async () => {
+    await fs.mkdir(path.dirname(getConfigPath()), { mode: 0o755 });
     const initial = prepareInitialDeploymentConfig(getDefaultConfig(), {
       deploymentId: '019c1234-5678-7123-8123-123456789abc',
     });
@@ -42,6 +43,7 @@ describe('initial deployment config', () => {
     });
     expect(created.config.daemon?.jwtSecret).toMatch(/^[0-9a-f]{64}$/);
     expect(created.config.daemon?.masterSecret).toMatch(/^[0-9a-f]{64}$/);
+    expect((await fs.stat(path.dirname(getConfigPath()))).mode & 0o777).toBe(0o700);
     expect((await fs.stat(getConfigPath())).mode & 0o777).toBe(0o600);
 
     const replacement = prepareInitialDeploymentConfig(getDefaultConfig(), {

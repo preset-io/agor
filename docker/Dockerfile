@@ -77,7 +77,7 @@ RUN set -eux; \
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
     chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
-    mkdir -p /home/agor/.agor; \
+    mkdir -p -m 0700 /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
 # Copy Zellij config for the daemon user.

@@ -14,6 +14,7 @@ import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integratio
 import {
   type AgorConfig,
   createInitialConfig,
+  ensureAgorHome,
   getConfigPath,
   getDaemonUrl,
   getDefaultConfig,
@@ -539,8 +540,10 @@ export default class Init extends Command {
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
+    await ensureAgorHome(baseDir, { enforceExistingMode: true });
+    this.log(`${chalk.green('   ✓')} ${baseDir}`);
+
     const dirs = [
-      baseDir,
       join(baseDir, 'repos'),
       join(baseDir, 'worktrees'),
       join(baseDir, 'concepts'),
