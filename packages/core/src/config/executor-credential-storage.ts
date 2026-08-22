@@ -23,10 +23,10 @@ export function hasTenantSafeExecutorCredentialHome(
  *
  * Local isolation is concrete only in `sandbox` mode, where Agor selects the
  * tenant/user-keyed home store, explicitly points auth helpers at its `.codex`
- * directory, and can prove a timed-out credential writer is gone before the
- * database authority lock is released. Delegated execution can declare an
- * exact home but Agor cannot yet prove containment of a timed-out remote auth
- * helper, so the device flow fails closed there. Merely declaring
+ * directory, and bounds normal credential-writer timeouts locally. Ambiguous
+ * crash outcomes are user-retryable rather than automatically replayed.
+ * Delegated execution can declare an exact home but is outside this deliberately
+ * local device-flow implementation, so the capability fails closed there. Merely declaring
  * `persistent-per-user` while running in `simple` mode does not change the
  * daemon process home either.
  */

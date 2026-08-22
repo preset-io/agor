@@ -232,4 +232,30 @@ describe('resolveCodexCredentialRoute — sandbox mode', () => {
     });
     expect(findById).toHaveBeenCalledOnce();
   });
+
+  it('rejects filesystem_home overrides in HA rather than trusting shared ownership', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      deployment: { mode: 'ha' },
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { enabled: true, home_mode: 'per_user' },
+      },
+    } as never);
+    findById.mockResolvedValue({
+      user_id: USER_ID,
+      filesystem_home: '/srv/agor-homes/shared',
+    });
+
+    await expect(
+      resolveCodexCredentialRoute(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported-home-override',
+      message: expect.stringContaining('canonical tenant/user home'),
+    });
+  });
 });

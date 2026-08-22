@@ -288,6 +288,9 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
           <Button size="small" type="text" onClick={cancelAttempt}>
             Cancel
           </Button>
+          <Button size="small" type="text" onClick={requestCode}>
+            Start over
+          </Button>
         </div>
       </div>
     );

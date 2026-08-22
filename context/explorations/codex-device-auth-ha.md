@@ -63,15 +63,33 @@ replayed automatically.
 - The executor additionally stores a per-home generation tombstone under an
   atomic filesystem lock. In the admitted sandbox profile, the daemon retains
   its database authority lock until the credential-writer process group is
-  proven absent; a timed-out writer therefore cannot escape and overwrite a
-  newer login/logout/import. File and directory fsync make successful local
-  responses durable; a crash can be ambiguous but not stale-overwriting.
+  proven absent during normal request handling, so a timed-out writer cannot
+  race a newer login/logout/import while that daemon remains alive. File and
+  directory fsync make successful local responses durable.
 - A new attempt is latest-wins. Overlapping creates serialize before generation
   allocation, and only the newest row remains current. UI cancellation names
   the exact attempt UUID, so a stale tab cannot cancel a newer code. A replica
   lost before it attaches the provider grant leaves a resumeless `starting`
   reservation, which expires within one minute rather than posing as a live
   device code for the full provider lifetime.
+
+## Failure and retry contract
+
+This is an authentication convenience flow, not an exactly-once transaction.
+Provider calls, local credential persistence, and UI polling are bounded and
+surface terminal failures, but Agor does not automatically replay an ambiguous
+authorization-code exchange or reconcile every possible daemon-crash point.
+A daemon crash after a local credential helper starts may leave the filesystem
+and attempt row temporarily disagreeing. The supported recovery is explicit:
+the user starts over, which supersedes the previous attempt and issues a new
+code.
+
+The OpenAI device code remains valid for 15 minutes to allow human sign-in.
+That is not a 15-minute request timeout: each provider request is bounded to 15
+seconds, HA poll ownership is leased for 25 seconds, credential persistence is
+bounded to 10 seconds, and the UI checks status every two seconds. The pending
+UI always offers **Start over**, so a user who has returned from OpenAI but sees
+no progress need not wait for code expiry.
 
 ## Boundaries
 
@@ -90,11 +108,12 @@ boundary. It is written only into the trusted, tenant/user-keyed credential
 route with directory mode 0700 and file mode 0600. The HA capability stays
 disabled when that route is replica-local, shared between users, or merely
 declared `persistent-per-user` while `simple` execution would still use the
-daemon's home. Local HA admission therefore requires `sandbox`. Delegated
-device auth remains gated: its storage declaration can prove routing, but the
-current request protocol cannot prove a timed-out remote credential writer has
-terminated. The checked-in HA smoke profile uses sandbox per-user homes on its
-shared Agor volume.
+daemon's home. Local HA admission therefore requires `sandbox`; HA Codex auth
+also rejects admin `filesystem_home` overrides because the schema does not
+prove those paths unique across users. Delegated device auth remains gated:
+this implementation intentionally supports only the local bounded helper and
+simple user-visible retry contract. The checked-in HA smoke profile uses
+sandbox per-user homes on its shared Agor volume.
 
 Executor native-auth resolution uses the Task creator's saved auth method but
 the filesystem sandbox mounts the Session owner's home. The resolver now

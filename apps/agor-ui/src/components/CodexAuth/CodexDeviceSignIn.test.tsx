@@ -76,4 +76,37 @@ describe('CodexDeviceSignIn copy', () => {
     expect(await screen.findByText('ChatGPT sign-in was cancelled.')).toBeInTheDocument();
     expect(create).toHaveBeenCalledTimes(1);
   });
+
+  it('starts over directly while an approval is still pending', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        phase: 'pending',
+        attemptId: '01900000-0000-7000-8000-000000000001',
+        userCode: USER_CODE,
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      })
+      .mockResolvedValueOnce({
+        phase: 'pending',
+        attemptId: '01900000-0000-7000-8000-000000000002',
+        userCode: 'WXYZ-9876',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      });
+    const client = {
+      service: () => ({
+        find: vi.fn(async () => ({ phase: 'idle' })),
+        create,
+        remove: vi.fn(),
+      }),
+    } as unknown as import('@agor-live/client').AgorClient;
+
+    render(<CodexDeviceSignIn client={client} onVerified={vi.fn()} onUseFallback={vi.fn()} />);
+    expect(await screen.findByText(USER_CODE)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Start over' }));
+
+    expect(await screen.findByText('WXYZ-9876')).toBeInTheDocument();
+    expect(create).toHaveBeenCalledTimes(2);
+  });
 });

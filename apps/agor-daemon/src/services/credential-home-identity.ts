@@ -15,6 +15,7 @@ import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 export interface ExecutionCredentialHome {
   delegatedHomeKey: string | null;
   homeStore: string | null;
+  homeStoreSource: 'canonical' | 'override' | null;
 }
 
 export class ExecutionCredentialHomeResolutionError extends Error {
@@ -62,6 +63,7 @@ export async function resolveExecutionCredentialHome(options: {
     );
   }
 
+  const filesystemHome = row?.filesystem_home?.trim();
   return {
     delegatedHomeKey,
     homeStore: perOwnerHome
@@ -69,9 +71,10 @@ export async function resolveExecutionCredentialHome(options: {
           config,
           tenantId,
           ownerUserId: userId,
-          filesystemHome: row?.filesystem_home,
+          filesystemHome,
         })
       : null,
+    homeStoreSource: perOwnerHome ? (filesystemHome ? 'override' : 'canonical') : null,
   };
 }
 

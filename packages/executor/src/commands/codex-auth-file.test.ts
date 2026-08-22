@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,27 @@ describe('codex.auth-file executor boundary', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('does not follow a symlinked CODEX_HOME during credential mutation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-codex-home-boundary-'));
+    const callerHome = join(root, 'caller');
+    const otherCodexHome = join(root, 'other', '.codex');
+    await mkdir(callerHome, { recursive: true });
+    await mkdir(otherCodexHome, { recursive: true });
+    await symlink(otherCodexHome, join(callerHome, '.codex'));
+    process.env.CODEX_HOME = join(callerHome, '.codex');
+
+    await expect(
+      handleCodexAuthFile(
+        {
+          command: 'codex.auth-file',
+          params: { operation: 'write', content: '{"tokens":{"refresh_token":"secret"}}' },
+        },
+        {}
+      )
+    ).rejects.toThrow('Credential directory must be a real directory');
+    await expect(readdir(otherCodexHome)).resolves.toEqual([]);
   });
 
   it('fences delayed writes and logout with a durable per-home generation', async () => {

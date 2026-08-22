@@ -51,9 +51,11 @@ async function mutateViaExecutor(
   // HA sandbox mutations hold the database user-authority lock while this
   // command runs. Do not release that lock on timeout until the local process
   // group is proven absent; otherwise a straggler could race a newer
-  // generation after the transaction rolls back. Delegated helpers cannot
-  // provide this containment proof and therefore are not admitted for device
-  // auth. Standalone and legacy auth-file operations retain request mode.
+  // generation after the transaction rolls back during normal daemon
+  // operation. A daemon crash is an explicitly ambiguous, user-retryable
+  // outcome rather than an automatically reconciled transaction. Delegated
+  // helpers are not admitted for device auth. Standalone and legacy auth-file
+  // operations retain request mode.
   if (authorityGeneration !== undefined && routing.codexHome) {
     return startContainedExecutorCommand(payload, executorOptions).result;
   }

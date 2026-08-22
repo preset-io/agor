@@ -267,6 +267,7 @@ registerCommand('zellij.tab', handleZellijTab);
 registerCommand('codex.auth-file', handleCodexAuthFile);
 // Generation-fenced HA mutations use the contained JSON-lines transport so
 // the daemon does not release its DB authority lock until the local process
-// group is proven absent. This command does not emit intermediate events, but
-// it must still be registered on that transport.
+// group is proven absent during normal daemon operation. Daemon-crash outcomes
+// are deliberately user-retryable rather than replayed. This command does not
+// emit intermediate events, but it must still be registered on that transport.
 registerInteractiveCommand('codex.auth-file', handleCodexAuthFile);

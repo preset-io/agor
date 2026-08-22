@@ -298,9 +298,10 @@ in delegated mode it carries the compatibility home key.
 > executor, but correctness requires every auth helper and Task for one trusted tenant/user identity
 > to receive the same persistent home. Declare that guarantee as
 > `execution.executor_storage.user_home: persistent-per-user`; the launcher must actually implement
-> it. The constrained HA profile admits auth-file check/import/logout only with a consistent
-> declared home. Declaring storage does not make the process-affine device-code poller durable, so
-> device sign-in remains gated.
+> it. The constrained HA profile admits auth-file check/import/logout with a consistent declared
+> home. Device sign-in is narrower: it currently requires Agor's local sandbox per-user home and is
+> not enabled for a delegated launcher. Ambiguous exchange or credential-write outcomes surface to
+> the user and are retried by starting a new code, not by automatic side-effect replay.
 
 ### How It Works
 

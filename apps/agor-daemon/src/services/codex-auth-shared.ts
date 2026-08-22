@@ -80,7 +80,11 @@ export type CodexCredentialRouteResolution =
     }
   | {
       ok: false;
-      reason: 'missing-username' | 'resolve-failed' | 'unsupported-mode';
+      reason:
+        | 'missing-username'
+        | 'resolve-failed'
+        | 'unsupported-mode'
+        | 'unsupported-home-override';
       message: string;
     };
 
@@ -146,6 +150,15 @@ export async function resolveCodexCredentialRoute(
       config,
       withTenantDatabase,
     });
+    if (config.deployment?.mode === 'ha' && resolved.homeStoreSource === 'override') {
+      return {
+        ok: false,
+        reason: 'unsupported-home-override',
+        message:
+          'HA Codex subscription auth requires Agor’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override for this account or use an API key.',
+      };
+    }
     const codexHome = resolved.homeStore ? join(resolved.homeStore, '.codex') : undefined;
     return {
       ok: true,

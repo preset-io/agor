@@ -38,7 +38,8 @@ describe('durable authority primitives', () => {
     ['a different tenant', { tenantId: 'tenant-b' }],
     ['a different transaction handle', { db: { execute: vi.fn() } }],
   ])('rejects %s', async (_label, override) => {
-    const db = { execute: vi.fn(async () => []) } as never;
+    const execute = vi.fn(async () => []);
+    const db = { execute } as never;
     await expect(
       tenantDatabaseScope.run(
         {
@@ -53,6 +54,6 @@ describe('durable authority primitives', () => {
         () => lockTenantAuthoritySubject(db, 'tenant-a', 'subject')
       )
     ).rejects.toThrow('active tenant transaction');
-    expect(db.execute).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 });

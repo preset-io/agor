@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const LOCK_STALE_MS = 30_000;
@@ -76,9 +76,9 @@ async function currentGeneration(path: string): Promise<number> {
 
 /**
  * Filesystem-side generation fence for delayed external executor commands.
- * The generation tombstone is persisted before the auth mutation: a crash may
- * leave an ambiguous newest operation, but an older command can never restore
- * stale credentials afterward.
+ * The generation tombstone is persisted before the auth mutation. It orders
+ * ordinary overlapping/retried commands; daemon-crash outcomes remain
+ * explicitly ambiguous and are recovered by a user-visible restart.
  */
 export async function mutateCredentialFile(options: {
   target: string;
@@ -87,6 +87,10 @@ export async function mutateCredentialFile(options: {
 }): Promise<'applied' | 'stale'> {
   const dir = join(options.target, '..');
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  const directory = await lstat(dir);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    throw new Error('Credential directory must be a real directory');
+  }
   await chmod(dir, 0o700);
 
   if (options.generation === undefined) {
