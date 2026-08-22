@@ -432,65 +432,77 @@ describe('ConfigService.resolveApiKey', () => {
   });
 
   it.each([
-    ['the session owner', 'creator-1', 'creator-1'],
-    ['a collaborator sharing the override', 'prompter-1', 'owner-2'],
-  ])('rejects an HA Codex home override for %s', async (_case, prompterId, ownerId) => {
-    configMocks.resolveApiKey.mockResolvedValue({
-      apiKey: null,
-      source: 'user',
-      useNativeAuth: true,
-    });
-    configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(true);
-    homeMocks.resolveExecutionCredentialHome.mockImplementation(async () => ({
-      delegatedHomeKey: null,
-      homeStore: '/srv/shared-home',
-      homeStoreSource: 'override',
-    }));
-    const service = new ConfigService(
-      {} as never,
-      {
-        deployment: { mode: 'ha' },
-        multi_tenancy: { mode: 'required_from_auth' },
-        execution: {
-          unix_user_mode: 'sandbox',
-          executor_storage: { user_home: 'persistent-per-user' },
-        },
-      } as never
-    );
-    service.app = {
-      service(name: string) {
-        if (name === 'tasks') {
-          return {
-            get: vi.fn(async () => ({
-              created_by: prompterId as UserID,
-              session_id: 'session-1',
-            })),
-          };
-        }
-        if (name === 'sessions') {
-          return {
-            get: vi.fn(async () => ({ agentic_tool: 'codex', created_by: ownerId })),
-          };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    } as never;
-
-    await expect(
-      service.resolveApiKey(
-        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+    ['the session owner', 'creator-1', 'creator-1', false, 1],
+    ['a collaborator sharing the override', 'prompter-1', 'owner-2', false, 1],
+    ['only the distinct session owner', 'prompter-1', 'owner-2', true, 2],
+  ])(
+    'rejects an HA Codex home override for %s',
+    async (_case, prompterId, ownerId, ownerOnly, expectedLookups) => {
+      configMocks.resolveApiKey.mockResolvedValue({
+        apiKey: null,
+        source: 'user',
+        useNativeAuth: true,
+      });
+      configMocks.hasExactUserExecutorCredentialHome.mockReturnValue(true);
+      homeMocks.resolveExecutionCredentialHome.mockImplementation(async ({ userId }) =>
+        ownerOnly && userId === prompterId
+          ? {
+              delegatedHomeKey: null,
+              homeStore: `/homes/${userId}`,
+              homeStoreSource: 'canonical',
+            }
+          : {
+              delegatedHomeKey: null,
+              homeStore: '/srv/shared-home',
+              homeStoreSource: 'override',
+            }
+      );
+      const service = new ConfigService(
+        {} as never,
         {
-          provider: 'socketio',
-          tenant: { tenant_id: 'tenant-1' },
-          authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            executor_storage: { user_home: 'persistent-per-user' },
           },
         } as never
-      )
-    ).rejects.toThrow(/canonical tenant\/user home/);
-    expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledOnce();
-    expect(homeMocks.sameExecutionCredentialHome).not.toHaveBeenCalled();
-  });
+      );
+      service.app = {
+        service(name: string) {
+          if (name === 'tasks') {
+            return {
+              get: vi.fn(async () => ({
+                created_by: prompterId as UserID,
+                session_id: 'session-1',
+              })),
+            };
+          }
+          if (name === 'sessions') {
+            return {
+              get: vi.fn(async () => ({ agentic_tool: 'codex', created_by: ownerId })),
+            };
+          }
+          throw new Error(`unexpected service ${name}`);
+        },
+      } as never;
+
+      await expect(
+        service.resolveApiKey(
+          { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+          {
+            provider: 'socketio',
+            tenant: { tenant_id: 'tenant-1' },
+            authentication: {
+              payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            },
+          } as never
+        )
+      ).rejects.toThrow(/canonical tenant\/user home/);
+      expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledTimes(expectedLookups);
+      expect(homeMocks.sameExecutionCredentialHome).not.toHaveBeenCalled();
+    }
+  );
 
   it('keeps hosted native auth gated without a concrete exact-user route', async () => {
     configMocks.resolveApiKey.mockResolvedValue({

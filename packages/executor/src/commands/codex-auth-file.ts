@@ -1,5 +1,10 @@
 import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
-import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
+import {
+  mutateCredentialFile,
+  readCredentialFile,
+  type VerifiedCodexAuthWrite,
+  writeVerifiedCodexAuthFile,
+} from '@agor/core/codex/credential-file';
 import type { CodexAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveCodexAuthPath } from '../user-runtime-paths.js';
 import type { CommandOptions } from './index.js';
@@ -83,46 +88,32 @@ export async function handleCodexAuthFile(
     return { success: true, data: { status: 'deleted' } };
   }
 
-  if (
-    (await mutateCredentialFile({
+  let written: VerifiedCodexAuthWrite;
+  try {
+    written = await writeVerifiedCodexAuthFile({
       target,
       content: payload.params.content,
       generation: payload.params.generation,
-    })) === 'stale'
-  ) {
-    return {
-      success: false,
-      error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
-    };
-  }
-  let readBack: string;
-  try {
-    readBack = await readCredentialFile(target);
+    });
   } catch {
-    readBack = await readCredentialFile(target);
-  }
-  if (readBack !== payload.params.content) {
     return {
       success: false,
       error: { code: 'AUTH_FILE_VERIFY_FAILED', message: 'Codex auth file could not be verified' },
     };
   }
-  const parsed = parseCodexAuthJson(readBack);
-  return parsed.ok
-    ? {
-        success: true,
-        data: {
-          status: 'written',
-          authMode: parsed.summary.authMode,
-          ...(parsed.summary.planType ? { planType: parsed.summary.planType } : {}),
-          ...(parsed.summary.lastRefresh ? { lastRefresh: parsed.summary.lastRefresh } : {}),
-        },
-      }
-    : {
-        success: false,
-        error: {
-          code: 'AUTH_FILE_VERIFY_FAILED',
-          message: 'Codex auth file could not be verified',
-        },
-      };
+  if (written.outcome === 'stale') {
+    return {
+      success: false,
+      error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
+    };
+  }
+  return {
+    success: true,
+    data: {
+      status: 'written',
+      authMode: written.authMode,
+      ...(written.planType ? { planType: written.planType } : {}),
+      ...(written.lastRefresh ? { lastRefresh: written.lastRefresh } : {}),
+    },
+  };
 }

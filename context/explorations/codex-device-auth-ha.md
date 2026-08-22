@@ -61,7 +61,10 @@ replayed automatically.
   generation, and exchange claim before writing. Provider waits never occur in
   that transaction.
 - The credential store additionally keeps a per-home generation tombstone
-  under an atomic filesystem lock. In the admitted sandbox profile, the
+  under a Linux kernel `flock`. The lock is not age-stealable: a database
+  disconnect cannot admit a second filesystem writer while the first daemon is
+  still alive. A tiny attached holder releases the kernel lock when its daemon
+  pipe closes, including process/container death. In the admitted sandbox profile, the
   authority-owning daemon performs the short local mutation itself while it
   retains the database lock; there is no detached credential writer that can
   survive that daemon. Linux file operations are anchored to an opened
@@ -78,9 +81,13 @@ replayed automatically.
 ## Failure and retry contract
 
 This is an authentication convenience flow, not an exactly-once transaction.
-Provider calls, local credential persistence, and UI polling are bounded and
-surface terminal failures, but Agor does not automatically replay an ambiguous
-authorization-code exchange or reconcile every possible daemon-crash point.
+Provider calls and UI polling are bounded and surface terminal failures, but
+Agor does not automatically replay an ambiguous authorization-code exchange or
+reconcile every possible daemon-crash point. The local mutation is deliberately
+not wrapped in a fake promise timeout: Node filesystem work cannot be cancelled
+safely after such a timeout. A retry waits up to 10 seconds for the kernel lock
+and then fails visibly rather than stealing authority from a still-live writer;
+restarting that daemon closes its lock-holder pipe.
 A daemon crash between the local credential mutation and the database state
 transition may leave the filesystem and attempt row temporarily disagreeing,
 but it cannot leave a detached writer that later overwrites a retry. The
@@ -90,9 +97,10 @@ previous attempt and issues a new code.
 The OpenAI device code remains valid for 15 minutes to allow human sign-in.
 That is not a 15-minute request timeout: each provider request is bounded to 15
 seconds, HA poll ownership is leased for 25 seconds, executor-routed auth-file
-requests are bounded to 10 seconds, and the UI checks status every two seconds.
-The pending UI always offers **Start over**, so a user who has returned from
-OpenAI but sees no progress need not wait for code expiry.
+requests and HA filesystem lock admission are bounded to 10 seconds, and the UI
+checks status every two seconds. The pending UI always offers **Start over**, so
+a user who has returned from OpenAI but sees no progress need not wait for code
+expiry.
 
 ## Boundaries
 

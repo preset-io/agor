@@ -31,8 +31,10 @@ RUN apt-get update && apt-get install -y \
   openssh-client \
   ripgrep \
   bubblewrap \
+  util-linux \
   && rm -rf /var/lib/apt/lists/*
-# bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
+# bubblewrap: filesystem-only executor sandbox. util-linux supplies the kernel
+# flock holder used by HA Codex credential mutations.
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility

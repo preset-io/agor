@@ -74,7 +74,10 @@ describe('codex.auth-file executor boundary', () => {
         },
         {}
       )
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({
+      success: false,
+      error: { code: 'AUTH_FILE_VERIFY_FAILED' },
+    });
     await expect(
       handleCodexAuthFile({ command: 'codex.auth-file', params: { operation: 'inspect' } }, {})
     ).resolves.toMatchObject({ success: false, error: { code: 'AUTH_FILE_UNREADABLE' } });
@@ -136,6 +139,10 @@ describe('codex.auth-file executor boundary', () => {
         {}
       )
     ).resolves.toMatchObject({ success: false, error: { code: 'AUTH_FILE_STALE' } });
-    expect(await readdir(process.env.CODEX_HOME)).toEqual(['.agor-auth-generation']);
+    expect(await readdir(process.env.CODEX_HOME)).toEqual(
+      process.platform === 'linux'
+        ? ['.agor-auth-generation', '.agor-auth-mutation.lock']
+        : ['.agor-auth-generation']
+    );
   });
 });

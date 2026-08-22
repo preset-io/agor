@@ -1,6 +1,5 @@
 import { join } from 'node:path';
-import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
-import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
+import { mutateCredentialFile, writeVerifiedCodexAuthFile } from '@agor/core/codex/credential-file';
 import { requestExecutor } from './spawn-executor.js';
 
 export interface CodexAuthCredentialRouting {
@@ -61,20 +60,18 @@ async function writeCodexAuthLocally(
   codexHome: string,
   authorityGeneration: number
 ): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
-  const target = join(codexHome, 'auth.json');
-  if (
-    (await mutateCredentialFile({ target, content, generation: authorityGeneration })) === 'stale'
-  ) {
+  const written = await writeVerifiedCodexAuthFile({
+    target: join(codexHome, 'auth.json'),
+    content,
+    generation: authorityGeneration,
+  });
+  if (written.outcome === 'stale') {
     throw new Error('Codex credential write was superseded');
   }
-  const readBack = await readCredentialFile(target);
-  if (readBack !== content) throw new Error('Codex credential write verification failed');
-  const parsed = parseCodexAuthJson(readBack);
-  if (!parsed.ok) throw new Error('Codex credential write verification failed');
   return {
-    authMode: parsed.summary.authMode,
-    ...(parsed.summary.planType ? { planType: parsed.summary.planType } : {}),
-    ...(parsed.summary.lastRefresh ? { lastRefresh: parsed.summary.lastRefresh } : {}),
+    authMode: written.authMode,
+    ...(written.planType ? { planType: written.planType } : {}),
+    ...(written.lastRefresh ? { lastRefresh: written.lastRefresh } : {}),
   };
 }
 

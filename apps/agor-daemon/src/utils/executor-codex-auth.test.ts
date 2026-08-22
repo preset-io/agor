@@ -1,4 +1,4 @@
-import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
+import { writeVerifiedCodexAuthFile } from '@agor/core/codex/credential-file';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteCodexAuthCredential,
@@ -9,15 +9,14 @@ import { requestExecutor } from './spawn-executor.js';
 
 vi.mock('@agor/core/codex/credential-file', () => ({
   mutateCredentialFile: vi.fn(),
-  readCredentialFile: vi.fn(),
+  writeVerifiedCodexAuthFile: vi.fn(),
 }));
 
 vi.mock('./spawn-executor.js', () => ({
   requestExecutor: vi.fn(),
 }));
 const runMock = vi.mocked(requestExecutor);
-const mutateCredentialFileMock = vi.mocked(mutateCredentialFile);
-const readCredentialFileMock = vi.mocked(readCredentialFile);
+const writeVerifiedCodexAuthFileMock = vi.mocked(writeVerifiedCodexAuthFile);
 
 describe('executor Codex auth dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -84,8 +83,10 @@ describe('executor Codex auth dispatch', () => {
 
   it('keeps generation-fenced HA mutations in the authority-owning daemon', async () => {
     const content = '{"tokens":{"refresh_token":"credential-json"}}';
-    mutateCredentialFileMock.mockResolvedValue('applied');
-    readCredentialFileMock.mockResolvedValue(content);
+    writeVerifiedCodexAuthFileMock.mockResolvedValue({
+      outcome: 'written',
+      authMode: 'chatgpt',
+    });
     await writeCodexAuthCredential(
       content,
       {
@@ -97,12 +98,11 @@ describe('executor Codex auth dispatch', () => {
     );
 
     expect(runMock).not.toHaveBeenCalled();
-    expect(mutateCredentialFileMock).toHaveBeenCalledWith({
+    expect(writeVerifiedCodexAuthFileMock).toHaveBeenCalledWith({
       target: '/tenant/user/.codex/auth.json',
       content,
       generation: 42,
     });
-    expect(readCredentialFileMock).toHaveBeenCalledWith('/tenant/user/.codex/auth.json');
   });
 
   it('dispatches idempotent deletion and throws a secret-free failure', async () => {

@@ -6,6 +6,47 @@ import { mutateCredentialFile, readCredentialFile } from './credential-file';
 
 describe('credential file directory capability', () => {
   it.runIf(process.platform === 'linux')(
+    'does not let a retry steal the lock from a still-live writer',
+    async () => {
+      const codexHome = await mkdtemp(join(tmpdir(), 'agor-credential-lock-'));
+      const target = join(codexHome, 'auth.json');
+      let allowFirst!: () => void;
+      const firstBlocked = new Promise<void>((resolveBlocked) => {
+        allowFirst = resolveBlocked;
+      });
+      let firstHasLock!: () => void;
+      const firstAcquired = new Promise<void>((resolveAcquired) => {
+        firstHasLock = resolveAcquired;
+      });
+
+      const first = mutateCredentialFile({
+        target,
+        content: 'first',
+        generation: 1,
+        afterLockAcquiredForTest: async () => {
+          firstHasLock();
+          await firstBlocked;
+        },
+      });
+      await firstAcquired;
+
+      let retrySettled = false;
+      const retry = mutateCredentialFile({ target, content: 'retry', generation: 2 }).finally(
+        () => {
+          retrySettled = true;
+        }
+      );
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      expect(retrySettled).toBe(false);
+
+      allowFirst();
+      await expect(first).resolves.toBe('applied');
+      await expect(retry).resolves.toBe('applied');
+      await expect(readFile(target, 'utf8')).resolves.toBe('retry');
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
     'rejects directory and file symlinks instead of inspecting another home',
     async () => {
       const root = await mkdtemp(join(tmpdir(), 'agor-credential-boundary-'));

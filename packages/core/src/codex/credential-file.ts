@@ -1,10 +1,22 @@
+import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { type FileHandle, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve, sep } from 'node:path';
+import { parseCodexAuthJson } from './auth-file.js';
 
-const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
+const LOCK_HOLDER_SCRIPT = `
+const { spawnSync } = require('node:child_process');
+const result = spawnSync(
+  'flock',
+  ['--exclusive', '--wait', '${LOCK_WAIT_MS / 1_000}', '3'],
+  { stdio: ['ignore', 'ignore', 'ignore', 3] }
+);
+if (result.status !== 0) process.exit(result.status ?? 1);
+process.stdout.write('locked\\n');
+process.stdin.resume();
+`;
 
 interface CredentialDirectory {
   handle: FileHandle;
@@ -14,10 +26,12 @@ interface CredentialDirectory {
 interface CredentialDirectoryTestOptions {
   /** Deterministic race-test seam; production callers must omit. */
   afterDirectoryOpenForTest?: () => Promise<void>;
+  /** Deterministic lock-contention test seam; production callers must omit. */
+  afterLockAcquiredForTest?: () => Promise<void>;
 }
 
 // Keep this sensitive storage primitive's ambient filesystem authority behind
-// five narrow adapters. Besides making the operations auditable by Agor's
+// six narrow adapters. Besides making the operations auditable by Agor's
 // daemon-filesystem boundary registry, callers cannot accidentally bypass the
 // directory-capability path with a one-off fs call.
 async function openPath(path: string, flags: string | number, mode?: number): Promise<FileHandle> {
@@ -43,8 +57,11 @@ async function removePath(path: string, recursive = false): Promise<void> {
   await rm(path, { recursive, force: true });
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+function spawnLockHolder(lockHandle: FileHandle): ChildProcess {
+  return spawn(process.execPath, ['-e', LOCK_HOLDER_SCRIPT], {
+    stdio: ['pipe', 'pipe', 'ignore', lockHandle.fd],
+    detached: false,
+  });
 }
 
 function linuxDirectoryFlags(): number {
@@ -156,31 +173,82 @@ async function atomicWrite(
   }
 }
 
-async function acquireLock(lockDir: string): Promise<() => Promise<void>> {
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try {
-      await createDirectory(lockDir, { mode: 0o700 });
-      return async () => removePath(lockDir, true);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        const lock = await inspectLink(lockDir);
-        if (!lock.isDirectory() || lock.isSymbolicLink()) {
-          throw new Error('Credential mutation lock is not a directory');
-        }
-        if (Date.now() - lock.mtimeMs > LOCK_STALE_MS) {
-          await removePath(lockDir, true);
-          continue;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        continue;
-      }
-      if (Date.now() >= deadline) throw new Error('Credential mutation lock timed out');
-      await sleep(25);
-    }
+async function acquireLinuxLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+  const lockHandle = await openPath(
+    join(directory.path, '.agor-auth-mutation.lock'),
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+    0o600
+  );
+  let child: ChildProcess;
+  let closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  try {
+    const metadata = await lockHandle.stat();
+    if (!metadata.isFile()) throw new Error('Credential mutation lock is not a regular file');
+    await lockHandle.chmod(0o600);
+    child = spawnLockHolder(lockHandle);
+    closed = new Promise((resolveClose) =>
+      child.once('close', (code, signal) => resolveClose({ code, signal }))
+    );
+  } finally {
+    // spawn() has duplicated fd 3 before it returns. Keeping the parent's copy
+    // open would also keep the flock alive after the holder exits.
+    await lockHandle.close();
   }
+
+  await new Promise<void>((resolveReady, rejectReady) => {
+    let output = '';
+    const fail = () => rejectReady(new Error('Credential mutation lock timed out'));
+    child.once('error', fail);
+    child.once('close', fail);
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      output += chunk;
+      if (!output.includes('locked\n')) return;
+      child.removeListener('error', fail);
+      child.removeListener('close', fail);
+      resolveReady();
+    });
+  }).catch(async (error) => {
+    child.stdin?.destroy();
+    await closed;
+    throw error;
+  });
+
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    child.stdin?.end();
+    const outcome = await closed;
+    if (outcome.code !== 0) {
+      throw new Error('Credential mutation lock holder exited unexpectedly');
+    }
+  };
+}
+
+async function acquirePortableLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+  const lockDir = join(directory.path, '.agor-auth-mutation.lock');
+  try {
+    await createDirectory(lockDir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error('Credential mutation lock is already held');
+    }
+    throw error;
+  }
+  return async () => removePath(lockDir, true);
+}
+
+/**
+ * Linux uses a kernel flock held by a tiny child whose stdin belongs to this
+ * daemon. A database disconnect may release PostgreSQL authority while the
+ * callback is still alive, but a retry cannot steal this lock. Process or
+ * container death closes stdin and releases the kernel lock automatically.
+ */
+async function acquireLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+  return process.platform === 'linux'
+    ? acquireLinuxLock(directory)
+    : acquirePortableLock(directory);
 }
 
 async function currentGeneration(path: string): Promise<number> {
@@ -233,8 +301,9 @@ export async function mutateCredentialFile(
       throw new Error('Credential mutation generation is invalid');
     }
 
-    const release = await acquireLock(join(directory.path, '.agor-auth-mutation.lock'));
+    const release = await acquireLock(directory);
     try {
+      await options.afterLockAcquiredForTest?.();
       const generationPath = join(directory.path, '.agor-auth-generation');
       if (options.generation < (await currentGeneration(generationPath))) return 'stale';
       await atomicWrite(directory, '.agor-auth-generation', `${options.generation}\n`, 0o600);
@@ -251,4 +320,41 @@ export async function mutateCredentialFile(
   } finally {
     await directory.handle.close();
   }
+}
+
+export type VerifiedCodexAuthWrite =
+  | { outcome: 'stale' }
+  | {
+      outcome: 'written';
+      authMode: 'chatgpt' | 'api_key';
+      planType?: string;
+      lastRefresh?: string;
+    };
+
+/** Shared write/read-back/parse semantics for daemon-local and executor routes. */
+export async function writeVerifiedCodexAuthFile(options: {
+  target: string;
+  content: string;
+  generation?: number;
+}): Promise<VerifiedCodexAuthWrite> {
+  if (!parseCodexAuthJson(options.content).ok) {
+    throw new Error('Codex credential content is malformed');
+  }
+  if ((await mutateCredentialFile(options)) === 'stale') return { outcome: 'stale' };
+
+  let readBack: string;
+  try {
+    readBack = await readCredentialFile(options.target);
+  } catch {
+    readBack = await readCredentialFile(options.target);
+  }
+  if (readBack !== options.content) throw new Error('Codex credential write verification failed');
+  const parsed = parseCodexAuthJson(readBack);
+  if (!parsed.ok) throw new Error('Codex credential write verification failed');
+  return {
+    outcome: 'written',
+    authMode: parsed.summary.authMode,
+    ...(parsed.summary.planType ? { planType: parsed.summary.planType } : {}),
+    ...(parsed.summary.lastRefresh ? { lastRefresh: parsed.summary.lastRefresh } : {}),
+  };
 }

@@ -300,7 +300,8 @@ in delegated mode it carries the compatibility home key.
 > it. The constrained HA profile admits auth-file check/import/logout with a consistent declared
 > home. Device sign-in is narrower: it currently requires Agor's local sandbox per-user home and is
 > not enabled for a delegated launcher. Its generation-fenced mutation runs in the authority-owning
-> daemon, not a detached writer. Ambiguous exchange or credential-write outcomes surface to the user
+> daemon, not a detached writer, and a Linux kernel lock fails closed rather than letting a retry
+> overtake a still-live writer. Ambiguous exchange or credential-write outcomes surface to the user
 > and are retried by starting a new code, not by automatic side-effect replay.
 
 ### How It Works
