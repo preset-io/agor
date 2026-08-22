@@ -36,8 +36,13 @@ after(async () => {
   );
 });
 
-async function selectPersona(persona = 'acme-alice', tenant = 'acme', returnTo = '/ui/') {
-  return fetch(`${baseUrl}/dev-auth/select`, {
+async function selectPersona(
+  persona = 'acme-alice',
+  tenant = 'acme',
+  returnTo = '/ui/',
+  launcherBaseUrl = baseUrl
+) {
+  return fetch(`${launcherBaseUrl}/dev-auth/select`, {
     method: 'POST',
     redirect: 'manual',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -53,8 +58,8 @@ function launchCodeFrom(response) {
   return code;
 }
 
-async function exchange(launchCode, overrides = {}) {
-  return fetch(`${baseUrl}/exchange`, {
+async function exchange(launchCode, overrides = {}, launcherBaseUrl = baseUrl) {
+  return fetch(`${launcherBaseUrl}/exchange`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -144,4 +149,36 @@ test('burns a code on an invalid audience and never redirects outside the HA ori
   );
   assert.equal(redirect.origin, 'http://127.0.0.1:3030');
   assert.equal(redirect.pathname, '/ui/');
+});
+
+test('bounds pending launch codes and evicts the oldest unexchanged identity', async () => {
+  const bounded = createDevLauncher({
+    publicOrigin: 'http://127.0.0.1:3030',
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    instanceId: INSTANCE_ID,
+    sharedSecret: SHARED_SECRET,
+    maxPendingCodes: 2,
+  });
+  await new Promise((resolve) => bounded.server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = bounded.server.address();
+    assert(address && typeof address === 'object');
+    const boundedBaseUrl = `http://127.0.0.1:${address.port}`;
+    const first = launchCodeFrom(await selectPersona('acme-alice', 'acme', '/ui/', boundedBaseUrl));
+    const second = launchCodeFrom(
+      await selectPersona('acme-aaron', 'acme', '/ui/', boundedBaseUrl)
+    );
+    const third = launchCodeFrom(
+      await selectPersona('globex-ben', 'globex', '/ui/', boundedBaseUrl)
+    );
+
+    assert.equal((await exchange(first, {}, boundedBaseUrl)).status, 401);
+    assert.equal((await exchange(second, {}, boundedBaseUrl)).status, 200);
+    assert.equal((await exchange(third, {}, boundedBaseUrl)).status, 200);
+  } finally {
+    await new Promise((resolve, reject) =>
+      bounded.server.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
 });

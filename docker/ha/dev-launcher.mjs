@@ -58,6 +58,7 @@ export const HA_DEV_PERSONAS = Object.freeze([
 const PERSONAS_BY_ID = new Map(HA_DEV_PERSONAS.map((persona) => [persona.id, persona]));
 const DEFAULT_CODE_TTL_MS = 60_000;
 const DEFAULT_ASSERTION_TTL_SECONDS = 120;
+const DEFAULT_MAX_PENDING_CODES = 256;
 const MAX_REQUEST_BYTES = 16 * 1024;
 
 function base64UrlJson(value) {
@@ -192,10 +193,25 @@ export function createDevLauncher(options) {
   const now = options.now ?? Date.now;
   const codeTtlMs = options.codeTtlMs ?? DEFAULT_CODE_TTL_MS;
   const assertionTtlSeconds = options.assertionTtlSeconds ?? DEFAULT_ASSERTION_TTL_SECONDS;
+  const maxPendingCodes = options.maxPendingCodes ?? DEFAULT_MAX_PENDING_CODES;
   const codes = new Map();
 
   if (!issuer || !audience || !instanceId || !sharedSecret) {
     throw new Error('issuer, audience, instanceId, and sharedSecret are required');
+  }
+  if (!Number.isSafeInteger(maxPendingCodes) || maxPendingCodes < 1) {
+    throw new Error('maxPendingCodes must be a positive integer');
+  }
+
+  function preparePendingCodes(timestamp) {
+    for (const [code, record] of codes) {
+      if (record.expiresAt <= timestamp) codes.delete(code);
+    }
+    while (codes.size >= maxPendingCodes) {
+      const oldestCode = codes.keys().next().value;
+      if (oldestCode === undefined) break;
+      codes.delete(oldestCode);
+    }
   }
 
   const server = createServer(async (request, response) => {
@@ -221,8 +237,10 @@ export function createDevLauncher(options) {
         if (!persona || form.get('tenant') !== persona.tenantId) {
           return json(response, 400, { error: 'Unknown development persona' });
         }
+        const timestamp = now();
+        preparePendingCodes(timestamp);
         const launchCode = randomBytes(24).toString('base64url');
-        codes.set(launchCode, { persona, expiresAt: now() + codeTtlMs });
+        codes.set(launchCode, { persona, expiresAt: timestamp + codeTtlMs });
         response.writeHead(303, {
           location: buildLaunchRedirect(publicOrigin, form.get('return_to'), launchCode),
           'cache-control': 'no-store',

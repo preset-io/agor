@@ -24,6 +24,15 @@ afterEach(async () => {
 });
 
 describe('checked-in HA Compose configuration', () => {
+  it('keeps previously rendered HA lifecycle commands parseable after the identity cutover', async () => {
+    const compose = await fs.readFile(path.join(REPO_ROOT, 'docker-compose.ha.yml'), 'utf8');
+    const interpolationPrefix = '$' + '{AGOR_EXTERNAL_LAUNCH_SHARED_SECRET:';
+    const fallback = `${interpolationPrefix}-agor-ha-dev-launch-secret-000000000000000000000000}`;
+
+    expect(compose.split(fallback)).toHaveLength(3);
+    expect(compose).not.toContain(`${interpolationPrefix}?`);
+  });
+
   it('materializes into a valid auth-resolved multi-tenant HA profile', async () => {
     const source = await fs.readFile(path.join(REPO_ROOT, 'docker/ha/config.yaml'), 'utf8');
     expect(source).toContain('__AGOR_HA_PUBLIC_ORIGIN__');
