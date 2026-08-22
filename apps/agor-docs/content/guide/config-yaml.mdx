@@ -5,6 +5,13 @@ creates it once with mode `0600`. After initialization Agor does not silently re
 comments, formatting, key order, YAML anchors, read-only ConfigMaps, and infrastructure-as-code
 ownership.
 
+On POSIX systems, when Agor itself creates a missing `~/.agor` directory it gives the directory
+mode `0700`. This is a private-by-default mode-bit policy, not a claim to manage filesystem ACLs
+or Windows access controls. Agor preserves an existing directory's mode, ownership, group, ACLs,
+mount policy, and symlink layout; it does not recursively chmod or “repair” an operator-provisioned
+home. Deployments that share the home between identities must provision their intended access
+policy before starting Agor.
+
 Initialization atomically publishes `config.yaml` without replacing an existing file. The
 filesystem containing `~/.agor` must support same-directory hard links (as normal local
 filesystems do). On an unsupported filesystem, Agor fails with migration guidance rather than

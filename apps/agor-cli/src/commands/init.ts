@@ -540,7 +540,7 @@ export default class Init extends Command {
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
-    await ensureAgorHome(baseDir, { enforceExistingMode: true });
+    await ensureAgorHome(baseDir);
     this.log(`${chalk.green('   ✓')} ${baseDir}`);
 
     const dirs = [

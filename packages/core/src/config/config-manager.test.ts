@@ -1605,11 +1605,16 @@ describe('initConfig', () => {
     expect(await fs.readdir(path.dirname(getConfigPath()))).toEqual([]);
   });
 
-  it('preserves existing permission bits during an explicit atomic rewrite', async () => {
+  it('preserves existing permission bits during an explicit atomic rewrite under any umask', async () => {
     await createInitialConfig({ daemon: { port: 3001 } });
     const configPath = getConfigPath();
     await fs.chmod(configPath, 0o640);
-    await rewriteConfigForTests({ daemon: { port: 3002 } });
+    const previousUmask = process.platform === 'win32' ? undefined : process.umask(0o077);
+    try {
+      await rewriteConfigForTests({ daemon: { port: 3002 } });
+    } finally {
+      if (previousUmask !== undefined) process.umask(previousUmask);
+    }
     expect((await fs.stat(configPath)).mode & 0o777).toBe(0o640);
     expect((await loadConfig()).daemon?.port).toBe(3002);
   });

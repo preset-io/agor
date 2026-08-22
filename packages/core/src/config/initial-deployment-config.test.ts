@@ -30,8 +30,9 @@ describe('initial deployment config', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates and reuses a complete bootable config with mode 0600', async () => {
+  it('creates a 0600 config without changing a pre-created operator home', async () => {
     await fs.mkdir(path.dirname(getConfigPath()), { mode: 0o755 });
+    await fs.chmod(path.dirname(getConfigPath()), 0o755);
     const initial = prepareInitialDeploymentConfig(getDefaultConfig(), {
       deploymentId: '019c1234-5678-7123-8123-123456789abc',
     });
@@ -43,7 +44,7 @@ describe('initial deployment config', () => {
     });
     expect(created.config.daemon?.jwtSecret).toMatch(/^[0-9a-f]{64}$/);
     expect(created.config.daemon?.masterSecret).toMatch(/^[0-9a-f]{64}$/);
-    expect((await fs.stat(path.dirname(getConfigPath()))).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(path.dirname(getConfigPath()))).mode & 0o777).toBe(0o755);
     expect((await fs.stat(getConfigPath())).mode & 0o777).toBe(0o600);
 
     const replacement = prepareInitialDeploymentConfig(getDefaultConfig(), {
@@ -55,6 +56,19 @@ describe('initial deployment config', () => {
       deploymentId: created.deploymentId,
     });
     expect(reused.config).toEqual(created.config);
+  });
+
+  it('enforces config mode 0600 after a restrictive umask filters creation', async () => {
+    if (process.platform === 'win32') return;
+    await fs.mkdir(path.dirname(getConfigPath()), { mode: 0o700 });
+    const previousUmask = process.umask(0o777);
+    try {
+      await createInitialConfig({ daemon: { port: 3001 } });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    expect((await fs.stat(getConfigPath())).mode & 0o777).toBe(0o600);
   });
 
   it('rejects an existing config that cannot boot the daemon', async () => {

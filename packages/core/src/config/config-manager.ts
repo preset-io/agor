@@ -1160,8 +1160,12 @@ export async function migrateConfigDeploymentId(
   const tempPath = `${filePath}.rewrite-${process.pid}-${randomUUID()}`;
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(tempPath, 'wx', stat.mode & 0o7777);
+    handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(yaml.dump(parsed, { indent: 2, lineWidth: 120, noRefs: true }), 'utf-8');
+    // open(2)'s requested mode is filtered by the process umask. Apply the
+    // original operator-selected bits through the already-open inode before
+    // publishing the replacement.
+    await handle.chmod(stat.mode & 0o7777);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1223,10 +1227,9 @@ async function syncContainingDirectory(filePath: string): Promise<void> {
  */
 export async function createInitialConfig(config: AgorConfig = getDefaultConfig()): Promise<void> {
   validateConfig(config);
-  // Initial publication establishes an Agor-managed deployment boundary, so
-  // an empty/pre-created mount is brought under the private-home contract.
-  // Runtime reads and rewrites do not repair operator policy implicitly.
-  await ensureAgorHome(getAgorHome(), { enforceExistingMode: true });
+  // Create a missing state home privately, but preserve any pre-created
+  // operator-managed directory, bind mount, group/ACL policy, or symlink.
+  await ensureAgorHome(getAgorHome());
   const configPath = getConfigPath();
   const content = [
     '# Agor operator configuration',
@@ -1248,6 +1251,9 @@ export async function createInitialConfig(config: AgorConfig = getDefaultConfig(
   try {
     handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(content, 'utf-8');
+    // Guarantee the documented mode even when the process has an unusually
+    // restrictive umask. The descriptor pins the inode we are publishing.
+    await handle.chmod(0o600);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1292,8 +1298,11 @@ async function rewriteConfigFile(
   const content = yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(tempPath, 'wx', stat.mode & 0o7777);
+    handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(content, 'utf-8');
+    // Preserve the existing operator-selected mode exactly; open(2) alone
+    // cannot do so because the ambient umask filters its mode argument.
+    await handle.chmod(stat.mode & 0o7777);
     await handle.sync();
     await handle.close();
     handle = undefined;

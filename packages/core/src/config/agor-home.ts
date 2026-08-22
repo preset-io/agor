@@ -22,17 +22,6 @@ import path from 'node:path';
 
 export const AGOR_HOME_MODE = 0o700;
 
-export interface EnsureAgorHomeOptions {
-  /**
-   * Repair an existing directory to the managed-private contract.
-   *
-   * This is intentionally opt-in: an existing home may be an operator-owned
-   * bind mount with group/ACL policy. Fresh `agor init` owns its empty target
-   * and opts in; ordinary config and daemon reads do not.
-   */
-  enforceExistingMode?: boolean;
-}
-
 /** Get the default Agor state directory (`~/.agor`). */
 export function getAgorHome(): string {
   return path.join(os.homedir(), '.agor');
@@ -107,30 +96,27 @@ function enforcePrivateDirectoryModeSync(homePath: string): void {
  * Ensure an Agor home exists under the managed-private creation policy.
  *
  * Newly created homes are chmodded through an opened directory descriptor so
- * the verified inode ends at exactly 0700 under normal umasks. An unusual
- * umask that removes owner read/execute permission can prevent the descriptor
- * from opening; setup then fails closed rather than using a path-based chmod
- * that could follow a replacement symlink. Existing directories retain
- * operator policy unless `enforceExistingMode` is explicitly requested by a
- * setup boundary that owns the directory.
+ * the verified inode ends at exactly 0700 under normal POSIX mode semantics.
+ * An unusual umask that removes owner read/execute permission can prevent the
+ * descriptor from opening; setup then fails closed rather than using a
+ * path-based chmod that could follow a replacement symlink.
+ *
+ * Existing directories (including symlinked directories) are operator-managed
+ * and remain unchanged. Creation alone does not prove that Agor owns a
+ * pre-created bind mount, group/ACL directory, or Kubernetes fsGroup volume;
+ * changing those paths would be an explicit migration/repair operation.
  */
-export async function ensureAgorHome(
-  homePath = getAgorHome(),
-  options: EnsureAgorHomeOptions = {}
-): Promise<void> {
+export async function ensureAgorHome(homePath = getAgorHome()): Promise<void> {
   const createdPath = await fs.mkdir(homePath, { recursive: true, mode: AGOR_HOME_MODE });
-  if (createdPath !== undefined || options.enforceExistingMode === true) {
+  if (createdPath !== undefined) {
     await enforcePrivateDirectoryMode(homePath);
   }
 }
 
 /** Synchronous variant for the CLI's detached-daemon file setup. */
-export function ensureAgorHomeSync(
-  homePath = getAgorHome(),
-  options: EnsureAgorHomeOptions = {}
-): void {
+export function ensureAgorHomeSync(homePath = getAgorHome()): void {
   const createdPath = mkdirSync(homePath, { recursive: true, mode: AGOR_HOME_MODE });
-  if (createdPath !== undefined || options.enforceExistingMode === true) {
+  if (createdPath !== undefined) {
     enforcePrivateDirectoryModeSync(homePath);
   }
 }
