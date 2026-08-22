@@ -392,7 +392,12 @@ describe('tenant-owned service registration', () => {
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
-      expect.arrayContaining(['kb/settings', 'kb/indexing/status', 'kb/indexing/reindex'])
+      expect.arrayContaining([
+        'kb/graph',
+        'kb/settings',
+        'kb/indexing/status',
+        'kb/indexing/reindex',
+      ])
     );
   });
 });

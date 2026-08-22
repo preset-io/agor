@@ -480,6 +480,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'session-env-selections',
   'kb/namespaces',
   'kb/documents',
+  'kb/graph',
   'kb/document-edits',
   'kb/versions',
   'kb/search',
