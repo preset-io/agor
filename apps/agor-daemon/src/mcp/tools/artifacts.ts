@@ -22,7 +22,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { ARTIFACT_LIST_FIELDS_WITHOUT_FILES } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
@@ -451,7 +451,7 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
       } catch (err) {
-        if (err instanceof NotFoundError) {
+        if (isNotFoundError(err)) {
           return textResult({ error: `Artifact ${artifactId} not found` });
         }
         throw err;
@@ -630,7 +630,7 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       try {
         artifact = await service.get(artifactId, ctx.baseServiceParams);
       } catch (err) {
-        if (err instanceof NotFoundError) {
+        if (isNotFoundError(err)) {
           return textResult({ error: `Artifact ${artifactId} not found` });
         }
         throw err;

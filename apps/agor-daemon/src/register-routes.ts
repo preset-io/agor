@@ -94,7 +94,6 @@ import {
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-capability.js';
@@ -180,6 +179,7 @@ import {
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
+import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -1253,31 +1253,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    */
   const sessionTurnLocks: SessionTurnLocks = new Map();
 
-  /**
-   * Helper: Safely patch an entity, returning false if it was deleted mid-execution
-   */
-  async function safePatch<T>(
-    serviceName: string,
-    id: string,
-    data: Partial<T>,
-    entityType: string,
-    params?: RouteParams
-  ): Promise<boolean> {
-    try {
-      await app.service(serviceName).patch(id, data, params || {});
-      return true;
-    } catch (error) {
-      if (
-        error instanceof NotFoundError ||
-        (error instanceof Error && error.message.includes('No record found'))
-      ) {
-        console.log(`⚠️  ${entityType} ${shortId(id)} was deleted mid-execution - skipping update`);
-        return false;
-      }
-      throw error;
-    }
-  }
-
   async function reconcileSessionPromptStateIfStuck(
     session: Session,
     taskRepo: TaskRepository,
@@ -1668,7 +1643,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
         );
-        await safePatch(
+        await patchUnlessRemoved(
+          app,
           'tasks',
           taskId,
           {
