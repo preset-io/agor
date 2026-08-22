@@ -13,7 +13,7 @@ for (const name of [
   'AGOR_REDIS_KEY_PREFIX',
   'AGOR_JWT_SECRET',
   'AGOR_MASTER_SECRET',
-  'AGOR_ADMIN_PASSWORD',
+  'AGOR_EXTERNAL_LAUNCH_SHARED_SECRET',
 ]) {
   assert(process.env[name], `${name} is required`);
 }
@@ -187,8 +187,8 @@ function socketHealth(socket) {
 
 let cleanupAccessToken;
 let cleanupApiKeyId;
+const cleanupBoards = new Map();
 let cleanupCodexAuth = false;
-const cleanupBoardIds = new Set();
 const cleanupSockets = new Set();
 const cleanupStoppedServices = new Set();
 let completed = false;
@@ -204,7 +204,7 @@ try {
 
   for (const service of ['daemon-a', 'daemon-b']) {
     const destinations = serviceMountDestinations(service);
-    assert(destinations.has('/home/agor'), `${service} is missing the shared executor home mount`);
+    assert(destinations.has('/home/agor'), `${service} is missing the shared container home mount`);
     assert(
       destinations.has('/home/agor/.agor'),
       `${service} is missing the stable Agor workspace/state mount`
@@ -239,7 +239,7 @@ try {
       '/home/agor/.agor/.ha-workspace-probe'
     );
   }
-  console.log('ok - executor home and stable Agor workspace mounts are shared across replicas');
+  console.log('ok - shared storage carries stable tenant/user homes and Agor workspaces');
 
   for (const service of ['daemon-a', 'daemon-b']) {
     const doctor = JSON.parse(dockerOutput('exec', '-T', service, 'agor', 'doctor', '--json'));
@@ -279,42 +279,46 @@ try {
   console.log('ok - both HA replicas activated distributed environment-health discovery');
   console.log('ok - both replicas activated shared runtime reconciliation and queue discovery');
 
-  async function loginAdmin() {
-    const response = await fetch(`${daemonA}/authentication`, {
+  async function loginPersona({ tenant, persona }, base = daemonA) {
+    const selected = await fetch(`${ingress}/dev-auth/select`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ tenant, persona, return_to: '/ui/' }),
+    });
+    assert.equal(selected.status, 303, `persona selection failed: ${selected.status}`);
+    const location = selected.headers.get('location');
+    assert(location, 'persona selection did not return a launch redirect');
+    const launchCode = new URL(location).searchParams.get('launch_code');
+    assert(launchCode, 'persona selection did not return a launch code');
+    assert(!location.includes('tenant_id='), 'persona redirect exposed a raw tenant selector');
+
+    const response = await fetch(`${base}/auth/launch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        strategy: 'local',
-        email: 'admin@agor.live',
-        password: process.env.AGOR_ADMIN_PASSWORD,
-      }),
+      body: JSON.stringify({ launchCode }),
     });
-    assert.equal(response.status, 201, `admin login failed: ${response.status}`);
+    assert.equal(response.status, 201, `persona launch failed: ${response.status}`);
     return response.json();
   }
 
-  let loginResult = await loginAdmin();
-  if (loginResult.user?.must_change_password) {
-    const confirmationSocket = await connectAuthenticated(daemonA, loginResult.accessToken);
-    cleanupSockets.add(confirmationSocket);
-    await new Promise((resolve, reject) => {
-      confirmationSocket.emit(
-        'patch',
-        'users',
-        loginResult.user.user_id,
-        { password: process.env.AGOR_ADMIN_PASSWORD },
-        {},
-        (error, result) =>
-          error ? reject(new Error(error.message ?? String(error))) : resolve(result)
-      );
-    });
-    confirmationSocket.close();
-    cleanupSockets.delete(confirmationSocket);
-    loginResult = await loginAdmin();
-  }
+  const picker = await fetch(`${ingress}/dev-auth/`);
+  assert.equal(picker.status, 200);
+  assert.match(await picker.text(), /HA development login/);
+  const loginResult = await loginPersona({ tenant: 'acme', persona: 'acme-alice' });
+  const foreignLoginResult = await loginPersona(
+    { tenant: 'globex', persona: 'globex-beatrice' },
+    daemonB
+  );
+  const memberLoginResult = await loginPersona({ tenant: 'acme', persona: 'acme-aaron' }, daemonB);
   const { accessToken } = loginResult;
+  const foreignAccessToken = foreignLoginResult.accessToken;
+  const memberAccessToken = memberLoginResult.accessToken;
   assert.equal(typeof accessToken, 'string');
+  assert.equal(typeof foreignAccessToken, 'string');
+  assert.equal(typeof memberAccessToken, 'string');
   cleanupAccessToken = accessToken;
+  console.log('ok - dev picker JIT-provisioned independent admin identities in two tenants');
 
   const issueInstallState = async (base) => {
     const response = await fetch(`${base}/api/github/setup/state`, {
@@ -554,8 +558,14 @@ try {
   assert.equal(typeof apiKeyResult.rawKey, 'string');
   assert.equal(typeof apiKeyResult.key?.id, 'string');
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const initialize = await fetch(`${ingress}/mcp`, {
+  // A personal API key is intentionally opaque and therefore cannot select a
+  // tenant in this auth-claim-only deployment. Prove both replicas and ingress
+  // fail closed instead of performing a global key-table lookup or inferring
+  // tenant scope from a caller-controlled value. Deployments that need
+  // personal-key MCP access must provide reviewed trusted-edge tenant routing;
+  // session MCP tokens already carry a signed tenant binding.
+  for (const base of [daemonA, daemonB, ingress]) {
+    const initialize = await fetch(`${base}/mcp`, {
       method: 'POST',
       headers: {
         Accept: 'application/json, text/event-stream',
@@ -564,7 +574,7 @@ try {
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
-        id: 200 + attempt,
+        id: 200,
         method: 'initialize',
         params: {
           protocolVersion: '2025-03-26',
@@ -573,19 +583,14 @@ try {
         },
       }),
     });
-    assert.equal(initialize.status, 200, `stateless MCP initialize failed: ${initialize.status}`);
+    assert.equal(
+      initialize.status,
+      401,
+      `personal API key unexpectedly selected a tenant at ${base}: ${initialize.status}`
+    );
     assert.equal(initialize.headers.get('mcp-session-id'), null);
-    assert.match(await initialize.text(), /protocolVersion/);
+    assert.match(await initialize.text(), /tenant/i);
   }
-  const rejectedGet = await fetch(`${ingress}/mcp`, {
-    method: 'GET',
-    headers: {
-      'X-API-Key': apiKeyResult.rawKey,
-      'Mcp-Session-Id': 'process-affine-session',
-    },
-  });
-  assert.equal(rejectedGet.status, 405);
-  assert.equal(rejectedGet.headers.get('allow'), 'POST');
   const apiKeyRemove = await fetch(`${ingress}/api/v1/user/api-keys/${apiKeyResult.key.id}`, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${accessToken}` },
@@ -593,28 +598,45 @@ try {
   assert.equal(apiKeyRemove.status, 200, `personal API key cleanup failed: ${apiKeyRemove.status}`);
   await apiKeyRemove.text();
   cleanupApiKeyId = undefined;
-  console.log('ok - stateless MCP crosses load-balanced ingress; GET is method-not-allowed');
+  console.log('ok - opaque personal API keys cannot select a tenant in auth-claim-only HA');
 
   const anonymousSocket = io(daemonB, { transports: ['websocket'], reconnection: false });
   cleanupSockets.add(anonymousSocket);
   await once(anonymousSocket, 'connect');
+  const foreignSocket = await connectAuthenticated(daemonB, foreignAccessToken);
+  const memberSocket = await connectAuthenticated(daemonB, memberAccessToken);
+  cleanupSockets.add(foreignSocket);
+  cleanupSockets.add(memberSocket);
   const health = await socketHealth(socketA);
   assert.equal(health.deployment.supportProfile, 'constrained-active-active');
   assert.equal(health.deployment.capabilities.taskExecution, true);
   assert.equal(health.deployment.capabilities.agorManagedInteractivePermissions, true);
+  assert.deepEqual(health.features.branchStorage, {
+    defaultMode: 'clone',
+    allowedModes: ['clone'],
+    allowShallowClones: true,
+  });
   console.log('ok - authenticated health exposes constrained support capabilities');
   const boardEvents = [];
   const anonymousBoardEvents = [];
+  const foreignBoardEvents = [];
+  const memberBoardEvents = [];
   socketB.on('boards created', (board) => boardEvents.push(board));
   anonymousSocket.on('boards created', (board) => anonymousBoardEvents.push(board));
+  foreignSocket.on('boards created', (board) => foreignBoardEvents.push(board));
+  memberSocket.on('boards created', (board) => memberBoardEvents.push(board));
   const created = await fetch(`${daemonA}/boards`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ name: `HA integration ${Date.now()}` }),
+    body: JSON.stringify({
+      name: `HA integration ${Date.now()}`,
+      access_mode: 'private',
+    }),
   });
   assert.equal(created.status, 201, `board create failed: ${created.status}`);
   const board = await created.json();
-  cleanupBoardIds.add(board.board_id);
+  assert.equal(board.access_mode, 'private', 'same-tenant RBAC checks require a private board');
+  cleanupBoards.set(board.board_id, accessToken);
   await waitUntil(() => boardEvents.length > 0, 'cross-replica Feathers board event');
   await delay(EXACTLY_ONCE_SETTLE_MS);
   assert.deepEqual(
@@ -622,34 +644,71 @@ try {
     [board.board_id]
   );
   assert.deepEqual(anonymousBoardEvents, []);
+  assert.deepEqual(foreignBoardEvents, []);
+  assert.deepEqual(memberBoardEvents, []);
   console.log(
     'ok - authorized Feathers publication crossed replicas once in the observation window'
   );
   console.log('ok - unauthenticated socket received no Feathers publication');
+  console.log('ok - foreign-tenant socket received no Feathers publication');
+
+  const foreignCreated = await fetch(`${daemonB}/boards`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${foreignAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ name: `Foreign HA integration ${Date.now()}` }),
+  });
+  assert.equal(foreignCreated.status, 201, `foreign board create failed: ${foreignCreated.status}`);
+  const foreignBoard = await foreignCreated.json();
+  cleanupBoards.set(foreignBoard.board_id, foreignAccessToken);
+  const foreignRead = await fetch(`${daemonA}/boards/${foreignBoard.board_id}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  const missingRead = await fetch(`${daemonA}/boards/018f0000-0000-7000-8000-000000000099`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  assert.equal(foreignRead.status, missingRead.status);
+  assert.equal(foreignRead.status, 404);
+  await Promise.all([foreignRead.text(), missingRead.text()]);
+  console.log('ok - exact foreign board IDs are indistinguishable from missing IDs');
 
   const watchBoard = (socket) =>
     new Promise((resolve) => socket.emit('presence:watch-board', board.board_id, resolve));
-  const [watchA, watchB, anonymousWatch] = await Promise.all([
+  const [watchA, watchB, anonymousWatch, foreignWatch, memberWatch] = await Promise.all([
     watchBoard(socketA),
     watchBoard(socketB),
     watchBoard(anonymousSocket),
+    watchBoard(foreignSocket),
+    watchBoard(memberSocket),
   ]);
   assert.deepEqual(watchA, { ok: true });
   assert.deepEqual(watchB, { ok: true });
   assert.deepEqual(anonymousWatch, { ok: false });
+  assert.deepEqual(foreignWatch, { ok: false });
+  assert.deepEqual(memberWatch, { ok: false });
   let cursorCount = 0;
   let anonymousCursorCount = 0;
+  let foreignCursorCount = 0;
+  let memberCursorCount = 0;
   socketB.on('cursor-moved', () => cursorCount++);
   anonymousSocket.on('cursor-moved', () => anonymousCursorCount++);
+  foreignSocket.on('cursor-moved', () => foreignCursorCount++);
+  memberSocket.on('cursor-moved', () => memberCursorCount++);
   socketA.emit('cursor-move', { boardId: board.board_id, x: 1, y: 2, timestamp: Date.now() });
   await waitUntil(() => cursorCount > 0, 'cross-replica cursor event');
   await delay(EXACTLY_ONCE_SETTLE_MS);
   assert.equal(cursorCount, 1);
   assert.equal(anonymousCursorCount, 0);
+  assert.equal(foreignCursorCount, 0);
+  assert.equal(memberCursorCount, 0);
   console.log(
     'ok - tenant-scoped direct room event crossed replicas once in the observation window'
   );
   console.log('ok - unauthorized native-room watcher received no cursor event');
+  console.log('ok - foreign-tenant native-room watcher received no cursor event');
+  console.log('ok - same-tenant member without board access received no cursor event');
 
   const affinitySocket = io(ingress, { transports: ['polling', 'websocket'], reconnection: true });
   cleanupSockets.add(affinitySocket);
@@ -753,7 +812,7 @@ try {
     });
     assert.equal(recoveredCreate.status, 201);
     recoveredBoard = await recoveredCreate.json();
-    cleanupBoardIds.add(recoveredBoard.board_id);
+    cleanupBoards.set(recoveredBoard.board_id, accessToken);
     await waitUntil(() => recoveredEvents.length > 0, 'post-recovery Feathers board event');
     await delay(EXACTLY_ONCE_SETTLE_MS);
     assert.deepEqual(
@@ -826,11 +885,11 @@ try {
   }
 
   if (cleanupAccessToken) {
-    for (const boardId of cleanupBoardIds) {
+    for (const [boardId, ownerAccessToken] of cleanupBoards) {
       try {
         const removed = await fetch(`${ingress}/boards/${boardId}`, {
           method: 'DELETE',
-          headers: { authorization: `Bearer ${cleanupAccessToken}` },
+          headers: { authorization: `Bearer ${ownerAccessToken}` },
         });
         if (removed.status !== 200 && removed.status !== 404) {
           cleanupWarning(`board ${boardId} removal returned ${removed.status}`);
