@@ -610,7 +610,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       environment_variant?: string;
       /**
        * Branch storage model — see context/explorations/clone-redesign.md.
-       * 'worktree' (default) = native `git worktree add`. 'clone' = self-standing `git clone`.
+       * The deployment configuration selects the default. 'worktree' uses
+       * native `git worktree add`; 'clone' uses a self-standing `git clone`.
        */
       storage_mode?: 'worktree' | 'clone';
       /** Shallow clone depth (only when storage_mode='clone'). NULL/undefined = full clone. */
@@ -687,7 +688,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       if (!repo.remote_url) {
         throw new Error(
           `Cannot create a clone-mode branch for repo '${repo.slug}': repo has no remote_url. ` +
-            `Use storage_mode='worktree' or register the repo with a remote first.`
+            `Register the repo with a remote first, or choose another storage mode enabled by this deployment.`
         );
       }
     }
