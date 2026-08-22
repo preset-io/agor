@@ -1,4 +1,4 @@
-import { compare, createDefaultAdminUser, eq, hash, select, users } from '@agor/core/db';
+import { compare, createDevelopmentDefaultAdminUser, eq, hash, select, users } from '@agor/core/db';
 import type { AuthenticatedParams, User, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -84,11 +84,32 @@ describe('UsersService password policy', () => {
         code: 400,
         data: { code: 'PASSWORD_HASH_NOT_ACCEPTED' },
       });
+
+      for (const field of ['credential_generation', 'tokens_valid_after']) {
+        await expect(
+          service.patch(user.user_id as UserID, { [field]: 1 } as never)
+        ).rejects.toMatchObject({
+          code: 400,
+          data: { code: 'PASSWORD_CREDENTIAL_METADATA_NOT_ACCEPTED' },
+        });
+      }
     }
   );
 
   dbTest('grandfathers the controlled development admin until assignment', async ({ db }) => {
-    const admin = await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
+    const previousPassword = process.env.AGOR_ADMIN_PASSWORD;
+    const previousGate = process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
+    let admin!: Awaited<ReturnType<typeof createDevelopmentDefaultAdminUser>>;
+    try {
+      process.env.AGOR_ADMIN_PASSWORD = 'admin';
+      process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = 'true';
+      admin = await createDevelopmentDefaultAdminUser(db);
+    } finally {
+      if (previousPassword === undefined) delete process.env.AGOR_ADMIN_PASSWORD;
+      else process.env.AGOR_ADMIN_PASSWORD = previousPassword;
+      if (previousGate === undefined) delete process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
+      else process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = previousGate;
+    }
     const service = new UsersService(db);
     const before = await select(db).from(users).where(eq(users.user_id, admin.user_id)).one();
     expect(before && (await compare('admin', before.password))).toBe(true);
@@ -117,6 +138,7 @@ describe('UsersService password policy', () => {
       });
       const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
       expect(row?.tokens_valid_after).toBeInstanceOf(Date);
+      expect(row?.credential_generation).toBe(1);
       expect(row?.must_change_password).toBe(false);
       expect(row && (await compare('a second unique local passphrase', row.password))).toBe(true);
     }

@@ -31,7 +31,7 @@ import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types'
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authTokenIssuedAtClaim } from './token-invalidation.js';
+import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 export interface PublicLaunchAuthSettings {
@@ -350,6 +350,13 @@ async function projectLaunchUser(
         name: name ?? existing.name,
         role,
         unix_username: nextUnixUsername,
+        // Once identity authority is external there is no authoritative local
+        // password-write path. Clear stale seed/manual flags while projecting
+        // the linked account so the user cannot be trapped behind an
+        // impossible forced-password-change flow.
+        ...(identityAuthority.capabilities.users.passwordWrite
+          ? {}
+          : { must_change_password: false }),
         updated_at: now,
         data: {
           ...data,
@@ -661,6 +668,7 @@ function issueRuntimeTokens(
   tenantId?: string
 ): LaunchAuthResult {
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
+    ...authCredentialGenerationClaim(user),
     ...authTokenIssuedAtClaim(Date.now(), user),
     ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
   });

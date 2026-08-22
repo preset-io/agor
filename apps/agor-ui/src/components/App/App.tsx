@@ -222,8 +222,8 @@ export interface AppProps {
   onStopEnvironment?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-  onCreateUser?: (data: CreateUserInput) => void;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
+  onCreateUser?: (data: CreateUserInput) => Promise<void>;
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (mcpServerId: string) => void;

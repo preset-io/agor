@@ -54,10 +54,16 @@ describe('UsersRepository password boundary', () => {
 
     const id = await makeUser(repo);
     await expect(repo.update(id, { password: 'field-smuggle' } as never)).rejects.toThrow(
-      /cannot update passwords/
+      /credential fields/
     );
     await expect(repo.update(id, { password_hash: 'field-smuggle' } as never)).rejects.toThrow(
-      /cannot update passwords/
+      /credential fields/
+    );
+    await expect(repo.update(id, { credential_generation: 99 } as never)).rejects.toThrow(
+      /credential fields/
+    );
+    await expect(repo.update(id, { tokens_valid_after: new Date(0) } as never)).rejects.toThrow(
+      /credential fields/
     );
   });
 

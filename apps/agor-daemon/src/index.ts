@@ -283,7 +283,12 @@ async function startDaemonWithOwnedMetrics(
     } catch {
       return context;
     }
-    if (!freshUser.must_change_password) return context;
+    if (
+      !freshUser.must_change_password ||
+      !resolveIdentityAuthority(effectiveConfig).capabilities.users.passwordWrite
+    ) {
+      return context;
+    }
     if (context.path === 'authentication' || context.path === 'authentication/refresh')
       return context;
     if (context.path === 'health') return context;

@@ -991,6 +991,9 @@ export const users = sqliteTable(
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
 
+    // Monotonic local-credential generation copied into interactive JWTs.
+    credential_generation: integer('credential_generation').notNull().default(0),
+
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
     tokens_valid_after: t.timestamp('tokens_valid_after'),

@@ -137,8 +137,8 @@ Existing password hashes continue to authenticate after an upgrade. Policy is
 enforced only when a password is assigned or changed. The checked-in
 development Compose workflow retains `admin@agor.live` / `admin` through the
 narrow `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true` plus explicit
-`NODE_ENV=development` gate; that exception is unavailable in production and does not
-weaken ordinary user password assignments.
+`AGOR_ADMIN_PASSWORD=admin` and `NODE_ENV=development` gate; that exception is unavailable in
+production and does not weaken ordinary user password assignments.
 
 ```bash
 # Retrieve generated credentials from inside the container when

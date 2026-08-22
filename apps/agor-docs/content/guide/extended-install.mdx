@@ -263,6 +263,8 @@ Some migrations change distributed ownership or callback protocols and must be a
 - `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers.
 - `0078_mcp_oauth_pending_flows` replaces plaintext, unfenced MCP OAuth grants with durable sealed callback and refresh authority.
 - `0082_github_install_state` moves GitHub App install callback state from a per-daemon Map to PostgreSQL. Old daemons cannot consume state issued by new daemons, and new daemons cannot consume state issued by old daemons.
+- `0091_codex_device_auth_attempts` moves Codex device authorization polling and exchange ownership into a fenced PostgreSQL protocol.
+- `0092_add_user_credential_generation` makes password-change revocation use generation-bearing tokens. Old daemons do not understand the claim and must not share a cohort once a password changes.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 

@@ -19,7 +19,15 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { AuthenticatedParams, User, UserID, UserRole } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createRefreshTokenService } from '../auth/refresh-token-service.js';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  AUTH_CREDENTIAL_GENERATION_CLAIM,
+  assertUserTokenNotInvalidated,
+  authTokenIssuedAtClaim,
+} from '../auth/token-invalidation.js';
 import { createGroupMembershipsService } from './groups.js';
 import { UsersService } from './users.js';
 
@@ -30,6 +38,14 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
   return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
@@ -165,12 +181,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         const [stored] = rowsOf(
           await executeRaw(
             scoped,
-            sql`SELECT password, tokens_valid_after FROM users WHERE user_id = ${memberA.user_id}`
+            sql`SELECT password, tokens_valid_after, credential_generation FROM users WHERE user_id = ${memberA.user_id}`
           )
         );
         expect(typeof stored?.password).toBe('string');
         expect(await compare(assigned, String(stored?.password))).toBe(true);
         expect(stored?.tokens_valid_after).toBeTruthy();
+        expect(Number(stored?.credential_generation)).toBe(1);
 
         const created = await service.create(
           {
@@ -188,6 +205,70 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(createdRows).toHaveLength(1);
         expect(createdRows[0]?.tenant_id).toBe(tenantA);
       });
+    });
+
+    it('makes a refresh racing a password change stale without replica-clock ordering', async () => {
+      const tenantId = `users-password-refresh-race-${generateId()}`;
+      const member = await seed(tenantId, 'member', 'password-refresh-race');
+      const service = new UsersService(db);
+      const enteredLookup = deferred();
+      const releaseLookup = deferred();
+      const jwtSecret = 'postgres-password-generation-race-secret';
+
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.patch(member.user_id as UserID, {
+          password: 'initial postgres refresh passphrase',
+        })
+      );
+      const generationOne = await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.get(member.user_id as UserID)
+      );
+      expect(generationOne.credential_generation).toBe(1);
+
+      const refreshService = createRefreshTokenService({
+        jwtSecret,
+        accessTokenTtl: '15m',
+        refreshTokenTtl: '30d',
+        usersService: {
+          get: async (...args: Parameters<UsersService['get']>) => {
+            const snapshot = await service.get(...args);
+            enteredLookup.resolve();
+            await releaseLookup.promise;
+            return snapshot;
+          },
+        },
+      });
+      const oldRefreshToken = issueRuntimeToken(
+        {
+          sub: member.user_id,
+          type: 'refresh',
+          tenant_id: tenantId,
+          [AUTH_CREDENTIAL_GENERATION_CLAIM]: 1,
+          ...authTokenIssuedAtClaim(Date.now(), generationOne),
+        },
+        jwtSecret,
+        '30d'
+      );
+
+      const refresh = runWithTenantDatabaseScope(db, tenantId, () =>
+        refreshService.create({ refreshToken: oldRefreshToken })
+      );
+      await enteredLookup.promise;
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.patch(member.user_id as UserID, {
+          password: 'replacement postgres refresh passphrase',
+        })
+      );
+      releaseLookup.resolve();
+
+      const result = await refresh;
+      const current = await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.get(member.user_id as UserID)
+      );
+      const decoded = jwt.verify(result.accessToken, jwtSecret) as jwt.JwtPayload;
+      expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(1);
+      expect(current.credential_generation).toBe(2);
+      expect(() => assertUserTokenNotInvalidated(current, decoded)).toThrow(/Session expired/);
     });
 
     it('serializes concurrent peer demotions and preserves a superadmin', async () => {

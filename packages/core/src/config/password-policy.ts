@@ -1,103 +1,75 @@
 /**
  * Local-password assignment policy.
  *
- * This module is deliberately browser-safe. The daemon is authoritative, while
- * clients may use the public requirements for early feedback. Password values
- * are never logged or sent to an external breach-checking service.
+ * The daemon is authoritative. Public browser-safe types and requirement
+ * metadata live in `password-policy-contract`; the versioned blocklist stays
+ * out of browser bundles. Password values are never logged or sent externally.
  */
 
-export const AgorPasswordPolicyProfile = {
-  SECURE: 'secure',
-} as const;
-export type AgorPasswordPolicyProfile =
-  (typeof AgorPasswordPolicyProfile)[keyof typeof AgorPasswordPolicyProfile];
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  type PasswordPolicyContext,
+  PasswordPolicyError,
+  PasswordValidationCode,
+  SECURE_PASSWORD_POLICY_REQUIREMENTS,
+} from './password-policy-contract';
 
-export const PasswordValidationCode = {
-  REQUIRED: 'PASSWORD_REQUIRED',
-  TOO_SHORT: 'PASSWORD_TOO_SHORT',
-  TOO_LONG: 'PASSWORD_TOO_LONG',
-  COMMON: 'PASSWORD_COMMON',
-  CONTEXT_SPECIFIC: 'PASSWORD_CONTEXT_SPECIFIC',
-  HASH_NOT_ACCEPTED: 'PASSWORD_HASH_NOT_ACCEPTED',
-} as const;
-export type PasswordValidationCode =
-  (typeof PasswordValidationCode)[keyof typeof PasswordValidationCode];
+export * from './password-policy-contract';
 
-export interface PasswordPolicyRequirements {
-  profile: AgorPasswordPolicyProfile;
-  /** Minimum Unicode code points for an assigned password. */
-  min_length: number;
-  /** bcrypt's safe input boundary, measured after UTF-8 encoding. */
-  max_utf8_bytes: number;
-  common_passwords_rejected: true;
-  composition_rules: false;
-  periodic_rotation_required: false;
-}
+const PASSWORD_BLOCKLIST_FILENAME = 'password-blocklist-v1.txt';
 
-export const SECURE_PASSWORD_POLICY_REQUIREMENTS: Readonly<PasswordPolicyRequirements> =
-  Object.freeze({
-    profile: AgorPasswordPolicyProfile.SECURE,
-    min_length: 15,
-    max_utf8_bytes: 72,
-    common_passwords_rejected: true,
-    composition_rules: false,
-    periodic_rotation_required: false,
-  });
-
-export interface PasswordPolicyContext {
-  email?: string;
-}
-
-export class PasswordPolicyError extends Error {
-  readonly code: PasswordValidationCode;
-  readonly requirements = SECURE_PASSWORD_POLICY_REQUIREMENTS;
-
-  constructor(code: PasswordValidationCode, message: string) {
-    super(message);
-    this.name = 'PasswordPolicyError';
-    this.code = code;
+function loadCommonPasswordBlocklist(): string[] {
+  // Source-mode imports resolve beside this module. Bundled @agor/core entry
+  // points can live at dist/, dist/config/, dist/db/, or dist/seed/, so walk a
+  // bounded set of parents looking for the one copied config asset.
+  let directory = dirname(fileURLToPath(import.meta.url));
+  const candidates: string[] = [];
+  for (let depth = 0; depth < 3; depth += 1) {
+    candidates.push(
+      join(directory, PASSWORD_BLOCKLIST_FILENAME),
+      join(directory, 'config', PASSWORD_BLOCKLIST_FILENAME)
+    );
+    directory = dirname(directory);
   }
-}
 
-// A deliberately local, reviewable deny-list. It catches common long values
-// that a length-only rule misses without disclosing a candidate to a third
-// party. Comparison removes separators/case so composition suffixes do not
-// turn a known password into an accepted one.
-const COMMON_PASSWORD_KEYS = new Set([
-  '123456789012345',
-  '12345678901234567890',
-  'abc123abc123abc123',
-  'adminadminadmin',
-  'administratoradministrator',
-  'asdfghjklasdfghjkl',
-  'baseballbaseball',
-  'changemechangeme',
-  'correcthorsebatterystaple',
-  'dragondragondragon',
-  'footballfootball',
-  'iloveyouiloveyou',
-  'letmeinletmein',
-  'loginloginlogin',
-  'mastermastermaster',
-  'monkeymonkeymonkey',
-  'passwordpassword',
-  'passwordpasswordpassword',
-  'princessprincess',
-  'qwertyuiopasdfgh',
-  'qwertyqwertyqwerty',
-  'starwarsstarwars',
-  'sunshinesunshine',
-  'supermansuperman',
-  'trustno1trustno1',
-  'welcome123welcome123',
-  'whateverwhatever',
-]);
+  for (const candidate of new Set(candidates)) {
+    try {
+      const entries = readFileSync(candidate, 'utf8')
+        .split(/\r?\n/u)
+        .filter((entry) => entry.length > 0);
+      if (entries.length !== 10_000) {
+        throw new Error(`expected 10000 entries, found ${entries.length}`);
+      }
+      return entries;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw new Error(`Invalid offline password blocklist at ${candidate}`, { cause: error });
+    }
+  }
+  throw new Error('Offline password blocklist asset is missing from @agor/core');
+}
 
 function comparisonKey(value: string): string {
   return value
     .normalize('NFKC')
     .toLocaleLowerCase('en-US')
     .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+// Comparison removes separators/case so cosmetic composition does not turn a
+// known password into an accepted one. The source corpus is version-pinned and
+// entirely local; candidate passwords never leave the daemon/CLI process.
+const COMMON_PASSWORD_KEYS = new Set(
+  loadCommonPasswordBlocklist()
+    .map(comparisonKey)
+    .filter((key) => key.length > 0)
+);
+// Expected/common values that are important to Agor's policy contract but do
+// not appear verbatim in the pinned top-10k corpus.
+for (const key of ['correcthorsebatterystaple', 'adminadminadmin', 'passwordpassword']) {
+  COMMON_PASSWORD_KEYS.add(key);
 }
 
 function isRepeatedToken(candidate: string, token: string): boolean {
@@ -107,13 +79,26 @@ function isRepeatedToken(candidate: string, token: string): boolean {
   return token.repeat(candidate.length / token.length) === candidate;
 }
 
-function isShortRepeatedPattern(candidate: string): boolean {
+function isRepeatedPattern(candidate: string): boolean {
   const codePoints = Array.from(candidate);
-  for (let tokenLength = 1; tokenLength <= 4; tokenLength += 1) {
+  for (let tokenLength = 1; tokenLength <= Math.floor(codePoints.length / 2); tokenLength += 1) {
+    if (codePoints.length % tokenLength !== 0) continue;
     const token = codePoints.slice(0, tokenLength).join('');
     if (isRepeatedToken(candidate, token)) return true;
   }
   return false;
+}
+
+function isCommonPasswordVariant(candidate: string): boolean {
+  if (COMMON_PASSWORD_KEYS.has(candidate)) return true;
+
+  // A common alphabetic password plus a numeric suffix/prefix is still an
+  // expected guessing candidate even when the exact variant falls outside the
+  // top-10k corpus (for example password1234567 or qwerty123456789).
+  const suffix = candidate.match(/^(\p{L}+)(\d{2,})$/u);
+  if (suffix && COMMON_PASSWORD_KEYS.has(suffix[1])) return true;
+  const prefix = candidate.match(/^(\d{2,})(\p{L}+)$/u);
+  return !!prefix && COMMON_PASSWORD_KEYS.has(prefix[2]);
 }
 
 function isContextSpecificPassword(password: string, context: PasswordPolicyContext): boolean {
@@ -171,27 +156,13 @@ export function assertSecurePassword(
 
   if (
     /^\s+$/u.test(password) ||
-    COMMON_PASSWORD_KEYS.has(key) ||
-    isShortRepeatedPattern(key) ||
-    isShortRepeatedPattern(password.normalize('NFKC').toLocaleLowerCase('en-US'))
+    isCommonPasswordVariant(key) ||
+    isRepeatedPattern(key) ||
+    isRepeatedPattern(password.normalize('NFKC').toLocaleLowerCase('en-US'))
   ) {
     throw new PasswordPolicyError(
       PasswordValidationCode.COMMON,
       'Choose a less common password or passphrase.'
     );
   }
-}
-
-/** Safe requirements for `/health`; returns no password or deny-list data. */
-export function resolvePasswordPolicyRequirements(
-  profile: AgorPasswordPolicyProfile | undefined
-): PasswordPolicyRequirements {
-  // There is intentionally no weak general-purpose profile. Omission and the
-  // only accepted named profile both resolve to the fail-safe secure policy.
-  if (profile === undefined || profile === AgorPasswordPolicyProfile.SECURE) {
-    return { ...SECURE_PASSWORD_POLICY_REQUIREMENTS };
-  }
-  // Config validation should make this unreachable, but keep the resolver
-  // fail-closed for direct callers and malformed deserialized objects.
-  throw new Error(`Unsupported password policy profile: ${String(profile)}`);
 }

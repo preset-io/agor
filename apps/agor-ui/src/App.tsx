@@ -58,6 +58,7 @@ import {
 } from './domain/sessionCreation';
 import {
   IdentityContractState,
+  isIdentityCapabilityAvailable,
   useAgorClient,
   useAgorData,
   useAuth,
@@ -84,7 +85,10 @@ import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLife
 import type { CreateRepoOptions } from './types';
 import { cloneErrorHint } from './utils/cloneErrorHint';
 import { isMobileDevice } from './utils/deviceDetection';
-import { completeForcedPasswordChange } from './utils/forcePasswordChange';
+import {
+  completeForcedPasswordChange,
+  completeLocalPasswordChange,
+} from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { savePromptDraft } from './utils/promptDrafts';
@@ -363,6 +367,11 @@ function AppContent() {
     identityContractState,
     retry: retryAuthConfig,
   } = useAuthConfig();
+  const passwordWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'passwordWrite'
+  );
 
   // Authentication
   const {
@@ -456,7 +465,7 @@ function AppContent() {
     loading,
     error: dataError,
   } = useAgorData(client, {
-    enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
+    enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
   });
 
@@ -507,7 +516,7 @@ function AppContent() {
     }
   }, [loading, initialLoadComplete, dataError]);
 
-  const mustChangePassword = !!user?.must_change_password;
+  const mustChangePassword = !!user?.must_change_password && passwordWriteAvailable;
   const loaderPhase = useInitialLoaderPhase({
     connecting,
     loading,
@@ -799,7 +808,7 @@ function AppContent() {
       currentUser &&
       canRunOnboarding &&
       currentUser.onboarding_completed === false &&
-      !currentUser.must_change_password &&
+      !(currentUser.must_change_password && passwordWriteAvailable) &&
       connected &&
       workspaceSurfaceShouldRun &&
       currentSurface.startsWorkspaceRuntime &&
@@ -815,6 +824,7 @@ function AppContent() {
     currentSurface.startsWorkspaceRuntime,
     loading,
     authenticationGeneration,
+    passwordWriteAvailable,
     activateOnboardingWizard,
     setOnboardingWizardOwner,
   ]);
@@ -1110,7 +1120,7 @@ function AppContent() {
   }
 
   // Show data error (but not if user needs to change password - let the modal render)
-  if (workspaceSurfaceShouldRun && dataError && !user?.must_change_password) {
+  if (workspaceSurfaceShouldRun && dataError && !mustChangePassword) {
     return (
       <div
         style={{
@@ -1306,6 +1316,7 @@ function AppContent() {
       showSuccess('User created successfully!');
     } catch (error) {
       showError(`Failed to create user: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     }
   };
 
@@ -1316,13 +1327,35 @@ function AppContent() {
   ) => {
     if (!client) return;
     try {
-      // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
-      await client.service('users').patch(userId, updates as Partial<User>);
+      const newPassword =
+        typeof updates.password === 'string' && updates.password.length > 0
+          ? updates.password
+          : undefined;
+      const changesCurrentPassword = userId === currentUser?.user_id && !!newPassword;
+      let signedIn = true;
+      if (changesCurrentPassword && currentUser && newPassword) {
+        signedIn = await completeLocalPasswordChange({
+          client,
+          userId,
+          emailAfterChange: updates.email ?? currentUser.email,
+          newPassword,
+          updates: updates as UpdateUserInput & { password: string },
+          login,
+          logout,
+        });
+      } else {
+        // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
+        await client.service('users').patch(userId, updates as Partial<User>);
+      }
       if (updates.agentic_tools || updates.env_vars) {
         setCredentialVersion((v) => v + 1);
       }
       if (!options.silent) {
-        showSuccess('User updated successfully!');
+        showSuccess(
+          signedIn
+            ? 'User updated successfully!'
+            : 'Password changed successfully. Please sign in again.'
+        );
       }
     } catch (error) {
       if (!options.silent) {
@@ -2023,7 +2056,7 @@ function AppContent() {
     <ConnectionProvider value={connectionContextValue}>
       {/* Force Password Change Modal - shown when user.must_change_password is true */}
       <ForcePasswordChangeModal
-        open={!!currentUser?.must_change_password}
+        open={!!currentUser?.must_change_password && passwordWriteAvailable}
         user={currentUser}
         onChangePassword={handleForcePasswordChange}
         onLogout={logout}

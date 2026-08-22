@@ -106,6 +106,7 @@ function makeUsersService(db: Database) {
         unix_username: row.unix_username ?? undefined,
         onboarding_completed: row.onboarding_completed,
         must_change_password: row.must_change_password,
+        credential_generation: row.credential_generation,
         tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
         created_at: row.created_at,
         updated_at: row.updated_at ?? undefined,
@@ -488,6 +489,40 @@ describe('one-time launch auth service', () => {
 
     const row = await select(db).from(users).where(eq(users.user_id, 'local-user-1')).one();
     expect((row!.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
+  });
+
+  it('clears an impossible forced-password flag when external authority links a local user', async () => {
+    const now = new Date();
+    await insert(db, users)
+      .values({
+        user_id: 'forced-local-user',
+        created_at: now,
+        updated_at: now,
+        email: 'person@example.test',
+        password: await hash('local-password', 10),
+        name: 'Forced Local User',
+        emoji: '👤',
+        role: 'member',
+        onboarding_completed: false,
+        must_change_password: true,
+        data: { preferences: {} },
+      })
+      .run();
+
+    mockExchange(signClaims({ email_verified: true }));
+    const config = externalAuthorityConfig();
+    config.external_launch = {
+      ...config.external_launch,
+      trust_verified_email_for_linking: true,
+    };
+    const result = await service(config).create({ launchCode: 'trusted-forced-email' });
+
+    expect(result.user).toMatchObject({
+      user_id: 'forced-local-user',
+      must_change_password: false,
+    });
+    const row = await select(db).from(users).where(eq(users.user_id, 'forced-local-user')).one();
+    expect(row?.must_change_password).toBe(false);
   });
 
   it('does not merge a new external identity by email alone', async () => {

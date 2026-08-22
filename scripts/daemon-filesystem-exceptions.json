@@ -1734,5 +1734,19 @@
     "symbol": "spawn",
     "local": "spawn",
     "operation": "call:spawn@spawnLockAcquirer#1"
+  },
+  {
+    "id": "DAEMON-FS-CAP-216",
+    "class": "A",
+    "file": "packages/core/src/config/password-policy.ts",
+    "import": "node:fs",
+    "symbol": "readFileSync",
+    "local": "readFileSync",
+    "operation": "call:readFileSync@loadCommonPasswordBlocklist#1",
+    "owner": "daemon authentication policy",
+    "boundary": "immutable packaged password-policy asset",
+    "rationale": "Loads only the version-pinned offline common-password corpus shipped beside @agor/core; tenant and candidate-password inputs cannot influence the asset path, and startup fails closed if the corpus is absent or malformed.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

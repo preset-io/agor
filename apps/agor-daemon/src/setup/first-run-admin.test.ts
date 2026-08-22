@@ -27,7 +27,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         }
       }),
     bootstrapFirstRunAdmin: vi.fn(),
-    createDefaultAdminUser: vi.fn(),
+    createDevelopmentDefaultAdminUser: vi.fn(),
     createUser: vi.fn(),
   };
 });
@@ -216,7 +216,7 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
   async function loadMocks() {
     const dbModule = (await import('@agor/core/db')) as unknown as {
       bootstrapFirstRunAdmin: ReturnType<typeof vi.fn>;
-      createDefaultAdminUser: ReturnType<typeof vi.fn>;
+      createDevelopmentDefaultAdminUser: ReturnType<typeof vi.fn>;
       createUser: ReturnType<typeof vi.fn>;
     };
     return dbModule;
@@ -273,7 +273,8 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     process.env.AGOR_ADMIN_PASSWORD = 'admin';
     process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN = 'true';
 
-    const { bootstrapFirstRunAdmin, createDefaultAdminUser, createUser } = await loadMocks();
+    const { bootstrapFirstRunAdmin, createDevelopmentDefaultAdminUser, createUser } =
+      await loadMocks();
     bootstrapFirstRunAdmin.mockImplementation(
       async (_db: unknown, factory: () => Promise<unknown>) => ({
         createdAdmin: true,
@@ -281,14 +282,18 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
         reattributedCount: 0,
       })
     );
-    createDefaultAdminUser.mockResolvedValue({ user_id: 'u1', email: 'admin@agor.live' });
+    createDevelopmentDefaultAdminUser.mockResolvedValue({
+      user_id: 'u1',
+      email: 'admin@agor.live',
+    });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await runFirstRunAdminBootstrap({} as unknown as never, { credentialsBaseDir: tempDir });
 
-    expect(createDefaultAdminUser).toHaveBeenCalledWith(expect.anything(), {
-      allowDevelopmentDefault: true,
-    });
+    expect(createDevelopmentDefaultAdminUser).toHaveBeenCalledWith(expect.anything());
     expect(createUser).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('[SECURITY]'));
+    warning.mockRestore();
   });
 
   it('refuses the development-default gate outside an explicit development/test runtime', async () => {

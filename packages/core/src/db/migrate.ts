@@ -165,6 +165,19 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
       }),
     },
   ],
+  [
+    '0092_add_user_credential_generation',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Requires a coordinated offline cutover so every daemon uses credential-generation token claims; older code may ignore the additive column.',
+      }),
+    },
+  ],
 ]);
 
 const NO_OFFLINE_ACTION_SUMMARY =

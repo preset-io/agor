@@ -18,8 +18,10 @@ import {
 } from './runtime-tokens';
 import { ServiceJWTStrategy } from './service-jwt-strategy';
 import {
+  AUTH_CREDENTIAL_GENERATION_CLAIM,
   AUTH_TOKEN_ISSUED_AT_MS_CLAIM,
   assertUserTokenNotInvalidated,
+  authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
 } from './token-invalidation';
 import { redactUserAuthMetadata } from './user-redaction';
@@ -28,12 +30,21 @@ const JWT_SECRET = 'password-token-invalidation-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '30d';
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function authTime(ms: number) {
   return { [AUTH_TOKEN_ISSUED_AT_MS_CLAIM]: ms };
 }
 
 function expectNoTokenMarker(value: unknown): void {
   expect(value).not.toHaveProperty('tokens_valid_after');
+  expect(value).not.toHaveProperty('credential_generation');
 }
 
 function expectTokenMarker(value: unknown): void {
@@ -47,6 +58,18 @@ test('treats tokens issued at the invalidation boundary as stale', () => {
     assertUserTokenNotInvalidated(user, { sub: 'user-1', type: 'access', ...authTime(1_000) })
   ).toThrow(/Session expired/);
   expect(authTokenIssuedAtClaim(1_000, user)[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toBe(1_001);
+});
+
+test('rejects a token from an older credential generation without using clocks', () => {
+  expect(() =>
+    assertUserTokenNotInvalidated(
+      { credential_generation: 2 },
+      { sub: 'user-1', type: 'access', [AUTH_CREDENTIAL_GENERATION_CLAIM]: 1 }
+    )
+  ).toThrow(/Session expired/);
+  expect(authCredentialGenerationClaim({ credential_generation: 2 })).toEqual({
+    [AUTH_CREDENTIAL_GENERATION_CLAIM]: 2,
+  });
 });
 
 test('runtime tenant helpers preserve standard and custom tenant claims', () => {
@@ -85,7 +108,8 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
 
   const authentication = new AuthenticationService(app);
   authentication.register('jwt', new ServiceJWTStrategy());
-  authentication.register('local', new AgorLocalStrategy());
+  const localStrategy = new AgorLocalStrategy();
+  authentication.register('local', localStrategy);
   app.use('authentication', authentication);
 
   const authService = app.service('authentication') as {
@@ -109,7 +133,10 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
               JWT_SECRET,
               ACCESS_TOKEN_TTL,
               REFRESH_TOKEN_TTL,
-              authTokenIssuedAtClaim(Date.now(), context.result.user)
+              {
+                ...authCredentialGenerationClaim(context.result.user),
+                ...authTokenIssuedAtClaim(Date.now(), context.result.user),
+              }
             );
             context.result.accessToken = tokens.accessToken;
             context.result.refreshToken = tokens.refreshToken;
@@ -121,7 +148,7 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
     },
   });
 
-  return { app, usersService };
+  return { app, usersService, localStrategy };
 }
 
 async function createUser(service: UsersService, email: string): Promise<User> {
@@ -210,6 +237,82 @@ dbTest('rejects a refresh token issued before the password change marker', async
   await expect(refreshService.create({ refreshToken: oldRefreshToken })).rejects.toThrow(
     /Invalid or expired refresh token/
   );
+});
+
+dbTest(
+  'rejects a local login whose verified password changes while bcrypt is in flight',
+  async ({ db }) => {
+    const { app, usersService, localStrategy } = createAuthApp(db);
+    const user = await createUser(usersService, 'racing-login@example.test');
+    const compared = deferred();
+    const release = deferred();
+    const comparePassword = localStrategy.comparePassword.bind(localStrategy);
+    vi.spyOn(localStrategy, 'comparePassword').mockImplementation(async (entity, password) => {
+      const verified = await comparePassword(entity, password);
+      compared.resolve();
+      await release.promise;
+      return verified;
+    });
+
+    const login = app
+      .service('authentication')
+      .create(
+        { strategy: 'local', email: user.email, password: 'old-password-1234' },
+        { provider: 'rest' }
+      );
+    await compared.promise;
+    await usersService.patch(user.user_id, { password: 'replacement-password-1234' });
+    release.resolve();
+
+    await expect(login).rejects.toThrow(/Invalid login/);
+  }
+);
+
+test('a refresh racing a password change can mint only an already-stale generation', async () => {
+  const enteredLookup = deferred();
+  const releaseLookup = deferred();
+  const currentUser = {
+    user_id: 'racing-refresh-user' as UserID,
+    email: 'racing-refresh@example.test',
+    role: ROLES.MEMBER,
+    onboarding_completed: true,
+    must_change_password: false,
+    created_at: new Date(),
+    credential_generation: 0,
+  } as User & { credential_generation: number };
+  const usersService = {
+    get: async () => {
+      const credentialSnapshot = { ...currentUser };
+      enteredLookup.resolve();
+      await releaseLookup.promise;
+      return credentialSnapshot;
+    },
+  };
+  const refreshService = createRefreshTokenService({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: REFRESH_TOKEN_TTL,
+    usersService,
+  });
+  const refreshToken = issueRuntimeToken(
+    {
+      sub: currentUser.user_id,
+      type: 'refresh',
+      [AUTH_CREDENTIAL_GENERATION_CLAIM]: 0,
+    },
+    JWT_SECRET,
+    REFRESH_TOKEN_TTL
+  );
+
+  const refresh = refreshService.create({ refreshToken });
+  await enteredLookup.promise;
+  currentUser.credential_generation = 1;
+  releaseLookup.resolve();
+  const result = await refresh;
+  const decoded = jwt.verify(result.accessToken, JWT_SECRET) as jwt.JwtPayload;
+
+  expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(0);
+  expect(() => assertUserTokenNotInvalidated(currentUser, decoded)).toThrow(/Session expired/);
 });
 
 test('refresh token lookup is scoped to the tenant claim and reissues tenant-bearing tokens', async () => {
@@ -333,6 +436,7 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
 
   const decoded = jwt.verify(refreshResult.accessToken, JWT_SECRET) as jwt.JwtPayload;
   expect(decoded[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toEqual(expect.any(Number));
+  expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(1);
 });
 
 dbTest(

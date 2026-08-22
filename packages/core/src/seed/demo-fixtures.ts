@@ -43,10 +43,10 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
-import bcrypt from 'bcryptjs';
 import { assertSecurePassword } from '../config/password-policy';
 import type { Database } from '../db/client';
 import { insert, txAsDb } from '../db/database-wrapper';
+import { hashLocalPassword } from '../db/password-credentials';
 import {
   ArtifactRepository,
   BoardObjectRepository,
@@ -152,9 +152,6 @@ export const DEMO_USER_CREDENTIALS: ReadonlyArray<{
 /** Demo admin email — used as the terminal idempotency sentinel (see file docstring). */
 const SENTINEL_EMAIL = DEMO_USER_CREDENTIALS[0].email;
 
-/** bcrypt cost factor — matches `createUser` in db/user-utils.ts. */
-const BCRYPT_ROUNDS = 12;
-
 /**
  * Resolve the database the same way {@link seedDevFixtures} does, honoring
  * `DATABASE_URL` and `AGOR_DB_DIALECT`. Tests inject `options.db` to bypass this.
@@ -213,7 +210,7 @@ export async function loadDemoFixtures(
     assertSecurePassword(credential.password, { email: credential.email });
   }
   const hashedPasswords = await Promise.all(
-    DEMO_USER_CREDENTIALS.map((c) => bcrypt.hash(c.password, BCRYPT_ROUNDS))
+    DEMO_USER_CREDENTIALS.map((credential) => hashLocalPassword(credential.password))
   );
 
   // Everything below runs in ONE transaction → all-or-nothing. Repos are bound

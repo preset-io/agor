@@ -35,6 +35,10 @@ describe('secure password policy', () => {
     ['', PasswordValidationCode.REQUIRED],
     ['short password', PasswordValidationCode.TOO_SHORT],
     ['password-password', PasswordValidationCode.COMMON],
+    ['password1234567', PasswordValidationCode.COMMON],
+    ['qwerty123456789', PasswordValidationCode.COMMON],
+    ['secretsecretsecret', PasswordValidationCode.COMMON],
+    ['correct horse battery staple', PasswordValidationCode.COMMON],
     ['abcdabcdabcdabcd', PasswordValidationCode.COMMON],
     ['                ', PasswordValidationCode.COMMON],
     ['agor-agor-agor-agor', PasswordValidationCode.CONTEXT_SPECIFIC],
@@ -59,5 +63,11 @@ describe('secure password policy', () => {
     expect(error.code).toBe(PasswordValidationCode.TOO_SHORT);
     expect(error.requirements).toEqual(SECURE_PASSWORD_POLICY_REQUIREMENTS);
     expect(error.message).not.toContain(candidate);
+  });
+
+  it('advertises the exact versioned offline blocklist contract', () => {
+    expect(SECURE_PASSWORD_POLICY_REQUIREMENTS.blocklist_version).toMatch(
+      /^seclists-10k-[a-f0-9]{8}$/
+    );
   });
 });

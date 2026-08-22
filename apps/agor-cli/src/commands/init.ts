@@ -24,9 +24,10 @@ import {
 } from '@agor/core/config';
 import {
   createDatabaseAsync,
-  createDefaultAdminUser,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
+  isDevelopmentDefaultAdminEnvironment,
   runMigrations,
   seedInitialData,
 } from '@agor/core/db';
@@ -75,8 +76,11 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
   };
 }
 
-export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
-  return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+export function shouldDeferAdminSetup(
+  nonInteractive: boolean,
+  env: NodeJS.ProcessEnv = process.env
+) {
+  return nonInteractive || !isDevelopmentDefaultAdminEnvironment(env);
 }
 
 /** Inquirer-compatible validation using the canonical server password policy. */
@@ -604,7 +608,7 @@ export default class Init extends Command {
         try {
           const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
           try {
-            await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
+            await createDevelopmentDefaultAdminUser(db);
           } finally {
             this.closeSQLiteDatabase(db);
           }

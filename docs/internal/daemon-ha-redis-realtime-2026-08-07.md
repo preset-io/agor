@@ -101,8 +101,8 @@ password.
 
 The Agor-managed smoke variant deliberately converges on the repository-wide development login
 `admin@agor.live` / `admin`. It sets `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true` together with
-`NODE_ENV=development`; first-run bootstrap refuses that escape hatch in production mode. This is
-development ergonomics, not a production HA credential policy.
+`AGOR_ADMIN_PASSWORD=admin` and `NODE_ENV=development`; first-run bootstrap refuses that escape
+hatch in production mode. This is development ergonomics, not a production HA credential policy.
 
 ## Verification record
 

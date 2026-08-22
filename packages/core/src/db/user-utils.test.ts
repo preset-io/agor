@@ -5,13 +5,14 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { dbTest } from './test-helpers';
 import {
   assertUsableBootstrapAdminPassword,
   type CreateUserData,
   createDefaultAdminUser,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
@@ -478,24 +479,6 @@ describe('createDefaultAdminUser', () => {
   });
 
   dbTest(
-    'should restrict the development gate to the exact controlled identity',
-    async ({ db }) => {
-      await expect(
-        createDefaultAdminUser(db, {
-          allowDevelopmentDefault: true,
-          email: 'other@example.com',
-        })
-      ).rejects.toThrow(/exact admin@agor\.live \/ admin bootstrap identity/);
-      await expect(
-        createDefaultAdminUser(db, {
-          allowDevelopmentDefault: true,
-          password: 'another-weak-value',
-        })
-      ).rejects.toThrow(/exact admin@agor\.live \/ admin bootstrap identity/);
-    }
-  );
-
-  dbTest(
     'should refuse the legacy fixed default password as an explicit password',
     async ({ db }) => {
       await expect(createDefaultAdminUser(db, { password: 'admin' })).rejects.toThrow(
@@ -572,6 +555,62 @@ describe('createDefaultAdminUser', () => {
   });
 });
 
+describe('createDevelopmentDefaultAdminUser', () => {
+  const savedEnvironment = {
+    NODE_ENV: process.env.NODE_ENV,
+    AGOR_ADMIN_PASSWORD: process.env.AGOR_ADMIN_PASSWORD,
+    AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN,
+  };
+
+  function setEnvironment(values: Record<string, string | undefined>) {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  afterEach(() => setEnvironment(savedEnvironment));
+
+  dbTest('requires every part of the development gate', async ({ db }) => {
+    for (const env of [
+      {
+        NODE_ENV: 'production',
+        AGOR_ADMIN_PASSWORD: 'admin',
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+      },
+      {
+        NODE_ENV: 'test',
+        AGOR_ADMIN_PASSWORD: 'admin',
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: undefined,
+      },
+      {
+        NODE_ENV: 'test',
+        AGOR_ADMIN_PASSWORD: undefined,
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+      },
+    ]) {
+      setEnvironment(env);
+      await expect(createDevelopmentDefaultAdminUser(db)).rejects.toThrow();
+    }
+  });
+
+  dbTest('creates only the exact development identity with the complete gate', async ({ db }) => {
+    setEnvironment({
+      NODE_ENV: 'test',
+      AGOR_ADMIN_PASSWORD: 'admin',
+      AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+    });
+    const admin = await createDevelopmentDefaultAdminUser(db);
+    expect(admin).toMatchObject({
+      email: 'admin@agor.live',
+      name: 'Admin',
+      role: 'superadmin',
+      unix_username: 'admin',
+      must_change_password: false,
+    });
+  });
+});
+
 // ============================================================================
 // Integration Tests
 // ============================================================================
@@ -632,7 +671,7 @@ describe('User utilities integration', () => {
 
   dbTest('should work alongside default admin user', async ({ db }) => {
     // Create default admin
-    const admin = await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
+    const admin = await createDefaultAdminUser(db, { password: 'explicit-secret' });
 
     // Create regular users
     const user1 = await createUser(db, createUserData({ email: 'user1@example.com' }));

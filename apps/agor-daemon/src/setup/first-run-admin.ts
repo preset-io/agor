@@ -21,10 +21,11 @@ import { promisify } from 'node:util';
 import { type AgorConfig, RETIRED_CONFIG_KEYS } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
+  ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV,
   assertUsableBootstrapAdminPassword,
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
-  createDefaultAdminUser,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   generateAdminPassword,
@@ -37,8 +38,6 @@ const closeP = promisify(close);
 const unlinkP = promisify(unlink);
 
 const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials';
-const ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV = 'AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN';
-
 /** Where the generated admin password is persisted on first run. */
 export function getAdminCredentialsPath(baseDir: string = join(homedir(), '.agor')): string {
   return join(baseDir, ADMIN_CREDENTIALS_FILENAME);
@@ -176,7 +175,10 @@ export async function runFirstRunAdminBootstrap(
         assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
       }
       if (useDevelopmentDefault) {
-        return await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
+        console.warn(
+          '⚠️  [SECURITY] Creating the fixed admin@agor.live / admin development credential. Do not expose this deployment.'
+        );
+        return await createDevelopmentDefaultAdminUser(db);
       }
       return await createUser(db, {
         email: BOOTSTRAP_ADMIN_EMAIL,

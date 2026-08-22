@@ -1,6 +1,6 @@
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authTokenIssuedAtClaim } from './token-invalidation.js';
+import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 /**
@@ -62,6 +62,7 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
       accessTokenTtl,
       refreshTokenTtl,
       {
+        ...authCredentialGenerationClaim(context.result.user),
         ...authTokenIssuedAtClaim(Date.now(), context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),
       }

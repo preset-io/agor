@@ -567,6 +567,12 @@ export interface User extends BaseUserFields {
 export type UserAuthMetadata = object & {
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
+  /**
+   * Monotonic local-credential generation captured in interactive JWTs.
+   * Password changes increment this atomically so a token minted by a racing
+   * login or refresh against an older credential snapshot is fail-closed.
+   */
+  credential_generation?: number;
   /** Backend-only tenant id used while issuing/validating runtime tokens. */
   tenant_id?: string;
 };

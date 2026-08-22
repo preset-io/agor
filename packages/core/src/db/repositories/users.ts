@@ -70,6 +70,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       filesystem_home: row.filesystem_home ?? undefined,
       onboarding_completed: row.onboarding_completed,
       must_change_password: row.must_change_password,
+      credential_generation: row.credential_generation,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       avatar_url: row.data.avatar_url ?? row.data.avatar,
       avatar: row.data.avatar,
@@ -138,6 +139,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       filesystem_home: user.filesystem_home ?? null,
       onboarding_completed: user.onboarding_completed ?? false,
       must_change_password: user.must_change_password ?? false,
+      credential_generation: user.credential_generation ?? 0,
       tokens_valid_after: user.tokens_valid_after ? new Date(user.tokens_valid_after) : null,
       data: {
         avatar_url: user.avatar_url,
@@ -187,7 +189,10 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   async create(data: Partial<InternalUser>): Promise<InternalUser> {
     if (
       Object.hasOwn(data as object, 'password') ||
-      Object.hasOwn(data as object, 'password_hash')
+      Object.hasOwn(data as object, 'password_hash') ||
+      Object.hasOwn(data as object, 'passwordHash') ||
+      Object.hasOwn(data as object, 'credential_generation') ||
+      Object.hasOwn(data as object, 'tokens_valid_after')
     ) {
       throw new RepositoryError(
         'UsersRepository does not accept password credential fields; use an authoritative password-write service'
@@ -310,10 +315,13 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   async update(id: string, updates: Partial<InternalUser>): Promise<InternalUser> {
     if (
       Object.hasOwn(updates as object, 'password') ||
-      Object.hasOwn(updates as object, 'password_hash')
+      Object.hasOwn(updates as object, 'password_hash') ||
+      Object.hasOwn(updates as object, 'passwordHash') ||
+      Object.hasOwn(updates as object, 'credential_generation') ||
+      Object.hasOwn(updates as object, 'tokens_valid_after')
     ) {
       throw new RepositoryError(
-        'UsersRepository cannot update passwords; use an authoritative password-write service'
+        'UsersRepository cannot update password credential fields; use an authoritative password-write service'
       );
     }
     const fullId = await this.resolveId(id);

@@ -251,7 +251,7 @@ export interface UserSettingsModalProps {
   user: User | null;
   client: AgorClient | null;
   currentUser?: User | null;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => void;
+  onUpdate?: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onRestartOnboarding?: () => void | Promise<void>;
   initialTab?: string;
 }

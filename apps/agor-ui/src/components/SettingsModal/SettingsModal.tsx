@@ -102,8 +102,8 @@ export interface SettingsModalProps {
   ) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
-  onCreateUser?: (data: CreateUserInput) => void;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
+  onCreateUser?: (data: CreateUserInput) => Promise<void>;
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;

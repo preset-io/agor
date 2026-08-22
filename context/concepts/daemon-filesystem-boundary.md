@@ -39,7 +39,7 @@ CODEOWNERS review for the checker, registry, and daemon-host adapters is a usefu
 
 ## Closure status (2026-08-22)
 
-The registry contains **124** exact capabilities (**97 A, 27 B, 0 C, 0 D**).
+The registry contains **125** exact capabilities (**98 A, 27 B, 0 C, 0 D**).
 The only B entries remain the local upload staging adapter. Obsolete declarations
 for Unix account/group management, sudo wrappers, env-file ownership, and local
 OpenCode command execution were removed with those code paths. Sandbox path

@@ -19,11 +19,12 @@ docker compose up
 That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, RBAC + sandbox testing, HA smoke testing, or the docs site, see the variant system below.
 
 The fixed login is an intentionally narrow bootstrap exception, not a weak
-deployment-wide password profile. It requires the checked-in development gate
-and `NODE_ENV=development`; every newly created or changed
-password still follows the secure daemon policy. An existing development
-`admin` password remains usable until you change it, after which it cannot be
-assigned again through normal user APIs.
+deployment-wide password profile. It requires all three checked-in values:
+`AGOR_ADMIN_PASSWORD=admin`, `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true`, and
+`NODE_ENV=development`. Every newly created or changed password still follows
+the secure daemon policy. An existing development `admin` password remains
+usable until you change it, after which it cannot be assigned again through
+normal user APIs.
 
 ## Seeding test data
 

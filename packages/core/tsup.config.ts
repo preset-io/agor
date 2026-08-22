@@ -112,5 +112,11 @@ export default defineConfig({
     // The curated catalog overlay is data, not code — tsup would not emit it.
     cpSync('src/mcp-catalog/curated.yaml', 'dist/mcp-catalog/curated.yaml');
     console.log('✅ Copied curated.yaml to dist/');
+
+    // Keep the versioned password corpus as one runtime asset instead of
+    // duplicating ten thousand literals into every bundled Node entry point.
+    cpSync('src/config/password-blocklist-v1.txt', 'dist/config/password-blocklist-v1.txt');
+    cpSync('src/config/password-blocklist-v1.LICENSE', 'dist/config/password-blocklist-v1.LICENSE');
+    console.log('✅ Copied offline password blocklist and license to dist/');
   },
 });

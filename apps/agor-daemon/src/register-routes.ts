@@ -100,7 +100,10 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
-import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
+import {
+  authCredentialGenerationClaim,
+  authTokenIssuedAtClaim,
+} from './auth/token-invalidation.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -237,7 +240,22 @@ export class AgorLocalStrategy extends LocalStrategy {
     // so freshly issued tokens can be bumped past a just-written invalidation
     // marker. The authentication hook redacts the metadata before returning.
     markAuthenticationUserLookup(params);
-    return super.getEntity(result, params);
+    const current = (await super.getEntity(result, params)) as {
+      credential_generation?: unknown;
+    };
+    const verified = result as { credential_generation?: unknown };
+    const verifiedGeneration =
+      typeof verified.credential_generation === 'number' ? verified.credential_generation : 0;
+    const currentGeneration =
+      typeof current.credential_generation === 'number' ? current.credential_generation : 0;
+
+    // The password comparison ran against `result`. If a password update won
+    // while bcrypt was in flight, never mint claims from the re-fetched row as
+    // though the newly stored credential had been verified.
+    if (verifiedGeneration !== currentGeneration) {
+      throw new NotAuthenticated('Invalid login');
+    }
+    return current;
   }
 }
 
@@ -835,6 +853,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           impersonated_by: caller.user_id,
           is_impersonated: true,
           jti,
+          ...authCredentialGenerationClaim(targetUser),
           ...authTokenIssuedAtClaim(Date.now(), targetUser),
         },
         jwtSecret,

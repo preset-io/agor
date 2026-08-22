@@ -87,6 +87,27 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces credential-generation token claims as an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0091_codex_device_auth_attempts'],
+        pending: ['0092_add_user_credential_generation'],
+      })
+    ).toEqual(['0092_add_user_credential_generation']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0094_codex_device_auth_attempts'],
+        pending: ['0095_add_user_credential_generation'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0092_add_user_credential_generation'],
+      })
+    ).toEqual([]);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await readJournals();
 

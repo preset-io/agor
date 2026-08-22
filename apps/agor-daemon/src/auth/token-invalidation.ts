@@ -3,11 +3,17 @@ import type { UserAuthMetadata } from '@agor/core/types';
 import type { JwtPayload } from 'jsonwebtoken';
 
 export const AUTH_TOKEN_ISSUED_AT_MS_CLAIM = 'auth_time_ms';
+export const AUTH_CREDENTIAL_GENERATION_CLAIM = 'auth_credential_generation';
 
 export type UserAuthTokenPayload = JwtPayload & {
   type?: string;
   [AUTH_TOKEN_ISSUED_AT_MS_CLAIM]?: unknown;
+  [AUTH_CREDENTIAL_GENERATION_CLAIM]?: unknown;
 };
+
+function credentialGeneration(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
 
 function dateToMillis(value: Date | string | number | undefined): number | null {
   if (value === undefined) return null;
@@ -34,6 +40,16 @@ export function assertUserTokenNotInvalidated(
   user: UserAuthMetadata,
   payload: UserAuthTokenPayload | undefined
 ): void {
+  const currentGeneration = credentialGeneration(user.credential_generation) ?? 0;
+  const tokenGeneration = credentialGeneration(payload?.[AUTH_CREDENTIAL_GENERATION_CLAIM]);
+
+  // Tokens issued before credential generations were introduced are generation
+  // zero. They remain valid across the upgrade, but the first password change
+  // increments the row and invalidates them without relying on replica clocks.
+  if ((tokenGeneration ?? 0) !== currentGeneration) {
+    throw new NotAuthenticated('Session expired, please login again');
+  }
+
   const validAfterMs = dateToMillis(user.tokens_valid_after);
   if (validAfterMs === null) return;
 
@@ -41,6 +57,14 @@ export function assertUserTokenNotInvalidated(
   if (issuedAtMs === null || issuedAtMs <= validAfterMs) {
     throw new NotAuthenticated('Session expired, please login again');
   }
+}
+
+export function authCredentialGenerationClaim(
+  user: UserAuthMetadata
+): Record<typeof AUTH_CREDENTIAL_GENERATION_CLAIM, number> {
+  return {
+    [AUTH_CREDENTIAL_GENERATION_CLAIM]: credentialGeneration(user.credential_generation) ?? 0,
+  };
 }
 
 export function authTokenIssuedAtClaim(

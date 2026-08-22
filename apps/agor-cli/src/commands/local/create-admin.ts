@@ -5,9 +5,11 @@
 import { join } from 'node:path';
 import { getConfigPath, loadConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
+  assertDevelopmentDefaultAdminEnvironment,
   assertUsableBootstrapAdminPassword,
   createDatabase,
   createDefaultAdminUser,
+  createDevelopmentDefaultAdminUser,
   createTenantScopedDatabaseProxy,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
@@ -16,6 +18,7 @@ import {
   sanitizeDbError,
   shortId,
 } from '@agor/core/db';
+import type { User } from '@agor/core/types';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -47,7 +50,7 @@ export default class LocalCreateAdmin extends Command {
     }),
     'dev-default': Flags.boolean({
       description:
-        'Development/test only: use admin@agor.live / admin. Requires NODE_ENV=development or test.',
+        'Development/test only: exact admin default; requires AGOR_ADMIN_PASSWORD=admin, AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true, and development/test NODE_ENV.',
       default: false,
     }),
   };
@@ -137,13 +140,23 @@ export default class LocalCreateAdmin extends Command {
 
         // Create admin user
         this.log(chalk.gray('Creating admin user...'));
-        const user = await createDefaultAdminUser(db, {
-          email: flags.email,
-          password,
-          name: flags.name,
-          unix_username: flags['unix-username'],
-          allowDevelopmentDefault: flags['dev-default'],
-        });
+        let user: User;
+        if (flags['dev-default']) {
+          assertDevelopmentDefaultAdminCliRequest({
+            email: flags.email,
+            name: flags.name,
+            unixUsername: flags['unix-username'],
+            password,
+          });
+          user = await createDevelopmentDefaultAdminUser(db);
+        } else {
+          user = await createDefaultAdminUser(db, {
+            email: flags.email,
+            password,
+            name: flags.name,
+            unix_username: flags['unix-username'],
+          });
+        }
 
         this.log(`${chalk.green('✓')} Admin user created successfully`);
         this.log('');
@@ -172,4 +185,22 @@ export default class LocalCreateAdmin extends Command {
       process.exit(1);
     }
   }
+}
+
+/** Validate the CLI-specific shape, then delegate environment policy to core. */
+export function assertDevelopmentDefaultAdminCliRequest(
+  request: { email: string; name: string; unixUsername: string; password?: string },
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  if (
+    request.email !== DEVELOPMENT_DEFAULT_ADMIN_USER.email ||
+    request.name !== DEVELOPMENT_DEFAULT_ADMIN_USER.name ||
+    request.unixUsername !== DEVELOPMENT_DEFAULT_ADMIN_USER.unix_username ||
+    request.password !== undefined
+  ) {
+    throw new Error(
+      '--dev-default is restricted to the exact admin@agor.live / admin development identity'
+    );
+  }
+  assertDevelopmentDefaultAdminEnvironment(env);
 }

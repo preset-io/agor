@@ -238,6 +238,8 @@ function isPasswordPolicyRequirements(value: unknown): value is PasswordPolicyRe
     Number.isSafeInteger(value.max_utf8_bytes) &&
     (value.max_utf8_bytes as number) > 0 &&
     value.common_passwords_rejected === true &&
+    (value.blocklist_version === undefined ||
+      (typeof value.blocklist_version === 'string' && value.blocklist_version.length > 0)) &&
     value.composition_rules === false &&
     value.periodic_rotation_required === false
   );

@@ -16,7 +16,7 @@ x-daemon-environment: &daemon-environment
   AGOR_MASTER_SECRET: ${AGOR_MASTER_SECRET:?set a stable shared master secret (32+ characters)}
   AGOR_ADMIN_PASSWORD: ${AGOR_ADMIN_PASSWORD:?set the initial admin password}
   # This checked-in stack is a disposable development smoke environment. The
-  # explicit double gate keeps admin/admin unavailable to production-mode
+  # explicit triple gate keeps admin/admin unavailable to production-mode
   # daemon deployments while matching the repository's other dev variants.
   AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: ${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-false}
   # The production image serves the UI from the daemon. Browsers still send
