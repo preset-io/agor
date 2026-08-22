@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { isAuthenticationUserLookup } from '../services/users.js';
 import { ApiKeyStrategy } from './api-key-strategy.js';
 
 describe('ApiKeyStrategy tenant propagation', () => {
@@ -18,5 +19,7 @@ describe('ApiKeyStrategy tenant propagation', () => {
 
     expect(apiKeysRepo.verifyKey).toHaveBeenCalledWith('agor_sk_test');
     expect(usersService.get).toHaveBeenCalledWith('user-1', params);
+    expect(isAuthenticationUserLookup(params)).toBe(true);
+    expect(params.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
 });

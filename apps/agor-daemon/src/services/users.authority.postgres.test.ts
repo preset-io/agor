@@ -20,7 +20,7 @@ import {
 } from '@agor/core/db';
 import type { AuthenticatedParams, User, UserID, UserRole } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createRefreshTokenService } from '../auth/refresh-token-service.js';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
@@ -269,6 +269,56 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(1);
       expect(current.credential_generation).toBe(2);
       expect(() => assertUserTokenNotInvalidated(current, decoded)).toThrow(/Session expired/);
+    });
+
+    it('prevents a stale generic update from restoring password credential metadata', async () => {
+      const tenantId = `users-password-profile-race-${generateId()}`;
+      const member = await seed(tenantId, 'member', 'password-profile-race');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const repo = new UsersRepository(scoped);
+        const readSnapshot = deferred();
+        const releaseUpdate = deferred();
+        const findById = repo.findById.bind(repo);
+        vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+          const snapshot = await findById(id);
+          readSnapshot.resolve();
+          await releaseUpdate.promise;
+          return snapshot;
+        });
+
+        const profileUpdate = repo.update(member.user_id, { name: 'Concurrent rename' });
+        await readSnapshot.promise;
+        try {
+          await service.patch(member.user_id as UserID, {
+            password: 'replacement postgres profile passphrase',
+          });
+        } finally {
+          releaseUpdate.resolve();
+        }
+        await expect(profileUpdate).resolves.toMatchObject({ name: 'Concurrent rename' });
+
+        const [stored] = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT name, credential_generation, tokens_valid_after FROM users WHERE user_id = ${member.user_id}`
+          )
+        );
+        expect(stored?.name).toBe('Concurrent rename');
+        expect(Number(stored?.credential_generation)).toBe(1);
+        expect(stored?.tokens_valid_after).toBeTruthy();
+        expect(() =>
+          assertUserTokenNotInvalidated(
+            { credential_generation: Number(stored?.credential_generation) },
+            {
+              sub: member.user_id,
+              type: 'access',
+              [AUTH_CREDENTIAL_GENERATION_CLAIM]: 0,
+            }
+          )
+        ).toThrow(/Session expired/);
+      });
     });
 
     it('serializes concurrent peer demotions and preserves a superadmin', async () => {

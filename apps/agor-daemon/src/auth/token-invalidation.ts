@@ -62,8 +62,16 @@ export function assertUserTokenNotInvalidated(
 export function authCredentialGenerationClaim(
   user: UserAuthMetadata
 ): Record<typeof AUTH_CREDENTIAL_GENERATION_CLAIM, number> {
+  const generation = credentialGeneration(user.credential_generation);
+  if (generation === null) {
+    // A browser credential minted from a redacted/public user would be stale
+    // immediately after the first password change. Fail closed instead of
+    // silently substituting generation zero so every authentication strategy
+    // must opt into the backend-only user lookup contract.
+    throw new NotAuthenticated('Authentication credential metadata unavailable');
+  }
   return {
-    [AUTH_CREDENTIAL_GENERATION_CLAIM]: credentialGeneration(user.credential_generation) ?? 0,
+    [AUTH_CREDENTIAL_GENERATION_CLAIM]: generation,
   };
 }
 

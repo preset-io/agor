@@ -7,6 +7,7 @@
 
 import type { UserApiKeysRepository } from '@agor/core/db';
 import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
+import { markAuthenticationUserLookup } from '../services/users.js';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   private apiKeysRepo: UserApiKeysRepository | null = null;
@@ -41,7 +42,10 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       console.warn('Failed to update API key last_used_at:', err);
     });
 
-    // Load the user
+    // Browser-token issuance needs backend-only credential metadata. Preserve
+    // the already-resolved tenant context while marking this one lookup as an
+    // internal authentication read; ordinary external user reads stay redacted.
+    markAuthenticationUserLookup(params);
     const user = await this.usersService.get(keyRow.user_id, params);
     if (!user) {
       throw new NotAuthenticated('User not found for API key');

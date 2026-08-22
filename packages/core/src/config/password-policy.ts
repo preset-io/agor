@@ -6,10 +6,12 @@
  * out of browser bundles. Password values are never logged or sent externally.
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  PASSWORD_BLOCKLIST_SHA256,
   type PasswordPolicyContext,
   PasswordPolicyError,
   PasswordValidationCode,
@@ -36,7 +38,13 @@ function loadCommonPasswordBlocklist(): string[] {
 
   for (const candidate of new Set(candidates)) {
     try {
-      const entries = readFileSync(candidate, 'utf8')
+      const contents = readFileSync(candidate);
+      const digest = createHash('sha256').update(contents).digest('hex');
+      if (digest !== PASSWORD_BLOCKLIST_SHA256) {
+        throw new Error(`expected SHA-256 ${PASSWORD_BLOCKLIST_SHA256}, found ${digest}`);
+      }
+      const entries = contents
+        .toString('utf8')
         .split(/\r?\n/u)
         .filter((entry) => entry.length > 0);
       if (entries.length !== 10_000) {

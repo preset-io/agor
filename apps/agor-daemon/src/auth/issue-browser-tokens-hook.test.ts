@@ -21,6 +21,7 @@ function makeUser() {
   return {
     user_id: 'user-1',
     email: 'user@example.com',
+    credential_generation: 0,
     tokens_valid_after: new Date(0),
     password: 'hashed-secret',
   };
@@ -102,6 +103,13 @@ test('api-key login (no JWT payload) receives a browser access + refresh token p
   const accessPayload = verifyToken(result.accessToken);
   expect(accessPayload.type).toBe('access');
   expect(accessPayload.sub).toBe('user-1');
+});
+
+test('interactive issuance fails closed when an authentication strategy returns a redacted user', async () => {
+  const context = makeContext(undefined, 'api-key');
+  delete (context.result.user as { credential_generation?: number }).credential_generation;
+
+  await expect(makeHook()(context)).rejects.toThrow(/credential metadata unavailable/);
 });
 
 test('params.tenant tenant_id propagates into both minted tokens', async () => {

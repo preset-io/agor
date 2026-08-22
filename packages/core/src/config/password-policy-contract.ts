@@ -31,7 +31,9 @@ export interface PasswordPolicyRequirements {
   periodic_rotation_required: false;
 }
 
-export const PASSWORD_BLOCKLIST_VERSION = 'seclists-10k-e9d6a61e';
+export const PASSWORD_BLOCKLIST_SHA256 =
+  '4adb3f0afb4a10cf19ebe48d8c69a46f934bbc8d77c694c210564f9583e7f4ba';
+export const PASSWORD_BLOCKLIST_VERSION = `seclists-10k-sha256-${PASSWORD_BLOCKLIST_SHA256.slice(0, 12)}`;
 
 export const SECURE_PASSWORD_POLICY_REQUIREMENTS: Readonly<PasswordPolicyRequirements> =
   Object.freeze({

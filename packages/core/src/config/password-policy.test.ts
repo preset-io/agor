@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertSecurePassword,
+  PASSWORD_BLOCKLIST_SHA256,
+  PASSWORD_BLOCKLIST_VERSION,
   PasswordPolicyError,
   PasswordValidationCode,
   resolvePasswordPolicyRequirements,
@@ -18,6 +20,13 @@ function capture(candidate: unknown, email?: string): PasswordPolicyError {
 }
 
 describe('secure password policy', () => {
+  it('binds the public blocklist version to the integrity-checked asset digest', () => {
+    expect(PASSWORD_BLOCKLIST_SHA256).toBe(
+      '4adb3f0afb4a10cf19ebe48d8c69a46f934bbc8d77c694c210564f9583e7f4ba'
+    );
+    expect(PASSWORD_BLOCKLIST_VERSION).toBe('seclists-10k-sha256-4adb3f0afb4a');
+  });
+
   it('uses one fail-safe named profile', () => {
     expect(resolvePasswordPolicyRequirements(undefined)).toEqual(
       SECURE_PASSWORD_POLICY_REQUIREMENTS
@@ -67,7 +76,7 @@ describe('secure password policy', () => {
 
   it('advertises the exact versioned offline blocklist contract', () => {
     expect(SECURE_PASSWORD_POLICY_REQUIREMENTS.blocklist_version).toMatch(
-      /^seclists-10k-[a-f0-9]{8}$/
+      /^seclists-10k-sha256-[a-f0-9]{12}$/
     );
   });
 });

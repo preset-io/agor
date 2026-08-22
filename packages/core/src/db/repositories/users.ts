@@ -13,6 +13,7 @@ import type {
   InternalUser,
   StoredAgenticTools,
   User,
+  UserAuthMetadata,
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
@@ -42,7 +43,10 @@ import {
  * go through the daemon UsersService, which enforces actor/target role
  * authority before calling the database.
  */
-export class UsersRepository implements BaseRepository<InternalUser, Partial<InternalUser>> {
+/** Credential-free input accepted by this generic persistence boundary. */
+export type UsersRepositoryWrite = Partial<Omit<InternalUser, keyof UserAuthMetadata>>;
+
+export class UsersRepository implements BaseRepository<InternalUser, UsersRepositoryWrite> {
   constructor(private db: Database) {}
 
   /**
@@ -186,7 +190,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   /**
    * Create a new user
    */
-  async create(data: Partial<InternalUser>): Promise<InternalUser> {
+  async create(data: UsersRepositoryWrite): Promise<InternalUser> {
     if (
       Object.hasOwn(data as object, 'password') ||
       Object.hasOwn(data as object, 'password_hash') ||
@@ -312,7 +316,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   /**
    * Update user by ID
    */
-  async update(id: string, updates: Partial<InternalUser>): Promise<InternalUser> {
+  async update(id: string, updates: UsersRepositoryWrite): Promise<InternalUser> {
     if (
       Object.hasOwn(updates as object, 'password') ||
       Object.hasOwn(updates as object, 'password_hash') ||
@@ -361,12 +365,29 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       merged.env_vars_raw = rawRow.data.env_vars;
     }
     const insertData = this.userToInsert(merged);
-    const { password: _preservedPassword, ...mutableInsertData } = insertData;
+
+    // This explicit allowlist is also a concurrency boundary. Generic profile
+    // updates must never round-trip password authority fields from the stale
+    // snapshot above: an authoritative password patch may have incremented the
+    // generation while this method was awaiting. Keeping credential fields,
+    // immutable identifiers, and creation metadata out of the UPDATE prevents
+    // an unrelated write from reviving pre-change tokens.
+    const mutableUserData = {
+      email: insertData.email,
+      name: insertData.name,
+      emoji: insertData.emoji,
+      role: insertData.role,
+      unix_username: insertData.unix_username,
+      filesystem_home: insertData.filesystem_home,
+      onboarding_completed: insertData.onboarding_completed,
+      must_change_password: insertData.must_change_password,
+      data: insertData.data,
+    } satisfies Partial<SchemaUserInsert>;
 
     // Update database
     await update(this.db, users)
       .set({
-        ...mutableInsertData,
+        ...mutableUserData,
         updated_at: new Date(),
       })
       .where(eq(users.user_id, fullId))

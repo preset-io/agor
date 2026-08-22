@@ -3,10 +3,19 @@ import type { User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { expect, test, vi } from 'vitest';
-import { eq, update, users } from '../../../../packages/core/src/db';
+import {
+  eq,
+  select,
+  UserApiKeysRepository,
+  UsersRepository,
+  update,
+  users,
+} from '../../../../packages/core/src/db';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { AgorLocalStrategy } from '../register-routes';
 import { createUsersService, type UsersService } from '../services/users';
+import { ApiKeyStrategy } from './api-key-strategy';
+import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook';
 import { createRefreshTokenService } from './refresh-token-service';
 import {
   issueRuntimeToken,
@@ -24,7 +33,6 @@ import {
   authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
 } from './token-invalidation';
-import { redactUserAuthMetadata } from './user-redaction';
 
 const JWT_SECRET = 'password-token-invalidation-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
@@ -82,14 +90,17 @@ test('runtime tenant helpers preserve standard and custom tenant claims', () => 
   expect(readRuntimeTenantClaim({ tenant_id: 'tenant-c' }, 'org_id')).toBe('tenant-c');
 });
 
-function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
+function createAuthApp(
+  db: Parameters<typeof createUsersService>[0],
+  options: { now?: () => number } = {}
+) {
   const app = feathers();
   app.set('authentication', {
     secret: JWT_SECRET,
     entity: 'user',
     entityId: 'user_id',
     service: 'users',
-    authStrategies: ['jwt', 'local'],
+    authStrategies: ['jwt', 'local', 'api-key'],
     jwtOptions: {
       header: { typ: 'access' },
       audience: RUNTIME_JWT_AUDIENCE,
@@ -110,6 +121,10 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
   authentication.register('jwt', new ServiceJWTStrategy());
   const localStrategy = new AgorLocalStrategy();
   authentication.register('local', localStrategy);
+  const apiKeysRepo = new UserApiKeysRepository(db);
+  const apiKeyStrategy = new ApiKeyStrategy();
+  apiKeyStrategy.setDependencies(apiKeysRepo, usersService);
+  authentication.register('api-key', apiKeyStrategy);
   app.use('authentication', authentication);
 
   const authService = app.service('authentication') as {
@@ -126,29 +141,18 @@ function createAuthApp(db: Parameters<typeof createUsersService>[0]) {
   authService.hooks({
     after: {
       create: [
-        async (context) => {
-          if (context.result?.user) {
-            const tokens = issueRuntimeTokenPair(
-              context.result.user,
-              JWT_SECRET,
-              ACCESS_TOKEN_TTL,
-              REFRESH_TOKEN_TTL,
-              {
-                ...authCredentialGenerationClaim(context.result.user),
-                ...authTokenIssuedAtClaim(Date.now(), context.result.user),
-              }
-            );
-            context.result.accessToken = tokens.accessToken;
-            context.result.refreshToken = tokens.refreshToken;
-            context.result.user = redactUserAuthMetadata(context.result.user);
-          }
-          return context;
-        },
+        createIssueBrowserTokensHook({
+          jwtSecret: JWT_SECRET,
+          accessTokenTtl: ACCESS_TOKEN_TTL,
+          refreshTokenTtl: REFRESH_TOKEN_TTL,
+          tenantClaim: 'tenant_id',
+          now: options.now,
+        }),
       ],
     },
   });
 
-  return { app, usersService, localStrategy };
+  return { app, usersService, localStrategy, apiKeysRepo };
 }
 
 async function createUser(service: UsersService, email: string): Promise<User> {
@@ -268,6 +272,48 @@ dbTest(
   }
 );
 
+dbTest(
+  'generic user updates cannot restore credential metadata from a stale snapshot',
+  async ({ db }) => {
+    const { usersService } = createAuthApp(db);
+    const user = await createUser(usersService, 'racing-profile-update@example.test');
+    const repo = new UsersRepository(db);
+    const readSnapshot = deferred();
+    const releaseUpdate = deferred();
+    const findById = repo.findById.bind(repo);
+    vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+      const snapshot = await findById(id);
+      readSnapshot.resolve();
+      await releaseUpdate.promise;
+      return snapshot;
+    });
+
+    const oldToken = issueRuntimeToken(
+      {
+        sub: user.user_id,
+        type: 'access',
+        [AUTH_CREDENTIAL_GENERATION_CLAIM]: 0,
+      },
+      JWT_SECRET,
+      ACCESS_TOKEN_TTL
+    );
+    const profileUpdate = repo.update(user.user_id, { name: 'Renamed concurrently' });
+    await readSnapshot.promise;
+    try {
+      await usersService.patch(user.user_id, { password: 'replacement profile race passphrase' });
+    } finally {
+      releaseUpdate.resolve();
+    }
+    await expect(profileUpdate).resolves.toMatchObject({ name: 'Renamed concurrently' });
+
+    const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
+    expect(row?.credential_generation).toBe(1);
+    expect(row?.tokens_valid_after).toEqual(expect.any(Date));
+    const decoded = jwt.verify(oldToken, JWT_SECRET) as jwt.JwtPayload;
+    expect(() => assertUserTokenNotInvalidated(row!, decoded)).toThrow(/Session expired/);
+  }
+);
+
 test('a refresh racing a password change can mint only an already-stale generation', async () => {
   const enteredLookup = deferred();
   const releaseLookup = deferred();
@@ -325,7 +371,8 @@ test('refresh token lookup is scoped to the tenant claim and reissues tenant-bea
     must_change_password: false,
     created_at: new Date(),
     tenant_id: 'tenant-a',
-  } as User & { tenant_id: string };
+    credential_generation: 0,
+  } as User & { tenant_id: string; credential_generation: number };
   const usersService = {
     get: async (_id: UserID, _params?: unknown) => user,
   };
@@ -440,11 +487,52 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
 });
 
 dbTest(
+  'API-key login after a password change issues usable current-generation tokens',
+  async ({ db }) => {
+    const { app, usersService, apiKeysRepo } = createAuthApp(db);
+    const user = await createUser(usersService, 'api-key-generation@example.test');
+    await usersService.patch(user.user_id, { password: 'replacement api key passphrase' });
+    const { rawKey } = await apiKeysRepo.create(user.user_id, 'Generation regression');
+
+    const loginResult = await app.service('authentication').create(
+      { strategy: 'api-key', apiKey: rawKey },
+      {
+        provider: 'rest',
+        tenant: { tenant_id: 'default', source: 'auth_claim' },
+      }
+    );
+    expectNoTokenMarker(loginResult.user);
+    for (const token of [loginResult.accessToken, loginResult.refreshToken]) {
+      const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
+      expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(1);
+    }
+
+    const accessResult = await app
+      .service('authentication')
+      .create({ strategy: 'jwt', accessToken: loginResult.accessToken }, { provider: 'rest' });
+    expect(accessResult.user.email).toBe(user.email);
+
+    const refreshResult = await createRefreshTokenService({
+      jwtSecret: JWT_SECRET,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      usersService,
+    }).create({ refreshToken: loginResult.refreshToken });
+    expect(refreshResult.user.email).toBe(user.email);
+    expect(
+      (jwt.verify(refreshResult.accessToken, JWT_SECRET) as jwt.JwtPayload)[
+        AUTH_CREDENTIAL_GENERATION_CLAIM
+      ]
+    ).toBe(1);
+  }
+);
+
+dbTest(
   'local login uses auth metadata when issuing tokens at the invalidation boundary',
   async ({ db }) => {
-    const { app, usersService } = createAuthApp(db);
-    const user = await createUser(usersService, 'local-boundary@example.test');
     const marker = new Date(Date.now() + 1_000);
+    const { app, usersService } = createAuthApp(db, { now: () => marker.getTime() });
+    const user = await createUser(usersService, 'local-boundary@example.test');
     await update(db, users)
       .set({ tokens_valid_after: marker })
       .where(eq(users.user_id, user.user_id))
