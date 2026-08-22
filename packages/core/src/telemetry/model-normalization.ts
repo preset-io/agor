@@ -18,6 +18,7 @@ const KNOWN_PROVIDER_VALUES = new Set([
   'gemini',
   'opencode',
   'openrouter',
+  'orcarouter',
   'local',
   'ollama',
 ]);
