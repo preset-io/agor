@@ -4,6 +4,7 @@
  */
 
 import {
+  compare,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
@@ -133,6 +134,59 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
         expect(visible).toHaveLength(1);
         expect(visible[0]?.name).toBe('superadmin-b');
+      });
+    });
+
+    it('enforces password assignment policy after RLS authority and stores only accepted hashes', async () => {
+      const tenantA = `users-password-a-${generateId()}`;
+      const tenantB = `users-password-b-${generateId()}`;
+      const adminA = await seed(tenantA, 'admin', 'password-admin-a');
+      const memberA = await seed(tenantA, 'member', 'password-member-a');
+      const memberB = await seed(tenantB, 'member', 'password-member-b');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        await expect(
+          service.patch(memberA.user_id as UserID, { password: 'short' }, params(adminA, tenantA))
+        ).rejects.toMatchObject({ code: 400, data: { code: 'PASSWORD_TOO_SHORT' } });
+
+        // Target authorization deliberately precedes policy validation, so a
+        // foreign row cannot be distinguished from an absent row by its
+        // candidate password or validation code.
+        await expect(
+          service.patch(memberB.user_id as UserID, { password: 'short' }, params(adminA, tenantA))
+        ).rejects.toMatchObject({ code: 403 });
+
+        const assigned = 'a unique postgres test passphrase';
+        await expect(
+          service.patch(memberA.user_id as UserID, { password: assigned }, params(adminA, tenantA))
+        ).resolves.toMatchObject({ user_id: memberA.user_id });
+
+        const [stored] = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT password, tokens_valid_after FROM users WHERE user_id = ${memberA.user_id}`
+          )
+        );
+        expect(typeof stored?.password).toBe('string');
+        expect(await compare(assigned, String(stored?.password))).toBe(true);
+        expect(stored?.tokens_valid_after).toBeTruthy();
+
+        const created = await service.create(
+          {
+            email: `password-created-${generateId()}@example.test`,
+            password: 'another unique postgres passphrase',
+          },
+          params(adminA, tenantA)
+        );
+        const createdRows = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT tenant_id FROM users WHERE user_id = ${created.user_id}`
+          )
+        );
+        expect(createdRows).toHaveLength(1);
+        expect(createdRows[0]?.tenant_id).toBe(tenantA);
       });
     });
 

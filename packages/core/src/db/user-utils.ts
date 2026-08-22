@@ -6,6 +6,11 @@
 
 import bcrypt from 'bcryptjs';
 import { and, eq } from 'drizzle-orm';
+import {
+  assertSecurePassword,
+  PasswordPolicyError,
+  PasswordValidationCode,
+} from '../config/password-policy';
 import { generateId } from '../lib/ids';
 import type { InternalUser, User, UserID } from '../types';
 import { normalizeRole } from '../types/user';
@@ -95,7 +100,7 @@ export function userRowToUser(row: UserRow): InternalUser {
  * @param data - User data
  * @returns Created user
  */
-export async function createUser(db: Database, data: CreateUserData): Promise<User> {
+async function persistUser(db: Database, data: CreateUserData): Promise<User> {
   // Check if email already exists
   const existing = await select(db).from(users).where(userEmailPredicate(db, data.email)).one();
 
@@ -142,6 +147,18 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
 }
 
 /**
+ * Create a user with an assigned local password.
+ *
+ * This direct database seam is used by `agor init` and bootstrap tooling, so
+ * it enforces the same canonical policy as the daemon UsersService. The only
+ * weak credential exception is private to `createDefaultAdminUser` below.
+ */
+export async function createUser(db: Database, data: CreateUserData): Promise<User> {
+  assertSecurePassword(data.password, { email: data.email });
+  return persistUser(db, data);
+}
+
+/**
  * Check if a user with the given email exists
  *
  * @param db - Database instance
@@ -180,17 +197,26 @@ export const DEVELOPMENT_DEFAULT_ADMIN_USER = {
   unix_username: 'admin',
 };
 
-export const MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH = 8;
-
 export function assertUsableBootstrapAdminPassword(
   password: string,
   label: string = 'Bootstrap admin password'
 ): void {
   if (password === DEVELOPMENT_DEFAULT_ADMIN_USER.password) {
-    throw new Error(`${label} must not be the legacy fixed default password.`);
+    throw new PasswordPolicyError(
+      PasswordValidationCode.CONTEXT_SPECIFIC,
+      `${label} must not be the legacy fixed default password.`
+    );
   }
-  if (password.length < MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH) {
-    throw new Error(`${label} must be at least ${MIN_BOOTSTRAP_ADMIN_PASSWORD_LENGTH} characters.`);
+  try {
+    assertSecurePassword(password, { email: DEVELOPMENT_DEFAULT_ADMIN_USER.email });
+  } catch (error) {
+    if (error instanceof PasswordPolicyError && error.message.startsWith('Password ')) {
+      throw new PasswordPolicyError(
+        error.code,
+        `${label}${error.message.slice('Password'.length)}`
+      );
+    }
+    throw error;
   }
 }
 
@@ -201,7 +227,7 @@ export interface CreateDefaultAdminUserOptions {
   unix_username?: string;
   /**
    * Explicitly opt into the legacy admin@agor.live/admin credential for
-   * development/test ergonomics. Refused when NODE_ENV=production.
+   * development/test ergonomics. Requires NODE_ENV=development or test.
    */
   allowDevelopmentDefault?: boolean;
 }
@@ -211,7 +237,7 @@ export interface CreateDefaultAdminUserOptions {
  *
  * Production callers must pass an explicit password. The fixed
  * admin@agor.live/admin credential is available only behind an explicit
- * development/test gate.
+ * development/test gate. Requires NODE_ENV=development or NODE_ENV=test.
  *
  * @param db - Database instance
  * @param options - Admin identity/password options
@@ -223,6 +249,19 @@ export async function createDefaultAdminUser(
   options: CreateDefaultAdminUserOptions = {}
 ): Promise<User> {
   const useDevelopmentDefault = options.allowDevelopmentDefault === true;
+  if (
+    useDevelopmentDefault &&
+    ((options.email !== undefined && options.email !== DEVELOPMENT_DEFAULT_ADMIN_USER.email) ||
+      (options.password !== undefined &&
+        options.password !== DEVELOPMENT_DEFAULT_ADMIN_USER.password) ||
+      (options.name !== undefined && options.name !== DEVELOPMENT_DEFAULT_ADMIN_USER.name) ||
+      (options.unix_username !== undefined &&
+        options.unix_username !== DEVELOPMENT_DEFAULT_ADMIN_USER.unix_username))
+  ) {
+    throw new Error(
+      'The development default gate is restricted to the exact admin@agor.live / admin bootstrap identity'
+    );
+  }
   if (!options.password && !useDevelopmentDefault) {
     throw new Error(
       'Refusing to create admin with fixed default credentials. Pass an explicit password, or set allowDevelopmentDefault only in development/test.'
@@ -231,8 +270,14 @@ export async function createDefaultAdminUser(
   if (options.password && !useDevelopmentDefault) {
     assertUsableBootstrapAdminPassword(options.password);
   }
-  if (useDevelopmentDefault && process.env.NODE_ENV === 'production') {
-    throw new Error('Refusing development default admin credentials when NODE_ENV=production');
+  if (
+    useDevelopmentDefault &&
+    process.env.NODE_ENV !== 'development' &&
+    process.env.NODE_ENV !== 'test'
+  ) {
+    throw new Error(
+      'Refusing development default admin credentials unless NODE_ENV=development or NODE_ENV=test'
+    );
   }
 
   const adminData = {
@@ -249,12 +294,17 @@ export async function createDefaultAdminUser(
     throw new Error(`Admin user already exists (email: ${adminData.email})`);
   }
 
-  return createUser(db, {
+  const data: CreateUserData = {
     email: adminData.email,
     password: adminData.password,
     name: adminData.name,
     role: adminData.role,
     unix_username: adminData.unix_username,
     must_change_password: !useDevelopmentDefault,
-  });
+  };
+
+  // This is the sole local-password policy exception: an exact, controlled
+  // development bootstrap identity behind an explicit caller gate and a
+  // explicit development/test NODE_ENV invariant. It cannot weaken ordinary user creation.
+  return useDevelopmentDefault ? persistUser(db, data) : createUser(db, data);
 }

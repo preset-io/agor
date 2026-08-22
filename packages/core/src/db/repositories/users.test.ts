@@ -12,6 +12,7 @@
  */
 
 import type { UserID } from '@agor/core/types';
+import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect } from 'vitest';
 import { select, update } from '../database-wrapper';
@@ -37,6 +38,45 @@ async function makeUser(repo: UsersRepository): Promise<UserID> {
   });
   return u.user_id as UserID;
 }
+
+describe('UsersRepository password boundary', () => {
+  dbTest('rejects plaintext and pre-hashed credential smuggling', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    await expect(
+      repo.create({ email: 'plaintext-smuggle@example.com', password: 'not-a-hash' } as never)
+    ).rejects.toThrow(/does not accept password credential fields/);
+    await expect(
+      repo.create({
+        email: 'hash-smuggle@example.com',
+        password_hash: await bcrypt.hash('smuggled password', 10),
+      } as never)
+    ).rejects.toThrow(/does not accept password credential fields/);
+
+    const id = await makeUser(repo);
+    await expect(repo.update(id, { password: 'field-smuggle' } as never)).rejects.toThrow(
+      /cannot update passwords/
+    );
+    await expect(repo.update(id, { password_hash: 'field-smuggle' } as never)).rejects.toThrow(
+      /cannot update passwords/
+    );
+  });
+
+  dbTest('preserves an opaque fixture hash during unrelated updates', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const fixturePassword = 'fixture-password-long-enough';
+    const password_hash = await bcrypt.hash(fixturePassword, 10);
+    const user = await repo.create({ email: 'opaque-fixture@example.com' });
+    await update(db, users)
+      .set({ password: password_hash })
+      .where(eq(users.user_id, user.user_id))
+      .run();
+
+    await repo.update(user.user_id, { name: 'Updated fixture' });
+    const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
+    expect(row?.password).toBe(password_hash);
+    expect(row && (await bcrypt.compare(fixturePassword, row.password))).toBe(true);
+  });
+});
 
 describe('UsersRepository execution home key validation', () => {
   dbTest('rejects invalid keys on create and update', async ({ db }) => {

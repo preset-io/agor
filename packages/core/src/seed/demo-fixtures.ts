@@ -44,8 +44,9 @@ import type {
 } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import bcrypt from 'bcryptjs';
+import { assertSecurePassword } from '../config/password-policy';
 import type { Database } from '../db/client';
-import { txAsDb } from '../db/database-wrapper';
+import { insert, txAsDb } from '../db/database-wrapper';
 import {
   ArtifactRepository,
   BoardObjectRepository,
@@ -59,6 +60,8 @@ import {
   TaskRepository,
   UsersRepository,
 } from '../db/repositories';
+import { users as usersTable } from '../db/schema';
+import { userRowToUser } from '../db/user-utils';
 import { generateId } from '../lib/ids';
 
 /**
@@ -206,6 +209,9 @@ export async function loadDemoFixtures(
 
   // Pre-hash demo passwords OUTSIDE the transaction (bcrypt is CPU-bound; no
   // reason to hold the DB transaction open while hashing).
+  for (const credential of DEMO_USER_CREDENTIALS) {
+    assertSecurePassword(credential.password, { email: credential.email });
+  }
   const hashedPasswords = await Promise.all(
     DEMO_USER_CREDENTIALS.map((c) => bcrypt.hash(c.password, BCRYPT_ROUNDS))
   );
@@ -216,7 +222,6 @@ export async function loadDemoFixtures(
   // transaction inside this one.
   const counts = await db.transaction(async (tx) => {
     const t = txAsDb(tx);
-    const usersRepo = new UsersRepository(t);
     const cardTypeRepo = new CardTypeRepository(t);
     const repoRepo = new RepoRepository(t);
     const boardRepo = new BoardRepository(t);
@@ -230,20 +235,31 @@ export async function loadDemoFixtures(
 
     // ── STEP 1: Users (bcrypt-hashed → loginable) ───────────────────────────
     console.log('1️⃣  Creating demo users...');
+    // This fixture-only raw insert is intentionally adjacent to the canonical
+    // plaintext validation above. The general UsersRepository rejects both
+    // plaintext and pre-hashed credential fields, so production/background
+    // callers cannot turn it into an alternate password-assignment seam.
     const users = await Promise.all(
-      DEMO_USER_CREDENTIALS.map((cred, i) =>
-        usersRepo.create({
-          email: cred.email,
-          name: cred.name,
-          emoji: cred.emoji,
-          role: cred.role,
-          onboarding_completed: true,
-          // usersRepo.create stores `password` verbatim; we pass a bcrypt hash so
-          // the auth layer's bcrypt.compare succeeds. Cast to surface `password`,
-          // which is intentionally absent from the public User type.
-          password: hashedPasswords[i],
-        } as Partial<User>)
-      )
+      DEMO_USER_CREDENTIALS.map(async (cred, i) => {
+        const now = new Date();
+        const row = await insert(t, usersTable)
+          .values({
+            user_id: generateId(),
+            created_at: now,
+            updated_at: now,
+            email: cred.email,
+            password: hashedPasswords[i],
+            name: cred.name,
+            emoji: cred.emoji,
+            role: cred.role,
+            onboarding_completed: true,
+            must_change_password: false,
+            data: { preferences: {} },
+          })
+          .returning()
+          .one();
+        return userRowToUser(row);
+      })
     );
     const [alice, bob, carol] = users;
 

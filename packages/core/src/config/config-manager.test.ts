@@ -95,6 +95,7 @@ describe('getDefaultConfig', () => {
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
+    expect(defaults.identity?.password_policy).toBe('secure');
     expect(defaults.analytics?.enabled).toBe(false);
     expect(defaults.metrics?.statsd).toEqual({
       enabled: false,
@@ -107,6 +108,14 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('keeps the fail-safe password profile out of environment-variable override space', () => {
+    const resolved = resolveEffectiveConfig(
+      { identity: { password_policy: 'secure' } },
+      { AGOR_PASSWORD_POLICY: 'development' }
+    );
+    expect(resolved.identity?.password_policy).toBe('secure');
+  });
+
   it('materializes defaults and supported environment overrides without mutating input', () => {
     const input: AgorConfig = { daemon: { host: 'yaml-host', port: 1234 } };
     const resolved = resolveEffectiveConfig(input, {
@@ -993,6 +1002,24 @@ describe('loadConfig', () => {
         external: { provider: 'external_launch', provisioning: 'jit' },
       },
     });
+  });
+
+  it('accepts only the named secure password profile and fails closed on weak profiles', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ identity: { password_policy: 'secure' } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({
+      identity: { password_policy: 'secure' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ identity: { password_policy: 'development' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/identity\.password_policy must be 'secure'/);
   });
 
   it('rejects unknown identity keys and unsupported authority values', async () => {

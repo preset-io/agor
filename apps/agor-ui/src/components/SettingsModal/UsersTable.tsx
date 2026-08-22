@@ -32,6 +32,11 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import {
+  passwordPolicyHelp,
+  passwordPolicyRequirements,
+  passwordRules,
+} from '@/utils/passwordPolicy';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
 import { useThemedMessage } from '../../utils/message';
@@ -76,6 +81,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const canCreateUsers =
     isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
   const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
+  const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const canManageAvatarSettings =
     isAdmin &&
     isIdentityCapabilityAvailable(authConfig, identityContractState, 'avatarSettingsWrite');
@@ -373,12 +379,10 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             <Form.Item
               label="Password"
               name="password"
-              rules={[
-                { required: true, message: 'Please enter a password' },
-                { min: 8, message: 'Password must be at least 8 characters' },
-              ]}
+              help={passwordPolicyHelp(passwordRequirements)}
+              rules={passwordRules(passwordRequirements, { required: true })}
             >
-              <Input.Password placeholder="••••••••" />
+              <Input.Password placeholder="••••••••" autoComplete="new-password" />
             </Form.Item>
 
             <Form.Item

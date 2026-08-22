@@ -47,7 +47,7 @@ export default class LocalCreateAdmin extends Command {
     }),
     'dev-default': Flags.boolean({
       description:
-        'Development/test only: use admin@agor.live / admin. Refused when NODE_ENV=production.',
+        'Development/test only: use admin@agor.live / admin. Requires NODE_ENV=development or test.',
       default: false,
     }),
   };

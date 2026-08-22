@@ -111,7 +111,6 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    */
   private userToInsert(
     user: Partial<InternalUser> & {
-      password?: string;
       agentic_tools_raw?: StoredAgenticTools;
       env_vars_raw?: SchemaUserInsert['data']['env_vars'];
     }
@@ -128,7 +127,10 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       created_at: user.created_at ? new Date(user.created_at) : now,
       updated_at: user.updated_at ? new Date(user.updated_at) : now,
       email: user.email,
-      password: user.password ?? '', // Password required, but handled by services layer
+      // Repository-created projections/background fixtures intentionally have
+      // no usable local credential. Password assignment must go through
+      // createUser or the daemon UsersService.
+      password: '',
       name: user.name ?? null,
       emoji: user.emoji ?? null,
       role: user.role ?? 'member',
@@ -183,6 +185,14 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    * Create a new user
    */
   async create(data: Partial<InternalUser>): Promise<InternalUser> {
+    if (
+      Object.hasOwn(data as object, 'password') ||
+      Object.hasOwn(data as object, 'password_hash')
+    ) {
+      throw new RepositoryError(
+        'UsersRepository does not accept password credential fields; use an authoritative password-write service'
+      );
+    }
     if (data.unix_username !== undefined && !isValidExecutionHomeKey(data.unix_username)) {
       throw new RepositoryError('Invalid execution home key format');
     }
@@ -298,6 +308,14 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    * Update user by ID
    */
   async update(id: string, updates: Partial<InternalUser>): Promise<InternalUser> {
+    if (
+      Object.hasOwn(updates as object, 'password') ||
+      Object.hasOwn(updates as object, 'password_hash')
+    ) {
+      throw new RepositoryError(
+        'UsersRepository cannot update passwords; use an authoritative password-write service'
+      );
+    }
     const fullId = await this.resolveId(id);
 
     // Get current user
@@ -335,11 +353,12 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       merged.env_vars_raw = rawRow.data.env_vars;
     }
     const insertData = this.userToInsert(merged);
+    const { password: _preservedPassword, ...mutableInsertData } = insertData;
 
     // Update database
     await update(this.db, users)
       .set({
-        ...insertData,
+        ...mutableInsertData,
         updated_at: new Date(),
       })
       .where(eq(users.user_id, fullId))

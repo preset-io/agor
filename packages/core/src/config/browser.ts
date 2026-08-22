@@ -6,6 +6,7 @@
  */
 
 export * from './constants';
+export * from './password-policy';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './types';

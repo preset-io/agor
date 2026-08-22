@@ -4,6 +4,7 @@
 
 import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
+import type { AgorPasswordPolicyProfile } from './password-policy';
 
 export type { ManagedEnvExecutionMode };
 export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
@@ -330,6 +331,8 @@ export interface AgorIdentitySettings {
   user_lifecycle?: AgorUserLifecycleAuthority;
   role_authority?: AgorRoleAuthority;
   local_auth?: AgorLocalAuthMode;
+  /** Named policy for newly assigned local passwords. Defaults to `secure`. */
+  password_policy?: AgorPasswordPolicyProfile;
   external?: AgorExternalIdentitySettings;
 }
 

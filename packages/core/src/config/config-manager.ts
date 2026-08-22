@@ -29,6 +29,7 @@ import {
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
 import { assertValidMultiTenancyConfig } from './multitenancy';
+import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
@@ -667,7 +668,13 @@ function validateConfig(config: AgorConfig): void {
     'return_host_param',
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
-  only(config.identity, 'identity', ['user_lifecycle', 'role_authority', 'local_auth', 'external']);
+  only(config.identity, 'identity', [
+    'user_lifecycle',
+    'role_authority',
+    'local_auth',
+    'password_policy',
+    'external',
+  ]);
   only(config.identity?.external, 'identity.external', ['provider', 'provisioning']);
   if (
     config.identity?.user_lifecycle !== undefined &&
@@ -686,6 +693,12 @@ function validateConfig(config: AgorConfig): void {
     !Object.values(AgorLocalAuthMode).includes(config.identity.local_auth)
   ) {
     throw new Error('Config error: identity.local_auth must be enabled or disabled');
+  }
+  if (
+    config.identity?.password_policy !== undefined &&
+    config.identity.password_policy !== AgorPasswordPolicyProfile.SECURE
+  ) {
+    throw new Error("Config error: identity.password_policy must be 'secure'");
   }
   if (
     config.identity?.external?.provider !== undefined &&
@@ -1348,6 +1361,9 @@ export function getDefaultConfig(): AgorConfig {
       port: 5173,
       host: 'localhost',
     },
+    identity: {
+      password_policy: AgorPasswordPolicyProfile.SECURE,
+    },
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
       session_token_max_uses: 1, // Single-use tokens
@@ -1466,6 +1482,7 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
       ...defaults.execution,
@@ -1678,6 +1695,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     ...activeConfig,
     daemon: { ...defaults.daemon, ...activeDaemon },
     ui: { ...defaults.ui, ...config.ui },
+    identity: { ...defaults.identity, ...config.identity },
     execution: { ...defaults.execution, ...activeExecution },
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },

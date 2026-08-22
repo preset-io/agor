@@ -69,6 +69,11 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { copyToClipboard } from '../../utils/clipboard';
+import {
+  passwordPolicyHelp,
+  passwordPolicyRequirements,
+  passwordRules,
+} from '../../utils/passwordPolicy';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import { getSettingsSearchTokens, matchesSettingsSearchTokens } from '../../utils/settingsSearch';
 import {
@@ -314,6 +319,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     identityContractState,
     'passwordWrite'
   );
+  const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
   const canEditTarget =
@@ -722,6 +728,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       if (panels.has('profile') && canWriteIdentity) toValidate.push('email', 'name');
       if (panels.has('profile') && canWriteRole) toValidate.push('role');
       if (panels.has('security') && canWriteExecutionHome) toValidate.push('unix_username');
+      if (panels.has('security') && canWritePassword && form.getFieldValue('password') !== '') {
+        toValidate.push('password');
+      }
       if (toValidate.length) await form.validateFields(toValidate);
 
       const updates: UpdateUserInput = {};
@@ -746,7 +755,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       if (panels.has('security')) {
         const values = form.getFieldsValue(['unix_username', 'password']);
         if (canWriteExecutionHome) updates.unix_username = values.unix_username;
-        if (canWritePassword && values.password?.trim()) updates.password = values.password;
+        if (canWritePassword && typeof values.password === 'string' && values.password !== '') {
+          updates.password = values.password;
+        }
       }
 
       if (panels.has('preferences')) {
@@ -1632,8 +1643,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
         {canWritePassword && (
-          <FieldRow label="Password" name="password" help="Leave blank to keep current password">
-            <Input.Password placeholder="••••••••" />
+          <FieldRow
+            label="Password"
+            name="password"
+            help={`Leave blank to keep current password. ${passwordPolicyHelp(passwordRequirements)}`}
+            rules={passwordRules(passwordRequirements, { required: false })}
+          >
+            <Input.Password placeholder="••••••••" autoComplete="new-password" />
           </FieldRow>
         )}
 

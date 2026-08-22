@@ -89,6 +89,58 @@ never itself be the unrecognized key, and so it persists across image rollbacks.
 JWT and master secrets must be stable. Prefer a deployment secret manager. If neither env nor YAML
 provides one, the daemon fails closed rather than silently rotating it.
 
+## Local password policy
+
+The effective daemon config owns local password policy. New installations materialize the
+fail-safe named profile explicitly:
+
+```yaml
+identity:
+  password_policy: secure
+```
+
+`secure` is currently the only accepted value and the default when the key is absent. It requires
+at least 15 Unicode characters, rejects values above bcrypt's 72-byte UTF-8 boundary, and rejects a
+local list of common or account-specific values. It deliberately has no uppercase/digit/symbol
+composition rules, periodic rotation rule, or paste restriction, so password managers and pasted
+passphrases work normally. Candidate passwords are never sent to an external breach-checking
+service.
+
+There is no general `development` profile and no `AGOR_PASSWORD_POLICY` override. Development
+fixtures still get the exact `admin@agor.live` / `admin` bootstrap only when all of these are true:
+
+- `AGOR_ADMIN_PASSWORD=admin`;
+- `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true`; and
+- `NODE_ENV` is exactly `development` (or `test` in an automated test).
+
+That exception can create only the controlled first-run admin. It does not weaken user creation,
+password reset, or password change for any account, including that admin after bootstrap. The
+daemon emits a security warning when the exception is used. Do not expose such an environment to
+an untrusted network.
+
+Policy applies when a password is newly assigned through REST, Socket.IO, CLI, MCP, direct daemon
+service calls, `agor init`, bootstrap, and loginable demo fixture creation. Existing hashes are
+grandfathered: an upgrade neither rejects startup nor prevents login with an existing weak
+password, but the next assignment must pass `secure`. An accepted password change invalidates
+existing browser access and refresh tokens; it does not revoke separately managed API keys.
+
+Validation failures are HTTP 400 responses with a stable `data.code`:
+`PASSWORD_REQUIRED`, `PASSWORD_TOO_SHORT`, `PASSWORD_TOO_LONG`, `PASSWORD_COMMON`, or
+`PASSWORD_CONTEXT_SPECIFIC`. Responses include safe profile/minimum/maximum metadata and never the
+candidate or the deny-list. `/health.auth.passwordPolicy` exposes the same safe requirements for
+form help; server validation remains authoritative.
+
+When external identity owns the user lifecycle and local authentication is disabled, local
+password assignment is disabled instead of applying this policy. The health response omits
+password requirements and mutation attempts continue to return `IDENTITY_EXTERNALLY_MANAGED` or
+`LOCAL_AUTH_DISABLED` as appropriate.
+
+For rollout, add or retain `identity.password_policy: secure`, upgrade every daemon, then verify
+the effective snapshot with `agor config --yaml`. No database migration or forced user reset is
+required. For rollback to a version that predates this key, first remove the additive key from
+YAML after the old binary is ready to take over; rollback restores the older binary's weaker
+assignment behavior, so keep the window short and restrict password-write access during it.
+
 ## Bounded executor request responses
 
 Agor's normal executor lifecycle remains autonomous and fire-and-forget. A

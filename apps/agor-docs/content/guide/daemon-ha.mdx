@@ -123,6 +123,12 @@ this smoke stack to an untrusted network or copy that gate into a production dep
 Compose use should omit the gate, run in production mode, and provide a strong generated
 `AGOR_ADMIN_PASSWORD` as shown above.
 
+The exception creates only that first-run admin. It is not a deployment-wide
+weak policy: REST, Socket.IO, CLI, MCP, and direct daemon password assignments
+still enforce `identity.password_policy: secure`, and a later attempt to reset
+the development admin back to `admin` is rejected. Existing bootstrapped
+`admin` hashes remain loginable until changed.
+
 Compose volumes survive `up` and ordinary Agor environment stop/start operations. In particular,
 `AGOR_ADMIN_PASSWORD` is bootstrap-only: changing it after the users table exists does not reset
 the admin password. Use the existing password or explicitly nuke the disposable smoke environment

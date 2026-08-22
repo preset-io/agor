@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integrations';
 import {
   type AgorConfig,
+  assertSecurePassword,
   createInitialConfig,
   ensureAgorHome,
   getConfigPath,
@@ -23,6 +24,7 @@ import {
 } from '@agor/core/config';
 import {
   createDatabaseAsync,
+  createDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   runMigrations,
@@ -75,6 +77,16 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
 
 export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
   return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+}
+
+/** Inquirer-compatible validation using the canonical server password policy. */
+export function validateInitAdminPassword(input: unknown, email?: string): true | string {
+  try {
+    assertSecurePassword(input, { email });
+    return true;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 export function formatInitBackupTimestamp(date = new Date()): string {
@@ -592,12 +604,7 @@ export default class Init extends Command {
         try {
           const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
           try {
-            await createUser(db, {
-              email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
-              password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
-              name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
-              role: 'admin',
-            });
+            await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
           } finally {
             this.closeSQLiteDatabase(db);
           }
@@ -1003,12 +1010,7 @@ export default class Init extends Command {
         name: 'password',
         message: 'Password:',
         mask: '*',
-        validate: (input: string) => {
-          if (!input || input.length < 4) {
-            return 'Password must be at least 4 characters';
-          }
-          return true;
-        },
+        validate: (input: string) => validateInitAdminPassword(input),
       },
     ]);
 

@@ -360,7 +360,7 @@ dbTest(
     const usersService = createUsersService(db);
     const bearer = await usersService.create({
       email: 'messages-rest-bearer@example.test',
-      password: 'password-123',
+      password: 'test-password-1234',
       role: ROLES.MEMBER,
     });
     const ownerId = generateId() as UUID;

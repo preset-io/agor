@@ -16,11 +16,14 @@ import {
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
   assertInlineAgenticConfigurationAllowed,
+  assertSecurePassword,
   assertV05Scope,
   getEnvVarBlockReason,
   AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  PasswordPolicyError,
+  PasswordValidationCode,
   type ResolvedIdentityAuthority,
   resolveIdentityAuthority,
   resolveUserEnvironment,
@@ -359,6 +362,11 @@ function assertSingleUserMutation(data: unknown): void {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new BadRequest('Bulk user mutations are not supported');
   }
+  if (Object.hasOwn(data, 'password_hash') || Object.hasOwn(data, 'passwordHash')) {
+    throw new BadRequest('Password hashes cannot be assigned through the users service.', {
+      code: PasswordValidationCode.HASH_NOT_ACCEPTED,
+    });
+  }
 }
 
 function assertTrustedMutationFields(
@@ -376,6 +384,21 @@ function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
   throw new BadRequest(
     'Execution home key must start with a lowercase letter or underscore, contain only lowercase letters, numbers, hyphens, or underscores, and be at most 32 characters.'
   );
+}
+
+function validatedAssignedPassword(password: unknown, email?: string): string {
+  try {
+    assertSecurePassword(password, { email });
+    return password;
+  } catch (error) {
+    if (!(error instanceof PasswordPolicyError)) throw error;
+    throw new BadRequest(error.message, {
+      code: error.code,
+      policy: error.requirements.profile,
+      min_length: error.requirements.min_length,
+      max_utf8_bytes: error.requirements.max_utf8_bytes,
+    });
+  }
 }
 
 /**
@@ -446,7 +469,7 @@ export class UsersService {
     }
 
     if (
-      (data.password !== undefined || data.must_change_password !== undefined) &&
+      (Object.hasOwn(data, 'password') || data.must_change_password !== undefined) &&
       !this.identityAuthority.capabilities.users.passwordWrite
     ) {
       this.externallyManaged(
@@ -741,6 +764,7 @@ export class UsersService {
     if (Object.hasOwn(data, 'role')) data.role = canonicalizeRoleWrite(data.role);
     await lockUserAuthorityMutation(this.db, params);
     await this.authorizeCreate(data, params);
+    const assignedPassword = validatedAssignedPassword(data.password, data.email);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -752,7 +776,7 @@ export class UsersService {
     }
 
     // Hash password
-    const hashedPassword = await hash(data.password, 10);
+    const hashedPassword = await hash(assignedPassword, 10);
 
     // Create user
     const now = new Date();
@@ -811,6 +835,10 @@ export class UsersService {
     }
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizePatch(id, data, params);
+    const hasPasswordWrite = Object.hasOwn(data, 'password');
+    const assignedPassword = hasPasswordWrite
+      ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)
+      : undefined;
     if (
       Object.hasOwn(data, 'role') &&
       data.role !== undefined &&
@@ -823,8 +851,8 @@ export class UsersService {
     const updates: Record<string, unknown> = { updated_at: now };
 
     // Handle password separately (needs hashing)
-    if (data.password) {
-      updates.password = await hash(data.password, 10);
+    if (assignedPassword !== undefined) {
+      updates.password = await hash(assignedPassword, 10);
       // Any password change requires fresh browser authentication; previously
       // issued access and refresh tokens are rejected after this marker.
       updates.tokens_valid_after = now;

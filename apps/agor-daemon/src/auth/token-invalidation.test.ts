@@ -132,7 +132,7 @@ dbTest('redacts token invalidation marker from external user service responses',
   const usersService = createUsersService(db);
   const admin = await usersService.create({
     email: 'redaction-admin@example.test',
-    password: 'password-1234',
+    password: 'test-password-1234',
     role: ROLES.ADMIN,
   });
   const adminParams = {
@@ -142,7 +142,7 @@ dbTest('redacts token invalidation marker from external user service responses',
   const user = await createUser(usersService, 'redacted-users@example.test');
 
   const createResult = await usersService.create(
-    { email: 'redacted-create@example.test', password: 'password-1234', role: ROLES.MEMBER },
+    { email: 'redacted-create@example.test', password: 'test-password-1234', role: ROLES.MEMBER },
     adminParams
   );
   expectNoTokenMarker(createResult);

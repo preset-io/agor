@@ -18,6 +18,13 @@ docker compose up
 
 That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, RBAC + sandbox testing, HA smoke testing, or the docs site, see the variant system below.
 
+The fixed login is an intentionally narrow bootstrap exception, not a weak
+deployment-wide password profile. It requires the checked-in development gate
+and `NODE_ENV=development`; every newly created or changed
+password still follows the secure daemon policy. An existing development
+`admin` password remains usable until you change it, after which it cannot be
+assigned again through normal user APIs.
+
 ## Seeding test data
 
 Two optional, composable env switches pre-populate the database on first boot:
@@ -52,6 +59,10 @@ extra demo logins are available (passwords printed in the seed log):
 | `demo.bob@agor.live`   | `demo-password-bob`   | member |
 | `demo.carol@agor.live` | `demo-password-carol` | member |
 | `demo.dave@agor.live`  | `demo-password-dave`  | viewer |
+
+The `rich` RBAC fixture uses `alice@agor.live / alice-development-only` and
+`bob@agor.live / bob-development-only`. All fixture passwords are local-only;
+do not expose a managed development environment to an untrusted network.
 
 See [`packages/core/src/seed/README.md`](https://github.com/preset-io/agor/blob/main/packages/core/src/seed/README.md) for the full inventory.
 

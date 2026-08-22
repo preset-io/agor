@@ -16,6 +16,7 @@ import {
   resolveBranchStorageConfig,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
+  resolvePasswordPolicyRequirements,
   resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
@@ -4594,6 +4595,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
       const identityAuthority = resolveIdentityAuthority(config);
+      const passwordPolicy = identityAuthority.capabilities.users.passwordWrite
+        ? resolvePasswordPolicyRequirements(config.identity?.password_policy)
+        : undefined;
       // `/health` stays 200 always (pre-login UI fetches must not throw), so the
       // DB signal rides on `status`: ok | degraded. /readyz is the one that 503s.
       // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
@@ -4622,6 +4626,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           requireAuth: true,
           externalLaunch: publicLaunchAuth,
           identity: identityAuthority,
+          passwordPolicy,
         },
         instance: {
           label: config.daemon?.instanceLabel,

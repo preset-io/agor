@@ -9,9 +9,11 @@ import {
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
   AgorLocalAuthMode,
+  AgorPasswordPolicyProfile,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
   IDENTITY_AUTHORITY_CONTRACT_VERSION,
+  type PasswordPolicyRequirements,
   type ResolvedIdentityAuthority,
 } from '@agor/core/config/browser';
 import type { ManagedEnvExecutionMode } from '@agor/core/environment/webhook';
@@ -23,6 +25,8 @@ import type { BranchStorageConfig } from '../utils/branchStorage';
 export interface AuthConfig {
   requireAuth: boolean;
   identity?: ResolvedIdentityAuthority;
+  /** Safe hints for local password forms; the daemon remains authoritative. */
+  passwordPolicy?: PasswordPolicyRequirements;
   externalLaunch?: {
     enabled?: boolean;
     loginRedirectUrl?: string;
@@ -225,6 +229,20 @@ function isResolvedIdentityAuthority(value: unknown): value is ResolvedIdentityA
   );
 }
 
+function isPasswordPolicyRequirements(value: unknown): value is PasswordPolicyRequirements {
+  if (!isRecord(value)) return false;
+  return (
+    value.profile === AgorPasswordPolicyProfile.SECURE &&
+    Number.isSafeInteger(value.min_length) &&
+    (value.min_length as number) > 0 &&
+    Number.isSafeInteger(value.max_utf8_bytes) &&
+    (value.max_utf8_bytes as number) > 0 &&
+    value.common_passwords_rejected === true &&
+    value.composition_rules === false &&
+    value.periodic_rotation_required === false
+  );
+}
+
 function parseAuthConfig(value: unknown): {
   config: AuthConfig | null;
   identityContractState: IdentityContractState;
@@ -232,6 +250,9 @@ function parseAuthConfig(value: unknown): {
 } {
   if (!isRecord(value) || typeof value.requireAuth !== 'boolean') {
     throw new Error('Daemon returned an invalid authentication configuration');
+  }
+  if (value.passwordPolicy !== undefined && !isPasswordPolicyRequirements(value.passwordPolicy)) {
+    throw new Error('Daemon returned invalid password policy requirements');
   }
 
   const identity = value.identity;
@@ -249,6 +270,13 @@ function parseAuthConfig(value: unknown): {
       config: null,
       identityContractState: IdentityContractState.UNSUPPORTED,
       error: new Error('Unsupported or malformed daemon identity capability contract'),
+    };
+  }
+  if (value.passwordPolicy !== undefined && identity.localAuth !== AgorLocalAuthMode.ENABLED) {
+    return {
+      config: null,
+      identityContractState: IdentityContractState.UNSUPPORTED,
+      error: new Error('Password policy requirements conflict with disabled local authentication'),
     };
   }
   return {

@@ -27,6 +27,7 @@ import {
   isFreshInitState,
   parseInitialAgenticTools,
   shouldDeferAdminSetup,
+  validateInitAdminPassword,
 } from './init.js';
 
 const temporaryDirectories: string[] = [];
@@ -347,6 +348,16 @@ describe('headless admin bootstrap', () => {
     expect(shouldDeferAdminSetup(false, 'test')).toBe(false);
     expect(shouldDeferAdminSetup(false, '')).toBe(true);
     expect(shouldDeferAdminSetup(false, 'production')).toBe(true);
+  });
+
+  it('uses the secure policy for interactive password assignment', () => {
+    expect(validateInitAdminPassword('short', 'operator@example.com')).toMatch(/at least 15/);
+    expect(validateInitAdminPassword('operatoroperatoroperator', 'operator@example.com')).toMatch(
+      /account or Agor name/
+    );
+    expect(validateInitAdminPassword('a unique bootstrap passphrase', 'operator@example.com')).toBe(
+      true
+    );
   });
 });
 

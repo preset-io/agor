@@ -24,6 +24,7 @@ import {
   assertUsableBootstrapAdminPassword,
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
+  createDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   generateAdminPassword,
@@ -155,9 +156,13 @@ export async function runFirstRunAdminBootstrap(
   const allowDevelopmentDefault = process.env[ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV] === 'true';
   let credentialsWritten = false;
 
-  if (allowDevelopmentDefault && process.env.NODE_ENV === 'production') {
+  if (
+    allowDevelopmentDefault &&
+    process.env.NODE_ENV !== 'development' &&
+    process.env.NODE_ENV !== 'test'
+  ) {
     throw new Error(
-      `${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is development-only and is refused when NODE_ENV=production.`
+      `${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is development-only and requires NODE_ENV=development or NODE_ENV=test.`
     );
   }
 
@@ -169,6 +174,9 @@ export async function runFirstRunAdminBootstrap(
         allowDevelopmentDefault && envPassword === DEVELOPMENT_DEFAULT_ADMIN_USER.password;
       if (!useDevelopmentDefault) {
         assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
+      }
+      if (useDevelopmentDefault) {
+        return await createDefaultAdminUser(db, { allowDevelopmentDefault: true });
       }
       return await createUser(db, {
         email: BOOTSTRAP_ADMIN_EMAIL,

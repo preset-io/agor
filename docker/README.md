@@ -120,7 +120,9 @@ On first startup with an empty users table, the daemon creates
 `admin@agor.live` as the bootstrap superadmin using one of these paths:
 
 1. Set `AGOR_ADMIN_PASSWORD` in the container environment. Agor uses that
-   operator-provided password and does not print it.
+   operator-provided password and does not print it. It must satisfy the
+   daemon's `identity.password_policy` (`secure`: at least 15 characters and
+   no more than 72 UTF-8 bytes; common values are rejected).
 2. Leave `AGOR_ADMIN_PASSWORD` unset. Agor generates a random password and
    writes it to `/home/agor/.agor/admin-credentials` with mode `0600`; logs
    only point at that file path.
@@ -130,6 +132,13 @@ The bootstrap admin is forced to change its password on first login.
 forget to set it before first startup, read the generated credentials file and
 change the password after logging in; setting `AGOR_ADMIN_PASSWORD` on a later
 restart will not reset an existing user's password.
+
+Existing password hashes continue to authenticate after an upgrade. Policy is
+enforced only when a password is assigned or changed. The checked-in
+development Compose workflow retains `admin@agor.live` / `admin` through the
+narrow `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true` plus explicit
+`NODE_ENV=development` gate; that exception is unavailable in production and does not
+weaken ordinary user password assignments.
 
 ```bash
 # Retrieve generated credentials from inside the container when
