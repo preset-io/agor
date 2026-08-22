@@ -1630,11 +1630,11 @@
     "import": "node:child_process",
     "owner": "Codex credential authority",
     "boundary": "canonical tenant/user credential-store capability",
-    "rationale": "Holds the per-home Linux kernel flock in an attached, secret-free process whose stdin closes on daemon death, preventing a retry from stealing filesystem authority from a still-live writer after PostgreSQL session loss.",
+    "rationale": "A fixed, secret-free /usr/bin/flock helper applies the per-home kernel lock to the daemon's retained open-file description, preventing a retry from stealing filesystem authority from a still-live writer after PostgreSQL session loss.",
     "reviewTarget": null,
     "reviewDate": null,
     "symbol": "spawn",
     "local": "spawn",
-    "operation": "call:spawn@spawnLockHolder#1"
+    "operation": "call:spawn@spawnLockAcquirer#1"
   }
 ]

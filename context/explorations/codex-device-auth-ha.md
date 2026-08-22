@@ -63,8 +63,9 @@ replayed automatically.
 - The credential store additionally keeps a per-home generation tombstone
   under a Linux kernel `flock`. The lock is not age-stealable: a database
   disconnect cannot admit a second filesystem writer while the first daemon is
-  still alive. A tiny attached holder releases the kernel lock when its daemon
-  pipe closes, including process/container death. In the admitted sandbox profile, the
+  still alive. A fixed, secret-free `flock` helper applies the lock to the
+  daemon's open-file description; the daemon retains its descriptor throughout
+  mutation, and process/container death releases it. In the admitted sandbox profile, the
   authority-owning daemon performs the short local mutation itself while it
   retains the database lock; there is no detached credential writer that can
   survive that daemon. Linux file operations are anchored to an opened
@@ -87,7 +88,7 @@ reconcile every possible daemon-crash point. The local mutation is deliberately
 not wrapped in a fake promise timeout: Node filesystem work cannot be cancelled
 safely after such a timeout. A retry waits up to 10 seconds for the kernel lock
 and then fails visibly rather than stealing authority from a still-live writer;
-restarting that daemon closes its lock-holder pipe.
+restarting that daemon closes its lock descriptor.
 A daemon crash between the local credential mutation and the database state
 transition may leave the filesystem and attempt row temporarily disagreeing,
 but it cannot leave a detached writer that later overwrites a retry. The
@@ -119,7 +120,9 @@ boundary. It is written only into the trusted, tenant/user-keyed credential
 route with directory mode 0700 and file mode 0600. The HA capability stays
 disabled when that route is replica-local, shared between users, or merely
 declared `persistent-per-user` while `simple` execution would still use the
-daemon's home. Local HA admission therefore requires `sandbox`; HA Codex auth
+daemon's home. It also requires the operator assertion
+`user_home_locking: cross-replica-flock`; shared paths with local-only locks
+(including NFS `local_lock`) are not admitted. Local HA admission therefore requires `sandbox`; HA Codex auth
 also rejects admin `filesystem_home` overrides because the schema does not
 prove those paths unique across users. Delegated device auth remains gated:
 this implementation intentionally supports only the local sandbox credential

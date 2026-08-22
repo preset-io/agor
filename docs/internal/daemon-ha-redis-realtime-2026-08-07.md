@@ -33,7 +33,7 @@
 - Redis relay data must use `context.dispatch` when an after hook redacts the event; relaying raw `data` would bypass Feathers dispatch redaction.
 - The Redis publisher is fail-fast (`enableOfflineQueue: false`, no unfulfilled-command resend, bounded request retries), while the subscriber retains automatic resubscription. Gap traffic is discarded rather than replayed after recovery.
 - Native cross-replica Socket.IO packets pass through the typed `emitHaNativeSocketEvent` inventory. Other room/global emits are explicitly local, and `check:realtime-boundaries` prevents a new raw cluster broadcast from bypassing that decision.
-- Auth-resolved HA requires `executor_storage.user_home: persistent-per-user`. One shared predicate now drives startup validation, advertised Codex credential-file capability, and shared auth identity resolution.
+- Auth-resolved HA requires `executor_storage.user_home: persistent-per-user`. HA Codex credential mutation additionally requires the operator assertion `executor_storage.user_home_locking: cross-replica-flock`; local-only filesystem locking leaves that capability gated.
 - HA without external-launch authentication requires an explicit `AGOR_ADMIN_PASSWORD`, preventing replicas from racing through the process-local generated credential-file bootstrap path.
 
 ## Activation and lifecycle contract

@@ -866,6 +866,9 @@ export type AgorExecutorBranchWorkspaceStorage =
 /** Availability of the registered repository's base checkout to executors. */
 export type AgorExecutorBaseRepositoryStorage = 'replica-local' | 'shared' | 'unavailable';
 
+/** Scope in which advisory locks on the user-home filesystem are coherent. */
+export type AgorExecutorUserHomeLocking = 'local-only' | 'cross-replica-flock';
+
 /**
  * Declarative execution-substrate storage contract.
  *
@@ -876,6 +879,11 @@ export type AgorExecutorBaseRepositoryStorage = 'replica-local' | 'shared' | 'un
  */
 export interface AgorExecutorStorageSettings {
   user_home?: AgorExecutorUserHomeStorage;
+  /**
+   * Operator assertion about the backing filesystem, not a mount option Agor
+   * configures. HA Codex credential mutation requires `cross-replica-flock`.
+   */
+  user_home_locking?: AgorExecutorUserHomeLocking;
   branch_workspace?: AgorExecutorBranchWorkspaceStorage;
   base_repository?: AgorExecutorBaseRepositoryStorage;
 }

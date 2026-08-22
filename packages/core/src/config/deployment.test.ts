@@ -25,6 +25,7 @@ const haConfig: AgorConfig = {
     managed_envs_execution_mode: 'webhook-only',
     executor_storage: {
       user_home: 'shared',
+      user_home_locking: 'cross-replica-flock',
       branch_workspace: 'shared',
       base_repository: 'shared',
     },
@@ -70,6 +71,7 @@ describe('resolveDeploymentConfig', () => {
       },
       executorStorage: {
         userHome: 'shared',
+        userHomeLocking: 'cross-replica-flock',
         branchWorkspace: 'shared',
         baseRepository: 'shared',
       },
@@ -278,6 +280,7 @@ describe('resolveDeploymentConfig', () => {
           ...haConfig.execution,
           executor_storage: {
             user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
             branch_workspace: 'shared',
             base_repository: 'shared',
           },
@@ -300,6 +303,7 @@ describe('resolveDeploymentConfig', () => {
           unix_user_mode: 'sandbox',
           executor_storage: {
             user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
             branch_workspace: 'shared',
             base_repository: 'shared',
           },
@@ -310,6 +314,29 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.mode).toBe('ha');
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexDeviceAuth).toBe(true);
+  });
+
+  it('gates HA Codex credential mutation without cross-replica flock', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'local-only',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.codexCredentialFiles).toBe(false);
+    expect(deployment.capabilities.codexDeviceAuth).toBe(false);
   });
 
   it('rejects HA when the executor storage contract is omitted', () => {

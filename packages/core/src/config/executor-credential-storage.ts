@@ -36,3 +36,15 @@ export function hasExactUserExecutorCredentialHome(config: Pick<AgorConfig, 'exe
   const mode = config.execution?.unix_user_mode ?? 'simple';
   return mode === 'sandbox';
 }
+
+/**
+ * Whether the operator asserts that one user home's kernel flock is visible to
+ * every HA replica/client that can mutate that home. A merely shared path is
+ * insufficient: NFS `local_lock` and similar mounts can expose identical bytes
+ * while providing only client-local locks.
+ */
+export function hasCrossReplicaExecutorCredentialLock(
+  config: Pick<AgorConfig, 'execution'>
+): boolean {
+  return config.execution?.executor_storage?.user_home_locking === 'cross-replica-flock';
+}

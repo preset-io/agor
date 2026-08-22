@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { type FileHandle, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
@@ -6,17 +6,7 @@ import { basename, dirname, join, parse, resolve, sep } from 'node:path';
 import { parseCodexAuthJson } from './auth-file.js';
 
 const LOCK_WAIT_MS = 10_000;
-const LOCK_HOLDER_SCRIPT = `
-const { spawnSync } = require('node:child_process');
-const result = spawnSync(
-  'flock',
-  ['--exclusive', '--wait', '${LOCK_WAIT_MS / 1_000}', '3'],
-  { stdio: ['ignore', 'ignore', 'ignore', 3] }
-);
-if (result.status !== 0) process.exit(result.status ?? 1);
-process.stdout.write('locked\\n');
-process.stdin.resume();
-`;
+const FLOCK_EXECUTABLE = '/usr/bin/flock';
 
 interface CredentialDirectory {
   handle: FileHandle;
@@ -28,6 +18,10 @@ interface CredentialDirectoryTestOptions {
   afterDirectoryOpenForTest?: () => Promise<void>;
   /** Deterministic lock-contention test seam; production callers must omit. */
   afterLockAcquiredForTest?: () => Promise<void>;
+}
+
+interface CredentialLock {
+  release: () => Promise<void>;
 }
 
 // Keep this sensitive storage primitive's ambient filesystem authority behind
@@ -57,10 +51,13 @@ async function removePath(path: string, recursive = false): Promise<void> {
   await rm(path, { recursive, force: true });
 }
 
-function spawnLockHolder(lockHandle: FileHandle): ChildProcess {
-  return spawn(process.execPath, ['-e', LOCK_HOLDER_SCRIPT], {
-    stdio: ['pipe', 'pipe', 'ignore', lockHandle.fd],
+function spawnLockAcquirer(lockHandle: FileHandle) {
+  return spawn(FLOCK_EXECUTABLE, ['--exclusive', '--wait', String(LOCK_WAIT_MS / 1_000), '3'], {
+    stdio: ['ignore', 'ignore', 'ignore', lockHandle.fd],
     detached: false,
+    // The helper needs only fd 3. Do not copy database, signing, or
+    // application secrets from the daemon.
+    env: {},
   });
 }
 
@@ -173,60 +170,43 @@ async function atomicWrite(
   }
 }
 
-async function acquireLinuxLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+async function acquireLinuxLock(directory: CredentialDirectory): Promise<CredentialLock> {
   const lockHandle = await openPath(
     join(directory.path, '.agor-auth-mutation.lock'),
     constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
     0o600
   );
-  let child: ChildProcess;
-  let closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   try {
     const metadata = await lockHandle.stat();
     if (!metadata.isFile()) throw new Error('Credential mutation lock is not a regular file');
     await lockHandle.chmod(0o600);
-    child = spawnLockHolder(lockHandle);
-    closed = new Promise((resolveClose) =>
-      child.once('close', (code, signal) => resolveClose({ code, signal }))
+    const child = spawnLockAcquirer(lockHandle);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolveClose, rejectClose) => {
+        child.once('error', rejectClose);
+        child.once('close', (code, signal) => resolveClose({ code, signal }));
+      }
     );
-  } finally {
-    // spawn() has duplicated fd 3 before it returns. Keeping the parent's copy
-    // open would also keep the flock alive after the holder exits.
-    await lockHandle.close();
+    if (outcome.code !== 0) throw new Error('Credential mutation lock timed out');
+  } catch (error) {
+    await lockHandle.close().catch(() => undefined);
+    throw error;
   }
 
-  await new Promise<void>((resolveReady, rejectReady) => {
-    let output = '';
-    const fail = () => rejectReady(new Error('Credential mutation lock timed out'));
-    child.once('error', fail);
-    child.once('close', fail);
-    child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      output += chunk;
-      if (!output.includes('locked\n')) return;
-      child.removeListener('error', fail);
-      child.removeListener('close', fail);
-      resolveReady();
-    });
-  }).catch(async (error) => {
-    child.stdin?.destroy();
-    await closed;
-    throw error;
-  });
-
   let released = false;
-  return async () => {
-    if (released) return;
-    released = true;
-    child.stdin?.end();
-    const outcome = await closed;
-    if (outcome.code !== 0) {
-      throw new Error('Credential mutation lock holder exited unexpectedly');
-    }
+  return {
+    release: async () => {
+      if (released) return;
+      released = true;
+      // `flock` applied the lock to the open-file description shared with this
+      // descriptor. Retaining it binds lock lifetime directly to the writer;
+      // daemon death or this release closes the last local copy.
+      await lockHandle.close();
+    },
   };
 }
 
-async function acquirePortableLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+async function acquirePortableLock(directory: CredentialDirectory): Promise<CredentialLock> {
   const lockDir = join(directory.path, '.agor-auth-mutation.lock');
   try {
     await createDirectory(lockDir, { mode: 0o700 });
@@ -236,16 +216,19 @@ async function acquirePortableLock(directory: CredentialDirectory): Promise<() =
     }
     throw error;
   }
-  return async () => removePath(lockDir, true);
+  return {
+    release: async () => removePath(lockDir, true),
+  };
 }
 
 /**
- * Linux uses a kernel flock held by a tiny child whose stdin belongs to this
- * daemon. A database disconnect may release PostgreSQL authority while the
- * callback is still alive, but a retry cannot steal this lock. Process or
- * container death closes stdin and releases the kernel lock automatically.
+ * Linux asks a fixed, secret-free `flock` helper to lock the daemon's open-file
+ * description, then retains the original descriptor for the mutation. A
+ * database disconnect may release PostgreSQL authority while the callback is
+ * still alive, but a retry cannot steal this lock. Process or container death
+ * closes the descriptor and releases the kernel lock automatically.
  */
-async function acquireLock(directory: CredentialDirectory): Promise<() => Promise<void>> {
+async function acquireLock(directory: CredentialDirectory): Promise<CredentialLock> {
   return process.platform === 'linux'
     ? acquireLinuxLock(directory)
     : acquirePortableLock(directory);
@@ -301,7 +284,7 @@ export async function mutateCredentialFile(
       throw new Error('Credential mutation generation is invalid');
     }
 
-    const release = await acquireLock(directory);
+    const lock = await acquireLock(directory);
     try {
       await options.afterLockAcquiredForTest?.();
       const generationPath = join(directory.path, '.agor-auth-generation');
@@ -315,7 +298,7 @@ export async function mutateCredentialFile(
       }
       return 'applied';
     } finally {
-      await release();
+      await lock.release();
     }
   } finally {
     await directory.handle.close();

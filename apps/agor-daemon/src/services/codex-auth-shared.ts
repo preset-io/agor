@@ -17,7 +17,11 @@
  */
 
 import { join } from 'node:path';
-import { type AgorConfig, hasTenantSafeExecutorCredentialHome } from '@agor/core/config';
+import {
+  type AgorConfig,
+  hasCrossReplicaExecutorCredentialLock,
+  hasTenantSafeExecutorCredentialHome,
+} from '@agor/core/config';
 import { getCurrentTenantId, type TenantScopedDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
@@ -104,6 +108,17 @@ export async function resolveCodexCredentialRoute(
   config: DeepReadonly<AgorConfig>
 ): Promise<CodexCredentialRouteResolution> {
   const mode = config.execution?.unix_user_mode ?? 'simple';
+
+  if (config.deployment?.mode === 'ha' && !hasCrossReplicaExecutorCredentialLock(config)) {
+    return {
+      ok: false,
+      reason: 'unsupported-mode',
+      message:
+        'HA Codex credential operations require ' +
+        'execution.executor_storage.user_home_locking: cross-replica-flock. ' +
+        'Verify the shared storage propagates flock across every replica, or use an API key.',
+    };
+  }
 
   if (!hasTenantSafeExecutorCredentialHome(config)) {
     return {

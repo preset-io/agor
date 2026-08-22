@@ -859,6 +859,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution?.executor_storage, 'execution.executor_storage', [
     'user_home',
+    'user_home_locking',
     'branch_workspace',
     'base_repository',
   ]);
@@ -870,6 +871,16 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error(
       'Config error: execution.executor_storage.user_home must be replica-local, shared, or persistent-per-user'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.user_home_locking !== undefined &&
+    !['local-only', 'cross-replica-flock'].includes(
+      config.execution.executor_storage.user_home_locking
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.user_home_locking must be local-only or cross-replica-flock'
     );
   }
   if (

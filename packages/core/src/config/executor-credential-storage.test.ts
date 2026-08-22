@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
 } from './executor-credential-storage';
@@ -25,6 +26,36 @@ describe('hasTenantSafeExecutorCredentialHome', () => {
       hasTenantSafeExecutorCredentialHome({
         multi_tenancy: { mode: 'required_from_auth' },
         execution: { executor_storage: { user_home: 'persistent-per-user' } },
+      })
+    ).toBe(true);
+  });
+});
+
+describe('hasCrossReplicaExecutorCredentialLock', () => {
+  it('requires the explicit cross-client flock assertion', () => {
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: { executor_storage: { user_home: 'persistent-per-user' } },
+      })
+    ).toBe(false);
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: {
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'local-only',
+          },
+        },
+      })
+    ).toBe(false);
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: {
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+          },
+        },
       })
     ).toBe(true);
   });

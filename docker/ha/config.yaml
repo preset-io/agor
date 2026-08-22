@@ -29,6 +29,9 @@ execution:
     # at the same path on both replicas. Device completion and later Codex Tasks
     # therefore resolve the same exact user's `.codex/auth.json`.
     user_home: persistent-per-user
+    # Docker's same-host named volume propagates kernel flock between these
+    # replicas. Multi-host operators must verify this for their storage.
+    user_home_locking: cross-replica-flock
     branch_workspace: shared
     base_repository: shared
   # The checked-in HA smoke must exercise the same exact-user credential route
