@@ -130,7 +130,10 @@ If you've used [Claude Code's subagent feature](https://docs.claudecode.com/suba
 | **Hierarchical spawning**     | No                               | Children can spawn their own children |
 | **Multi-tool support**        | Claude Code only                 | Claude, Codex, Gemini, OpenCode       |
 
-**Crucially**, neither Codex, Gemini, nor OpenCode SDKs natively support spawning subsessions. **Agor unlocks this for all supported agents.**
+Codex also has a native multi-agent feature, but Agor deliberately disables it in
+Agor-launched Codex processes. Use Agor subsessions instead: they keep child work visible in
+the session tree and provide durable status and callback semantics. Agor provides the same
+observable orchestration boundary for every supported agent.
 
 ---
 
