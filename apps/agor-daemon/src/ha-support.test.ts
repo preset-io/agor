@@ -147,6 +147,15 @@ describe('constrained HA support profile', () => {
     ).toBe(true);
   });
 
+  it('gives gated Codex routes actionable cross-replica lock guidance', () => {
+    expect(haUnavailable('codexAuth').message).toContain(
+      'execution.executor_storage.user_home_locking: cross-replica-flock'
+    );
+    expect(haUnavailable('codexDeviceAuth').message).toContain(
+      'execution.executor_storage.user_home_locking: cross-replica-flock'
+    );
+  });
+
   it('does not change standalone behavior', () => {
     const context = {} as HookContext;
     expect(
