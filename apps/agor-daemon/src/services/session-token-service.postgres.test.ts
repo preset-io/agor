@@ -230,23 +230,27 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         user: { user_id: 'user-peer' },
       });
       expect(initialConnection).toMatchObject({
+        authenticated: true,
         authentication: {
           strategy: 'jwt',
         },
+        tenant: { tenant_id: tenantId, source: 'auth_claim' },
+        user: { user_id: 'user-peer' },
       });
       expect(
-        typeof (initialConnection.authentication as { accessToken?: unknown } | undefined)
-          ?.accessToken
-      ).toBe('string');
+        (initialConnection.authentication as { accessToken?: unknown } | undefined)?.accessToken
+      ).toBeUndefined();
       expect(reconnectConnection).toMatchObject({
+        authenticated: true,
         authentication: {
           strategy: 'jwt',
         },
+        tenant: { tenant_id: tenantId, source: 'auth_claim' },
+        user: { user_id: 'user-peer' },
       });
       expect(
-        typeof (reconnectConnection.authentication as { accessToken?: unknown } | undefined)
-          ?.accessToken
-      ).toBe('string');
+        (reconnectConnection.authentication as { accessToken?: unknown } | undefined)?.accessToken
+      ).toBeUndefined();
 
       await runWithTenantDatabaseScope(dbB, tenantId, async (scoped) => {
         const result = await (
