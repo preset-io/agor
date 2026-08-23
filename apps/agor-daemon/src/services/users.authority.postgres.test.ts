@@ -275,11 +275,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantId = `users-password-profile-race-${generateId()}`;
       const member = await seed(tenantId, 'member', 'password-profile-race');
       const service = new UsersService(db);
+      const readSnapshot = deferred();
+      const releaseUpdate = deferred();
 
-      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      const profileUpdate = runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const repo = new UsersRepository(scoped);
-        const readSnapshot = deferred();
-        const releaseUpdate = deferred();
         const findById = repo.findById.bind(repo);
         vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
           const snapshot = await findById(id);
@@ -288,17 +288,21 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           return snapshot;
         });
 
-        const profileUpdate = repo.update(member.user_id, { name: 'Concurrent rename' });
-        await readSnapshot.promise;
-        try {
-          await service.patch(member.user_id as UserID, {
+        return repo.update(member.user_id, { name: 'Concurrent rename' });
+      });
+      await readSnapshot.promise;
+      try {
+        await runWithTenantDatabaseScope(db, tenantId, () =>
+          service.patch(member.user_id as UserID, {
             password: 'replacement postgres profile passphrase',
-          });
-        } finally {
-          releaseUpdate.resolve();
-        }
-        await expect(profileUpdate).resolves.toMatchObject({ name: 'Concurrent rename' });
+          })
+        );
+      } finally {
+        releaseUpdate.resolve();
+      }
+      await expect(profileUpdate).resolves.toMatchObject({ name: 'Concurrent rename' });
 
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const [stored] = rowsOf(
           await executeRaw(
             scoped,

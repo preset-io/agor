@@ -1,5 +1,5 @@
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { UserAuthMetadata } from '@agor/core/types';
+import type { AuthenticationUserAuthMetadata, UserAuthMetadata } from '@agor/core/types';
 import type { JwtPayload } from 'jsonwebtoken';
 
 export const AUTH_TOKEN_ISSUED_AT_MS_CLAIM = 'auth_time_ms';
@@ -39,8 +39,9 @@ export function getAuthTokenIssuedAtMs(payload: UserAuthTokenPayload | undefined
 export function assertUserTokenNotInvalidated(
   user: UserAuthMetadata,
   payload: UserAuthTokenPayload | undefined
-): void {
-  const currentGeneration = credentialGeneration(user.credential_generation) ?? 0;
+): asserts user is AuthenticationUserAuthMetadata {
+  assertAuthenticationUserAuthMetadata(user);
+  const currentGeneration = user.credential_generation;
   const tokenGeneration = credentialGeneration(payload?.[AUTH_CREDENTIAL_GENERATION_CLAIM]);
 
   // Tokens issued before credential generations were introduced are generation
@@ -59,19 +60,22 @@ export function assertUserTokenNotInvalidated(
   }
 }
 
-export function authCredentialGenerationClaim(
+export function assertAuthenticationUserAuthMetadata(
   user: UserAuthMetadata
-): Record<typeof AUTH_CREDENTIAL_GENERATION_CLAIM, number> {
-  const generation = credentialGeneration(user.credential_generation);
-  if (generation === null) {
-    // A browser credential minted from a redacted/public user would be stale
-    // immediately after the first password change. Fail closed instead of
-    // silently substituting generation zero so every authentication strategy
-    // must opt into the backend-only user lookup contract.
+): asserts user is AuthenticationUserAuthMetadata {
+  if (credentialGeneration(user.credential_generation) === null) {
     throw new NotAuthenticated('Authentication credential metadata unavailable');
   }
+}
+
+export function authCredentialGenerationClaim(
+  user: AuthenticationUserAuthMetadata
+): Record<typeof AUTH_CREDENTIAL_GENERATION_CLAIM, number> {
+  // Retain runtime validation at the credential boundary even though callers
+  // must now supply the structurally required authentication-user type.
+  assertAuthenticationUserAuthMetadata(user);
   return {
-    [AUTH_CREDENTIAL_GENERATION_CLAIM]: generation,
+    [AUTH_CREDENTIAL_GENERATION_CLAIM]: user.credential_generation,
   };
 }
 

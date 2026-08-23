@@ -14,7 +14,7 @@
 import type { UserID } from '@agor/core/types';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect } from 'vitest';
+import { beforeAll, describe, expect, vi } from 'vitest';
 import { select, update } from '../database-wrapper';
 import { users } from '../schema';
 import { dbTest } from '../test-helpers';
@@ -37,6 +37,14 @@ async function makeUser(repo: UsersRepository): Promise<UserID> {
     name: 'Users Test',
   });
   return u.user_id as UserID;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe('UsersRepository password boundary', () => {
@@ -336,5 +344,61 @@ describe('UsersRepository.update — credential blob preservation', () => {
     const after = await select(db).from(users).where(eq(users.user_id, userId)).one();
     const afterData = (after?.data ?? {}) as { env_vars?: typeof seedEnvVars };
     expect(afterData.env_vars).toEqual(seedEnvVars);
+  });
+
+  dbTest('writes only supplied fields and preserves opaque concurrent data', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const userId = await makeUser(repo);
+    const readSnapshot = deferred();
+    const releaseUpdate = deferred();
+    const findById = repo.findById.bind(repo);
+    vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+      const snapshot = await findById(id);
+      readSnapshot.resolve();
+      await releaseUpdate.promise;
+      return snapshot;
+    });
+
+    const profileUpdate = repo.update(userId, { name: 'Only this field changes' });
+    await readSnapshot.promise;
+    const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    const externalIdentities = [
+      {
+        key: 'external-key',
+        provider: 'test-provider',
+        issuer: 'https://issuer.example.test',
+        subject: 'subject-1',
+        last_login_at: new Date().toISOString(),
+      },
+    ];
+    try {
+      await update(db, users)
+        .set({
+          role: 'admin',
+          must_change_password: true,
+          data: {
+            ...row?.data,
+            external_identities: externalIdentities,
+            future_opaque_field: { preserved: true },
+          },
+        })
+        .where(eq(users.user_id, userId))
+        .run();
+    } finally {
+      releaseUpdate.resolve();
+    }
+    await profileUpdate;
+
+    const after = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    expect(after).toMatchObject({
+      name: 'Only this field changes',
+      role: 'admin',
+      must_change_password: true,
+    });
+    const afterData = (after?.data ?? {}) as Record<string, unknown>;
+    expect(afterData.external_identities).toEqual(externalIdentities);
+    expect(afterData.future_opaque_field).toEqual({
+      preserved: true,
+    });
   });
 });

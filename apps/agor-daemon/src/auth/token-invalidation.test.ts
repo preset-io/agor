@@ -60,12 +60,21 @@ function expectTokenMarker(value: unknown): void {
 }
 
 test('treats tokens issued at the invalidation boundary as stale', () => {
-  const user = { tokens_valid_after: new Date(1_000) };
+  const user = { credential_generation: 0, tokens_valid_after: new Date(1_000) };
 
   expect(() =>
     assertUserTokenNotInvalidated(user, { sub: 'user-1', type: 'access', ...authTime(1_000) })
   ).toThrow(/Session expired/);
   expect(authTokenIssuedAtClaim(1_000, user)[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toBe(1_001);
+});
+
+test('requires current user metadata while accepting legacy generation-zero token claims', () => {
+  expect(() => assertUserTokenNotInvalidated({}, { sub: 'user-1', type: 'access' })).toThrow(
+    /credential metadata unavailable/
+  );
+  expect(() =>
+    assertUserTokenNotInvalidated({ credential_generation: 0 }, { sub: 'user-1', type: 'access' })
+  ).not.toThrow();
 });
 
 test('rejects a token from an older credential generation without using clocks', () => {

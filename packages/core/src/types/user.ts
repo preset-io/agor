@@ -577,7 +577,15 @@ export type UserAuthMetadata = object & {
   tenant_id?: string;
 };
 
-export type InternalUser = User & UserAuthMetadata;
+/** Required backend metadata for any user used to validate or mint interactive credentials. */
+export type AuthenticationUserAuthMetadata = Omit<UserAuthMetadata, 'credential_generation'> & {
+  credential_generation: number;
+};
+
+export type AuthenticationUser = User & AuthenticationUserAuthMetadata;
+
+/** Database-backed internal users always carry the non-null generation column. */
+export type InternalUser = AuthenticationUser;
 
 /**
  * Read an explicitly stored primary coding agent, tolerating malformed JSON.

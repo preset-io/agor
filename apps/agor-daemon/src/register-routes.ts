@@ -101,6 +101,7 @@ import {
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
 import {
+  assertAuthenticationUserAuthMetadata,
   authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
 } from './auth/token-invalidation.js';
@@ -834,6 +835,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       } catch {
         throw new NotFound(`User not found: ${data.user_id}`);
       }
+      assertAuthenticationUserAuthMetadata(targetUser);
 
       // 8. Compute expiry (default 1h, capped at 1h)
       const configuredMax =

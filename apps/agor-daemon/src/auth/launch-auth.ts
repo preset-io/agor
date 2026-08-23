@@ -31,7 +31,11 @@ import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types'
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
+import {
+  assertAuthenticationUserAuthMetadata,
+  authCredentialGenerationClaim,
+  authTokenIssuedAtClaim,
+} from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 export interface PublicLaunchAuthSettings {
@@ -667,6 +671,7 @@ function issueRuntimeTokens(
   tenantClaim = 'tenant_id',
   tenantId?: string
 ): LaunchAuthResult {
+  assertAuthenticationUserAuthMetadata(user);
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
     ...authCredentialGenerationClaim(user),
     ...authTokenIssuedAtClaim(Date.now(), user),

@@ -46,6 +46,21 @@ import {
 /** Credential-free input accepted by this generic persistence boundary. */
 export type UsersRepositoryWrite = Partial<Omit<InternalUser, keyof UserAuthMetadata>>;
 
+const USER_DATA_UPDATE_FIELDS = [
+  'avatar_url',
+  'avatar',
+  'avatar_source',
+  'avatar_source_id',
+  'avatar_synced_at',
+  'preferences',
+  'agentic_auth_methods',
+  'default_agentic_config',
+  'primary_agentic_tool',
+  'primary_teammate_id',
+  'default_agentic_selection',
+  'default_mcp_server_ids',
+] as const satisfies ReadonlyArray<keyof UsersRepositoryWrite>;
+
 export class UsersRepository implements BaseRepository<InternalUser, UsersRepositoryWrite> {
   constructor(private db: Database) {}
 
@@ -349,40 +364,47 @@ export class UsersRepository implements BaseRepository<InternalUser, UsersReposi
       }
     }
 
-    // Merge updates. Preserve the encrypted agentic_tools and env_vars blobs
-    // from the raw row so a generic field update (name, preferences, etc.)
-    // doesn't nuke stored credentials — the boolean projection on `current`
-    // can't round-trip back to encrypted bytes.
     const rawRow = await this.getRawRow(fullId);
-    const merged = { ...current, ...updates } as Partial<InternalUser> & {
-      agentic_tools_raw?: StoredAgenticTools;
-      env_vars_raw?: SchemaUserInsert['data']['env_vars'];
-    };
-    if (rawRow?.data.agentic_tools) {
-      merged.agentic_tools_raw = rawRow.data.agentic_tools as StoredAgenticTools;
+    if (!rawRow) {
+      throw new EntityNotFoundError('User', id);
     }
-    if (rawRow?.data.env_vars) {
-      merged.env_vars_raw = rawRow.data.env_vars;
-    }
-    const insertData = this.userToInsert(merged);
+    const insertData = this.userToInsert({ ...current, ...updates });
 
     // This explicit allowlist is also a concurrency boundary. Generic profile
-    // updates must never round-trip password authority fields from the stale
-    // snapshot above: an authoritative password patch may have incremented the
-    // generation while this method was awaiting. Keeping credential fields,
-    // immutable identifiers, and creation metadata out of the UPDATE prevents
-    // an unrelated write from reviving pre-change tokens.
-    const mutableUserData = {
-      email: insertData.email,
-      name: insertData.name,
-      emoji: insertData.emoji,
-      role: insertData.role,
-      unix_username: insertData.unix_username,
-      filesystem_home: insertData.filesystem_home,
-      onboarding_completed: insertData.onboarding_completed,
-      must_change_password: insertData.must_change_password,
-      data: insertData.data,
-    } satisfies Partial<SchemaUserInsert>;
+    // updates write only fields the caller actually supplied. They must never
+    // round-trip password authority or unrelated profile fields from the stale
+    // snapshot above. JSON updates merge into the latest raw blob so opaque
+    // keys (external identities and forward-compatible data) also survive.
+    const mutableUserData: Partial<SchemaUserInsert> = {};
+    if (Object.hasOwn(updates, 'email')) mutableUserData.email = insertData.email;
+    if (Object.hasOwn(updates, 'name')) mutableUserData.name = insertData.name;
+    if (Object.hasOwn(updates, 'emoji')) mutableUserData.emoji = insertData.emoji;
+    if (Object.hasOwn(updates, 'role')) mutableUserData.role = insertData.role;
+    if (Object.hasOwn(updates, 'unix_username')) {
+      mutableUserData.unix_username = insertData.unix_username;
+    }
+    if (Object.hasOwn(updates, 'filesystem_home')) {
+      mutableUserData.filesystem_home = insertData.filesystem_home;
+    }
+    if (Object.hasOwn(updates, 'onboarding_completed')) {
+      mutableUserData.onboarding_completed = insertData.onboarding_completed;
+    }
+    if (Object.hasOwn(updates, 'must_change_password')) {
+      mutableUserData.must_change_password = insertData.must_change_password;
+    }
+
+    let dataChanged = false;
+    const nextData = { ...rawRow.data } as Record<string, unknown>;
+    for (const field of USER_DATA_UPDATE_FIELDS) {
+      if (!Object.hasOwn(updates, field)) continue;
+      dataChanged = true;
+      const value = updates[field];
+      if (value === undefined) delete nextData[field];
+      else nextData[field] = value;
+    }
+    if (dataChanged) {
+      mutableUserData.data = nextData as SchemaUserInsert['data'];
+    }
 
     // Update database
     await update(this.db, users)
