@@ -13,7 +13,6 @@ import type {
   InternalUser,
   StoredAgenticTools,
   User,
-  UserAuthMetadata,
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
@@ -43,9 +42,6 @@ import {
  * go through the daemon UsersService, which enforces actor/target role
  * authority before calling the database.
  */
-/** Credential-free input accepted by this generic persistence boundary. */
-export type UsersRepositoryWrite = Partial<Omit<InternalUser, keyof UserAuthMetadata>>;
-
 const USER_DATA_UPDATE_FIELDS = [
   'avatar_url',
   'avatar',
@@ -59,9 +55,29 @@ const USER_DATA_UPDATE_FIELDS = [
   'primary_teammate_id',
   'default_agentic_selection',
   'default_mcp_server_ids',
-] as const satisfies ReadonlyArray<keyof UsersRepositoryWrite>;
+] as const satisfies ReadonlyArray<keyof User>;
 
-export class UsersRepository implements BaseRepository<InternalUser, UsersRepositoryWrite> {
+type UsersRepositoryMutableField =
+  | 'email'
+  | 'name'
+  | 'emoji'
+  | 'role'
+  | 'unix_username'
+  | 'filesystem_home'
+  | 'onboarding_completed'
+  | 'must_change_password'
+  | (typeof USER_DATA_UPDATE_FIELDS)[number];
+
+/** Explicit credential-free input accepted when creating a persistence projection. */
+export type UsersRepositoryCreate = Pick<User, 'email'> &
+  Partial<Pick<User, 'user_id' | 'created_at' | 'updated_at' | UsersRepositoryMutableField>>;
+
+/** Fields the generic persistence boundary can actually mutate. */
+export type UsersRepositoryUpdate = Partial<Pick<User, UsersRepositoryMutableField>>;
+
+export class UsersRepository
+  implements BaseRepository<InternalUser, UsersRepositoryCreate, UsersRepositoryUpdate>
+{
   constructor(private db: Database) {}
 
   /**
@@ -205,7 +221,7 @@ export class UsersRepository implements BaseRepository<InternalUser, UsersReposi
   /**
    * Create a new user
    */
-  async create(data: UsersRepositoryWrite): Promise<InternalUser> {
+  async create(data: UsersRepositoryCreate): Promise<InternalUser> {
     if (
       Object.hasOwn(data as object, 'password') ||
       Object.hasOwn(data as object, 'password_hash') ||
@@ -331,7 +347,7 @@ export class UsersRepository implements BaseRepository<InternalUser, UsersReposi
   /**
    * Update user by ID
    */
-  async update(id: string, updates: UsersRepositoryWrite): Promise<InternalUser> {
+  async update(id: string, updates: UsersRepositoryUpdate): Promise<InternalUser> {
     if (
       Object.hasOwn(updates as object, 'password') ||
       Object.hasOwn(updates as object, 'password_hash') ||
