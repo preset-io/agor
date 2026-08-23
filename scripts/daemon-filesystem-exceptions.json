@@ -1736,7 +1736,7 @@
     "operation": "call:spawn@spawnLockAcquirer#1"
   },
   {
-    "id": "DAEMON-FS-CAP-216",
+    "id": "DAEMON-FS-CAP-224",
     "class": "A",
     "file": "packages/core/src/config/password-policy.ts",
     "import": "node:fs",
