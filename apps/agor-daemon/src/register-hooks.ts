@@ -442,6 +442,27 @@ export interface RegisterHooksContext {
 }
 
 /**
+ * RBAC services whose authorization hooks consume the authenticated principal.
+ *
+ * Socket.IO supplies `params.user` from immutable connection authority, while
+ * REST supplies only `params.authentication` until the shared authentication
+ * hook runs. Keep that transport normalization at one boundary so nested RBAC
+ * services cannot accidentally work over Socket.IO while rejecting or running
+ * without tenant authority over REST.
+ */
+export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
+  'groups',
+  'group-memberships',
+  'branches/:id/owners',
+  'branches/:id/group-grants',
+  'branches/:id/effective-access',
+  'branches/:id/fs-access-users',
+  'boards/:id/owners',
+  'boards/:id/group-grants',
+  'boards/:id/aligned-branches',
+] as const;
+
+/**
  * Register all FeathersJS service hooks.
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
@@ -455,14 +476,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'boards/:id/unarchive',
   'repos',
   'branches',
-  'branches/:id/owners',
-  'boards/:id/owners',
   'schedules',
   'users',
-  'groups',
-  'group-memberships',
-  'branches/:id/group-grants',
-  'boards/:id/group-grants',
+  ...AUTHENTICATED_RBAC_SERVICE_PATHS,
   'app-variables',
   'agentic-tool-settings',
   'agentic-tool-presets',
@@ -2640,6 +2656,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Groups hooks
   // ============================================================================
 
+  for (const path of AUTHENTICATED_RBAC_SERVICE_PATHS) {
+    safeService(path)?.hooks({ before: { all: [requireAuth] } });
+  }
   safeService('groups')?.hooks(groupsHooks);
   safeService('groups')?.hooks({
     after: {

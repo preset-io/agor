@@ -302,6 +302,35 @@ calls:
   rejection of live identity replacement, and automatic transport reconnect
   with freshly established authority.
 
+Final testing against the rebuilt two-replica HA stack corrected the fixture
+itself and closed one REST/Socket.IO transport asymmetry:
+
+- the HA harness now authenticates every Socket.IO connection at the namespace
+  handshake instead of issuing the removed post-connect Feathers login call;
+  anonymous handshakes must fail before connection admission;
+- browser access-token refresh is exercised over REST while live immutable
+  sockets retain their IDs and subscriptions. Daemon failover then proves the
+  reconnect handshake invokes the credential getter and verifies the latest
+  token;
+- nested RBAC services share one registered `requireAuth` boundary, so REST
+  requests receive the same authenticated user/tenant authority that an
+  admitted Socket.IO connection projects. Read-only effective-access,
+  aligned-branch, and filesystem-access routes now run in tenant database scope
+  as well; and
+- board-owner and board-group-grant routes share one daemon-owned route
+  authorization helper. Non-admin short IDs resolve inside current board
+  visibility, the full authorized ID is installed before the service method,
+  and hidden, foreign-tenant, missing, or visibility-ambiguous targets converge
+  on one denial without masking unexpected repository failures.
+
+The live HA fixture warms a replica's negative board ACL, adds an owner through
+the other replica, proves distributed cache-only invalidation without any
+socket disconnect, removes that owner, and proves full tenant eviction across
+replicas while the foreign tenant remains connected. Reconnect cannot restore
+the revoked board watch. The same run covers daemon failure, Redis
+failure/no-replay/recovery, token rotation, cross-tenant REST/event/watch/cursor
+negatives, and exact foreign/missing nested-RBAC responses.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -371,6 +400,12 @@ Observed results on the audit branch:
   boundary checks, and all 15 non-doc build tasks.
 - post-review, post-rebase final rerun: the full daemon suite passed (261
   files, 3,427 tests; 16 files/103 tests environment-gated).
+- final HA/RBAC follow-up: daemon suite passed (262 files, 3,443 tests; 16
+  files/103 tests environment-gated); focused registered-hook, group-service,
+  and board-route authorization coverage passed (157 tests); root `pnpm check`
+  passed all typecheck, lint/boundary, and 15 non-doc build tasks; the rebuilt
+  two-replica HA harness passed both with daemon/Redis failure injection and
+  without failure injection.
 
 The PostgreSQL/RLS and Redis results above were observed earlier on this audit
 branch. Their disposable fixture URLs were not present for the final reviewer

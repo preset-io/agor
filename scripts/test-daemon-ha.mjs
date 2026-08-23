@@ -121,7 +121,6 @@ async function waitUntil(predicate, description, timeoutMs = 10_000) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const EXACTLY_ONCE_SETTLE_MS = 500;
-const latestSocketAuthentication = new WeakMap();
 
 function once(socket, event, timeoutMs = 15_000) {
   return new Promise((resolve, reject) => {
@@ -133,40 +132,43 @@ function once(socket, event, timeoutMs = 15_000) {
   });
 }
 
-function authenticateSocket(socket, accessToken) {
-  return new Promise((resolve, reject) => {
-    socket.emit(
-      'create',
-      'authentication',
-      { strategy: 'jwt', accessToken },
-      {},
-      (error, result) =>
-        error ? reject(new Error(error.message ?? String(error))) : resolve(result)
-    );
-  });
+function socketAuthentication(accessToken) {
+  return (authorize) => {
+    const configured = typeof accessToken === 'function' ? accessToken() : accessToken;
+    authorize(configured ? { token: configured } : {});
+  };
 }
 
 async function connectAuthenticated(url, accessToken) {
   const socket = io(url, {
+    autoConnect: false,
     // Direct replica sockets isolate Redis/Feathers fanout from ingress
     // affinity. The separate ingress probe below deliberately exercises the
     // polling -> WebSocket upgrade path.
     transports: ['websocket'],
     reconnection: true,
     reconnectionDelay: 250,
+    auth: socketAuthentication(accessToken),
   });
-  // Feathers authentication/channel membership is process-local connection
-  // state. Re-establish it after every transport reconnect.
-  let initialAuthentication;
-  socket.on('connect', () => {
-    const attempt = authenticateSocket(socket, accessToken);
-    latestSocketAuthentication.set(socket, attempt);
-    initialAuthentication ??= attempt;
-    void attempt.catch((error) => socket.emit('error', error));
-  });
-  await once(socket, 'connect');
-  await initialAuthentication;
+  const connected = once(socket, 'connect');
+  socket.connect();
+  await connected;
   return socket;
+}
+
+async function assertAnonymousHandshakeRejected(url) {
+  const socket = io(url, {
+    autoConnect: false,
+    transports: ['websocket'],
+    reconnection: false,
+  });
+  const rejected = once(socket, 'connect_error');
+  socket.connect();
+  const error = await rejected;
+  assert.equal(socket.connected, false);
+  assert.equal(error?.data?.code, 401);
+  assert.equal(error?.data?.className, 'not-authenticated');
+  socket.close();
 }
 
 async function authenticatedHealth(base, accessToken) {
@@ -188,7 +190,7 @@ function socketHealth(socket) {
 let cleanupAccessToken;
 let cleanupApiKeyId;
 const cleanupBoards = new Map();
-let cleanupCodexAuth = false;
+let cleanupCodexAccessToken;
 const cleanupSockets = new Set();
 const cleanupStoppedServices = new Set();
 let completed = false;
@@ -311,12 +313,15 @@ try {
     daemonB
   );
   const memberLoginResult = await loginPersona({ tenant: 'acme', persona: 'acme-aaron' }, daemonB);
-  const { accessToken } = loginResult;
+  const { accessToken, refreshToken } = loginResult;
   const foreignAccessToken = foreignLoginResult.accessToken;
   const memberAccessToken = memberLoginResult.accessToken;
+  const memberUserId = memberLoginResult.user?.user_id;
   assert.equal(typeof accessToken, 'string');
+  assert.equal(typeof refreshToken, 'string');
   assert.equal(typeof foreignAccessToken, 'string');
   assert.equal(typeof memberAccessToken, 'string');
+  assert.equal(typeof memberUserId, 'string');
   cleanupAccessToken = accessToken;
   console.log('ok - dev picker JIT-provisioned independent admin identities in two tenants');
 
@@ -404,8 +409,13 @@ try {
     console.log('ok - HA ingress failure-path logs omit unconsumed GitHub setup state');
   }
 
-  const socketA = await connectAuthenticated(daemonA, accessToken);
-  const socketB = await connectAuthenticated(daemonB, accessToken);
+  const browserCredential = { accessToken, handshakeCount: 0 };
+  const currentBrowserAccessToken = () => {
+    browserCredential.handshakeCount += 1;
+    return browserCredential.accessToken;
+  };
+  const socketA = await connectAuthenticated(daemonA, currentBrowserAccessToken);
+  const socketB = await connectAuthenticated(daemonB, currentBrowserAccessToken);
   cleanupSockets.add(socketA);
   cleanupSockets.add(socketB);
   const [healthA, healthB] = await Promise.all([socketHealth(socketA), socketHealth(socketB)]);
@@ -442,7 +452,7 @@ try {
   const [codexDeviceStatusA, codexDeviceStatusB] = await Promise.all(
     [daemonA, daemonB].map((origin) =>
       fetch(`${origin}/codex-auth/device`, {
-        headers: { authorization: `Bearer ${accessToken}` },
+        headers: { authorization: `Bearer ${memberAccessToken}` },
       })
     )
   );
@@ -450,74 +460,102 @@ try {
   assert.equal(codexDeviceStatusB.status, 200);
   assert.deepEqual(await codexDeviceStatusA.json(), await codexDeviceStatusB.json());
 
-  // Persist only simulated, unusable token material. This exercises the exact
-  // sandbox user home across replicas without contacting OpenAI or creating a
-  // real device attempt; check-auth reads the same path a Codex executor uses.
-  const dummyRefreshToken = `ha-refresh-${crypto.randomUUID()}`;
-  const dummyAccessToken = `ha-access-${crypto.randomUUID()}`;
-  const dummyIdToken = `${Buffer.from('{}').toString('base64url')}.${Buffer.from(
-    JSON.stringify({
-      'https://api.openai.com/auth': {
-        chatgpt_plan_type: 'ha-simulated',
-        chatgpt_account_id: 'ha-simulated-account',
-      },
-    })
-  ).toString('base64url')}.signature`;
-  const admittedCodexImport = await fetch(`${daemonA}/codex-auth/import`, {
+  const existingMemberCodexAuth = await fetch(`${daemonA}/check-auth`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      authJson: JSON.stringify({
-        auth_mode: 'chatgpt',
-        OPENAI_API_KEY: null,
-        tokens: {
-          id_token: dummyIdToken,
-          access_token: dummyAccessToken,
-          refresh_token: dummyRefreshToken,
-          account_id: 'ha-simulated-account',
+    headers: {
+      authorization: `Bearer ${memberAccessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ tool: 'codex', validateNative: true }),
+  });
+  assert.equal(existingMemberCodexAuth.status, 201);
+  const existingMemberCodexStatus = (await existingMemberCodexAuth.json()).status;
+  if (existingMemberCodexStatus === 'authenticated') {
+    console.log(
+      "ok - preserved the harness member's pre-existing Codex credential instead of overwriting it"
+    );
+  } else {
+    // Persist only simulated, unusable token material. This exercises the exact
+    // sandbox user home across replicas without contacting OpenAI or creating a
+    // real device attempt; check-auth reads the same path a Codex executor uses.
+    const dummyRefreshToken = `ha-refresh-${crypto.randomUUID()}`;
+    const dummyAccessToken = `ha-access-${crypto.randomUUID()}`;
+    const dummyIdToken = `${Buffer.from('{}').toString('base64url')}.${Buffer.from(
+      JSON.stringify({
+        'https://api.openai.com/auth': {
+          chatgpt_plan_type: 'ha-simulated',
+          chatgpt_account_id: 'ha-simulated-account',
         },
-        last_refresh: new Date().toISOString(),
+      })
+    ).toString('base64url')}.signature`;
+    const admittedCodexImport = await fetch(`${daemonA}/codex-auth/import`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${memberAccessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        authJson: JSON.stringify({
+          auth_mode: 'chatgpt',
+          OPENAI_API_KEY: null,
+          tokens: {
+            id_token: dummyIdToken,
+            access_token: dummyAccessToken,
+            refresh_token: dummyRefreshToken,
+            account_id: 'ha-simulated-account',
+          },
+          last_refresh: new Date().toISOString(),
+        }),
       }),
-    }),
-  });
-  assert.equal(admittedCodexImport.status, 201);
-  const admittedCodexImportBody = await admittedCodexImport.json();
-  assert.equal(admittedCodexImportBody.status, 'authenticated');
-  cleanupCodexAuth = true;
+    });
+    assert.equal(admittedCodexImport.status, 201);
+    const admittedCodexImportBody = await admittedCodexImport.json();
+    assert.equal(admittedCodexImportBody.status, 'authenticated');
+    cleanupCodexAccessToken = memberAccessToken;
 
-  const inspectedThroughB = await fetch(`${daemonB}/check-auth`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ tool: 'codex', validateNative: true }),
-  });
-  assert.equal(inspectedThroughB.status, 201);
-  assert.deepEqual(await inspectedThroughB.json(), {
-    status: 'authenticated',
-    authenticated: true,
-    method: 'oauth',
-    hint: 'ChatGPT login found (ha-simulated plan).',
-  });
+    const inspectedThroughB = await fetch(`${daemonB}/check-auth`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${memberAccessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ tool: 'codex', validateNative: true }),
+    });
+    assert.equal(inspectedThroughB.status, 201);
+    assert.deepEqual(await inspectedThroughB.json(), {
+      status: 'authenticated',
+      authenticated: true,
+      method: 'oauth',
+      hint: 'ChatGPT login found (ha-simulated plan).',
+    });
 
-  const logoutThroughB = await fetch(`${daemonB}/codex-auth/logout`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: '{}',
-  });
-  assert.equal(logoutThroughB.status, 201);
-  cleanupCodexAuth = false;
-  const inspectedAfterLogout = await fetch(`${daemonA}/check-auth`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ tool: 'codex', validateNative: true }),
-  });
-  assert.equal(inspectedAfterLogout.status, 201);
-  assert.equal((await inspectedAfterLogout.json()).status, 'unauthenticated');
-  const authLogs = dockerOutput('logs', '--no-color', 'daemon-a', 'daemon-b', 'ingress');
-  assert(!authLogs.includes(dummyRefreshToken), 'Codex refresh token appeared in HA logs');
-  assert(!authLogs.includes(dummyAccessToken), 'Codex access token appeared in HA logs');
-  console.log(
-    'ok - Codex exact-user auth file is written on A, consumed on B, removed on B, and absent on A'
-  );
+    const logoutThroughB = await fetch(`${daemonB}/codex-auth/logout`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${memberAccessToken}`,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(logoutThroughB.status, 201);
+    cleanupCodexAccessToken = undefined;
+    const inspectedAfterLogout = await fetch(`${daemonA}/check-auth`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${memberAccessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ tool: 'codex', validateNative: true }),
+    });
+    assert.equal(inspectedAfterLogout.status, 201);
+    assert.equal((await inspectedAfterLogout.json()).status, 'unauthenticated');
+    const authLogs = dockerOutput('logs', '--no-color', 'daemon-a', 'daemon-b', 'ingress');
+    assert(!authLogs.includes(dummyRefreshToken), 'Codex refresh token appeared in HA logs');
+    assert(!authLogs.includes(dummyAccessToken), 'Codex access token appeared in HA logs');
+    console.log(
+      'ok - Codex exact-user auth file is written on A, consumed on B, removed on B, and absent on A'
+    );
+  }
 
   const ingressInstances = new Set();
   for (let attempt = 0; attempt < 12; attempt++) {
@@ -600,9 +638,7 @@ try {
   cleanupApiKeyId = undefined;
   console.log('ok - opaque personal API keys cannot select a tenant in auth-claim-only HA');
 
-  const anonymousSocket = io(daemonB, { transports: ['websocket'], reconnection: false });
-  cleanupSockets.add(anonymousSocket);
-  await once(anonymousSocket, 'connect');
+  await assertAnonymousHandshakeRejected(daemonB);
   const foreignSocket = await connectAuthenticated(daemonB, foreignAccessToken);
   const memberSocket = await connectAuthenticated(daemonB, memberAccessToken);
   cleanupSockets.add(foreignSocket);
@@ -618,11 +654,9 @@ try {
   });
   console.log('ok - authenticated health exposes constrained support capabilities');
   const boardEvents = [];
-  const anonymousBoardEvents = [];
   const foreignBoardEvents = [];
   const memberBoardEvents = [];
   socketB.on('boards created', (board) => boardEvents.push(board));
-  anonymousSocket.on('boards created', (board) => anonymousBoardEvents.push(board));
   foreignSocket.on('boards created', (board) => foreignBoardEvents.push(board));
   memberSocket.on('boards created', (board) => memberBoardEvents.push(board));
   const created = await fetch(`${daemonA}/boards`, {
@@ -643,13 +677,12 @@ try {
     boardEvents.map((value) => value.board_id),
     [board.board_id]
   );
-  assert.deepEqual(anonymousBoardEvents, []);
   assert.deepEqual(foreignBoardEvents, []);
   assert.deepEqual(memberBoardEvents, []);
   console.log(
     'ok - authorized Feathers publication crossed replicas once in the observation window'
   );
-  console.log('ok - unauthenticated socket received no Feathers publication');
+  console.log('ok - unauthenticated Socket.IO handshakes fail before connection admission');
   console.log('ok - foreign-tenant socket received no Feathers publication');
 
   const foreignCreated = await fetch(`${daemonB}/boards`, {
@@ -663,6 +696,15 @@ try {
   assert.equal(foreignCreated.status, 201, `foreign board create failed: ${foreignCreated.status}`);
   const foreignBoard = await foreignCreated.json();
   cleanupBoards.set(foreignBoard.board_id, foreignAccessToken);
+  await waitUntil(
+    () => foreignBoardEvents.some((value) => value.board_id === foreignBoard.board_id),
+    'same-tenant foreign board event'
+  );
+  assert.deepEqual(
+    foreignBoardEvents.map((value) => value.board_id),
+    [foreignBoard.board_id]
+  );
+  foreignBoardEvents.length = 0;
   const foreignRead = await fetch(`${daemonA}/boards/${foreignBoard.board_id}`, {
     headers: { authorization: `Bearer ${accessToken}` },
   });
@@ -672,48 +714,60 @@ try {
   assert.equal(foreignRead.status, missingRead.status);
   assert.equal(foreignRead.status, 404);
   await Promise.all([foreignRead.text(), missingRead.text()]);
+  const [foreignOwners, missingOwners] = await Promise.all([
+    fetch(`${daemonA}/boards/${foreignBoard.board_id}/owners`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    }),
+    fetch(`${daemonA}/boards/018f0000-0000-7000-8000-000000000099/owners`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    }),
+  ]);
+  assert.equal(foreignOwners.status, 403);
+  assert.equal(foreignOwners.status, missingOwners.status);
+  assert.equal(await foreignOwners.text(), await missingOwners.text());
   console.log('ok - exact foreign board IDs are indistinguishable from missing IDs');
 
   const watchBoard = (socket) =>
     new Promise((resolve) => socket.emit('presence:watch-board', board.board_id, resolve));
-  const [watchA, watchB, anonymousWatch, foreignWatch, memberWatch] = await Promise.all([
+  const [watchA, watchB, foreignWatch, memberWatch] = await Promise.all([
     watchBoard(socketA),
     watchBoard(socketB),
-    watchBoard(anonymousSocket),
     watchBoard(foreignSocket),
     watchBoard(memberSocket),
   ]);
   assert.deepEqual(watchA, { ok: true });
   assert.deepEqual(watchB, { ok: true });
-  assert.deepEqual(anonymousWatch, { ok: false });
   assert.deepEqual(foreignWatch, { ok: false });
   assert.deepEqual(memberWatch, { ok: false });
   let cursorCount = 0;
-  let anonymousCursorCount = 0;
   let foreignCursorCount = 0;
   let memberCursorCount = 0;
   socketB.on('cursor-moved', () => cursorCount++);
-  anonymousSocket.on('cursor-moved', () => anonymousCursorCount++);
   foreignSocket.on('cursor-moved', () => foreignCursorCount++);
   memberSocket.on('cursor-moved', () => memberCursorCount++);
   socketA.emit('cursor-move', { boardId: board.board_id, x: 1, y: 2, timestamp: Date.now() });
   await waitUntil(() => cursorCount > 0, 'cross-replica cursor event');
   await delay(EXACTLY_ONCE_SETTLE_MS);
   assert.equal(cursorCount, 1);
-  assert.equal(anonymousCursorCount, 0);
   assert.equal(foreignCursorCount, 0);
   assert.equal(memberCursorCount, 0);
   console.log(
     'ok - tenant-scoped direct room event crossed replicas once in the observation window'
   );
-  console.log('ok - unauthorized native-room watcher received no cursor event');
   console.log('ok - foreign-tenant native-room watcher received no cursor event');
   console.log('ok - same-tenant member without board access received no cursor event');
 
-  const affinitySocket = io(ingress, { transports: ['polling', 'websocket'], reconnection: true });
+  const affinitySocket = io(ingress, {
+    autoConnect: false,
+    transports: ['polling', 'websocket'],
+    reconnection: true,
+    auth: socketAuthentication(currentBrowserAccessToken),
+  });
   cleanupSockets.add(affinitySocket);
   const firstInfo = once(affinitySocket, 'server-info');
-  await once(affinitySocket, 'connect');
+  const affinityConnected = once(affinitySocket, 'connect');
+  affinitySocket.connect();
+  await affinityConnected;
   await new Promise((resolve, reject) => {
     if (affinitySocket.io.engine.transport.name === 'websocket') return resolve();
     const timer = setTimeout(() => reject(new Error('polling transport did not upgrade')), 15_000);
@@ -724,18 +778,31 @@ try {
   });
   const initialServer = await firstInfo;
   assert(['daemon-a', 'daemon-b'].includes(initialServer.instanceId));
-  let affinityAuthentication = authenticateSocket(affinitySocket, accessToken);
-  await affinityAuthentication;
-  affinitySocket.on('connect', () => {
-    affinityAuthentication = authenticateSocket(affinitySocket, accessToken);
-    void affinityAuthentication.catch((error) => affinitySocket.emit('error', error));
-  });
   console.log('ok - sticky polling session upgraded to WebSocket');
+
+  const socketIdsBeforeRotation = [socketA.id, socketB.id, affinitySocket.id];
+  const handshakesBeforeRotation = browserCredential.handshakeCount;
+  const refreshed = await fetch(`${ingress}/authentication/refresh`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  assert.equal(refreshed.status, 201, `browser token refresh failed: ${refreshed.status}`);
+  const refreshedTokens = await refreshed.json();
+  assert.equal(typeof refreshedTokens.accessToken, 'string');
+  assert.notEqual(refreshedTokens.accessToken, accessToken);
+  browserCredential.accessToken = refreshedTokens.accessToken;
+  await delay(EXACTLY_ONCE_SETTLE_MS);
+  assert.deepEqual([socketA.id, socketB.id, affinitySocket.id], socketIdsBeforeRotation);
+  assert.equal(browserCredential.handshakeCount, handshakesBeforeRotation);
+  await Promise.all([socketHealth(socketA), socketHealth(socketB), socketHealth(affinitySocket)]);
+  console.log('ok - browser access-token rotation leaves healthy immutable sockets connected');
 
   let recoveredBoard;
   if (process.env.AGOR_HA_INTEGRATION_FAILURES === '1') {
     const stopped = initialServer.instanceId;
     const survivor = stopped === 'daemon-a' ? 'daemon-b' : 'daemon-a';
+    const handshakesBeforeFailure = browserCredential.handshakeCount;
     // An established WebSocket is not transparently moved by ingress. The
     // client can take up to the configured Engine.IO heartbeat window to detect
     // the dead transport before reconnecting through the surviving upstream.
@@ -744,7 +811,7 @@ try {
     docker('stop', stopped);
     const nextServer = await reconnectedInfo;
     assert.equal(nextServer.instanceId, survivor);
-    await affinityAuthentication;
+    assert(browserCredential.handshakeCount > handshakesBeforeFailure);
     const reconnectedSocketHealth = await socketHealth(affinitySocket);
     assert.equal(reconnectedSocketHealth.deployment.instanceId, survivor);
     await waitFor(`${ingress}/readyz`, (r) => r.status === 200);
@@ -757,7 +824,6 @@ try {
       () => socketA.connected && socketB.connected,
       'direct replica socket reconnect'
     );
-    await Promise.all([socketA, socketB].map((socket) => latestSocketAuthentication.get(socket)));
     await Promise.all([socketHealth(socketA), socketHealth(socketB)]);
     const [rewatchA, rewatchB] = await Promise.all([watchBoard(socketA), watchBoard(socketB)]);
     assert.deepEqual(rewatchA, { ok: true });
@@ -824,6 +890,51 @@ try {
     );
   }
 
+  assert.deepEqual(foreignBoardEvents, []);
+  foreignBoardEvents.length = 0;
+  memberBoardEvents.length = 0;
+  const tenantSocketIdsBeforeGrant = [socketA.id, socketB.id, memberSocket.id, affinitySocket.id];
+  const addOwner = await fetch(`${daemonA}/boards/${board.board_id}/owners`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ user_id: memberUserId }),
+  });
+  assert.equal(addOwner.status, 201, `board owner grant failed: ${addOwner.status}`);
+  await addOwner.text();
+  await delay(EXACTLY_ONCE_SETTLE_MS);
+  assert.deepEqual(
+    [socketA.id, socketB.id, memberSocket.id, affinitySocket.id],
+    tenantSocketIdsBeforeGrant
+  );
+  assert(
+    socketA.connected && socketB.connected && memberSocket.connected && affinitySocket.connected
+  );
+  assert.deepEqual(await watchBoard(memberSocket), { ok: true });
+  console.log('ok - additive owner grant clears remote ACL cache without disconnecting sockets');
+
+  const tenantDisconnects = [socketA, socketB, memberSocket, affinitySocket].map((socket) =>
+    once(socket, 'disconnect')
+  );
+  const removeOwner = await fetch(`${daemonA}/boards/${board.board_id}/owners/${memberUserId}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  assert.equal(removeOwner.status, 200, `board owner revocation failed: ${removeOwner.status}`);
+  await removeOwner.text();
+  await Promise.all(tenantDisconnects);
+  assert.equal(foreignSocket.connected, true);
+  assert.equal(memberSocket.connected, false);
+
+  const memberReconnected = once(memberSocket, 'connect');
+  memberSocket.connect();
+  await memberReconnected;
+  assert.deepEqual(await watchBoard(memberSocket), { ok: false });
+  assert.deepEqual(foreignBoardEvents, []);
+  assert.deepEqual(memberBoardEvents, []);
+  console.log(
+    'ok - owner revocation evicts tenant sockets across replicas and reconnect cannot restore access'
+  );
+
   completed = true;
 } catch (error) {
   // Preserve the test/assertion error even when one or more best-effort cleanup
@@ -867,12 +978,12 @@ try {
     }
   }
 
-  if (cleanupAccessToken && cleanupCodexAuth) {
+  if (cleanupCodexAccessToken) {
     try {
       const removed = await fetch(`${ingress}/codex-auth/logout`, {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${cleanupAccessToken}`,
+          authorization: `Bearer ${cleanupCodexAccessToken}`,
           'content-type': 'application/json',
         },
         body: '{}',

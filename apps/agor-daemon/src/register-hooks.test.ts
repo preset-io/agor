@@ -28,6 +28,7 @@ import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTHENTICATED_RBAC_SERVICE_PATHS,
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
@@ -605,6 +606,90 @@ describe('tenant-owned service registration', () => {
       ])
     );
   });
+});
+
+describe('registered RBAC authentication boundary', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = { before?: { all?: RegisteredHook[] } };
+
+  const captureRbacHooks = () => {
+    const registrations = new Map<string, RegisteredHooks[]>();
+    const requireAuth = vi.fn(async (context: HookContext) => {
+      context.params.user = {
+        user_id: '00000000-0000-7000-8000-000000000001',
+        role: 'admin',
+      } as HookContext['params']['user'];
+      return context;
+    });
+    const app = {
+      service(path: string) {
+        const normalized = path.replace(/^\//, '');
+        return {
+          hooks(hooks: RegisteredHooks) {
+            registrations.set(normalized, [...(registrations.get(normalized) ?? []), hooks]);
+          },
+          emit: vi.fn(),
+        };
+      },
+      use() {},
+      publish() {},
+      emit: vi.fn(),
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as unknown as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'rbac-auth-test' },
+        execution: { branch_rbac: true },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'rbac-auth-test-secret',
+      requireAuth,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    return { registrations, requireAuth };
+  };
+
+  it('keeps every authenticated RBAC service inside tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([...AUTHENTICATED_RBAC_SERVICE_PATHS])
+    );
+  });
+
+  it.each(AUTHENTICATED_RBAC_SERVICE_PATHS)(
+    'normalizes REST authentication before %s authorization',
+    async (path) => {
+      const { registrations, requireAuth } = captureRbacHooks();
+      const allHooks = (registrations.get(path) ?? []).flatMap(
+        (registration) => registration.before?.all ?? []
+      );
+      const authenticationHook = allHooks.find((hook) => hook === requireAuth);
+      expect(authenticationHook).toBe(requireAuth);
+      expect(allHooks[0]).toBe(requireAuth);
+
+      const context = {
+        path,
+        method: 'find',
+        params: {
+          provider: 'rest',
+          authentication: { strategy: 'jwt', accessToken: 'signed-token' },
+        },
+      } as unknown as HookContext;
+      await authenticationHook?.(context);
+
+      expect(requireAuth).toHaveBeenCalledOnce();
+      expect(context.params.user).toMatchObject({ role: 'admin' });
+    }
+  );
 });
 
 describe('registered tenant write-gate classification', () => {
