@@ -115,7 +115,7 @@ export class AgorExecutor {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken, {
-        onReauthenticated: () => this.refreshTerminationState('reconnect'),
+        onReconnected: () => this.refreshTerminationState('reconnect'),
       });
       executorDebug('[executor] Connected to daemon');
 

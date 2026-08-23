@@ -27,6 +27,7 @@ import { AuthenticationService, feathers } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-capability.js';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -74,13 +75,24 @@ function makeExecutorAuthenticationService(sessionTokenService: SessionTokenServ
     },
   });
   const authentication = new AuthenticationService(app);
-  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService));
+  authentication.register(
+    'jwt',
+    new ServiceJWTStrategy({
+      sessionTokenService,
+      executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+    })
+  );
   app.use('authentication', authentication);
   return app.service('authentication');
 }
 
 describe('executor token Feathers authentication contract', () => {
-  it('re-authenticates a fresh connection through the production JWT strategy', async () => {
+  it('authenticates each fresh connection through the production JWT strategy', async () => {
     const authorityStore: SessionTokenAuthorityStore = {
       async issue() {},
       async validateAndConsume(input) {
@@ -127,13 +139,16 @@ describe('executor token Feathers authentication contract', () => {
         user: { user_id: 'user-fast-auth' },
       });
       expect(connection).toMatchObject({
+        authenticated: true,
         authentication: {
           strategy: 'jwt',
         },
+        tenant: { tenant_id: 'tenant-fast-auth', source: 'auth_claim' },
+        user: { user_id: 'user-fast-auth' },
       });
       expect(
-        typeof (connection.authentication as { accessToken?: unknown } | undefined)?.accessToken
-      ).toBe('string');
+        (connection.authentication as { accessToken?: unknown } | undefined)?.accessToken
+      ).toBeUndefined();
     }
     service.close();
   });

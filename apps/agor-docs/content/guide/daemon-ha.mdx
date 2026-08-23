@@ -80,7 +80,7 @@ A persisted WebSocket is an open TCP connection terminated by one daemon through
 
 Before WebSocket upgrade, Engine.IO may use multiple HTTP polling requests with one session ID. All `/socket.io/` requests for that logical connection must therefore reach the same daemon. The example nginx configuration uses consistent client-IP hashing for `/socket.io/`, forwards upgrade headers, and sets a 120-second proxy timeout (above Agor's 85-second heartbeat window). Ordinary HTTP/REST uses a separate round-robin upstream and is not sticky.
 
-If a daemon dies, its existing sockets close; their Engine.IO session IDs do not migrate. Socket.IO/Feathers clients reconnect and reauthenticate to a healthy daemon, then refetch PostgreSQL-backed state. The Redis adapter does not provide connection-state recovery or missed-event replay.
+If a daemon dies, its existing sockets close; their Engine.IO session IDs do not migrate. Socket.IO/Feathers clients reconnect to a healthy daemon with a new authenticated namespace handshake, then refetch PostgreSQL-backed state. The Redis adapter does not provide connection-state recovery or missed-event replay.
 
 For Agor Cloud, configure the platform load balancer or ingress so that:
 

@@ -43,7 +43,7 @@ let currentTabName: string | undefined;
  *
  * A transient network blip or a daemon restart drops the socket, but the
  * zellij session is long-lived and survives detach, so the PTY bridge is
- * recoverable: the feathers client auto-reconnects (and re-authenticates)
+ * recoverable: the Feathers client establishes a new authenticated handshake
  * on its own. We keep the PTY + zellij session alive for this long and only
  * exit if the socket has not come back by the time it elapses. Exiting
  * immediately (the old behavior) turned every blip into a dead terminal that
@@ -63,12 +63,10 @@ const MAX_PENDING_TERMINAL_INPUT_BYTES = 64 * 1024;
 let graceController: ReturnType<typeof createReconnectGrace> | null = null;
 
 /**
- * Whether the socket is not just transport-connected but actually
- * re-authenticated as the executor service — i.e. the daemon will accept our
- * emits again. Set true only after (re)authentication succeeds, false on
- * disconnect. The grace window keys teardown off THIS, not raw
- * `socket.connected`, so a socket that reconnects transport-only but never
- * re-authenticates doesn't keep a dead PTY alive forever.
+ * Whether the daemon accepted the latest authenticated namespace handshake
+ * and will therefore accept our emits. Set true only after `connect`, false on
+ * disconnect. A rejected handshake never emits `connect`, so the grace window
+ * cannot mistake a transport attempt for a healthy terminal bridge.
  */
 let bridgeHealthy = false;
 
@@ -459,16 +457,15 @@ export async function handleZellijAttach(
   }
 
   try {
-    // Connect to the owning daemon. A transient connection can reauthenticate
-    // only to the same boot; the token's owner fence rejects replica/boot
-    // adoption and the grace timer then tears down this bridge.
+    // Connect to the owning daemon. A transient disconnect can authenticate a
+    // new namespace connection only to the same boot; the token's owner fence
+    // rejects replica/boot adoption and the grace timer tears down this bridge.
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     feathersClient = await createExecutorClient(daemonUrl, payload.sessionToken, {
-      // Fires only after a reconnect RE-AUTHENTICATES (not on raw transport
-      // connect). This is when the daemon will accept our emits again, so it's
-      // the only safe point to mark the bridge healthy, cancel the pending
+      // Fires only after the daemon accepts a reconnect handshake. This is the
+      // only safe point to mark the bridge healthy, cancel the pending
       // teardown, re-join the channel, and re-announce readiness.
-      onReauthenticated: () => {
+      onReconnected: () => {
         bridgeHealthy = true;
         graceController?.onReconnect();
         const s = feathersClient?.io;
@@ -478,7 +475,7 @@ export async function handleZellijAttach(
       },
     });
     _currentUserId = userId;
-    // Initial connect + authenticate already succeeded inside createExecutorClient.
+    // The initial authenticated handshake succeeded inside createExecutorClient.
     bridgeHealthy = true;
 
     console.log(`[zellij.attach] Connected to owner daemon for terminal ${shortId(terminalId)}`);
@@ -490,9 +487,8 @@ export async function handleZellijAttach(
 
     graceController = createReconnectGrace({
       graceMs: DISCONNECT_GRACE_MS,
-      // Key teardown off re-authentication, NOT raw transport connectivity: a
-      // socket can be transport-connected yet unauthenticated (reauth failing),
-      // in which case the bridge is dead and we should still exit.
+      // Key teardown off an accepted namespace connection, not an underlying
+      // transport attempt: a rejected handshake must still let the bridge die.
       isConnected: () => bridgeHealthy,
       onGraceElapsed: () => {
         console.log('[zellij.attach] Reconnect grace elapsed without a healthy bridge — exiting');
@@ -505,13 +501,12 @@ export async function handleZellijAttach(
     });
 
     // A disconnect is recoverable — hold the PTY through a grace window and let
-    // the client's auto-reconnect + re-auth restore the bridge. The teardown is
-    // cancelled in onReauthenticated (above), not on raw `connect`, so a
-    // transport-only reconnect that never re-authenticates still tears down.
+    // the client's authenticated reconnect restore the bridge. The teardown is
+    // cancelled in onReconnected above only after the namespace is accepted.
     socket.on('disconnect', (reason: string) => {
       bridgeHealthy = false;
       console.log(
-        `[zellij.attach] Socket disconnected: ${reason} — holding PTY for ${DISCONNECT_GRACE_MS}ms pending re-auth`
+        `[zellij.attach] Socket disconnected: ${reason} — holding PTY for ${DISCONNECT_GRACE_MS}ms pending reconnect`
       );
       graceController?.onDisconnect();
     });

@@ -145,6 +145,17 @@ test('browser jwt re-auth (payload.type=access) still receives a fresh token pai
   expect(accessPayload.sub).toBe('user-1');
 });
 
+test('socket-provider login never mints and discards a browser token pair', async () => {
+  const context = makeContext('access');
+  context.params = { provider: 'socketio' };
+
+  const result = (await makeHook()(context)).result;
+
+  expect(result.accessToken).toBe(ORIGINAL_TOKEN);
+  expect(result).not.toHaveProperty('refreshToken');
+  expectRedactedUser(result.user);
+});
+
 test('result without a user is left untouched', async () => {
   const context = {
     params: {},

@@ -23,7 +23,6 @@ import type {
 import {
   configureRealtimePublish,
   executorTaskChannelName,
-  leaveAllSessionStreamChannels,
   markConnectionSessionStreamsAware,
   REDIS_FEATHERS_DENIED_PATHS,
   setBoardRemovalRealtimeVisibility,
@@ -2305,33 +2304,6 @@ describe('configureRealtimePublish streaming scope', () => {
     );
 
     expect(unionConnections(result)).toEqual([]);
-  });
-});
-
-describe('leaveAllSessionStreamChannels', () => {
-  it('leaves only session-stream rooms for the connection', () => {
-    const leaves: Array<[string, unknown]> = [];
-    const app = {
-      channels: [
-        'authenticated',
-        tenantChannelName('default'),
-        sessionStreamRoomName('standalone', 's1'),
-        sessionStreamRoomName('standalone', 's2'),
-      ],
-      channel: (name: string) => ({
-        leave: (connection: unknown) => {
-          leaves.push([name, connection]);
-        },
-      }),
-    } as unknown as Parameters<typeof leaveAllSessionStreamChannels>[0];
-    const connection = { id: 'c1' };
-
-    leaveAllSessionStreamChannels(app, connection);
-
-    expect(leaves).toEqual([
-      [sessionStreamRoomName('standalone', 's1'), connection],
-      [sessionStreamRoomName('standalone', 's2'), connection],
-    ]);
   });
 });
 

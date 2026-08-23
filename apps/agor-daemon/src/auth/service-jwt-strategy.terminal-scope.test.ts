@@ -80,8 +80,36 @@ describe('ServiceJWTStrategy terminal-scoped identity', () => {
     ).resolves.toBe('executor-service');
   });
 
+  it('does not treat a user subject as authority with a service token type', async () => {
+    stubSuperAuthenticate({ sub: ALICE, type: 'service' });
+    const strategy = new ServiceJWTStrategy();
+
+    await expect(strategy.authenticate({ accessToken: 'header.payload.sig' }, {})).rejects.toThrow(
+      /reserved service subject/
+    );
+  });
+
+  it('leaves Socket.IO Authorization headers to the normalized namespace boundary', async () => {
+    const strategy = new ServiceJWTStrategy();
+
+    await expect(
+      strategy.parse({
+        auth: {},
+        issued: Date.now(),
+        query: {},
+        headers: { authorization: 'Bearer header.payload.sig' },
+      } as never)
+    ).resolves.toBeNull();
+  });
+
   it('rejects contradictory verified tenant claims before the scoped entity lookup', async () => {
-    const strategy = new ServiceJWTStrategy(undefined, 'org_id');
+    const strategy = new ServiceJWTStrategy({
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'org_id',
+      },
+    });
     await expect(
       strategy.getEntityId(
         {

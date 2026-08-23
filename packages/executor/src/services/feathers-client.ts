@@ -7,7 +7,6 @@
 
 import { type AgorClient, createClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
-import { createAuthRetryAroundHook, createSingleFlight } from './feathers-auth-retry.js';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -18,7 +17,6 @@ const DEBUG_FEATHERS_CLIENT =
 const SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS = 1000;
 const SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS = 30_000;
 const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
-const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
 const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
 export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
@@ -61,26 +59,6 @@ export function registerExecutorClientHooks(client: AgorClient): void {
 }
 
 /**
- * In-memory storage for executor authentication
- * Executors need to store authentication for subsequent requests but can't use localStorage
- */
-class MemoryStorage {
-  private store: Record<string, string> = {};
-
-  async getItem(key: string): Promise<string | null> {
-    return this.store[key] || null;
-  }
-
-  async setItem(key: string, value: string): Promise<void> {
-    this.store[key] = value;
-  }
-
-  async removeItem(key: string): Promise<void> {
-    delete this.store[key];
-  }
-}
-
-/**
  * Create Feathers client connected to daemon with session token authentication
  *
  * @param daemonUrl - URL of the daemon (e.g., http://localhost:3030)
@@ -89,14 +67,14 @@ class MemoryStorage {
  */
 export interface ExecutorClientHooks {
   /**
-   * Fired after the socket reconnects AND successfully re-authenticates as the
-   * executor service account. Long-running commands (e.g. the zellij terminal
+   * Fired after a reconnect handshake has re-established the executor's
+   * immutable authority. Long-running commands (e.g. the zellij terminal
    * bridge) use this to re-establish socket-scoped state that a fresh socket
    * loses — channel room membership and readiness announcements — which the
    * auto-reconnect transport cannot restore on its own. Never fired for the
    * initial connect; only for reconnects.
    */
-  onReauthenticated?: () => void | Promise<void>;
+  onReconnected?: () => void | Promise<void>;
 }
 
 export async function createExecutorClient(
@@ -112,11 +90,9 @@ export async function createExecutorClient(
     console.log(`[executor] Socket ${event} after ${elapsedSeconds}s${suffix}`);
   };
 
-  // CRITICAL FIX: Use in-memory storage for authentication
-  // Without this, the authentication result is discarded and subsequent requests fail
-  const storage = new MemoryStorage();
-
-  // Create client with custom storage (don't auto-connect, we'll connect manually)
+  // The task-scoped token is available before the transport exists. Present it
+  // on every namespace handshake so the daemon installs immutable executor,
+  // tenant, session, task, and branch authority before accepting the socket.
   const client = createClient(daemonUrl, false, {
     verbose: DEBUG_FEATHERS_CLIENT, // Log connection status for debugging
     // Executors may run for much longer than common proxy/websocket connection
@@ -125,74 +101,50 @@ export async function createExecutorClient(
     // disconnect: heartbeats stop, terminal task patches are lost, and the
     // daemon eventually marks the task failed via stale heartbeat/onExit
     // safety nets. Match the browser client and keep retrying for the task's
-    // lifetime; the existing reconnect handler below re-authenticates the
-    // socket after each successful reconnect.
+    // lifetime. Every automatic reconnect performs a fresh authenticated
+    // handshake with the same scoped bearer.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
     ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
-    authStorage: storage,
+    socketAuthentication: { accessToken: sessionToken },
   });
   registerExecutorClientHooks(client);
 
-  // Keep the executor JWT available for daemon endpoints that need an explicit
-  // task-scoped proof. Socket.io auth can preserve the session creator user
-  // while dropping custom JWT claims from subsequent service params.
+  // Keep the executor JWT available for downstream process boundaries and
+  // daemon endpoints that require an explicit task-scoped bearer, rather than
+  // relying on the in-process Socket.IO connection projection.
   (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
 
   let serverDisconnectReconnectAttempts = 0;
-  let serverDisconnectAuthFailures = 0;
   let serverDisconnectReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let recoveringServerDisconnect = false;
   const resetServerDisconnectRecovery = () => {
     serverDisconnectReconnectAttempts = 0;
-    serverDisconnectAuthFailures = 0;
+    recoveringServerDisconnect = false;
     if (serverDisconnectReconnectTimer) {
       clearTimeout(serverDisconnectReconnectTimer);
       serverDisconnectReconnectTimer = undefined;
     }
   };
 
-  // Single-flight re-authentication. Both the socket-reconnect handlers and the
-  // 401-retry hook below funnel through this, so overlapping reauth attempts
-  // (e.g. a reconnect reauth racing a burst of in-flight-request 401s) coalesce
-  // into exactly ONE reAuthenticate/authenticate round-trip. Every caller
-  // awaits its REAL result — not an optimistic early `true` — so a caller that
-  // sees `true` knows the socket is genuinely re-authenticated.
-  const reauthenticateSocket = createSingleFlight(async (label: string): Promise<boolean> => {
-    try {
-      // Try reAuthenticate first — uses stored credentials from MemoryStorage
-      await client.reAuthenticate(true);
-      console.log(`[executor] Re-authenticated successfully after ${label}`);
-      resetServerDisconnectRecovery();
-      await hooks?.onReauthenticated?.();
-      return true;
-    } catch {
-      // Fallback: authenticate with raw JWT if storage-based re-auth fails
-      try {
-        await client.authenticate({
-          strategy: 'jwt',
-          accessToken: sessionToken,
-        });
-        console.log(`[executor] Re-authenticated with JWT fallback after ${label}`);
-        resetServerDisconnectRecovery();
-        await hooks?.onReauthenticated?.();
-        return true;
-      } catch (error) {
-        // The underlying session JWT is itself invalid/expired — nothing left
-        // to re-authenticate with. Report failure so the 401-retry hook fails
-        // the original call cleanly after one attempt instead of looping.
-        console.error(`[executor] Re-authentication failed after ${label}:`, error);
-        return false;
-      }
-    }
-  });
+  let hasConnectedOnce = false;
+  let restoreAfterReconnect: Promise<void> | null = null;
+  const restoreSocketState = (): void => {
+    if (!hooks?.onReconnected || restoreAfterReconnect) return;
+    restoreAfterReconnect = Promise.resolve(hooks.onReconnected())
+      .catch((error) => {
+        console.error('[executor] Post-reconnect recovery failed:', error);
+      })
+      .finally(() => {
+        restoreAfterReconnect = null;
+      });
+  };
 
-  // Method-agnostic, one-shot 401 retry. Any service call that fails with a
-  // definite auth failure (401 / NotAuthenticated) runs single-flight reauth
-  // and retries the ORIGINAL call exactly once, replaying via the raw hook
-  // arguments so custom (non-CRUD) methods retry too. There is deliberately NO
-  // proactive refresh timer: re-presenting the JWT cannot extend its expiry, so
-  // recovery is purely reactive. See feathers-auth-retry.ts.
-  const authRetryHook = createAuthRetryAroundHook({ client, reauthenticate: reauthenticateSocket });
-  client.hooks({ around: { all: [authRetryHook] } } as Parameters<AgorClient['hooks']>[0]);
+  client.io.on('connect', () => {
+    const isReconnect = hasConnectedOnce;
+    hasConnectedOnce = true;
+    resetServerDisconnectRecovery();
+    if (isReconnect) restoreSocketState();
+  });
 
   const scheduleServerDisconnectReconnect = () => {
     if (serverDisconnectReconnectTimer) return;
@@ -202,6 +154,7 @@ export async function createExecutorClient(
         'server_disconnect_reconnect_abandoned',
         `after ${serverDisconnectReconnectAttempts} attempts`
       );
+      recoveringServerDisconnect = false;
       return;
     }
 
@@ -222,23 +175,6 @@ export async function createExecutorClient(
 
     serverDisconnectReconnectTimer = setTimeout(() => {
       serverDisconnectReconnectTimer = undefined;
-      client.io.once('connect', async () => {
-        const reauthenticated = await reauthenticateSocket('server disconnect reconnect');
-        if (reauthenticated) return;
-
-        serverDisconnectAuthFailures += 1;
-        if (serverDisconnectAuthFailures >= SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES) {
-          logSocketEvent(
-            'server_disconnect_reconnect_auth_abandoned',
-            `after ${serverDisconnectAuthFailures} auth failures`
-          );
-          client.io.disconnect();
-          return;
-        }
-
-        client.io.disconnect();
-        scheduleServerDisconnectReconnect();
-      });
       client.io.connect();
     }, delayMs);
   };
@@ -252,14 +188,20 @@ export async function createExecutorClient(
       // initiated namespace disconnect. In practice, long executor tasks can
       // see this at the same ~15-minute boundary as proxy transport rotation.
       // Treat it as recoverable for executor lifetimes and explicitly reopen
-      // the socket; the one-shot connect handler below re-authenticates the new
-      // socket because Manager "reconnect" is not emitted for this path.
+      // the socket. The new handshake revalidates the scoped bearer before the
+      // connect handler restores task/terminal socket state.
+      recoveringServerDisconnect = true;
       scheduleServerDisconnectReconnect();
     }
   });
 
   client.io.on('connect_error', (error: Error) => {
     logSocketEvent('connect_error', error);
+    // A server-initiated disconnect disables Socket.IO's normal manager retry.
+    // Keep the explicit bounded recovery loop alive when its handshake fails;
+    // revoked/expired credentials therefore fail closed after the cap rather
+    // than spinning forever.
+    if (recoveringServerDisconnect) scheduleServerDisconnectReconnect();
   });
 
   client.io.io.on('reconnect_attempt', (attemptNumber: number) => {
@@ -276,45 +218,38 @@ export async function createExecutorClient(
 
   client.io.connect();
 
-  // Wait for connection
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Connection timeout'));
-    }, 5000);
+  // Wait for the daemon to accept the authenticated namespace handshake.
+  // The caller cannot clean up a client that was never returned, so close it
+  // here on initial failure (especially important with infinite transport
+  // reconnection configured for successfully-started long-running tasks).
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Connection timeout'));
+      }, 5000);
 
-    client.io.once('connect', () => {
-      clearTimeout(timeout);
-      resolve();
+      client.io.once('connect', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      client.io.once('connect_error', (error: Error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
     });
+  } catch (error) {
+    client.io.close();
+    throw error;
+  }
 
-    client.io.once('connect_error', (error: Error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  feathersClientDebug('[executor] Connected to daemon with authenticated handshake');
 
-  feathersClientDebug('[executor] Connected to daemon via Feathers client');
-
-  // Authenticate with session token (which is now a JWT!)
-  // This uses the standard JWT strategy - no custom strategy needed
-  // Session tokens are JWTs containing { sub: userId, sessionId: sessionId }
-  await client.authenticate({
-    strategy: 'jwt',
-    accessToken: sessionToken,
-  });
-
-  feathersClientDebug('[executor] Authenticated with session token (JWT)');
-
-  // Re-authenticate automatically on socket reconnect
-  // When socket.io reconnects after a transport error, the new socket is unauthenticated.
-  // Without this, all subsequent API calls fail with "NotAuthenticated" and the executor crashes.
-  // This is critical for long-running SDK turns (Codex, Gemini) where transient network hiccups
-  // can cause socket disconnects mid-execution.
-  // NOTE: 'reconnect' is a Manager event, not a Socket event.
-  // client.io is the Socket; client.io.io is the Manager.
-  client.io.io.on('reconnect', async (attemptNumber: number) => {
-    logSocketEvent('reconnected', `attempt ${attemptNumber}; re-authenticating`);
-    await reauthenticateSocket('reconnect');
+  // Manager-level reconnects retain the same Socket/Feathers client. The
+  // namespace `connect` listener above restores socket-scoped state after the
+  // daemon accepts the new authenticated handshake.
+  client.io.io.on('reconnect', (attemptNumber: number) => {
+    logSocketEvent('reconnected', `attempt ${attemptNumber}`);
   });
 
   return client;

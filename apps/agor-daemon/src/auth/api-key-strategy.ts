@@ -8,6 +8,7 @@
 import type { UserApiKeysRepository } from '@agor/core/db';
 import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   private apiKeysRepo: UserApiKeysRepository | null = null;
@@ -65,6 +66,8 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers req type
   async parse(req: any): Promise<{ strategy: string; apiKey: string } | null> {
+    if (isSocketIoHandshakeRequest(req)) return null;
+
     // Check X-API-Key header first
     const xApiKey = req.headers?.['x-api-key'];
     if (xApiKey && typeof xApiKey === 'string' && xApiKey.startsWith('agor_sk_')) {

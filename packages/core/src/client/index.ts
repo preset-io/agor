@@ -10,6 +10,7 @@
 export type {
   AgorClient,
   AgorService,
+  AuthenticatedAgorClient,
   BoardsService,
   BranchesService,
   ClientInput,

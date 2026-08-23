@@ -22,8 +22,8 @@ export function isTerminalExecutorIdentity(user: unknown): boolean {
 /**
  * Reject any REST/Feathers service call made by a terminal-executor identity.
  * Composed into `requireAuth` so it runs for every authenticated endpoint. The
- * authentication service itself is NOT gated by `requireAuth`, so the executor
- * can still (re)authenticate its socket.
+ * authentication service itself is NOT gated by `requireAuth` because the
+ * Socket.IO handshake invokes the JWT strategy before accepting a connection.
  */
 export async function rejectTerminalExecutorIdentity(context: HookContext): Promise<HookContext> {
   const user = (context.params as { user?: unknown } | undefined)?.user;

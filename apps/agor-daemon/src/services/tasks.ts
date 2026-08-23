@@ -1485,9 +1485,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       },
       { userId: task.created_by }
     );
-    void this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!).catch((error) =>
-      console.warn('Executor heartbeat callback failed:', error)
-    );
+    if (this.heartbeatCallbackRunner.isConfigured()) {
+      // Heartbeats arrive inside the request's tenant DB transaction. The
+      // optional callback enrichment performs a later sessions.get, so retain
+      // only the trusted tenant identity and re-enter after commit instead of
+      // inheriting a committed database scope into detached work.
+      deferWithTenantContext(
+        params,
+        () => this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!),
+        (error) => console.warn('Executor heartbeat callback failed:', error)
+      );
+    }
     emitServiceEvent(this.app, {
       path: 'tasks',
       event: 'patched',

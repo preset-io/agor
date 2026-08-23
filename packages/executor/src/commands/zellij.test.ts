@@ -302,10 +302,10 @@ describe('createReconnectGrace', () => {
     expect(onGraceElapsed).toHaveBeenCalledTimes(1);
   });
 
-  it('tears down when the bridge never becomes healthy again (reconnect without re-auth)', () => {
+  it('tears down when the daemon never accepts the replacement connection', () => {
     // Models a socket that flaps back to transport-connected but never
-    // re-authenticates: onReconnect (which zellij.ts only calls after a
-    // successful re-auth) is never invoked, so the window still fires.
+    // completes an authenticated namespace handshake: onReconnect is never
+    // invoked, so the window still fires.
     let bridgeHealthy = false;
     const onGraceElapsed = vi.fn();
     const grace = createReconnectGrace({
@@ -315,8 +315,8 @@ describe('createReconnectGrace', () => {
     });
 
     grace.onDisconnect();
-    // Transport blips but re-auth keeps failing; bridgeHealthy stays false and
-    // onReconnect is never called.
+    // Transport blips but the handshake keeps failing; bridgeHealthy stays
+    // false and onReconnect is never called.
     bridgeHealthy = false;
     vi.advanceTimersByTime(30_000);
     expect(onGraceElapsed).toHaveBeenCalledTimes(1);

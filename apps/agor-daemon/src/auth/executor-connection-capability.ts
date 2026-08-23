@@ -2,7 +2,6 @@ import type { TenantContext } from '@agor/core/types';
 import type { ExecutorSessionTokenRevocation } from '../services/session-token-service.js';
 
 const CANDIDATE = Symbol('agor.executor-connection-capability-candidate');
-const CAPABILITY = Symbol('agor.executor-connection-capability');
 const TOMBSTONE_TTL_MS = 5 * 60 * 1000;
 const MAX_TOMBSTONES = 4_096;
 
@@ -24,16 +23,15 @@ export interface ExecutorConnectionCapabilityCandidate {
 }
 
 export interface ExecutorConnectionCapability {
-  tenant: TenantContext;
-  sessionId: string;
-  taskId?: string;
-  branchId?: string;
-  expiresAt: number;
-  tokenFingerprint: string;
+  readonly tenant: TenantContext;
+  readonly sessionId: string;
+  readonly taskId?: string;
+  readonly branchId?: string;
+  readonly expiresAt: number;
+  readonly tokenFingerprint: string;
 }
 
 type CandidateCarrier = { [CANDIDATE]?: ExecutorConnectionCapabilityCandidate };
-type CapabilityCarrier = { [CAPABILITY]?: ExecutorConnectionCapability };
 
 function tombstoneKey(tenantId: string | undefined, value: string): string {
   return `${tenantId ?? '*'}\0${value}`;
@@ -43,11 +41,11 @@ function tombstoneKey(tenantId: string | undefined, value: string): string {
  * Process-local half of the distributed executor-token revocation fence.
  *
  * The authority database decides whether a bearer is valid. This fence closes
- * the interval between an asynchronous authority read and Socket.IO's final
- * synchronous login event: a revocation observed during that interval changes
- * the generation, so the stale authentication result cannot install a room
- * capability. Bounded tombstones also make the exact/session decision explicit
- * without retaining raw bearer material.
+ * the interval between an asynchronous authority read and the final synchronous
+ * authenticated-connection commit: a revocation observed during that interval
+ * changes the generation, so the stale authentication result cannot install a
+ * room capability. Bounded tombstones also make the exact/session decision
+ * explicit without retaining raw bearer material.
  */
 export class ExecutorConnectionRevocationFence {
   private allGeneration = 0;
@@ -175,38 +173,18 @@ export function getExecutorConnectionCapabilityCandidate(
 }
 
 export function commitExecutorConnectionCapability(
-  connection: object,
   candidate: ExecutorConnectionCapabilityCandidate,
   tenant: TenantContext,
   fence: ExecutorConnectionRevocationFence
 ): ExecutorConnectionCapability | undefined {
   if (!fence.permits(candidate, tenant)) return undefined;
-  const capability: ExecutorConnectionCapability = {
+  const capability: ExecutorConnectionCapability = Object.freeze({
     tenant,
     sessionId: candidate.sessionId,
     ...(candidate.taskId ? { taskId: candidate.taskId } : {}),
     ...(candidate.branchId ? { branchId: candidate.branchId } : {}),
     expiresAt: candidate.expiresAt,
     tokenFingerprint: candidate.tokenFingerprint,
-  };
-  Object.defineProperty(connection, CAPABILITY, {
-    configurable: true,
-    enumerable: false,
-    value: capability,
   });
   return capability;
-}
-
-export function getExecutorConnectionCapability(
-  connection: unknown
-): ExecutorConnectionCapability | undefined {
-  return connection && typeof connection === 'object'
-    ? (connection as CapabilityCarrier)[CAPABILITY]
-    : undefined;
-}
-
-export function clearExecutorConnectionCapability(connection: unknown): void {
-  if (connection && typeof connection === 'object') {
-    Reflect.deleteProperty(connection, CAPABILITY);
-  }
 }

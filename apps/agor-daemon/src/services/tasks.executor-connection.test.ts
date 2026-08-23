@@ -1,3 +1,4 @@
+import { getCurrentTenantId } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -113,6 +114,7 @@ describe('TasksService runtime telemetry', () => {
     const heartbeatCallback = vi.fn().mockResolvedValue(undefined);
     Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
     Reflect.set(service, 'handleExecutorHeartbeat', heartbeatCallback);
+    Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => false });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
 
     const result = await service.reportRuntimeTelemetry({
@@ -140,4 +142,51 @@ describe('TasksService runtime telemetry', () => {
       service.reportRuntimeTelemetry({ task_id: task.task_id, pulse })
     ).rejects.toThrow();
   });
+
+  it.each([
+    { tenantId: 'tenant-a', expectedBranchId: 'branch-a' },
+    { tenantId: 'tenant-b', expectedBranchId: undefined },
+  ])(
+    'enriches deferred heartbeat callbacks only inside the originating tenant ($tenantId)',
+    async ({ tenantId, expectedBranchId }) => {
+      const service = Object.create(TasksService.prototype) as TasksService;
+      const callbackRun = vi.fn();
+      const sessionGet = vi.fn(async () => {
+        if (getCurrentTenantId() !== 'tenant-a') throw new Error('session not found');
+        return { session_id: task.session_id, branch_id: 'branch-a' };
+      });
+      const emit = vi.fn();
+      Reflect.set(service, 'taskRepo', {
+        reportRuntimeTelemetry: vi.fn().mockResolvedValue(task),
+      });
+      Reflect.set(service, 'heartbeatCallbackRunner', {
+        isConfigured: () => true,
+        run: callbackRun,
+      });
+      Reflect.set(service, 'app', {
+        service: (path: string) => (path === 'sessions' ? { get: sessionGet } : { emit }),
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await service.reportRuntimeTelemetry({ task_id: task.task_id }, {
+        tenant: { tenant_id: tenantId, source: 'auth_claim' },
+      } as never);
+      await vi.waitFor(() => expect(callbackRun).toHaveBeenCalledOnce());
+
+      expect(sessionGet).toHaveBeenCalledWith(task.session_id);
+      expect(callbackRun).toHaveBeenCalledWith({
+        event: 'executor_heartbeat',
+        task_id: task.task_id,
+        session_id: task.session_id,
+        last_executor_heartbeat_at: task.last_executor_heartbeat_at,
+        ...(expectedBranchId ? { branch_id: expectedBranchId } : {}),
+      });
+      if (!expectedBranchId) {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('Could not resolve branch_id'),
+          'session not found'
+        );
+      }
+    }
+  );
 });

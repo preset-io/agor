@@ -720,7 +720,6 @@ async function startDaemonWithOwnedMetrics(
 
   const socketIOConfig = createSocketIOConfig(app, {
     corsOrigin,
-    jwtSecret,
     credentialsAllowed,
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the
     // `allow_web_terminal: false` kill-switch is enforced on the WebSocket
@@ -741,7 +740,7 @@ async function startDaemonWithOwnedMetrics(
       : {}),
   });
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
-  configureChannels(app, { multiTenancy });
+  configureChannels(app);
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
   const { db } = await initializeDatabase(databaseUrl, {

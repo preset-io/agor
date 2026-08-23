@@ -28,21 +28,37 @@ fails closed.
 
 ## Authentication and lifecycle result
 
-1. Handshake JWTs require the runtime issuer/audience and an exact Bearer token.
-   Conflicting `auth.token` and Authorization-header tokens are rejected.
+1. Handshake JWTs require the runtime issuer/audience, a bounded `exp`, and an
+   exact Bearer token. Conflicting `auth.token` and Authorization-header tokens
+   are rejected.
 2. Required-from-auth tenant identity comes only from signed claims. A raw
    handshake header/query/auth field is never tenant authority. If a configured
    signed claim and canonical `tenant_id` disagree, authentication fails.
 3. User lookup runs in the claimed tenant and checks `tokens_valid_after`.
    Service tokens must also satisfy the executor subject/purpose contract.
-4. Anonymous connections are permitted only as a login bootstrap. They join no
-   Feathers channel or tenant room and receive only `server-info`.
-5. Login replacement clears every prior Feathers/raw room, terminal
-   capability, tenant value, and authorization cache before installing the new
-   identity. Logout does the same. Asynchronous board joins recheck identity
-   after their authorization await.
-6. Every authenticated socket is disconnected at JWT `exp`; a replacement
-   login replaces the timer. Password/role/token and revocation-capable RBAC
+4. There is no anonymous namespace connection or post-connect login bootstrap.
+   The verified strategy result is synchronously finalized as a non-enumerable,
+   immutable connection authority before Socket.IO accepts the connection.
+   The authority contains the principal kind and trusted tenant; executor
+   principals additionally retain only their exact server-derived scope and a
+   token fingerprint. The same finalizer installs a frozen, enumerable
+   Feathers identity projection (`authenticated`, verified payload without the
+   bearer, redacted user, and tenant), so service hooks consume the established
+   connection authority instead of re-verifying mutable credential state. A
+   live connection cannot replace that authority, even after retirement.
+5. The same authority supplies the Feathers connection tenant used by service
+   hooks and every native Socket.IO authorization decision. Raw handshake
+   fields, `socket.data`, and authentication responses are not competing
+   identity sources. Restricted terminal executors receive no Feathers identity
+   projection at all. `configureChannels` consumes the finalized authority once
+   on connection. Asynchronous board joins recheck that authority after their
+   authorization await.
+6. Machine and impersonation sockets are disconnected at JWT `exp`. An
+   ordinary browser access token is an admission credential: routine 15-minute
+   rotation updates the bearer used by the next handshake without interrupting
+   a healthy immutable connection, open terminal, or subscriptions. Natural
+   reconnect still verifies the latest token and rejects stale/expired tokens.
+   Password/role/token and revocation-capable RBAC
    mutations emit a post-commit tenant authorization-invalidation signal,
    propagated to every Redis replica, which clears cached decisions,
    disconnects that tenant's sockets, and forces fresh authentication and
@@ -51,8 +67,10 @@ fails closed.
    created them. Full eviction includes permission-source/default-policy
    changes, filesystem-access reductions, and board/user deletion, not only
    direct grant edits.
-7. Socket.IO connection-state recovery is not enabled. A reconnect therefore
-   performs a new handshake rather than restoring old rooms.
+7. Socket.IO transport auto-reconnect remains enabled for browser and executor
+   clients. Server-side connection-state recovery is deliberately not enabled:
+   every replacement namespace connection performs the full authenticated
+   handshake and rebuilds only its authorized rooms/subscriptions.
 
 ## Room / channel authorization matrix
 
@@ -60,24 +78,24 @@ Logical names are shown below. The implementation encodes every dynamic tuple
 component with canonical base64url and uses versioned prefixes; callers never
 construct authorization by concatenating raw IDs.
 
-| Room/channel or stream               | Constructor/owner                                                  | Who may join                                                                                                                                          | Join authorization owner                                                                              | Publisher / event authorization                                                                                                                                | HA and cleanup                                                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Feathers `authenticated`             | `configureChannels`                                                | Full user/service login; never anonymous, terminal executor, or task executor                                                                         | authentication result                                                                                 | only an intermediate set; publisher always intersects tenant                                                                                                   | left on login replacement/logout/disconnect                                                                             |
-| Tenant channel                       | `tenantChannelName`                                                | user/full service with trusted tenant                                                                                                                 | signed claim or static config                                                                         | required tenant resolution; missing/conflict returns no recipients                                                                                             | Redis Feathers relay re-authorizes; all tenant channels removed on identity change                                      |
-| Tenant-user channel                  | `tenantUserChannelName`                                            | current user only                                                                                                                                     | authenticated result, never payload user ID                                                           | OAuth per-user events and user-scoped delivery                                                                                                                 | versioned room; identity-change cleanup                                                                                 |
-| Board presence                       | `boardPresenceRoomName`                                            | authenticated non-executor user with current `boards.get` access                                                                                      | `presence:watch-board` calls the hooked boards service, then rechecks live identity                   | cursor packets require the board in the socket's authorized set; room is tenant-qualified                                                                      | native Redis allowlist; unwatch/logout/invalidation/disconnect remove capability                                        |
-| Board Feathers audience              | `resolvePublishScope(kind=board)`                                  | not directly client-joinable                                                                                                                          | `BoardRepository.canView` per receiving connection                                                    | boards/cards/objects/comments resolve board ID and current board visibility; missing board is service-only                                                     | receiving replica re-authorizes; delete uses pre-delete visibility snapshot                                             |
-| Session stream                       | `sessionStreamRoomName`                                            | authenticated browser with current session/branch view; task executors denied                                                                         | `session-streams.create` plus session/branch hooks                                                    | every chunk intersects the current tenant channel and current branch visibility                                                                                | room cleared on logout/login; cache invalidation + tenant eviction on ACL changes                                       |
-| Executor task                        | `executorTaskRoomName`                                             | only an executor-session token whose signed task claim equals the authenticated result                                                                | final server-owned capability commit in `createSocketIOConfig`                                        | task/message private control events target the tenant-qualified task room                                                                                      | cleared on login/logout/disconnect; relay envelope keeps tenant/task scope                                              |
-| Terminal attachment                  | `terminalChannelName`                                              | current user for own allocated terminal, or terminal-scoped service token matching tenant/user/terminal/branch/boot and live process-local attachment | terminal allocation server capability plus per-event guard; generic `join` repeats exact scope checks | browser input/resize goes only to active local executor socket; executor output/lifecycle requires scoped token and live attachment                            | PTY payloads are `.local`; only qualified lifecycle metadata crosses replicas; replacement/disconnect fences duplicates |
-| Branch/session/task/message services | central realtime policy + `RealtimeAccessCache`                    | not client-joinable except session stream above                                                                                                       | branch repository / session derivation                                                                | current branch visibility; malformed or unresolved parent narrows to service-only                                                                              | relay v3 re-authorizes on each replica; branch removal carries a pre-delete snapshot                                    |
-| Artifact events                      | artifact audience                                                  | not directly joinable                                                                                                                                 | branch visibility, or creator/admin for null-branch artifacts                                         | CRUD uses artifact audience; `agor-query` is requester-socket only and never enters Redis                                                                      | requester query is local; metadata relay is re-authorized                                                               |
-| Knowledge events                     | knowledge publisher                                                | not directly joinable                                                                                                                                 | namespace/document permission resolver                                                                | per-document/per-namespace readers; query/edit RPC results suppressed                                                                                          | safe envelope and receiving-replica resolution                                                                          |
-| Tenant catalogs                      | tenant channel                                                     | current tenant user/full service                                                                                                                      | trusted tenant context                                                                                | only declared services; credential fields are projected/redacted before publish                                                                                | relay v3; missing tenant never becomes global                                                                           |
-| Gateway                              | no raw client room                                                 | none                                                                                                                                                  | authenticated service hooks and gateway tenant scope                                                  | gateway RPC is silent; `gateway-channels` configuration is declared tenant-wide                                                                                | Feathers relay only, no caller-named room                                                                               |
-| OAuth notification                   | tenant or tenant-user helper; exact local socket for bootstrap URL | no explicit client join                                                                                                                               | authenticated initiating connection and durable tenant/user flow                                      | shared grant -> tenant; per-user grant -> tenant-user; authorization URL -> exact local socket only                                                            | completion hint may cross Redis; credential/control-plane service responses never do                                    |
-| Repo clone error                     | tenant helper                                                      | current tenant                                                                                                                                        | trusted tenant params captured at operation start                                                     | tenant-qualified native event                                                                                                                                  | audited native Redis event                                                                                              |
-| Authorization invalidation           | internal server-side event                                         | clients cannot join/receive it                                                                                                                        | post-commit mutation hooks                                                                            | always clears matching tenant authorization caches; revocation-capable mutations also disconnect sockets and retire terminal capabilities; no resource payload | Socket.IO `serverSideEmit`, adapter-only                                                                                |
+| Room/channel or stream               | Constructor/owner                                                  | Who may join                                                                                                                                          | Join authorization owner                                                                             | Publisher / event authorization                                                                                                                                | HA and cleanup                                                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Feathers `authenticated`             | `configureChannels`                                                | Full user/service handshake; never anonymous, terminal executor, or task executor                                                                     | immutable connection authority                                                                       | only an intermediate set; publisher always intersects tenant                                                                                                   | transport disconnect removes membership; reconnect rebuilds from new authority                                        |
+| Tenant channel                       | `tenantChannelName`                                                | user/full service with trusted tenant                                                                                                                 | immutable authority derived from signed claim or static config                                       | required tenant resolution; missing/conflict returns no recipients                                                                                             | Redis Feathers relay re-authorizes; disconnect/invalidation clears membership                                         |
+| Tenant-user channel                  | `tenantUserChannelName`                                            | current user only                                                                                                                                     | immutable authority, never payload user ID                                                           | OAuth per-user events and user-scoped delivery                                                                                                                 | versioned room; disconnect/reconnect cleanup                                                                          |
+| Board presence                       | `boardPresenceRoomName`                                            | authenticated non-executor user with current `boards.get` access                                                                                      | `presence:watch-board` calls the hooked boards service, then rechecks live identity                  | cursor packets require the board in the socket's authorized set; room is tenant-qualified                                                                      | native Redis allowlist; unwatch/logout/invalidation/disconnect remove capability                                      |
+| Board Feathers audience              | `resolvePublishScope(kind=board)`                                  | not directly client-joinable                                                                                                                          | `BoardRepository.canView` per receiving connection                                                   | boards/cards/objects/comments resolve board ID and current board visibility; missing board is service-only                                                     | receiving replica re-authorizes; delete uses pre-delete visibility snapshot                                           |
+| Session stream                       | `sessionStreamRoomName`                                            | authenticated browser with current session/branch view; task executors denied                                                                         | `session-streams.create` plus session/branch hooks                                                   | every chunk intersects the current tenant channel and current branch visibility                                                                                | disconnect clears room; client re-announces after accepted reconnect; ACL eviction disconnects                        |
+| Executor task                        | `executorTaskRoomName`                                             | only an executor-session token whose signed task claim equals the authenticated result                                                                | awaited `ServiceJWTStrategy` finalizer commits authority; `configureChannels` owns membership        | task/message private control events target the tenant-qualified task room                                                                                      | disconnect/revocation clears room; reconnect revalidates token and relay envelope keeps tenant/task scope             |
+| Terminal attachment                  | `terminalChannelName`                                              | current user for own allocated terminal, or terminal-scoped service token matching tenant/user/terminal/branch/boot and live process-local attachment | terminal allocation server capability plus immutable connection scope; generic `join` repeats checks | browser input/resize goes only to active local executor socket; executor output/lifecycle requires scoped token and live attachment                            | PTY payloads are `.local`; only qualified lifecycle metadata crosses replicas; reconnect/disconnect fences duplicates |
+| Branch/session/task/message services | central realtime policy + `RealtimeAccessCache`                    | not client-joinable except session stream above                                                                                                       | branch repository / session derivation                                                               | current branch visibility; malformed or unresolved parent narrows to service-only                                                                              | relay v3 re-authorizes on each replica; branch removal carries a pre-delete snapshot                                  |
+| Artifact events                      | artifact audience                                                  | not directly joinable                                                                                                                                 | branch visibility, or creator/admin for null-branch artifacts                                        | CRUD uses artifact audience; `agor-query` is requester-socket only and never enters Redis                                                                      | requester query is local; metadata relay is re-authorized                                                             |
+| Knowledge events                     | knowledge publisher                                                | not directly joinable                                                                                                                                 | namespace/document permission resolver                                                               | per-document/per-namespace readers; query/edit RPC results suppressed                                                                                          | safe envelope and receiving-replica resolution                                                                        |
+| Tenant catalogs                      | tenant channel                                                     | current tenant user/full service                                                                                                                      | trusted tenant context                                                                               | only declared services; credential fields are projected/redacted before publish                                                                                | relay v3; missing tenant never becomes global                                                                         |
+| Gateway                              | no raw client room                                                 | none                                                                                                                                                  | authenticated service hooks and gateway tenant scope                                                 | gateway RPC is silent; `gateway-channels` configuration is declared tenant-wide                                                                                | Feathers relay only, no caller-named room                                                                             |
+| OAuth notification                   | tenant or tenant-user helper; exact local socket for bootstrap URL | no explicit client join                                                                                                                               | authenticated initiating connection and durable tenant/user flow                                     | shared grant -> tenant; per-user grant -> tenant-user; authorization URL -> exact local socket only                                                            | completion hint may cross Redis; credential/control-plane service responses never do                                  |
+| Repo clone error                     | tenant helper                                                      | current tenant                                                                                                                                        | trusted tenant params captured at operation start                                                    | tenant-qualified native event                                                                                                                                  | audited native Redis event                                                                                            |
+| Authorization invalidation           | internal server-side event                                         | clients cannot join/receive it                                                                                                                        | post-commit mutation hooks                                                                           | always clears matching tenant authorization caches; revocation-capable mutations also disconnect sockets and retire terminal capabilities; no resource payload | Socket.IO `serverSideEmit`, adapter-only                                                                              |
 
 The exhaustive service-event declaration is
 `apps/agor-daemon/src/utils/realtime-publish-policy.ts`. Startup refuses to run
@@ -106,7 +124,7 @@ terminal, streaming-ingest, and session-stream control services declare
 | WS-03 | **High**   | Socket tenant resolution accepted the configured trusted header directly from the client handshake. The HTTP deployment's proxy trust boundary did not automatically protect Socket.IO auth metadata.                                             | A valid user token plus a caller-selected header could bind the socket to a different tenant in header-based configurations.                                        | Socket authentication accepts signed tenant claims only (canonical fallback included) and rejects conflicting signed claims.                                                                    |
 | WS-04 | **High**   | The manual handshake JWT path accepted any correctly signed `type:service` token without the service strategy's subject/purpose checks; the canonical strategy also treated the reserved subject as a service entity before checking token type.  | A token from another runtime purpose, or a non-service token using the reserved subject, could acquire full service socket semantics.                               | Require the executor service subject/type and compatible purpose in both handshake and canonical strategy paths.                                                                                |
 | WS-05 | **High**   | A Feathers publication whose tenant resolution failed returned the whole service connection set.                                                                                                                                                  | Missing tenant metadata on an internal/manual emit could become a cross-tenant global broadcast.                                                                    | Unknown/missing/conflicting tenant delivery is `[]`; conflicts never fall back to static/global behavior.                                                                                       |
-| WS-06 | **High**   | Authentication was handshake-time only. JWT expiry, user token invalidation, and RBAC changes did not evict passive room membership.                                                                                                              | A tab could continue receiving authorized-before-revocation events until transport disconnect.                                                                      | Token-invalidated-at check, expiry disconnect timers, complete live-auth replacement cleanup, post-commit tenant eviction, and Redis-wide invalidation.                                         |
+| WS-06 | **High**   | Authentication was handshake-time only. JWT expiry, user token invalidation, and RBAC changes did not evict passive room membership.                                                                                                              | A tab could continue receiving authorized-before-revocation events until transport disconnect.                                                                      | Token-invalidated-at check, expiry disconnect timers, immutable authenticated handshakes, post-commit tenant eviction, and Redis-wide invalidation.                                             |
 | WS-07 | **High**   | Broadly role-gated streaming ingest allowed an ordinary member to submit executor-shaped task/message progress events.                                                                                                                            | A same-tenant member could forge runtime progress and influence listeners.                                                                                          | Require a full service identity or a task-scoped executor-session token; ordinary users are denied.                                                                                             |
 | WS-08 | **Medium** | Board/card/object/comment CRUD publication was tenant-wide, while private-board reads were narrower. Several standard mutations and the comment reaction/reply routes also lacked resource authorization; reaction user ID was caller-controlled. | A same-tenant non-viewer could receive or mutate private board data and attribute a reaction to another user.                                                       | Board-scoped publication with per-recipient `canView`; board/card/object/comment mutation hooks; custom comment route authorization; server-derived author/reaction identity; field projection. |
 | WS-09 | **Medium** | Artifact `agor-query` runtime requests were emitted to the artifact audience and contained requester/query details, with UI-side filtering as the last boundary.                                                                                  | Other authorized artifact viewers could passively receive a request intended for one tab.                                                                           | Exact requester-connection delivery only; event is denied from Redis.                                                                                                                           |
@@ -145,7 +163,7 @@ one replica disconnects tenant A on both replicas without disconnecting B.
 ### Unit and static negatives
 
 Focused tests cover claim/header conflicts, multiple credential sources,
-service token semantics, token invalidation/expiry, live login replacement,
+service token semantics, token invalidation/expiry, live login rejection,
 task-executor room restriction, room encoding/parser collisions, terminal
 scope/duplicate/rate-limit cases, session-stream authorization, publish-time
 RBAC, missing tenant, board delete snapshots, Redis relay v3 validation,
@@ -199,15 +217,16 @@ gaps. They were fixed before merge:
 Regression coverage includes two branches with different visibility on one
 private board, warm-cache revoke/reconnect, browser terminal rejoin after
 invalidation, local and cross-replica active executor revocation, and
-post-connect contradictory-claim authentication.
+contradictory signed claims at authentication, refresh, and handshake
+boundaries.
 
 A second review pass then found connection-ordering and identifier-resolution
 edge cases. The final implementation also:
 
-- installs a non-enumerable, server-owned executor connection capability only
-  in the final Socket.IO login event, after Feathers replaces connection auth
-  state; tenant/session/task/branch, expiry, and only a token fingerprint are
-  retained;
+- installs a non-enumerable, server-owned executor connection capability in
+  Feathers' awaited authentication connection lifecycle, before the login
+  event and authentication acknowledgement; tenant/session/task/branch,
+  expiry, and only a token fingerprint are retained;
 - records bounded per-tenant revocation generations/tombstones before scanning
   sockets, so authority validation that raced a local or HA revocation cannot
   install a late task-room capability;
@@ -225,17 +244,17 @@ The executor regression uses a real Socket.IO client plus the production
 Feathers `AuthenticationService`/`ServiceJWTStrategy`, including a deterministic
 pause-after-authority-validation revoke race.
 
-A third review pass exercised live identity replacement and generic comment
-mutation fields. The final boundaries additionally:
+A third review pass exercised identity replacement and generic comment mutation
+fields. The final boundaries additionally:
 
-- retire the executor capability symbol and every executor-task Feathers
-  channel as one login-transition operation. The transition is performed once
-  regardless of listener order, and only the Socket.IO capability commit owns
-  the task-room join;
-- prove with a real tenant-A executor to tenant-B user authentication
-  replacement that the old room has no connection and neither
-  `termination_requested` nor `permission_resolved` reaches the passive client
-  buffer;
+- finalize the executor capability and canonical Feathers connection tenant
+  once in the authentication lifecycle, independent of listener order;
+  `configureChannels` remains the sole task-room membership owner;
+- reject a post-connect tenant-A executor to tenant-B user authentication call
+  without changing the original executor authority, room, or passive event
+  audience; a second regression disconnects, performs a tenant-B handshake on
+  the retained client object, and proves the retired tenant-A task room no
+  longer delivers either private control event;
 - project external comment patch to the typed `content`/`resolved` contract,
   derive edited/preview state server-side, reject generic full replacement, and
   keep reactions on their caller-bound toggle operation; and
@@ -260,6 +279,29 @@ final implementation additionally:
   directly in tests, replacing the ineffective static-path membership claim
   for routes registered after ordinary service hooks.
 
+Live HA onboarding then exposed an executor reconnect failure at the boundary
+between Socket.IO state and Feathers service params. The final hardening pushes
+the fix into connection establishment rather than wrapping individual executor
+calls:
+
+- the browser, task executor, and terminal executor present their credential on
+  every namespace handshake; the production JWT strategy installs one frozen
+  principal/tenant/scope authority before `connect` or the first service call;
+- native Socket.IO handlers and Feathers tenant hooks consume projections of
+  that same authority. Terminal user/terminal/branch/boot scope is copied into
+  the immutable authority rather than reread from mutable Feathers entity data;
+- the Socket.IO client factory accepts a token getter, so normal automatic
+  reconnects read the latest browser token. A rejected expired-token handshake
+  refreshes over REST and retries; executor reconnects reuse their exact scoped
+  token and fail closed after revocation;
+- the Socket.IO client deliberately omits Feathers' authentication-client
+  plugin, eliminating its automatic post-connect reauthentication path. REST
+  login/refresh retains the normal Feathers authentication API; and
+- real production-strategy tests prove immediate tenant/user context, a
+  validation-versus-revocation race, structured fail-closed handshake errors,
+  rejection of live identity replacement, and automatic transport reconnect
+  with freshly established authority.
+
 ## Residual risks and operational requirements
 
 1. **Do not run a mixed deployment containing the vulnerable implementation.**
@@ -268,8 +310,11 @@ final implementation additionally:
    replica for clients connected directly to it. Drain old replicas and force
    reconnect during the upgrade.
 2. External identity-provider suspension has no daemon callback unless it is
-   reflected through Agor's user/token mutation path. Such a socket is bounded
-   by access-token expiry. Short access-token TTLs remain important.
+   reflected through Agor's user/token mutation path. An ordinary browser
+   access token is an admission credential, so an already accepted socket is
+   not retired merely because that bearer later expires. Deployments must
+   propagate suspension into Agor's token/user invalidation path; otherwise the
+   socket retains its accepted authority until its transport disconnects.
 3. Tenant-wide invalidation intentionally favors confidentiality over
    availability. An ACL change disconnects all sockets in that tenant; a future
    optimization may target affected users/resources only, but must preserve
@@ -315,6 +360,17 @@ Observed results on the audit branch:
   teammate selection no longer evict the initiating socket mid-RPC; focused
   invalidation, terminal, and hook coverage passed (242 tests), while
   revocation-capable mutations still require full eviction.
+- authenticated-connection finalization rerun: full daemon suite passed (259
+  files, 3,415 tests; 16 files/100 tests environment-gated), executor retry
+  coverage passed (17/17), and multitenancy/realtime boundary checks passed.
+- immutable-handshake simplification: focused daemon authentication/socket/
+  publication coverage passed (288 tests across 11 files), UI reconnect/refresh coverage passed
+  (32), executor reconnect coverage passed (28), core/client API coverage passed
+  (122), and multitenancy/realtime boundary checks passed. This refactor is a
+  net source reduction; root `pnpm check` passed all 21 typecheck tasks,
+  boundary checks, and all 15 non-doc build tasks.
+- post-review, post-rebase final rerun: the full daemon suite passed (261
+  files, 3,427 tests; 16 files/103 tests environment-gated).
 
 The PostgreSQL/RLS and Redis results above were observed earlier on this audit
 branch. Their disposable fixture URLs were not present for the final reviewer

@@ -1,4 +1,3 @@
-// @ts-nocheck - Complex client lifecycle with conditional null states
 /**
  * React hook for Agor daemon client connection
  *
@@ -6,16 +5,17 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
-import { createClient } from '@agor-live/client';
+import { createClient, createRestClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure } from '../utils/authErrors';
 import {
+  markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
-  refreshAndReauthenticate,
+  refreshTokensSingleFlight,
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
-import type { RefreshResult } from '../utils/tokenRefresh';
+import { getStoredRefreshToken, type RefreshResult } from '../utils/tokenRefresh';
 import { announceSessionStreamsCapability } from './sessionStreamsCapability';
 
 interface UseAgorClientResult {
@@ -44,17 +44,15 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<AgorClient | null>(null);
 
-  // Keep the latest access token in a ref so the long-lived socket effect
-  // can read it without taking it as a dependency. Before this split, every
-  // token refresh (every ~14 min at the 15m TTL) changed `accessToken` →
-  // the effect re-ran → the socket was torn down and recreated from scratch,
-  // which reset real-time subscriptions and explicitly flipped
-  // `connected: false` at connect() start — a UI flicker that no disconnect
-  // grace period could catch. The effect now rebuilds only when the
-  // *presence* of a token flips (login/logout) or when url changes;
-  // in-place refreshes just re-authenticate the existing socket.
+  // Every namespace handshake reads this ref. Token rotation updates the next
+  // handshake credential without replacing authority on the live connection;
+  // a natural reconnect always presents the latest token.
   const accessTokenRef = useRef(accessToken);
-  accessTokenRef.current = accessToken;
+  const accessTokenPropRef = useRef(accessToken);
+  if (accessTokenPropRef.current !== accessToken) {
+    accessTokenPropRef.current = accessToken;
+    accessTokenRef.current = accessToken;
+  }
   const hasToken = !!accessToken;
 
   useEffect(() => {
@@ -78,8 +76,8 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
 
     // Grace period before flipping `connected` to false on a disconnect.
-    // Most reconnects (tsx watch reload, brief network blip, JWT refresh
-    // reauth) finish well under 1s. Flipping `connected` immediately makes
+    // Most reconnects (tsx watch reload, brief network blip, or recovered
+    // rejected handshake) finish well under 1s. Flipping `connected` immediately makes
     // every `useConnectionDisabled` consumer disable — buttons, forms,
     // inline inputs — producing a UI flicker. Instead, fire `connecting:true`
     // immediately for the navbar status tag, and only flip `connected` if
@@ -102,6 +100,69 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       }, DISCONNECT_GRACE_MS);
     };
 
+    let authenticatedReconnect: Promise<void> | null = null;
+    const reconnectWithAuthenticatedHandshake = (nextAccessToken?: string): Promise<void> => {
+      if (nextAccessToken) accessTokenRef.current = nextAccessToken;
+      if (authenticatedReconnect) return authenticatedReconnect;
+      if (!client) return Promise.reject(new Error('Socket client is unavailable'));
+
+      const socket = client.io;
+      authenticatedReconnect = new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          socket.off('connect', handleConnect);
+          socket.off('connect_error', handleConnectError);
+        };
+        const handleConnect = () => {
+          cleanup();
+          resolve();
+        };
+        const handleConnectError = (connectError: Error) => {
+          cleanup();
+          reject(connectError);
+        };
+        socket.once('connect', handleConnect);
+        socket.once('connect_error', handleConnectError);
+        if (socket.connected) socket.disconnect();
+        socket.connect();
+      }).finally(() => {
+        authenticatedReconnect = null;
+      });
+      return authenticatedReconnect;
+    };
+
+    // A namespace middleware rejection does not produce a connected socket,
+    // so it cannot refresh through the Socket.IO Feathers transport. Recover
+    // an expired handshake credential over REST, then reopen the same client
+    // with the rotated token. Transport reconnects remain automatic; only the
+    // old post-connect Feathers reauthentication transition is gone.
+    let handshakeAuthRecovery: Promise<void> | null = null;
+    const recoverRejectedHandshake = (connectError: unknown): Promise<void> => {
+      if (!isDefiniteAuthFailure(connectError)) return Promise.reject(connectError);
+      if (handshakeAuthRecovery) return handshakeAuthRecovery;
+
+      const refreshToken = getStoredRefreshToken();
+      if (!refreshToken) {
+        return Promise.reject(markAuthenticationUnrecoverable(connectError));
+      }
+
+      handshakeAuthRecovery = createRestClient(url)
+        .then((restClient) => refreshTokensSingleFlight(restClient, refreshToken))
+        .then(async (result) => {
+          try {
+            await reconnectWithAuthenticatedHandshake(result.accessToken);
+          } catch (error) {
+            if (isDefiniteAuthFailure(error)) {
+              throw markAuthenticationUnrecoverable(error);
+            }
+            throw error;
+          }
+        })
+        .finally(() => {
+          handshakeAuthRecovery = null;
+        });
+      return handshakeAuthRecovery;
+    };
+
     async function connect() {
       // Don't create client if no access token. `hasToken` is the effect-level
       // snapshot (also a dep, so a later login rebuilds the effect); we still
@@ -122,191 +183,33 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       setError(null);
 
       // Create client (autoConnect: false, so we control connection timing)
-      client = createClient(url, false);
-      clientRef.current = client;
-
-      // Register an around-hook that transparently recovers from mid-session
-      // access-token expiry. Any service call that fails with NotAuthenticated
-      // (typically "jwt expired" from the Feathers auth strategy) will:
-      //   1. Call /authentication/refresh via the single-flight helper — N
-      //      parallel 401s share one refresh request so we don't rotate the
-      //      refresh token multiple times.
-      //   2. Re-authenticate the socket with the freshly-issued access token.
-      //   3. Retry the original call exactly once, via the raw method args so
-      //      custom (non-CRUD) service methods retry as well.
-      // The `_refreshRetried` flag on params guards against infinite recursion
-      // if the retry itself fails auth (e.g. refresh token also expired).
-      //
-      // Skip `authentication` (login) and `authentication/refresh` themselves
-      // so we never recurse on the refresh call. Auth-adjacent routes like
-      // `authentication/impersonate` go through the retry like any other
-      // service call.
-      const AUTH_PATHS_TO_SKIP = new Set(['authentication', 'authentication/refresh']);
-      client.hooks({
-        around: {
-          all: [
-            async (context, next) => {
-              const path = context.path;
-              if (typeof path === 'string' && AUTH_PATHS_TO_SKIP.has(path)) {
-                await next();
-                return;
-              }
-
-              try {
-                await next();
-              } catch (err) {
-                if (!isDefiniteAuthFailure(err)) throw err;
-
-                // Guard against infinite retry if the retry also 401s.
-                const currentParams = (context.params ?? {}) as Record<string, unknown>;
-                if (currentParams._refreshRetried) throw err;
-
-                if (!client) throw err;
-
-                try {
-                  const result = await refreshAndReauthenticate(client);
-                  if (!result) throw err; // no refresh token stored
-                } catch {
-                  // Refresh or re-authenticate failed — surface the original
-                  // auth error so upstream code (useAuth, connect handler)
-                  // can decide whether to clear tokens and bounce to login.
-                  throw err;
-                }
-
-                // Retry the original call once via its raw argument list so
-                // custom service methods (non-CRUD) retry correctly too.
-                // Feathers service methods always end with a `params` arg; we
-                // inject `_refreshRetried: true` there to stop recursion if
-                // the retry itself 401s.
-                const args = context.arguments ? [...context.arguments] : [];
-                const lastIdx = args.length - 1;
-                const lastArg = args[lastIdx];
-                const isParamsObject =
-                  lastArg !== null && typeof lastArg === 'object' && !Array.isArray(lastArg);
-                const retryParams = {
-                  ...(isParamsObject ? (lastArg as Record<string, unknown>) : {}),
-                  _refreshRetried: true,
-                };
-                if (isParamsObject) {
-                  args[lastIdx] = retryParams;
-                } else {
-                  args.push(retryParams);
-                }
-
-                const service = client.service(path as string) as Record<string, unknown>;
-                const method = context.method as string;
-                const methodFn = service[method];
-                if (typeof methodFn !== 'function') throw err;
-                context.result = await (methodFn as (...a: unknown[]) => unknown).call(
-                  service,
-                  ...args
-                );
-              }
-            },
-          ],
-        },
+      const socketClient = createClient(url, false, {
+        socketAuthentication: { accessToken: () => accessTokenRef.current },
       });
+      client = socketClient;
+      clientRef.current = socketClient;
 
       // Store client globally for Vite HMR cleanup
       if (typeof window !== 'undefined') {
-        (window as unknown as { __agorClient: AgorClient }).__agorClient = client;
+        (window as unknown as { __agorClient: AgorClient }).__agorClient = socketClient;
       }
 
       // Setup socket event listeners BEFORE connecting
-      client.io.on('connect', async () => {
-        if (mounted) {
-          const isReconnect = hasConnectedOnce;
-          hasConnectedOnce = true; // Mark that we've successfully connected
-          // Reset manual-reconnect backoff now that we're connected again.
-          manualReconnectAttempts = 0;
-          clearManualReconnectTimer();
-          // Cancel any pending "flip to disconnected" — we made it back in
-          // time, so consumers never saw a disabled frame.
-          clearDisconnectGrace();
-
-          // Initial authentication is performed by the connect() flow after
-          // its "wait for connection" promise resolves. If we authenticate
-          // here too, the first socket connection fires two back-to-back
-          // daemon login events for the same user. Only this event handler's
-          // reconnect path should re-authenticate.
-          if (!isReconnect) {
-            return;
-          }
-
-          // Re-authenticate on reconnection (e.g., after daemon restart or
-          // network recovery). Read the token from the ref to pick up any
-          // refresh that happened while we were disconnected.
-          const currentAccessToken = accessTokenRef.current;
-          try {
-            if (currentAccessToken) {
-              // Try to authenticate with access token first
-              try {
-                await client.authenticate({
-                  strategy: 'jwt',
-                  accessToken: currentAccessToken,
-                });
-                announceSessionStreamsCapability(client);
-                setConnected(true);
-                setConnecting(false);
-                setError(null);
-                return;
-              } catch (_accessTokenErr) {
-                // Access token expired or invalid — try the refresh token.
-                // `refreshAndReauthenticate` fires the single-flight refresh
-                // and re-authenticates this socket client with the new access
-                // token, shared with the 401-retry hook above.
-                try {
-                  const refreshResult = await refreshAndReauthenticate(client);
-                  if (refreshResult) {
-                    announceSessionStreamsCapability(client);
-                    setConnected(true);
-                    setConnecting(false);
-                    setError(null);
-                    return;
-                  }
-                  // refreshResult === null means no refresh token stored —
-                  // treat as terminal (nothing to retry with).
-                } catch (refreshErr) {
-                  console.error('❌ Refresh failed on reconnect:', refreshErr);
-                  // Only flip to the terminal "session expired" state on
-                  // definite auth failure. Transient errors (5xx, network)
-                  // should keep `connecting: true` so the normal socket
-                  // reconnect can retry later — otherwise a daemon restart
-                  // that briefly 5xxs the refresh endpoint would strand
-                  // the UI in a hard "Session expired" state even though
-                  // the tokens may still be valid. useAuth's unrecoverable
-                  // listener has already cleared tokens on the auth path.
-                  if (
-                    refreshErr instanceof RefreshUnrecoverableError ||
-                    isDefiniteAuthFailure(refreshErr)
-                  ) {
-                    setConnecting(false);
-                    setConnected(false);
-                    setError('Session expired. Please log in again.');
-                    return;
-                  }
-                  setConnected(false);
-                  setConnecting(true);
-                  return;
-                }
-              }
-            }
-
-            // If we get here, authentication failed
-            console.error('❌ Re-authentication failed after reconnect - all tokens expired');
-            setConnecting(false);
-            setConnected(false);
-            setError('Session expired. Please log in again.');
-          } catch (err) {
-            console.error('❌ Re-authentication failed after reconnect:', err);
-            // Don't set error immediately - let useAuth handle it
-            setConnecting(false);
-            setConnected(false);
-          }
-        }
+      socketClient.io.on('connect', () => {
+        if (!mounted) return;
+        hasConnectedOnce = true;
+        manualReconnectAttempts = 0;
+        clearManualReconnectTimer();
+        clearDisconnectGrace();
+        // Socket.IO emits `connect` only after the daemon has verified the
+        // handshake and installed immutable user/tenant authority.
+        announceSessionStreamsCapability(socketClient);
+        setConnected(true);
+        setConnecting(false);
+        setError(null);
       });
 
-      client.io.on('disconnect', (reason) => {
+      socketClient.io.on('disconnect', (reason) => {
         if (!mounted) return;
         // If we've never been connected (initial-load failure), flip
         // immediately — no "reconnect" to wait for. Otherwise defer the
@@ -354,7 +257,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           manualReconnectTimer = setTimeout(() => {
             manualReconnectTimer = null;
             if (!mounted) return;
-            client?.io.connect();
+            socketClient.io.connect();
           }, delay);
         } else if (
           reason === 'transport close' ||
@@ -365,8 +268,24 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
         }
       });
 
-      client.io.on('connect_error', (_err: Error) => {
+      socketClient.io.on('connect_error', (err: Error) => {
         if (mounted) {
+          if (isDefiniteAuthFailure(err)) {
+            setConnecting(true);
+            recoverRejectedHandshake(err).catch((recoveryError) => {
+              if (!mounted) return;
+              if (recoveryError instanceof RefreshUnrecoverableError) {
+                setError('Authentication could not be restored. Please sign in again.');
+              } else {
+                console.error('Failed to recover rejected socket handshake:', recoveryError);
+                setError('Unable to reconnect to the daemon. Please try again.');
+              }
+              setConnecting(false);
+              clearDisconnectGrace();
+              setConnected(false);
+            });
+            return;
+          }
           // Only show error on initial connection failure, not during reconnection attempts
           // If we've connected before, keep showing "reconnecting" state instead of error
           if (!hasConnectedOnce) {
@@ -383,108 +302,60 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       });
 
       // Now manually connect the socket
-      client.io.connect();
+      socketClient.io.connect();
 
-      // Wait for connection before authenticating
+      // A successful `connect` means the handshake has already authenticated.
       try {
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             reject(new Error('Connection timeout'));
           }, 5000);
 
-          if (client.io.connected) {
+          if (socketClient.io.connected) {
             clearTimeout(timeout);
             resolve();
             return;
           }
 
-          client.io.once('connect', () => {
+          socketClient.io.once('connect', () => {
             clearTimeout(timeout);
             resolve();
           });
 
-          client.io.once('connect_error', (err) => {
+          socketClient.io.once('connect_error', (err) => {
             clearTimeout(timeout);
-            reject(err);
+            if (isDefiniteAuthFailure(err)) {
+              recoverRejectedHandshake(err).then(resolve, reject);
+            } else {
+              reject(err);
+            }
           });
         });
-      } catch (_err) {
+      } catch (connectError) {
         if (mounted) {
-          setError('Failed to connect to daemon. Make sure it is running on :3030');
-          setConnecting(false);
-          setConnected(false);
-        }
-        return; // Exit early, don't try to authenticate
-      }
-
-      // Authenticate with JWT. Pull the token from the ref so if a refresh
-      // landed while we were establishing the socket, we use the fresh one.
-      const initialAccessToken = accessTokenRef.current;
-      try {
-        if (initialAccessToken) {
-          await client.authenticate({
-            strategy: 'jwt',
-            accessToken: initialAccessToken,
-          });
-        }
-      } catch (_err) {
-        if (mounted) {
-          setError('Authentication failed. Please log in again.');
+          setError(
+            connectError instanceof RefreshUnrecoverableError
+              ? 'Authentication could not be restored. Please sign in again.'
+              : 'Failed to connect to daemon. Make sure it is running on :3030'
+          );
           setConnecting(false);
           setConnected(false);
         }
         return;
       }
-
-      // Authentication successful - connection is ready
-      if (mounted) {
-        announceSessionStreamsCapability(client);
-        setConnected(true);
-        setConnecting(false);
-        setError(null);
-      }
     }
 
     connect();
 
-    // In-place reauth on token replacement. When refresh, local login, or
-    // launch sign-in stores a fresh access token, it dispatches
-    // TOKENS_REFRESHED_EVENT. Instead of rebuilding the entire socket (which
-    // would flicker the UI and reset every real-time subscription), we just
-    // call client.authenticate with the new token on the existing socket. If
-    // the socket happens to be disconnected at the moment of replacement, skip
-    // — the connect handler will pick up the fresh token from the ref when the
-    // socket reconnects.
+    // Routine access-token rotation does not tear down a healthy authenticated
+    // connection. Store the new credential for the next natural Socket.IO
+    // handshake; the daemon's immutable connection authority remains valid
+    // until disconnect or explicit revocation.
     const handleTokensRefreshed = (event: Event) => {
       if (!mounted) return;
       const detail = (event as CustomEvent<RefreshResult>).detail;
-      if (!detail || !client) return;
-      if (!client.io.connected) return;
-      client
-        .authenticate({ strategy: 'jwt', accessToken: detail.accessToken })
-        .then(() => {
-          // Publish recovery to React state. The connect handler above can
-          // strand the UI at `connecting=true, connected=false` when its own
-          // refresh attempt fails transiently (network half-restored, daemon
-          // briefly 5xxs, etc.) — see the `setConnecting(true); return;`
-          // branch above. Without this `setConnected(true)`, a later
-          // successful token replacement from any source re-authenticates the
-          // socket but the navbar stays stuck on "Reconnecting" until page
-          // refresh. We're safe to publish here because (a) `client.io.connected`
-          // was true at entry, (b) `authenticate()` just resolved, so the socket
-          // is connected AND authenticated.
-          if (!mounted) return;
-          announceSessionStreamsCapability(client);
-          setConnected(true);
-          setConnecting(false);
-          setError(null);
-        })
-        .catch((err) => {
-          // Best-effort — if this fails, the next service call will 401
-          // and the around-hook will take the standard refresh-and-retry
-          // path. Log so the cause isn't invisible.
-          console.error('In-place re-authentication failed after token replacement:', err);
-        });
+      if (!detail) return;
+      accessTokenRef.current = detail.accessToken;
     };
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
 
@@ -510,8 +381,8 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
     // The dep list deliberately uses `hasToken` (presence), not the token
     // value itself: see the accessTokenRef comment above. Rebuilds happen
-    // only on login/logout and url changes; in-session token replacements are
-    // absorbed in-place by the handler above.
+    // only on login/logout and url changes; in-session token replacements
+    // update the next-handshake credential through the handler above.
   }, [url, hasToken]);
 
   /**

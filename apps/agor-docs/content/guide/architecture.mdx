@@ -78,10 +78,14 @@ The unified model is no longer used in current Agor releases.
 The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use. There is no second-class "internal API."
 
 ```typescript
-import { createAgorClient } from '@agor-live/client';
+import { createClient, createRestClient } from '@agor-live/client';
 
-const agor = createAgorClient({ url: 'http://localhost:3030' });
-await agor.authenticate({ strategy: 'local', email, password });
+const url = 'http://localhost:3030';
+const loginClient = await createRestClient(url);
+const { accessToken } = await loginClient.authenticate({ strategy: 'local', email, password });
+const agor = createClient(url, true, {
+  socketAuthentication: { accessToken },
+});
 
 // Strongly-typed CRUD across every service
 const { data: branches } = await agor.service('branches').find({

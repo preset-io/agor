@@ -781,11 +781,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Register authentication strategies
   authentication.register(
     'jwt',
-    new ServiceJWTStrategy(
+    new ServiceJWTStrategy({
       sessionTokenService,
-      tenantTokenClaim,
-      getOrCreateExecutorConnectionRevocationFence(app)
-    )
+      executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+      multiTenancy,
+    })
   );
   authentication.register('local', new AgorLocalStrategy());
 

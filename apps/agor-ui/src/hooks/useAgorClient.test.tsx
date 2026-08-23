@@ -1,7 +1,11 @@
-import { createClient } from '@agor-live/client';
-import { renderHook, waitFor } from '@testing-library/react';
+import { createClient, createRestClient } from '@agor-live/client';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
+import {
+  resetRefreshFailureState,
+  TOKENS_REFRESH_UNRECOVERABLE_EVENT,
+  TOKENS_REFRESHED_EVENT,
+} from '../utils/singleFlightRefresh';
 import { useAgorClient } from './useAgorClient';
 
 // Keep every real export; only stub the client factory so the hook wires a
@@ -9,57 +13,87 @@ import { useAgorClient } from './useAgorClient';
 vi.mock('@agor-live/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor-live/client')>()),
   createClient: vi.fn(),
+  createRestClient: vi.fn(),
 }));
 
-// Mock only refreshAndReauthenticate so the reconnect refresh-fallback path is
-// drivable; keep the event name + error class real for the other paths.
-const { refreshMock } = vi.hoisted(() => ({ refreshMock: vi.fn() }));
+const { refreshTokensMock } = vi.hoisted(() => ({ refreshTokensMock: vi.fn() }));
 vi.mock('../utils/singleFlightRefresh', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/singleFlightRefresh')>()),
-  refreshAndReauthenticate: refreshMock,
+  refreshTokensSingleFlight: refreshTokensMock,
 }));
 
-function makeDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+type SocketHandler = { fn: (...args: unknown[]) => void; once: boolean };
 
-// Mock client that drives the REAL connect→authenticate flow: io.connect()
-// marks the socket connected so connect()'s wait-promise resolves; io 'connect'
-// handlers are captured so reconnects can be fired; authenticate() resolves by
-// default and can be overridden per-call. Unknown property access resolves to a
-// no-op fn so the rest of connect() can't throw.
+/**
+ * Socket seam with the lifecycle guarantees useAgorClient relies on. A call
+ * to connect completes asynchronously and emits the namespace `connect`
+ * event, exactly as a successfully authenticated real handshake does.
+ */
 function makeSeamClient() {
   const create = vi.fn(async () => ({ session_id: '', subscribed: false }));
-  const ioHandlers: Record<string, Array<(...a: unknown[]) => void>> = {};
+  const ioHandlers = new Map<string, SocketHandler[]>();
+
+  const addHandler = (event: string, fn: (...args: unknown[]) => void, once: boolean) => {
+    ioHandlers.set(event, [...(ioHandlers.get(event) ?? []), { fn, once }]);
+  };
+  const removeHandler = (event: string, fn: (...args: unknown[]) => void) => {
+    ioHandlers.set(
+      event,
+      (ioHandlers.get(event) ?? []).filter((entry) => entry.fn !== fn)
+    );
+  };
+  const fireIo = (event: string, ...args: unknown[]) => {
+    const handlers = [...(ioHandlers.get(event) ?? [])];
+    ioHandlers.set(
+      event,
+      handlers.filter((entry) => !entry.once)
+    );
+    for (const handler of handlers) handler.fn(...args);
+  };
+  const nextConnectErrors: Error[] = [];
 
   const permissive = (target: Record<string, unknown>) =>
     new Proxy(target, {
-      get(t, prop: string) {
-        if (prop in t) return t[prop];
+      get(current, prop: string) {
+        if (prop in current) return current[prop];
         const fn = vi.fn();
-        t[prop] = fn;
+        current[prop] = fn;
         return fn;
       },
     });
 
   const io = permissive({
     connected: false,
-    on: vi.fn((event: string, handler: (...a: unknown[]) => void) => {
-      const handlers = ioHandlers[event] ?? [];
-      handlers.push(handler);
-      ioHandlers[event] = handlers;
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      addHandler(event, handler, false);
     }),
-    once: vi.fn(),
-    off: vi.fn(),
+    once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      addHandler(event, handler, true);
+    }),
+    off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      removeHandler(event, handler);
+    }),
     connect: vi.fn(() => {
-      io.connected = true; // wait-for-connection resolves on next check
+      if (io.connected) return;
+      queueMicrotask(() => {
+        const error = nextConnectErrors.shift();
+        if (error) {
+          fireIo('connect_error', error);
+          return;
+        }
+        io.connected = true;
+        fireIo('connect');
+      });
     }),
+    disconnect: vi.fn(() => {
+      if (!io.connected) return;
+      io.connected = false;
+      fireIo('disconnect', 'io client disconnect');
+    }),
+    close: vi.fn(() => {
+      io.connected = false;
+    }),
+    removeAllListeners: vi.fn(() => ioHandlers.clear()),
   });
 
   const client = permissive({
@@ -71,82 +105,144 @@ function makeSeamClient() {
     authenticate: vi.fn(() => Promise.resolve({})),
   });
 
-  const fireIo = (event: string) => {
-    for (const handler of [...(ioHandlers[event] ?? [])]) handler();
+  return {
+    client,
+    create,
+    fireIo,
+    io,
+    rejectNextConnect(error: Error) {
+      nextConnectErrors.push(error);
+    },
   };
-  return { client, create, fireIo };
 }
 
-describe('useAgorClient session-streams announce seam', () => {
+describe('useAgorClient authenticated handshake lifecycle', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    refreshMock.mockReset();
+    refreshTokensMock.mockReset();
+    resetRefreshFailureState();
+    localStorage.clear();
   });
 
-  it('announces session-streams capability only after authenticate() resolves', async () => {
+  it('announces session-streams capability after the authenticated handshake without live reauthentication', async () => {
     const { client, create } = makeSeamClient();
-    const authDeferred = makeDeferred<Record<string, unknown>>();
-    client.authenticate.mockReturnValue(authDeferred.promise);
     vi.mocked(createClient).mockReturnValue(client as never);
 
     renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
 
-    // Drive the flow up to the pending authenticate() call.
-    await waitFor(() => expect(client.authenticate).toHaveBeenCalled());
-
-    // Pre-auth: announcing here would 401 — must NOT have fired yet.
-    expect(create).not.toHaveBeenCalled();
-
-    authDeferred.resolve({});
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create).toHaveBeenCalledWith({ capability: true });
+    expect(client.authenticate).not.toHaveBeenCalled();
+    expect(client.hooks).not.toHaveBeenCalled();
   });
 
-  it('re-announces on reconnect direct re-auth', async () => {
-    const { client, create, fireIo } = makeSeamClient();
+  it('re-announces socket-scoped capability after a normal transport reconnect', async () => {
+    const { client, create, fireIo, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
     renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1)); // initial auth
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
-    // First connect marks hasConnectedOnce; the second runs the reconnect
-    // handler (isReconnect=true) → direct authenticate() resolves → announce.
-    fireIo('connect');
-    fireIo('connect');
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      io.connect();
+    });
+
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create).toHaveBeenLastCalledWith({ capability: true });
+    expect(client.authenticate).not.toHaveBeenCalled();
   });
 
-  it('re-announces on reconnect refresh-fallback', async () => {
-    const { client, create, fireIo } = makeSeamClient();
+  it('updates the next handshake token without reconnecting a healthy socket', async () => {
+    const { client, create, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
     renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1)); // initial auth
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
-    fireIo('connect'); // marks hasConnectedOnce
-    // Reconnect: direct authenticate() rejects, refresh succeeds → announce.
-    client.authenticate.mockRejectedValueOnce(new Error('jwt expired'));
-    refreshMock.mockResolvedValue({ accessToken: 'fresh', refreshToken: 'r' });
-    fireIo('connect');
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
-    expect(create).toHaveBeenLastCalledWith({ capability: true });
+    const clientOptions = vi.mocked(createClient).mock.calls[0][2];
+    const tokenSource = clientOptions?.socketAuthentication?.accessToken;
+    expect(typeof tokenSource).toBe('function');
+    expect((tokenSource as () => string | null | undefined)()).toBe('access-token');
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: { accessToken: 'fresh', refreshToken: 'r' },
+        })
+      );
+    });
+
+    await waitFor(() => expect((tokenSource as () => string | null | undefined)()).toBe('fresh'));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(createClient).toHaveBeenCalledTimes(1);
+    expect(io.disconnect).not.toHaveBeenCalled();
+    expect((tokenSource as () => string | null | undefined)()).toBe('fresh');
+    expect(client.authenticate).not.toHaveBeenCalled();
   });
 
-  it('re-announces on in-place token-refresh reauth', async () => {
-    const { client, create } = makeSeamClient();
+  it('refreshes over REST and retries when an authenticated handshake is rejected', async () => {
+    const { client, create, rejectNextConnect } = makeSeamClient();
+    const restClient = { service: vi.fn() };
     vi.mocked(createClient).mockReturnValue(client as never);
-
-    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1)); // initial auth
-
-    // Token replacement on the live socket → in-place authenticate() resolves → announce.
-    window.dispatchEvent(
-      new CustomEvent(TOKENS_REFRESHED_EVENT, {
-        detail: { accessToken: 'fresh', refreshToken: 'r' },
+    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
+    refreshTokensMock.mockResolvedValue({
+      accessToken: 'fresh-after-rejection',
+      refreshToken: 'next-refresh',
+      user: { user_id: 'u1' },
+    });
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    rejectNextConnect(
+      Object.assign(new Error('Invalid or expired authentication token'), {
+        data: { code: 401, className: 'not-authenticated' },
       })
     );
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
-    expect(create).toHaveBeenLastCalledWith({ capability: true });
+
+    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'stale' }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(createRestClient).toHaveBeenCalledWith('http://daemon.test');
+    expect(refreshTokensMock).toHaveBeenCalledWith(restClient, 'stored-refresh');
+    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-rejection');
+    expect(client.authenticate).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a refreshed credential is still rejected by the handshake', async () => {
+    const { client, rejectNextConnect } = makeSeamClient();
+    const restClient = { service: vi.fn() };
+    vi.mocked(createClient).mockReturnValue(client as never);
+    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
+    refreshTokensMock.mockResolvedValue({
+      accessToken: 'still-rejected',
+      refreshToken: 'next-refresh',
+      user: { user_id: 'u1' },
+    });
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    const rejected = () =>
+      Object.assign(new Error('Invalid or expired authentication token'), {
+        data: { code: 401, className: 'not-authenticated' },
+      });
+    rejectNextConnect(rejected());
+    rejectNextConnect(rejected());
+    const unrecoverable = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    try {
+      const { result } = renderHook(() =>
+        useAgorClient({ url: 'http://daemon.test', accessToken: 'stale' })
+      );
+
+      await waitFor(() =>
+        expect(result.current.error).toBe(
+          'Authentication could not be restored. Please sign in again.'
+        )
+      );
+      expect(refreshTokensMock).toHaveBeenCalledTimes(1);
+      expect(unrecoverable).toHaveBeenCalledTimes(1);
+      expect(result.current.connected).toBe(false);
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    }
   });
 });

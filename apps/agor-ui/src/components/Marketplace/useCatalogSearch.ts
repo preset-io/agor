@@ -11,9 +11,10 @@
  * This has no writers a browser can observe and nothing to keep live — it
  * changes when the daemon is redeployed, which reloads the page anyway.
  *
- * Reads wait for `ready`. The client object exists from the moment the socket
- * is being built, well before it has connected and authenticated, so a surface
- * that fetches on `client !== null` asks an anonymous socket and is refused.
+ * Reads wait for `ready`. The client object exists while its authenticated
+ * namespace handshake is still pending, so a surface that fetches on
+ * `client !== null` can otherwise queue work against a connection that has not
+ * been accepted (or that may fail authentication).
  *
  * Filtering and ordering come from `@agor/core/mcp-catalog/query` rather than
  * being written here, so that "search matches the same things it used to" holds

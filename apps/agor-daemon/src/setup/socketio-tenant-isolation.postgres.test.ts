@@ -24,12 +24,23 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { feathers, feathersExpress, type Params, socketio } from '@agor/core/feathers';
+import {
+  AuthenticationService,
+  feathers,
+  feathersExpress,
+  type Params,
+  socketio,
+} from '@agor/core/feathers';
 import type { Board, BoardID, TenantContext, User, UserID, UUID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  issueRuntimeToken,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from '../auth/runtime-tokens.js';
+import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import { terminalChannelName } from '../realtime/routing.js';
-import { createSocketIOConfig } from './socketio.js';
+import { configureChannels, createSocketIOConfig } from './socketio.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -191,19 +202,36 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       });
 
-      const socketConfig = createSocketIOConfig(app as never, {
-        corsOrigin: '*',
-        jwtSecret: JWT_SECRET,
-        credentialsAllowed: false,
-        workIdentity: { instanceId: 'socket-test', bootId: 'socket-test-boot' },
-        multiTenancy: {
-          mode: 'required_from_auth',
-          static_tenant_id: 'unused' as never,
-          auth_claim: 'tenant_id',
-          trusted_header: 'x-agor-tenant-id',
+      const multiTenancy = {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+        trusted_header: 'x-agor-tenant-id',
+      } as const;
+      app.set('authentication', {
+        secret: JWT_SECRET,
+        entity: 'user',
+        entityId: 'user_id',
+        service: 'users',
+        authStrategies: ['jwt'],
+        jwtOptions: {
+          audience: RUNTIME_JWT_AUDIENCE,
+          issuer: RUNTIME_JWT_ISSUER,
+          algorithm: 'HS256',
         },
       });
+      const authentication = new AuthenticationService(app);
+      authentication.register('jwt', new ServiceJWTStrategy({ multiTenancy }));
+      app.use('authentication', authentication);
+
+      const socketConfig = createSocketIOConfig(app as never, {
+        corsOrigin: '*',
+        credentialsAllowed: false,
+        workIdentity: { instanceId: 'socket-test', bootId: 'socket-test-boot' },
+        multiTenancy,
+      });
       app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
+      configureChannels(app as never);
 
       server = await new Promise<HttpServer>((resolve) => {
         const listening = app.listen(0, '127.0.0.1', () => resolve(listening));

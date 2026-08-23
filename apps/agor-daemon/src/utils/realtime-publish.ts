@@ -37,8 +37,6 @@ import {
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
-  isSessionStreamRoomName,
-  isTenantRealtimeRoomName,
   sessionStreamRoomName,
   tenantChannelName,
 } from '../realtime/routing.js';
@@ -152,39 +150,10 @@ export function sessionStreamChannelName(tenantId: string, sessionId: string): s
   return sessionStreamRoomName(tenantId, sessionId);
 }
 
-/**
- * Remove a connection from every session-stream room it has joined. Called on
- * logout so a still-connected-but-deauthenticated socket stops receiving live
- * session text — Feathers only auto-drops channel membership on socket
- * disconnect, and streaming delivery would otherwise keep reaching a logged-out
- * connection (which is no longer in the authenticated/tenant channels but may
- * still sit in a session-stream room).
- */
-export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
-  for (const name of app.channels ?? []) {
-    if (isSessionStreamRoomName(name)) {
-      app.channel(name).leave(connection as never);
-    }
-  }
-}
-
-/** Drop task-control capability on logout or before replacing socket auth. */
+/** Drop task-control capability before disconnecting an executor socket. */
 export function leaveAllExecutorTaskChannels(app: Application, connection: unknown): void {
   for (const name of app.channels ?? []) {
     if (isExecutorTaskRoomName(name)) {
-      app.channel(name).leave(connection as never);
-    }
-  }
-}
-
-/** Drop every tenant-scoped Feathers channel on logout or live auth replacement. */
-export function leaveAllTenantChannels(app: Application, connection: unknown): void {
-  for (const name of app.channels ?? []) {
-    if (
-      isTenantRealtimeRoomName(name) &&
-      !isSessionStreamRoomName(name) &&
-      !isExecutorTaskRoomName(name)
-    ) {
       app.channel(name).leave(connection as never);
     }
   }

@@ -297,16 +297,14 @@ export function useAgorData(
   const [hasInitiallyFetched, setHasInitiallyFetched] = useState(false);
 
   // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
-  // when the socket flaps (e.g. waking from sleep on a flaky network) — the
-  // around-hook on the socket client already single-flights the underlying
-  // auth refresh, but we also don't want to issue 14 parallel service calls
-  // multiple times in a row.
+  // when the socket flaps (e.g. waking from sleep on a flaky network). We also
+  // don't want to issue 14 parallel service calls multiple times in a row.
   const refetchInflightRef = useRef(false);
 
   // Tracks whether the most recent silent refetch failed. Set by the silent
   // catch branch in `fetchData`, cleared on success. Read by the
   // TOKENS_REFRESHED_EVENT listener below so a token replacement that lands
-  // AFTER a failed reconnect refetch (auth race during socket re-auth) gets to
+  // AFTER a failed reconnect refetch (for example a transient daemon failure) gets to
   // retry — without this, the byId maps would stay stale until the next
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
@@ -318,7 +316,7 @@ export function useAgorData(
   // must not flip the global `loading` / `error` state — those are wired to the
   // fullscreen "Connecting to daemon..." spinner and "Failed to load data"
   // alert in App.tsx, which would be wildly disruptive if a transient
-  // reconnect-time 401 (auth race with the re-auth handler in useAgorClient)
+  // reconnect-time error
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
   // reconnect or token replacement gets another shot.
@@ -976,8 +974,8 @@ export function useAgorData(
         }
       } catch (err) {
         if (silent) {
-          // Background refetch failed (e.g. transient 401 racing the socket
-          // re-auth, or a 5xx). Don't escalate to the fullscreen error overlay —
+          // Background refetch failed (e.g. transient 401 racing an authenticated
+          // reconnect, or a 5xx). Don't escalate to the fullscreen error overlay —
           // we still have last-known good byId state on screen. Latch the
           // failure so the next TOKENS_REFRESHED_EVENT (or reconnect) retries.
           console.warn('[useAgorData] silent refetch failed:', err);
@@ -1328,9 +1326,8 @@ export function useAgorData(
     // `hasInitiallyFetched`) is already running or has just completed, and
     // re-running it would just be wasted bandwidth at startup.
     //
-    // `silent: true` so a transient failure (e.g. racing the re-auth handler
-    // in useAgorClient on reconnect, then 401-ing once before the around-hook
-    // refresh lands) doesn't blank the whole app via App.tsx's `dataError`
+    // `silent: true` so a transient failure during reconnect
+    // doesn't blank the whole app via App.tsx's `dataError`
     // path — see the silent branch in `fetchData`.
     const refetchSilently = async () => {
       if (!hasInitiallyFetched) return;
@@ -1344,10 +1341,9 @@ export function useAgorData(
     };
     client.io.on('connect', refetchSilently);
 
-    // If the prior reconnect refetch failed silently — typical scenario: the
-    // socket reconnected, the around-hook hadn't refreshed the access token
-    // yet, fetchData hit a 401 that bubbled up — retry once a token
-    // replacement lands. Without this, byId state stays stale until the next
+    // If the prior reconnect refetch failed silently, retry once a token
+    // replacement lands (one signal that authentication and connectivity are
+    // healthy again). Without this, byId state stays stale until the next
     // physical reconnect or a page refresh. We gate on the latch so we don't
     // refetch 14 services on every routine token rotation.
     const handleTokensRefreshed = () => {

@@ -10,13 +10,18 @@
  * service user with elevated privileges.
  */
 
-import { JWTStrategy } from '@agor/core/feathers';
+import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
+import { JWTStrategy, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, UserAuthMetadata } from '@agor/core/types';
 import {
   fingerprintExecutorSessionToken,
   type SessionTokenService,
 } from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import {
+  finalizeAuthenticatedConnectionAuthority,
+  retireAuthenticatedConnectionAuthority,
+} from './authenticated-connection-authority.js';
 import {
   attachExecutorConnectionCapabilityCandidate,
   type ExecutorConnectionRevocationFence,
@@ -26,7 +31,11 @@ import {
   isExecutorSessionTokenPayload,
 } from './executor-session-token.js';
 import { readRuntimeTenantClaim } from './runtime-tokens.js';
+import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
+
+type ConnectionEvent = Parameters<JWTStrategy['handleConnection']>[0];
+type AuthenticationResult = NonNullable<Parameters<JWTStrategy['handleConnection']>[2]>;
 
 function propagateTenantFromJwtPayload(
   params: Params,
@@ -41,6 +50,12 @@ function propagateTenantFromJwtPayload(
   tenantParams.tenant ??= { tenant_id: tenantId, source: 'auth_claim' };
 }
 
+export interface ServiceJWTStrategyOptions {
+  sessionTokenService?: SessionTokenService;
+  multiTenancy?: ResolvedMultiTenancyConfig;
+  executorRevocationFence?: ExecutorConnectionRevocationFence;
+}
+
 /**
  * Extended JWT Strategy that handles service tokens
  *
@@ -48,12 +63,65 @@ function propagateTenantFromJwtPayload(
  * for privileged executor operations (git.*, etc.)
  */
 export class ServiceJWTStrategy extends JWTStrategy {
-  constructor(
-    private sessionTokenService?: SessionTokenService,
-    private tenantClaim?: string,
-    private executorRevocationFence?: ExecutorConnectionRevocationFence
-  ) {
+  private readonly sessionTokenService?: SessionTokenService;
+  private readonly tenantClaim: string;
+  private readonly executorRevocationFence?: ExecutorConnectionRevocationFence;
+  private readonly multiTenancy?: ResolvedMultiTenancyConfig;
+
+  constructor(options: ServiceJWTStrategyOptions = {}) {
     super();
+    this.sessionTokenService = options.sessionTokenService;
+    this.multiTenancy = options.multiTenancy;
+    this.tenantClaim = options.multiTenancy?.auth_claim ?? 'tenant_id';
+    this.executorRevocationFence = options.executorRevocationFence;
+  }
+
+  /**
+   * The Socket.IO namespace owns handshake authentication and normalizes both
+   * auth-object and Authorization-header failures. Do not let Feathers' earlier
+   * header middleware perform a second login that stores the raw bearer and
+   * installs the base JWT strategy's expiry timer.
+   */
+  override async parse(req: Parameters<JWTStrategy['parse']>[0]) {
+    if (isSocketIoHandshakeRequest(req)) return null;
+    return super.parse(req);
+  }
+
+  /**
+   * Finalize trusted connection authority before Feathers emits `login`.
+   *
+   * AuthenticationService awaits every strategy's handleConnection hook before
+   * publishing the login event or acknowledging the request. Installing the
+   * immutable Feathers identity projection, tenant, and executor capability
+   * here makes all later channel/request consumers independent of Socket.IO
+   * listener registration order. The base JWT handler is intentionally not
+   * called: it would retain raw bearer material and re-arm bearer expiry as a
+   * live-connection expiry.
+   */
+  override async handleConnection(
+    event: ConnectionEvent,
+    connection: unknown,
+    authResult?: AuthenticationResult
+  ): Promise<void> {
+    const app = this.app;
+    if (!app) throw new Error('Authentication strategy is not attached to an application');
+    if (event === 'login' && authResult) {
+      if (!connection || typeof connection !== 'object') {
+        throw new Error('Authenticated connection is unavailable');
+      }
+      finalizeAuthenticatedConnectionAuthority({
+        connection,
+        authResult,
+        multiTenancy: this.multiTenancy,
+        executorRevocationFence: this.executorRevocationFence,
+      });
+      return;
+    }
+
+    if (event === 'logout' || event === 'disconnect') {
+      retireAuthenticatedConnectionAuthority(app, connection);
+      if (event === 'logout') app.emit('disconnect', connection);
+    }
   }
   /**
    * Override getEntity to handle service tokens
@@ -175,6 +243,10 @@ export class ServiceJWTStrategy extends JWTStrategy {
           _isServiceAccount: true,
         },
       };
+    }
+
+    if (payload?.type === 'service') {
+      throw new NotAuthenticated('Service tokens require the reserved service subject');
     }
 
     if (payload?.type === 'executor-session') {

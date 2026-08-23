@@ -112,14 +112,6 @@ export function parseTerminalChannel(
   return tenantId && userId && terminalId ? { tenantId, userId, terminalId } : null;
 }
 
-export function isTenantRealtimeRoomName(name: string): boolean {
-  return name.startsWith(REALTIME_ROOM_PREFIX);
-}
-
-export function isSessionStreamRoomName(name: string): boolean {
-  return name.startsWith(REALTIME_ROOM_PREFIX) && name.includes(':session-stream:');
-}
-
 export function isExecutorTaskRoomName(name: string): boolean {
   return name.startsWith(REALTIME_ROOM_PREFIX) && name.includes(':executor-task:');
 }

@@ -7,17 +7,22 @@
 
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
-import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
+import { AuthenticationService, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import type { BoardID, TenantContext, User, UserID } from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
-import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  issueRuntimeToken,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from '../auth/runtime-tokens.js';
+import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import {
   bindRealtimeAccessCacheInvalidation,
   RealtimeAccessCache,
 } from '../utils/realtime-access-cache.js';
-import { createSocketIOConfig, type SocketIOOptions } from './socketio.js';
+import { configureChannels, createSocketIOConfig, type SocketIOOptions } from './socketio.js';
 
 const redisUrl = process.env.AGOR_TEST_REDIS_URL;
 const JWT_SECRET = 'disposable-redis-socket-tenant-test-secret';
@@ -132,20 +137,37 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
     },
   });
 
+  const multiTenancy = {
+    mode: 'required_from_auth',
+    static_tenant_id: 'unused' as never,
+    auth_claim: 'tenant_id',
+  } as const;
+  app.set('authentication', {
+    secret: JWT_SECRET,
+    entity: 'user',
+    entityId: 'user_id',
+    service: 'users',
+    authStrategies: ['jwt'],
+    jwtOptions: {
+      audience: RUNTIME_JWT_AUDIENCE,
+      issuer: RUNTIME_JWT_ISSUER,
+      algorithm: 'HS256',
+    },
+  });
+  const authentication = new AuthenticationService(app);
+  authentication.register('jwt', new ServiceJWTStrategy({ multiTenancy }));
+  app.use('authentication', authentication);
+
   const options: SocketIOOptions = {
     corsOrigin: '*',
-    jwtSecret: JWT_SECRET,
     credentialsAllowed: false,
     adapter: createAdapter(pub, sub, { key: adapterKey }),
     workIdentity: { instanceId, bootId: `${instanceId}-boot` },
-    multiTenancy: {
-      mode: 'required_from_auth',
-      static_tenant_id: 'unused' as never,
-      auth_claim: 'tenant_id',
-    },
+    multiTenancy,
   };
   const config = createSocketIOConfig(app as never, options);
   app.configure(socketio(config.serverOptions, config.callback));
+  configureChannels(app as never);
   const server = await new Promise<HttpServer>((resolve) => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
   });

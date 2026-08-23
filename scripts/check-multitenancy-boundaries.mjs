@@ -53,26 +53,21 @@ const checks = [
       // connection to its verified tenant before asserting hard-delete
       // publication containment.
       'apps/agor-daemon/src/utils/branch-removal-realtime.integration.test.ts': 2,
-      // The tenant-aware realtime facade: tenant/session channel join, the
-      // publish handler, session-stream and tenant+task executor-control joins,
-      // the existence-gated room lookup (existingChannel — used by publish +
-      // leave paths so they never materialize a room), and both leave-all
-      // helpers live here on purpose. Executor control rooms are explicitly
-      // tenant-namespaced and can only be joined from a verified scoped JWT.
-      // Includes the centralized tenant-channel eviction helper used on
-      // logout/live authentication replacement.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 10,
+      // The tenant-aware realtime facade: session/task channel joins, the
+      // publish handler, and existence-gated lookups live here on purpose.
+      // Executor control rooms are tenant-namespaced and joined only from an
+      // immutable, verified scoped-JWT connection authority.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 8,
       // Raw Socket.IO presence/user/terminal rooms are deliberately centralized
       // here. Every join/leave/broadcast is tenant-namespaced, including logout
       // cleanup, and cross-tenant negative tests cover same user/board IDs. The
       // terminal service additionally receives a server-only connection
       // capability that joins its authenticated requesting socket to a room
       // derived from trusted tenant/user/terminal identity before executor
-      // startup, then removes that room if authentication changes while the
-      // join is pending. Same-room operations are serialized so stale/failed
-      // cleanup cannot evict another valid subscription; clients cannot supply
-      // that room or capability.
-      'apps/agor-daemon/src/setup/socketio.ts': 17,
+      // startup. Same-room operations are serialized and re-check immutable
+      // authority so retirement cannot leave stale membership; clients cannot
+      // supply that room or capability.
+      'apps/agor-daemon/src/setup/socketio.ts': 11,
       // Adversarial integration harnesses intentionally exercise the raw
       // Socket.IO boundary: the PostgreSQL test probes a guessed foreign room
       // and inspects passive delivery, while the Redis test emits one cursor
@@ -82,11 +77,11 @@ const checks = [
       // The second cursor packet is deliberately sent after revoke/reconnect
       // denial to prove a stale client cannot publish through its former room.
       'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,
-      // Real authentication-replacement coverage deliberately inspects the
-      // private Feathers task channel and injects both executor control event
-      // names into its current connections. The pre-replacement delivery and
-      // post-replacement empty passive buffer prove the room retirement.
-      'apps/agor-daemon/src/setup/socketio-executor-auth.integration.test.ts': 3,
+      // Real immutable-handshake coverage deliberately inspects the private
+      // Feathers task channel through one test helper and injects both executor
+      // control event names into its current connections. Pre-disconnect
+      // delivery and post-reconnect absence prove room retirement.
+      'apps/agor-daemon/src/setup/socketio-executor-auth.integration.test.ts': 1,
     },
   },
 
