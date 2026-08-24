@@ -7,15 +7,7 @@
  * Re-exports FeathersJS types so daemon doesn't need direct dependencies.
  */
 
-import type {
-  HookContext as FeathersHookContext,
-  Id,
-  NullableId,
-  Paginated,
-  Params,
-  Service,
-  ServiceMethods,
-} from '@feathersjs/feathers';
+import type { HookContext as FeathersHookContext, Paginated, Params } from '@feathersjs/feathers';
 
 // ============================================================================
 // Re-exported FeathersJS Types (for daemon usage without direct import)
@@ -30,7 +22,14 @@ import type {
  * - Version control (core manages Feathers version)
  * - Easier mocking/testing
  */
-export type { Id, NullableId, Paginated, Params, Service, ServiceMethods };
+export type {
+  Id,
+  NullableId,
+  Paginated,
+  Params,
+  Service,
+  ServiceMethods,
+} from '@feathersjs/feathers';
 
 // ============================================================================
 // Authentication Types
