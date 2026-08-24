@@ -349,6 +349,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               close();
             }}
             agentic_tool={tool}
+            variant="list"
             fullWidth
           />
         )}
@@ -373,6 +374,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
                 onEffortChange(effort);
                 close();
               }}
+              variant="list"
               fullWidth
             />
           )}
@@ -392,6 +394,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             mcpServers={mapToArray(mcpServerById)}
             value={formMcp}
             onChange={onMcpChange}
+            variant="list"
             placeholder="No MCP servers attached"
             style={{ width: '100%' }}
           />
@@ -409,7 +412,12 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           width={340}
           testid="advisor-chip"
           renderContent={() => (
-            <AdvisorModelSelect value={advisorModel} onChange={onAdvisorChange} client={client} />
+            <AdvisorModelSelect
+              value={advisorModel}
+              onChange={onAdvisorChange}
+              client={client}
+              variant="list"
+            />
           )}
         />
       )}

@@ -36,4 +36,25 @@ describe('PermissionModeSelector', () => {
     // Two-part description formula is present.
     expect(within(listbox).getByText(/isolated environments only/)).toBeInTheDocument();
   });
+
+  it('list variant shows the modes directly (values-first, no nested dropdown)', () => {
+    const onChange = vi.fn();
+    render(
+      <PermissionModeSelector
+        agentic_tool="claude-code"
+        value="default"
+        onChange={onChange}
+        variant="list"
+      />
+    );
+    // No dropdown trigger — options are visible on first render.
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(5);
+    expect(screen.getByText('Accept edits')).toBeInTheDocument();
+    expect(screen.getByText(/isolated environments only/)).toBeInTheDocument();
+    // Selecting a mode applies immediately.
+    fireEvent.click(screen.getByText('Accept edits'));
+    expect(onChange).toHaveBeenCalledWith('acceptEdits');
+  });
 });

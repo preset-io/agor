@@ -14,7 +14,7 @@
 
 import type { EffortLevel } from '@agor-live/client';
 import { BulbOutlined } from '@ant-design/icons';
-import { Select, Space, Tooltip, Typography, theme } from 'antd';
+import { Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 
 interface EffortSelectorProps {
@@ -27,7 +27,16 @@ interface EffortSelectorProps {
   compact?: boolean;
   plain?: boolean;
   fullWidth?: boolean;
+  /**
+   * `select` (default) shows a dropdown trigger. `list` renders the levels
+   * directly as a values-first radio list for popover surfaces where one click
+   * should reveal the options with no nested dropdown.
+   */
+  variant?: 'select' | 'list';
 }
+
+/** Sentinel radio value for "inherited" (no explicit effort) in list mode. */
+const INHERITED_VALUE = '__inherited__';
 
 const EFFORT_OPTIONS: {
   value: EffortLevel;
@@ -70,12 +79,56 @@ export const EffortSelector: React.FC<EffortSelectorProps> = ({
   compact = false,
   plain = false,
   fullWidth = false,
+  variant = 'select',
 }) => {
   const { token } = theme.useToken();
   const options = levels
     ? EFFORT_OPTIONS.filter((option) => levels.includes(option.value))
     : EFFORT_OPTIONS;
   const resolvedValue = value ?? fallbackValue;
+
+  // Values-first list: render the levels directly so a popover shows them on the
+  // first click. An explicit "Inherited" option maps to clearing the override.
+  if (variant === 'list') {
+    return (
+      <Radio.Group
+        value={resolvedValue ?? INHERITED_VALUE}
+        onChange={(e) =>
+          onChange?.(
+            e.target.value === INHERITED_VALUE ? undefined : (e.target.value as EffortLevel)
+          )
+        }
+        style={{ display: 'flex', flexDirection: 'column', gap: token.marginXS, width: '100%' }}
+      >
+        {allowInherited && (
+          <Radio value={INHERITED_VALUE} style={{ alignItems: 'flex-start' }}>
+            <div style={{ lineHeight: 1.3 }}>
+              <div>Inherited</div>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                Use the model's default effort
+              </Typography.Text>
+            </div>
+          </Radio>
+        )}
+        {options.map((opt) => (
+          <Radio key={opt.value} value={opt.value} style={{ alignItems: 'flex-start' }}>
+            <Space size={token.marginXXS} align="start">
+              <BulbOutlined style={{ marginTop: 3 }} />
+              <div style={{ lineHeight: 1.3 }}>
+                <div>{opt.label}</div>
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: token.fontSizeSM, whiteSpace: 'normal' }}
+                >
+                  {opt.description}
+                </Typography.Text>
+              </div>
+            </Space>
+          </Radio>
+        ))}
+      </Radio.Group>
+    );
+  }
 
   return (
     <Tooltip title="Reasoning effort level">

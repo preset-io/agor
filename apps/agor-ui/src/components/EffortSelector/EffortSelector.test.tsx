@@ -41,4 +41,26 @@ describe('EffortSelector', () => {
     fireEvent.mouseDown(container.querySelector('.ant-select-clear') as Element);
     expect(onChange.mock.calls.at(-1)?.[0]).toBeUndefined();
   });
+
+  it('list variant shows the levels directly and offers an inherited option', () => {
+    const onChange = vi.fn();
+    render(
+      <EffortSelector
+        value="high"
+        allowInherited
+        levels={['low', 'medium', 'high']}
+        onChange={onChange}
+        variant="list"
+      />
+    );
+    // No dropdown trigger — options are visible on first render.
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByText('Inherited')).toBeInTheDocument();
+    expect(screen.getByText('Deep reasoning')).toBeInTheDocument();
+    // Selecting a level applies immediately; inherited clears the override.
+    fireEvent.click(screen.getByText('Low'));
+    expect(onChange).toHaveBeenCalledWith('low');
+    fireEvent.click(screen.getByText('Inherited'));
+    expect(onChange.mock.calls.at(-1)?.[0]).toBeUndefined();
+  });
 });
