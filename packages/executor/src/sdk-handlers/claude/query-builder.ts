@@ -24,6 +24,7 @@ import {
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
   resolveScopedMCPAuthHeaders,
+  sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {

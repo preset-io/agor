@@ -36,6 +36,7 @@ import {
   MCPExternalError,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
   resolveScopedMCPAuthHeaders,
+  sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';

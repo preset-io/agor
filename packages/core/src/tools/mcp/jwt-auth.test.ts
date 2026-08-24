@@ -1,6 +1,5 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UnsafeOutboundUrlError } from '../../utils/safe-outbound-fetch';
 import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 

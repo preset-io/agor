@@ -1,5 +1,5 @@
 import type { MCPServer, SessionID } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from './scoping';
 import type { HandlerPermissionCapabilities } from './tool-permissions';
 
@@ -19,6 +19,8 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
 
 /** A handler that can drop individual tools — keeps these cases about scoping. */
 const ENFORCING: HandlerPermissionCapabilities = { toolFiltering: 'exclude' };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('getMcpServersForSession', () => {
   it('uses session-scoped effective config retrieval when available', async () => {
