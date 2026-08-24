@@ -453,9 +453,16 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           ghost
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-          // Flush the caret to the column's left edge and tighten the header's
-          // block padding so the collapsed summary sits close to the textarea.
-          styles={{ header: { paddingInlineStart: 0, paddingBlock: token.paddingXXS } }}
+          // Flush the caret to the column's left edge, center it against the
+          // single-line summary, and tighten the header's block padding so the
+          // collapsed summary sits close to the textarea.
+          styles={{
+            header: {
+              alignItems: 'center',
+              paddingInlineStart: 0,
+              paddingBlock: token.paddingXXS,
+            },
+          }}
           items={[
             {
               key: 'chips',
