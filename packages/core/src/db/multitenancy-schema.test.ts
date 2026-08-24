@@ -53,7 +53,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
   );
   const claudeOauthMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'
+    'packages/core/drizzle/postgres/0094_claude_oauth_attempts.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -87,7 +87,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0094_claude_oauth_attempts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

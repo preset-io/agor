@@ -647,10 +647,10 @@
       "breakpoints": true
     },
     {
-      "idx": 93,
+      "idx": 94,
       "version": "7",
-      "when": 1787529600000,
-      "tag": "0093_claude_oauth_attempts",
+      "when": 1787616000000,
+      "tag": "0094_claude_oauth_attempts",
       "breakpoints": true
     }
   ]
