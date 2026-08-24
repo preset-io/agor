@@ -417,7 +417,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   );
 
   return (
-    <div style={{ marginBottom: token.marginLG }}>
+    <div style={{ marginBottom: collapsibleChips ? token.marginSM : token.marginLG }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
       {['modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map((name) => (
         <Form.Item key={name} name={name} noStyle>
@@ -453,6 +453,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           ghost
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+          // Flush the caret to the column's left edge and tighten the header's
+          // block padding so the collapsed summary sits close to the textarea.
+          styles={{ header: { paddingInlineStart: 0, paddingBlock: token.paddingXXS } }}
           items={[
             {
               key: 'chips',
