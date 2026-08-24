@@ -74,6 +74,7 @@ import { createHttpMetricsMiddleware } from './metrics/http.js';
 import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
 import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
+import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -413,7 +414,15 @@ async function startDaemonWithOwnedMetrics(
   }
   const realtimeRuntime =
     deployment.mode === 'ha'
-      ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity)
+      ? new RedisRealtimeRuntime(deployment.redis, distributedWorkIdentity, {
+          onUnavailable: () => {
+            // Redis is the required HA invalidation/fanout plane. Clear every
+            // local authorization cache and terminal capability before the
+            // runtime closes transports; reconnects are admitted only after
+            // both Redis clients return to ready.
+            app.emit(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {});
+          },
+        })
       : undefined;
 
   // Configure how many reverse proxies we trust in front of the daemon.

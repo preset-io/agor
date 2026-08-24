@@ -1,5 +1,5 @@
 import type { Application } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -58,8 +58,19 @@ const executorMocks = vi.hoisted(() => ({
   spawnExecutorFireAndForget: vi.fn(),
 }));
 const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
+const tenantScopeMocks = vi.hoisted(() => {
+  const runFreshWrite = vi.fn(async (work: () => Promise<unknown>) => work());
+  return {
+    runFreshWrite,
+    createFreshTenantWriteDatabaseRunner: vi.fn(() => runFreshWrite),
+  };
+});
 vi.mock('../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: delegatedHomeMocks.resolve,
+}));
+vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/tenant-db-scope.js')>()),
+  createFreshTenantWriteDatabaseRunner: tenantScopeMocks.createFreshTenantWriteDatabaseRunner,
 }));
 vi.mock('../utils/spawn-executor.js', () => {
   return {
@@ -67,6 +78,11 @@ vi.mock('../utils/spawn-executor.js', () => {
     getDaemonUrl: vi.fn(() => 'http://daemon'),
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
+});
+
+beforeEach(() => {
+  tenantScopeMocks.runFreshWrite.mockClear();
+  tenantScopeMocks.createFreshTenantWriteDatabaseRunner.mockClear();
 });
 
 describe('ReposService.addLocalRepository executor boundary', () => {
@@ -371,6 +387,58 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('persists clone-exit failure in a fresh write-gated tenant unit', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockClear();
+    const db = { marker: 'base-db' };
+    const current = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor-failed-clone',
+      clone_status: 'cloning',
+    };
+    const repos = {
+      get: vi.fn(async () => current),
+      patch: vi.fn(async (_id: string, data: object) => ({ ...current, ...data })),
+    };
+    const app = {
+      get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'repos') return repos;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'create').mockResolvedValue(current as never);
+
+    await service.cloneRepository({ url: 'https://github.com/preset-io/agor-failed-clone.git' }, {
+      tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+    } as never);
+    const spawnOptions = executorMocks.spawnExecutorFireAndForget.mock.calls.at(-1)?.[1] as
+      | { onExit?: (code: number | null) => Promise<void> | void }
+      | undefined;
+
+    await spawnOptions?.onExit?.(17);
+
+    expect(tenantScopeMocks.createFreshTenantWriteDatabaseRunner).toHaveBeenCalledWith(
+      db,
+      'tenant-a'
+    );
+    expect(tenantScopeMocks.runFreshWrite).toHaveBeenCalledOnce();
+    expect(repos.get).toHaveBeenCalledWith(current.repo_id);
+    expect(repos.patch).toHaveBeenCalledWith(current.repo_id, {
+      clone_status: 'failed',
+      clone_error: {
+        exit_code: 17,
+        category: 'unknown',
+        message: 'Clone exited with code 17 before reporting an error.',
+      },
+    });
   });
 });
 

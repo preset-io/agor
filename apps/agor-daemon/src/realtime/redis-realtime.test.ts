@@ -156,7 +156,11 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
     }),
   };
   const runtime = new RedisRealtimeRuntime(settings, { instanceId: 'daemon-b', bootId: 'boot-b' });
-  runtime.attach({ of: vi.fn(() => namespace) } as never);
+  runtime.attach({
+    of: vi.fn(() => namespace),
+    engine: { on: vi.fn() },
+    sockets: { sockets: new Map() },
+  } as never);
   const handler = vi.fn();
   runtime.setRelayHandler(handler);
   const envelope = {
@@ -172,4 +176,56 @@ it('listens for server-side Feathers relays on the adapter root namespace', asyn
 
   expect(namespace.on).toHaveBeenCalledWith(REALTIME_RELAY_EVENT, expect.any(Function));
   expect(handler).toHaveBeenCalledWith(envelope);
+});
+
+it('fences each Redis outage with reconnectable transport closes and unhealthy admission', () => {
+  let engineAdmission: ((connection: { close(discard?: boolean): void }) => void) | undefined;
+  const namespace = { on: vi.fn() };
+  const existingTransportClose = vi.fn();
+  const sockets = new Map([['socket-a', { conn: { close: existingTransportClose } }]]);
+  const onUnavailable = vi.fn();
+  const runtime = new RedisRealtimeRuntime(
+    settings,
+    { instanceId: 'daemon-a', bootId: 'boot-a' },
+    { onUnavailable }
+  );
+  const clients = runtime as unknown as {
+    pubClient: { status: string; emit(event: string): void; disconnect(reconnect?: boolean): void };
+    subClient: { status: string; emit(event: string): void; disconnect(reconnect?: boolean): void };
+  };
+  clients.pubClient.status = 'ready';
+  clients.subClient.status = 'ready';
+  runtime.attach({
+    of: vi.fn(() => namespace),
+    engine: {
+      on: vi.fn((event: string, handler: typeof engineAdmission) => {
+        if (event === 'connection') engineAdmission = handler;
+      }),
+    },
+    sockets: { sockets },
+  } as never);
+
+  clients.pubClient.status = 'reconnecting';
+  clients.pubClient.emit('close');
+  clients.subClient.emit('close');
+
+  expect(onUnavailable).toHaveBeenCalledOnce();
+  expect(existingTransportClose).toHaveBeenCalledOnce();
+  const rejectedTransportClose = vi.fn();
+  engineAdmission?.({ close: rejectedTransportClose });
+  expect(rejectedTransportClose).toHaveBeenCalledWith(true);
+
+  clients.pubClient.status = 'ready';
+  clients.subClient.status = 'ready';
+  clients.pubClient.emit('ready');
+  const acceptedTransportClose = vi.fn();
+  engineAdmission?.({ close: acceptedTransportClose });
+  expect(acceptedTransportClose).not.toHaveBeenCalled();
+
+  clients.subClient.status = 'reconnecting';
+  clients.subClient.emit('reconnecting');
+  expect(onUnavailable).toHaveBeenCalledTimes(2);
+
+  clients.pubClient.disconnect(false);
+  clients.subClient.disconnect(false);
 });

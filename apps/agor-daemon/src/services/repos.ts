@@ -58,6 +58,7 @@ import {
   requestExecutor,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
+import { createFreshTenantWriteDatabaseRunner } from '../utils/tenant-db-scope.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
 /**
@@ -338,7 +339,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         templateVariables: {
           user_id: userId,
         },
-        onExit: (code) => {
+        onExit: async (code) => {
           if (code !== 0 && code !== null) {
             console.error(
               `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
@@ -355,7 +356,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             // same structured payload so the fallback toast cannot lose the
             // auth/CA/Git remediation hints. If the executor crashed before
             // patching, preserve the safety-net failure row and emit that one.
-            void (async () => {
+            const resolveDurableFailure = async () => {
               let current: Repo | undefined;
               try {
                 current = (await reposService.get(repoId)) as Repo;
@@ -396,7 +397,18 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 // durable repos.patched event remains the source of truth.
                 console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
               }
-            })();
+            };
+
+            // Executor callbacks outlive the request transaction that spawned
+            // them. In tenant-aware modes, explicitly leave any inherited ALS
+            // transaction and persist the safety-net result in one fresh,
+            // write-gated tenant unit. Standalone SQLite retains its historical
+            // unscoped internal-service behavior.
+            if (tenantId) {
+              await createFreshTenantWriteDatabaseRunner(this.db, tenantId)(resolveDurableFailure);
+            } else {
+              await resolveDurableFailure();
+            }
           }
         },
       }

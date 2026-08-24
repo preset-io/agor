@@ -74,7 +74,12 @@ fails closed.
 7. Socket.IO transport auto-reconnect remains enabled for browser and executor
    clients. Server-side connection-state recovery is deliberately not enabled:
    every replacement namespace connection performs the full authenticated
-   handshake and rebuilds only its authorized rooms/subscriptions.
+   handshake and rebuilds only its authorized rooms/subscriptions. In HA mode,
+   losing either required Redis client clears replica-local authorization
+   caches, retires terminal capabilities, and closes Engine.IO transports;
+   admission resumes only after both Redis clients are ready, preserving
+   automatic reconnect without accepting a socket on a partitioned fanout
+   plane.
 
 ## Room / channel authorization matrix
 
@@ -457,6 +462,14 @@ Observed results on the audit branch:
   typechecks passed, and Biome plus multitenancy/filesystem/realtime/short-ID
   boundary checks passed. The final root `pnpm check` passed all 21 typecheck
   tasks and all 15 non-doc build tasks.
+- final minimum-review hardening: 112 focused Redis lifecycle, tenant-unit,
+  scheduler, repository-callback, terminal, and long-route tests passed;
+  daemon/UI/client typechecks and focused formatting passed; the clean
+  packaged source image built and its client pack contract passed; and the
+  rebuilt two-replica HA harness passed with daemon and Redis failure
+  injection. A real browser Codex session also completed before and after an
+  additional Redis outage, proving authenticated UI reconnect and subsequent
+  executor dispatch against the preserved tenant/user credential home.
 
 The PostgreSQL/RLS and Redis results above were observed earlier on this audit
 branch. Their disposable fixture URLs were not present for the final reviewer

@@ -14,10 +14,7 @@ import {
   AGENTIC_TOOL_KEY_CREATION_URL as PRIVATE_AGENTIC_TOOL_KEY_CREATION_URL,
   TOOL_API_KEY_NAMES as PRIVATE_TOOL_API_KEY_NAMES,
 } from '@agor/agentic-tools';
-import type {
-  AgorClient as CoreAgorClient,
-  AuthenticatedAgorClient as CoreAuthenticatedAgorClient,
-} from '@agor/core/client';
+import type { AgorClient as CoreAgorClient } from '@agor/core/client';
 import {
   createClient as createCoreClient,
   createRestClient as createCoreRestClient,
@@ -50,7 +47,6 @@ import {
 export type {
   AgorClient,
   AgorService,
-  AuthenticatedAgorClient,
   BoardsService,
   BranchesService,
   ClientInput,
@@ -66,6 +62,12 @@ export type {
   TasksService,
 } from '@agor/core/client';
 export * from '@agor/core/client';
+
+// Derive this public alias from the function we wrap instead of asking the DTS
+// bundler to resolve the same named type through @agor/core's source and
+// declaration export conditions. This keeps clean packaged builds deterministic
+// while preserving the exact core client contract.
+export type AuthenticatedAgorClient = Awaited<ReturnType<typeof createCoreRestClient>>;
 
 // Preserve the published client contract while keeping registry values package-owned.
 export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> =
@@ -105,7 +107,7 @@ export function createClient(...args: Parameters<typeof createCoreClient>): Reac
 
 export async function createRestClient(
   ...args: Parameters<typeof createCoreRestClient>
-): Promise<CoreAuthenticatedAgorClient> {
+): Promise<AuthenticatedAgorClient> {
   return createCoreRestClient(...args);
 }
 

@@ -79,6 +79,36 @@ export function createTenantWriteGateAroundHook(db: TenantScopeAwareDatabase) {
   };
 }
 
+/**
+ * Admission-only write-gate check for authenticated routes that perform long
+ * process/network orchestration.
+ *
+ * Unlike {@link createTenantWriteGateAroundHook}, this helper does not expect
+ * the route to retain a database transaction while `next()` runs. It opens one
+ * short tenant write unit, checks the gate, commits it, and only then enters
+ * the long handler. Repository/service writes inside the handler retain their
+ * own gate checks; this admission check prevents external side effects from
+ * starting while a tenant freeze is already active.
+ */
+export function createTenantWriteAdmissionAroundHook(db: TenantScopeAwareDatabase) {
+  return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
+    if (isTenantWriteMethodName(context.method)) {
+      const tenantId = context.params.tenant?.tenant_id ?? getCurrentTenantId();
+      if (tenantId) {
+        try {
+          await createFreshTenantWriteDatabaseRunner(db, tenantId)(async () => undefined);
+        } catch (error) {
+          if (error instanceof TenantWriteGateActiveError) {
+            throw new Unavailable(error.message);
+          }
+          throw error;
+        }
+      }
+    }
+    await next();
+  };
+}
+
 export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
   const scopedParams = params as TenantScopedParams;
   return scopedParams?.tenant?.tenant_id ?? getCurrentTenantId();

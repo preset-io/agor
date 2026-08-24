@@ -838,8 +838,21 @@ try {
       waitFor(`${daemonA}/livez`, (r) => r.status === 200),
       waitFor(`${daemonB}/livez`, (r) => r.status === 200),
     ]);
+    const handshakesBeforeRedisOutage = browserCredential.handshakeCount;
+    await waitUntil(
+      () =>
+        !socketA.connected &&
+        !socketB.connected &&
+        !affinitySocket.connected &&
+        !foreignSocket.connected &&
+        !memberSocket.connected,
+      'Redis outage socket transport fence'
+    );
     const cursorCountBeforeOutagePacket = cursorCount;
-    socketA.emit('cursor-move', {
+    // Presence samples are ephemeral. Volatile delivery proves an event
+    // generated while the required fanout plane is unavailable is neither
+    // accepted nor buffered by the client for post-recovery replay.
+    socketA.volatile.emit('cursor-move', {
       boardId: board.board_id,
       x: 91,
       y: 92,
@@ -853,6 +866,23 @@ try {
       waitFor(`${daemonA}/readyz`, (r) => r.status === 200),
       waitFor(`${daemonB}/readyz`, (r) => r.status === 200),
     ]);
+    await waitUntil(
+      () =>
+        socketA.connected &&
+        socketB.connected &&
+        affinitySocket.connected &&
+        foreignSocket.connected &&
+        memberSocket.connected,
+      'post-Redis-outage socket reconnect',
+      30_000
+    );
+    assert(browserCredential.handshakeCount > handshakesBeforeRedisOutage);
+    const [redisRewatchA, redisRewatchB] = await Promise.all([
+      watchBoard(socketA),
+      watchBoard(socketB),
+    ]);
+    assert.deepEqual(redisRewatchA, { ok: true });
+    assert.deepEqual(redisRewatchB, { ok: true });
     await delay(EXACTLY_ONCE_SETTLE_MS);
     assert.equal(
       cursorCount,
@@ -886,7 +916,7 @@ try {
       [recoveredBoard.board_id]
     );
     console.log(
-      'ok - Redis outage failed readiness, dropped gap traffic without replay, and recovered fanout'
+      'ok - Redis outage fenced sockets, reauthenticated reconnects, dropped gap traffic without replay, and recovered fanout'
     );
   }
 

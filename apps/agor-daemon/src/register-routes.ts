@@ -217,6 +217,7 @@ import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-valid
 import {
   createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
+  createTenantWriteAdmissionAroundHook,
   createTenantWriteGateAroundHook,
   deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
@@ -716,6 +717,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     jwtSecret,
     transaction: false,
   });
+  const tenantWriteAdmissionAround = createTenantWriteAdmissionAroundHook(db);
   const inTenantDatabaseScope = <T>(hook: (context: HookContext) => T) =>
     async function scopedHook(context: HookContext): Promise<Awaited<T>> {
       return runWithTenantDatabaseScope(db, context.params.tenant?.tenant_id, async () =>
@@ -745,12 +747,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ) =>
     registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
-      around: [tenantIdentityAround, ...(options.around ?? [])],
+      around: [tenantIdentityAround, tenantWriteAdmissionAround, ...(options.around ?? [])],
     });
 
   // Long routes carry tenant identity without holding a route-wide database
-  // transaction. Bind direct repository dependencies to short units of work;
-  // hooked service calls establish their own scopes.
+  // transaction. Admission checks the write gate in one short unit before
+  // orchestration begins; direct repositories and hooked services re-check it
+  // at their own short write boundaries.
   const stopRouteRepositories = bindStopRouteRepositories(db, {
     taskRepo: new TaskRepository(db),
     branchRepo: branchRepository,

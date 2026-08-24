@@ -60,7 +60,11 @@ export interface RealtimeAuthorizationInvalidation {
 /** Internal exact executor-token revocation signal. */
 export const HA_EXECUTOR_TOKEN_INVALIDATION_EVENT = 'agor:executor-token-invalidated:v1';
 
-/** Process-local notification emitted before stale sockets are disconnected. */
+/**
+ * Process-local notification emitted before stale sockets are disconnected.
+ * A tenant id scopes ordinary authorization invalidation; an absent tenant id
+ * is the local-only global fence used when this replica loses required Redis.
+ */
 export const LOCAL_AUTHORIZATION_INVALIDATION_EVENT = 'realtime:authorization-invalidated-local';
 
 /** Process-local cache-only fence for additive authorization changes. */

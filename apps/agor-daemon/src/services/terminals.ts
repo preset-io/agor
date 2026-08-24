@@ -152,6 +152,7 @@ export class TerminalsService {
     });
     events.on(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, (data: { tenantId?: string }) => {
       if (data.tenantId) this.closeTenant(data.tenantId);
+      else this.cleanup();
     });
   }
 

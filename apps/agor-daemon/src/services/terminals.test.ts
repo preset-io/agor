@@ -1,5 +1,6 @@
 import type { BranchID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from '../realtime/routing.js';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
@@ -434,6 +435,39 @@ describe('attachment lifecycle', () => {
       service.matchesOwnedAttachment({
         terminalId: terminal.terminalId,
         tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+  });
+
+  it('a replica-wide realtime outage retires terminal capabilities for every tenant', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const tenantX = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    mocks.tenantId = 'tenant-y';
+    const tenantY = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const outageHandler = app.on.mock.calls.find(
+      ([event]) => event === LOCAL_AUTHORIZATION_INVALIDATION_EVENT
+    )?.[1] as ((data: { tenantId?: string }) => void) | undefined;
+
+    outageHandler?.({});
+
+    expect(outageHandler).toBeDefined();
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: tenantX.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: tenantY.terminalId,
+        tenantId: 'tenant-y',
         userId: 'user-1',
         branchId: 'branch-1',
         ownerBootId: 'daemon-a-boot',

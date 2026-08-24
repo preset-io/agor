@@ -14,6 +14,7 @@ import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens
 import {
   createFreshTenantWriteDatabaseRunner,
   createTenantDatabaseScopeAroundHook,
+  createTenantWriteAdmissionAroundHook,
   deferWithTenantContext,
   deferWithTenantDatabaseScope,
 } from './tenant-db-scope.js';
@@ -105,6 +106,78 @@ describe('createFreshTenantWriteDatabaseRunner', () => {
     expect(() => createFreshTenantWriteDatabaseRunner({} as never, undefined)).toThrow(
       'Missing tenant context'
     );
+  });
+});
+
+describe('createTenantWriteAdmissionAroundHook', () => {
+  it('checks a mutation in one short unit without holding it across long work', async () => {
+    const { db, tx } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBeUndefined();
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    });
+
+    await hook(
+      {
+        method: 'create',
+        params: { tenant: { tenant_id: 'tenant-long', source: 'explicit' } },
+      } as never,
+      next
+    );
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a long mutation before its handler when the tenant is frozen', async () => {
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            value_text: JSON.stringify({
+              generation: 'gate-generation',
+              acquiredAt: '2026-08-24T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await expect(
+      hook(
+        {
+          method: 'create',
+          params: { tenant: { tenant_id: 'tenant-frozen', source: 'explicit' } },
+        } as never,
+        next
+      )
+    ).rejects.toMatchObject({ code: 503 });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('does not query the write gate for a recognized custom read', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await hook(
+      {
+        method: 'getPrimaryTeammate',
+        params: { tenant: { tenant_id: 'tenant-read', source: 'explicit' } },
+      } as never,
+      next
+    );
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 });
 
