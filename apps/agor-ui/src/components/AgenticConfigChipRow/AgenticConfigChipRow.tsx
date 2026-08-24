@@ -25,9 +25,9 @@ import {
   Button,
   Checkbox,
   Collapse,
+  Dropdown,
   Flex,
   Form,
-  Popover,
   Select,
   Typography,
   theme,
@@ -517,7 +517,10 @@ interface EditableChipProps {
   renderContent: (close: () => void) => React.ReactNode;
 }
 
-/** A Tag chip that opens a popover editor on click (or shows a managed note). */
+/**
+ * A Tag chip that opens a BARE dropdown of values on click (no title/card
+ * chrome), or a minimal managed-by-preset note when not editable.
+ */
 const EditableChip: React.FC<EditableChipProps> = ({
   icon,
   label,
@@ -548,35 +551,32 @@ const EditableChip: React.FC<EditableChipProps> = ({
     </Button>
   );
 
-  if (!editable) {
-    return (
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        trigger="click"
-        placement="bottomLeft"
-        title={title}
-        content={managedNote}
-      >
-        {chip}
-      </Popover>
-    );
-  }
+  // A plain elevated surface — the dropdown reads like a native select menu
+  // rather than a titled popover card.
+  const surface = (content: React.ReactNode) => (
+    <div
+      style={{
+        width,
+        maxWidth: `calc(100vw - ${token.marginLG * 2}px)`,
+        padding: token.paddingXS,
+        background: token.colorBgElevated,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: token.boxShadowSecondary,
+      }}
+    >
+      {content}
+    </div>
+  );
 
   return (
-    <Popover
+    <Dropdown
       open={open}
       onOpenChange={setOpen}
-      trigger="click"
+      trigger={['click']}
       placement="bottomLeft"
-      title={title}
-      content={
-        <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
-          {renderContent(() => setOpen(false))}
-        </div>
-      }
+      popupRender={() => surface(editable ? renderContent(() => setOpen(false)) : managedNote)}
     >
       {chip}
-    </Popover>
+    </Dropdown>
   );
 };

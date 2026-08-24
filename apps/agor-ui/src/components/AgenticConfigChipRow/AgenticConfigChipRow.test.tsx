@@ -183,6 +183,19 @@ describe('AgenticConfigChipRow', () => {
     expect(responsiveContainer?.style.minWidth).toBe('');
   });
 
+  it('opens a bare value dropdown with no title header or card chrome', async () => {
+    render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
+    const permissionChip = screen.getByTestId('permission-chip');
+
+    fireEvent.click(permissionChip);
+    // The values (mocked control) are shown directly…
+    expect(await screen.findByTestId('perm-change')).toBeInTheDocument();
+    expect(permissionChip).toHaveAttribute('aria-expanded', 'true');
+    // …with no titled popover heading or card framing.
+    expect(document.querySelector('.ant-popover-title')).toBeNull();
+    expect(screen.queryByText('Permission mode')).not.toBeInTheDocument();
+  });
+
   it('preserves the selected preset and offers retry when preset loading fails', async () => {
     const find = vi
       .fn()
