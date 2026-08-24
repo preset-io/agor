@@ -168,6 +168,93 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     expect(claims.filter((claim) => claim.outcome === 'already_claimed')).toHaveLength(4);
   });
 
+  it('mutually fences prompt admission and permanent initialization diagnosis', async () => {
+    const seed = await seedTenant(db, `scheduler-init-race-${generateId()}`);
+    const session = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+      new SessionRepository(scoped).create({
+        session_id: generateId() as SessionID,
+        branch_id: seed.branchId,
+        created_by: seed.userId,
+        agentic_tool: 'claude-code',
+        scheduled_from_branch: true,
+        scheduled_run_at: Date.now(),
+        schedule_id: seed.scheduleId,
+      })
+    );
+    const taskId = generateId() as TaskID;
+
+    await Promise.allSettled([
+      runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).createPending({
+          task_id: taskId,
+          session_id: session.session_id,
+          created_by: seed.userId,
+          full_prompt: 'stable scheduler admission',
+          status: TaskStatus.QUEUED,
+        })
+      ),
+      runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new SessionRepository(scoped).markScheduledInitializationPermanentFailure({
+          sessionId: session.session_id,
+          code: 'mcp_server_not_usable',
+          stage: 'mcp_attachment',
+        })
+      ),
+    ]);
+
+    await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+      const storedSession = await new SessionRepository(scoped).findById(session.session_id);
+      const storedTask = await new TaskRepository(scoped).findById(taskId);
+      if (storedTask) {
+        expect(storedSession?.status).not.toBe(SessionStatus.FAILED);
+        expect(storedSession?.scheduler_init_failure_code).toBeUndefined();
+      } else {
+        expect(storedSession).toMatchObject({
+          status: SessionStatus.FAILED,
+          scheduler_init_failure_code: 'mcp_server_not_usable',
+        });
+        expect(
+          await new SessionRepository(scoped).markScheduledInitializationComplete(
+            session.session_id
+          )
+        ).toBe(false);
+      }
+    });
+  });
+
+  it('serializes database-timed retry attempts inside the tenant boundary', async () => {
+    const seed = await seedTenant(db, `scheduler-init-retry-${generateId()}`);
+    const session = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+      new SessionRepository(scoped).create({
+        session_id: generateId() as SessionID,
+        branch_id: seed.branchId,
+        created_by: seed.userId,
+        agentic_tool: 'claude-code',
+        scheduled_from_branch: true,
+        scheduled_run_at: Date.now(),
+        schedule_id: seed.scheduleId,
+      })
+    );
+    const transitions = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+          new SessionRepository(scoped).markScheduledInitializationRetry({
+            sessionId: session.session_id,
+            code: 'initialization_transient',
+            stage: 'prompt_admission',
+          })
+        )
+      )
+    );
+    expect(transitions.map((transition) => transition.attempt).sort()).toEqual([1, 2]);
+    await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+      expect(await new SessionRepository(scoped).findById(session.session_id)).toMatchObject({
+        scheduler_init_attempt_count: 2,
+        scheduler_init_failure_code: 'initialization_transient',
+      });
+    });
+  });
+
   it('keeps tenant reloads isolated while narrow system discovery returns routing refs', async () => {
     const a = await seedTenant(db, `scheduler-tenant-a-${generateId()}`);
     const b = await seedTenant(db, `scheduler-tenant-b-${generateId()}`);

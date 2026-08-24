@@ -79,6 +79,8 @@ import type {
   PersistedScheduleAgenticToolConfig,
   Schedule,
   ScheduleID,
+  SchedulerInitializationFailureCode,
+  SchedulerInitializationStage,
   Session,
   SessionID,
   Task,
@@ -222,12 +224,14 @@ export class ScheduleNotReadyError extends Error {
   public readonly code:
     | 'schedule_disabled'
     | 'schedule_incomplete'
+    | 'schedule_initialization_retry_pending'
     | 'schedule_agentic_tool_removed'
     | 'schedule_invalid_config';
   constructor(
     code:
       | 'schedule_disabled'
       | 'schedule_incomplete'
+      | 'schedule_initialization_retry_pending'
       | 'schedule_agentic_tool_removed'
       | 'schedule_invalid_config',
     message: string
@@ -237,14 +241,6 @@ export class ScheduleNotReadyError extends Error {
     this.code = code;
   }
 }
-
-type SchedulerInitializationStage =
-  | 'recovery_load'
-  | 'creator_load'
-  | 'snapshot'
-  | 'mcp_attachment'
-  | 'prompt_admission'
-  | 'finalization';
 
 class ScheduledInitializationError extends Error {
   constructor(
@@ -256,12 +252,23 @@ class ScheduledInitializationError extends Error {
   }
 }
 
-function permanentInitializationDiagnosis(error: ScheduledInitializationError): string | null {
-  const cause = error.cause;
-  if (cause instanceof MCPServerNotUsableError) return 'mcp_server_not_usable';
-  if (cause instanceof ScheduleNotReadyError) return cause.code;
-  if (cause instanceof Forbidden) return 'ownership_forbidden';
-  if (cause instanceof BadRequest) return 'invalid_configuration';
+class PermanentScheduledInitializationError extends Error {
+  constructor(
+    readonly code: Exclude<SchedulerInitializationFailureCode, 'initialization_transient'>,
+    readonly stage: SchedulerInitializationStage
+  ) {
+    super('Scheduled occurrence initialization cannot be completed');
+    this.name = 'PermanentScheduledInitializationError';
+  }
+}
+
+function permanentInitializationDiagnosis(
+  error: ScheduledInitializationError
+): PermanentScheduledInitializationError | null {
+  if (error.cause instanceof PermanentScheduledInitializationError) return error.cause;
+  if (error.stage === 'mcp_attachment' && error.cause instanceof MCPServerNotUsableError) {
+    return new PermanentScheduledInitializationError('mcp_server_not_usable', error.stage);
+  }
   return null;
 }
 
@@ -1025,7 +1032,13 @@ export class SchedulerService {
       admission.session.scheduler_init_retry_at &&
       Date.parse(admission.session.scheduler_init_retry_at) > now
     ) {
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (manual) {
+        throw new ScheduleNotReadyError(
+          'schedule_initialization_retry_pending',
+          'This scheduled occurrence is waiting for its durable initialization retry.'
+        );
+      }
+      await this.advanceScheduleCursor(schedule, now);
       return admission.session;
     }
     await this.config.testHooks?.afterSessionAdmission?.(admission.session);
@@ -1089,7 +1102,7 @@ export class SchedulerService {
         session,
         new ScheduledInitializationError(
           'snapshot',
-          new ScheduleNotReadyError('schedule_incomplete', 'Schedule identity is unavailable')
+          new PermanentScheduledInitializationError('schedule_identity_unavailable', 'snapshot')
         )
       );
       return;
@@ -1111,7 +1124,10 @@ export class SchedulerService {
           session,
           new ScheduledInitializationError(
             'recovery_load',
-            new ScheduleNotReadyError('schedule_incomplete', 'Schedule branch is unavailable')
+            new PermanentScheduledInitializationError(
+              'schedule_branch_unavailable',
+              'recovery_load'
+            )
           )
         );
         return;
@@ -1129,7 +1145,7 @@ export class SchedulerService {
         session,
         new ScheduledInitializationError(
           'snapshot',
-          new ScheduleNotReadyError('schedule_incomplete', 'Schedule prompt is unavailable')
+          new PermanentScheduledInitializationError('schedule_prompt_unavailable', 'snapshot')
         )
       );
       return;
@@ -1174,39 +1190,36 @@ export class SchedulerService {
       error instanceof ScheduledInitializationError
         ? error
         : new ScheduledInitializationError('recovery_load', error);
-    const permanentCode = permanentInitializationDiagnosis(diagnosed);
-    if (permanentCode) {
-      const recorded = await this.withTenantDatabase(() =>
+    const permanent = permanentInitializationDiagnosis(diagnosed);
+    if (permanent) {
+      const outcome = await this.withTenantDatabase(() =>
         this.sessionRepo.markScheduledInitializationPermanentFailure({
           sessionId: session.session_id,
-          code: permanentCode,
-          stage: diagnosed.stage,
+          code: permanent.code,
+          stage: permanent.stage,
         })
       );
-      if (recorded) {
+      if (outcome === 'recorded') {
         this.logWorkEvent('error', 'occurrence_initialization_permanent_failure', {
           schedule_id: session.schedule_id,
           session_id: session.session_id,
-          failure_code: permanentCode,
-          failure_stage: diagnosed.stage,
+          failure_code: permanent.code,
+          failure_stage: permanent.stage,
           retryable: false,
         });
       }
       return;
     }
 
-    const attempt = (session.scheduler_init_attempt_count ?? 0) + 1;
-    const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(attempt - 1, 8));
-    const retryAt = Date.now() + delayMs;
-    const recorded = await this.withTenantDatabase(() =>
+    const transition = await this.withTenantDatabase(() =>
       this.sessionRepo.markScheduledInitializationRetry({
         sessionId: session.session_id,
         code: 'initialization_transient',
         stage: diagnosed.stage,
-        retryAt,
       })
     );
-    if (recorded) {
+    if (transition.recorded) {
+      const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(transition.attempt - 1, 8));
       this.logWorkEvent('warn', 'occurrence_initialization_retry_scheduled', {
         schedule_id: session.schedule_id,
         session_id: session.session_id,
@@ -1289,7 +1302,7 @@ export class SchedulerService {
       if (!recoveredCreator) {
         throw new ScheduledInitializationError(
           'creator_load',
-          new ScheduleNotReadyError('schedule_incomplete', 'Schedule creator is unavailable')
+          new PermanentScheduledInitializationError('creator_unavailable', 'creator_load')
         );
       }
       creator = recoveredCreator;

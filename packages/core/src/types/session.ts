@@ -376,8 +376,8 @@ export interface Session {
   schedule_id?: ScheduleID;
 
   /** Safe durable scheduler initialization diagnosis (internal lifecycle). */
-  scheduler_init_failure_code?: string;
-  scheduler_init_failure_stage?: string;
+  scheduler_init_failure_code?: SchedulerInitializationFailureCode;
+  scheduler_init_failure_stage?: SchedulerInitializationStage;
   scheduler_init_attempt_count?: number;
   scheduler_init_retry_at?: string;
 
@@ -493,6 +493,29 @@ export interface Session {
     target_branch_id: BranchID;
   };
 }
+
+export const SCHEDULER_INITIALIZATION_STAGES = [
+  'recovery_load',
+  'creator_load',
+  'snapshot',
+  'mcp_attachment',
+  'prompt_admission',
+  'finalization',
+] as const;
+
+export type SchedulerInitializationStage = (typeof SCHEDULER_INITIALIZATION_STAGES)[number];
+
+export const SCHEDULER_INITIALIZATION_FAILURE_CODES = [
+  'initialization_transient',
+  'creator_unavailable',
+  'schedule_identity_unavailable',
+  'schedule_branch_unavailable',
+  'schedule_prompt_unavailable',
+  'mcp_server_not_usable',
+] as const;
+
+export type SchedulerInitializationFailureCode =
+  (typeof SCHEDULER_INITIALIZATION_FAILURE_CODES)[number];
 
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<

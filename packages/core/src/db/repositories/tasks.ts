@@ -1696,6 +1696,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .where(eq(sessions.session_id, input.session_id))
             .one();
           if (!sessionRow) throw new EntityNotFoundError('Session', input.session_id);
+          if (
+            input.task_id &&
+            sessionRow.scheduler_init_failure_code &&
+            !sessionRow.scheduler_init_retry_at
+          ) {
+            throw new RepositoryError('Scheduled occurrence initialization is permanently settled');
+          }
 
           let existingCreated: Task | undefined;
           if (input.task_id) {

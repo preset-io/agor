@@ -634,12 +634,21 @@ describe('scheduler HA occurrence recovery', () => {
           scheduler_init_failure_stage: 'prompt_admission',
           scheduler_init_attempt_count: 1,
         });
-        expect(Date.parse(session.scheduler_init_retry_at!)).toBe(NOW + 5_000);
+        const retryAt = Date.parse(session.scheduler_init_retry_at!);
+        expect(retryAt).toBeGreaterThan(0);
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toMatchObject({ code: 'schedule_initialization_retry_pending' });
+        expect(prompt).toHaveBeenCalledOnce();
 
         await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
         expect(prompt).toHaveBeenCalledOnce();
 
-        nowSpy.mockReturnValue(NOW + 5_000);
+        nowSpy.mockReturnValue(retryAt);
         await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
         expect(prompt).toHaveBeenCalledTimes(2);
         expect(
