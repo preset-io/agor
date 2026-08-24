@@ -27,7 +27,7 @@ describe('constrained HA support profile', () => {
       widgetResolutionDurableClaim: true as const,
       githubInstall: true as const,
       codexCredentialFiles: true,
-      codexDeviceAuth: false as const,
+      codexDeviceAuth: true,
       processAffineAuth: false as const,
       gatewayListeners: true as const,
       gatewayOutboundExactlyOnce: false as const,
@@ -37,7 +37,7 @@ describe('constrained HA support profile', () => {
     redis: {} as never,
     environmentHealthMonitor: {} as never,
     executorStorage: {
-      userHome: 'shared' as const,
+      userHome: 'persistent-per-user' as const,
       branchWorkspace: 'shared' as const,
       baseRepository: 'shared' as const,
     },
@@ -126,21 +126,47 @@ describe('constrained HA support profile', () => {
     ]);
   });
 
-  it('admits Codex/Claude auth-file operations only with a consistent executor home', () => {
-    for (const feature of ['codexAuth', 'claudeAuth'] as const) {
-      expect(isHaFeatureUnavailable(ha, feature)).toBe(false);
-      expect(
-        isHaFeatureUnavailable(
-          { ...ha, capabilities: { ...ha.capabilities, codexCredentialFiles: false } },
-          feature
-        )
-      ).toBe(true);
-    }
+  it('admits Codex auth-file operations with a consistent home and device auth only when exact-user routed', () => {
+    expect(isHaFeatureUnavailable(ha, 'codexAuth')).toBe(false);
+    expect(
+      isHaFeatureUnavailable(
+        {
+          ...ha,
+          capabilities: { ...ha.capabilities, codexCredentialFiles: false },
+        },
+        'codexAuth'
+      )
+    ).toBe(true);
+    expect(isHaFeatureUnavailable(ha, 'codexDeviceAuth')).toBe(false);
+    expect(
+      isHaFeatureUnavailable(
+        {
+          ...ha,
+          capabilities: { ...ha.capabilities, codexDeviceAuth: false },
+        },
+        'codexDeviceAuth'
+      )
+    ).toBe(true);
   });
 
-  it('always gates the in-memory device / OAuth attempt flows in constrained HA', () => {
-    expect(isHaFeatureUnavailable(ha, 'codexDeviceAuth')).toBe(true);
+  it('keeps standalone Claude credential mutation and OAuth gated in constrained HA', () => {
+    expect(isHaFeatureUnavailable(ha, 'claudeAuth')).toBe(true);
     expect(isHaFeatureUnavailable(ha, 'claudeOAuth')).toBe(true);
+    expect(
+      isHaFeatureUnavailable(
+        { ...ha, capabilities: { ...ha.capabilities, codexCredentialFiles: false } },
+        'claudeAuth'
+      )
+    ).toBe(true);
+  });
+
+  it('gives gated Codex routes actionable cross-replica lock guidance', () => {
+    expect(haUnavailable('codexAuth').message).toContain(
+      'execution.executor_storage.user_home_locking: cross-replica-flock'
+    );
+    expect(haUnavailable('codexDeviceAuth').message).toContain(
+      'execution.executor_storage.user_home_locking: cross-replica-flock'
+    );
   });
 
   it('does not change standalone behavior', () => {

@@ -610,6 +610,41 @@
       "when": 1787184000000,
       "tag": "0087_knowledge_teammate_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1787212550878,
+      "tag": "0088_session_recent_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1787270400000,
+      "tag": "0089_mcp_catalog_install_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1787270400001,
+      "tag": "0090_external_user_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1787356800000,
+      "tag": "0091_codex_device_auth_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1787443200000,
+      "tag": "0092_add_user_credential_generation",
+      "breakpoints": true
     }
   ]
 }

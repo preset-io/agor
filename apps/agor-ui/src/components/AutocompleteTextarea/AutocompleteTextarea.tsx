@@ -120,6 +120,8 @@ interface AutocompleteTextareaProps {
   kbLinkTarget?: KbLinkTarget;
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
+  /** Style overrides for the underlying Ant Design textarea control. */
+  textareaStyle?: React.CSSProperties;
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -379,6 +381,7 @@ export const AutocompleteTextarea = React.forwardRef<
       kbDocs,
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
+      textareaStyle,
     },
     ref
   ) => {
@@ -1355,6 +1358,20 @@ export const AutocompleteTextarea = React.forwardRef<
     const hasHighlights = value?.includes('@') ?? false;
     const shouldHighlightEmpty = highlightWhenEmpty && !value.trim() && !suppressEmptyHighlight;
 
+    // The highlight overlay is a separate layer painted behind the textarea, so
+    // it only lines up glyph-for-glyph while both use the same text metrics.
+    // Any caller override (e.g. the mobile composer's 16px anti-autozoom font
+    // size) therefore has to reach the overlay as well, or the highlights drift.
+    const overlayTextMetrics: React.CSSProperties = {
+      fontFamily: textareaStyle?.fontFamily ?? token.fontFamily,
+      fontSize: textareaStyle?.fontSize ?? token.fontSize,
+      lineHeight: textareaStyle?.lineHeight ?? token.lineHeight,
+      letterSpacing: textareaStyle?.letterSpacing,
+      padding: textareaStyle?.padding ?? '4px 11px',
+      paddingBlock: textareaStyle?.paddingBlock,
+      paddingInline: textareaStyle?.paddingInline,
+    };
+
     return (
       <div
         ref={wrapperRef}
@@ -1429,10 +1446,7 @@ export const AutocompleteTextarea = React.forwardRef<
               wordWrap: 'break-word',
               color: 'transparent',
               overflow: 'hidden',
-              fontFamily: token.fontFamily,
-              fontSize: token.fontSize,
-              lineHeight: token.lineHeight,
-              padding: '4px 11px',
+              ...overlayTextMetrics,
               border: '1px solid transparent',
               borderRadius: token.borderRadius,
               zIndex: 0,
@@ -1497,6 +1511,7 @@ export const AutocompleteTextarea = React.forwardRef<
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',
             zIndex: 1,
+            ...textareaStyle,
           }}
         />
       </div>

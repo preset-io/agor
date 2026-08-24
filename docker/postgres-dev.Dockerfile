@@ -7,8 +7,8 @@
 FROM pgvector/pgvector:0.8.2-pg16-trixie
 
 # BuildKit can retain a source file's POSIX ACL even with COPY --chmod. Stage it
-# first, then create a fresh inode so Unix-isolated worktree ACLs cannot make
-# the bootstrap script unreadable by the postgres user.
+# first, then create a fresh inode so checkout ACLs cannot make the bootstrap
+# script unreadable by the postgres user.
 COPY docker/postgres-init-app-user.sql /tmp/agor-init-app-user.sql
 RUN install -o root -g root -m 0644 \
   /tmp/agor-init-app-user.sql \

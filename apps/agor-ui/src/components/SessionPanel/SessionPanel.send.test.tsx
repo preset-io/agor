@@ -64,6 +64,7 @@ function renderSessionPanel({
   onFork = vi.fn(),
   onBtwFork = vi.fn(),
   session = makeSession(),
+  currentUserId = 'user-a',
 }: {
   onSendPrompt?: (
     sessionId: string,
@@ -72,8 +73,11 @@ function renderSessionPanel({
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   session?: Session;
+  currentUserId?: string;
 } = {}) {
-  const renderTree = (nextSession: Session) => (
+  let activeSession = session;
+  let activeUserId: string | undefined = currentUserId;
+  const renderTree = () => (
     <App>
       <ConnectionProvider
         value={{
@@ -85,17 +89,30 @@ function renderSessionPanel({
         }}
       >
         <AppActionsProvider value={{ onSendPrompt, onFork, onBtwFork }}>
-          <SessionPanel client={makeClient()} session={nextSession} open onClose={vi.fn()} />
+          <SessionPanel
+            client={makeClient()}
+            session={activeSession}
+            currentUserId={activeUserId}
+            open
+            onClose={vi.fn()}
+          />
         </AppActionsProvider>
       </ConnectionProvider>
     </App>
   );
-  const renderResult = render(renderTree(session));
+  const renderResult = render(renderTree());
   return {
     onSendPrompt,
     onFork,
     onBtwFork,
-    rerenderSession: (nextSession: Session) => renderResult.rerender(renderTree(nextSession)),
+    rerenderSession: (nextSession: Session) => {
+      activeSession = nextSession;
+      renderResult.rerender(renderTree());
+    },
+    rerenderUser: (nextUserId?: string) => {
+      activeUserId = nextUserId;
+      renderResult.rerender(renderTree());
+    },
     ...renderResult,
   };
 }
@@ -197,8 +214,9 @@ describe('SessionPanel composer send', () => {
     );
 
     rerenderSession(makeSession({ session_id: 'session-2' }));
-    await waitFor(() => expect(textarea).toHaveValue(''));
-    fireEvent.change(textarea, { target: { value: 'New session prompt must stay local' } });
+    const nextTextarea = screen.getByPlaceholderText(/Prompt here/i);
+    await waitFor(() => expect(nextTextarea).toHaveValue(''));
+    fireEvent.change(nextTextarea, { target: { value: 'New session prompt must stay local' } });
 
     upload.resolve({
       success: true,
@@ -223,7 +241,69 @@ describe('SessionPanel composer send', () => {
       expect.stringContaining('New session prompt must stay local'),
       expect.any(String)
     );
-    expect(textarea).toHaveValue('New session prompt must stay local');
+    expect(nextTextarea).toHaveValue('New session prompt must stay local');
+  });
+
+  it('isolates the visible composer when the authenticated user changes on the same session', async () => {
+    const { rerenderUser } = renderSessionPanel();
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'User A private draft' } });
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    rerenderUser('user-b');
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue(''));
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(localStorage.getItem('agor:prompt-draft')).toContain('"ownerId":"user-a"');
+    expect(localStorage.getItem('agor:prompt-draft')).not.toContain('user-b');
+  });
+
+  it('does not clear a replacement composer after an old identity send completes', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'User A prompt' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+
+    rerenderUser(undefined);
+    rerenderUser('user-a');
+    const replacement = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(replacement, { target: { value: 'Same user, new login draft' } });
+    send.resolve(true);
+
+    await waitFor(() => expect(replacement).toHaveValue('Same user, new login draft'));
+  });
+
+  it("does not clear a later caller's identical text or attachments after admission", async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'Identical prompt' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+
+    rerenderUser('user-b');
+    const replacement = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(replacement, { target: { value: 'Identical prompt' } });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['later caller'], 'user-b.txt', { type: 'text/plain' })],
+      },
+    });
+    await waitFor(() => expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument());
+
+    send.resolve(true);
+
+    await waitFor(() => expect(replacement).toHaveValue('Identical prompt'));
+    expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument();
   });
 
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {

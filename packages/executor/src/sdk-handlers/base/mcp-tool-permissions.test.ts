@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMcpToolPermissionIndex,
   EMPTY_MCP_TOOL_PERMISSION_INDEX,
+  mcpToolNameAliasesForServer,
   resolveMcpToolPermission,
 } from './mcp-tool-permissions.js';
 
@@ -133,5 +134,56 @@ describe('resolveMcpToolPermission', () => {
     ]);
 
     expect(resolveMcpToolPermission(reversed, 'mcp__a_b__search')).toBe('deny');
+  });
+});
+
+/**
+ * The Claude CLI sanitizes a server name the way we do, then applies an extra
+ * squeeze -- collapse runs of `_`, trim them from both ends -- but ONLY when
+ * the raw name begins `claude.ai `:
+ *
+ *     let t = e.replace(/[^a-zA-Z0-9_-]/g, "_");
+ *     if (e.startsWith("claude.ai ")) t = t.replace(/_+/g, "_").replace(/^_|_$/g, "");
+ *
+ * Transcribed from the shipped 0.3.197 CLI. It matters because those are
+ * exactly the names claude.ai connectors carry, and a name that misses reads
+ * as unconfigured -- which is `allow`.
+ */
+describe('claude.ai connector names', () => {
+  /** The CLI's own function, transcribed from the bundle. */
+  const cliServerName = (raw: string) => {
+    let t = raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (raw.startsWith('claude.ai ')) t = t.replace(/_+/g, '_').replace(/^_|_$/g, '');
+    return t;
+  };
+
+  it.each(['claude.ai Gmail (Beta)', 'claude.ai  Notion', 'claude.ai Drive.'])(
+    'covers the name the CLI actually mints for %s',
+    (raw) => {
+      // Without the collapsed alias this misses, and the deny fails OPEN.
+      expect(mcpToolNameAliasesForServer(raw)).toContain(cliServerName(raw));
+    }
+  );
+
+  it('binds a deny to the tool name the CLI will present', () => {
+    const raw = 'claude.ai Gmail (Beta)';
+    const index = buildMcpToolPermissionIndex([
+      server(raw, { delete_email: 'deny', list_email: 'allow' }),
+    ]);
+
+    expect(resolveMcpToolPermission(index, `mcp__${cliServerName(raw)}__delete_email`)).toBe(
+      'deny'
+    );
+    // Positive control: the same server's allowed tool is not swept up.
+    expect(resolveMcpToolPermission(index, `mcp__${cliServerName(raw)}__list_email`)).toBe('allow');
+  });
+
+  it('emits an alias free of doubled underscores, which the CLI would split on', () => {
+    // The CLI resolves `mcp__a__b` by splitting on `__` and taking the FIRST
+    // segment as the server, so an alias carrying `__` fragments and can never
+    // be addressed at all.
+    const aliases = mcpToolNameAliasesForServer('claude.ai Gmail (Beta)');
+    expect(aliases.some((alias) => !alias.includes('__'))).toBe(true);
+    expect(aliases).toContain('claude_ai_Gmail_Beta');
   });
 });

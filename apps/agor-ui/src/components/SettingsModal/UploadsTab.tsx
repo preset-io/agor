@@ -189,6 +189,7 @@ export function UploadsTab() {
             ),
           },
         ]}
+        scroll={{ x: 640 }}
       />
     </>
   );

@@ -9,6 +9,13 @@
  * run; a completed handshake means a client can connect straight away. Connect
  * runs this against the endpoint it is about to install and installs only on
  * the second answer, so this is where "can this be connected" is decided.
+ *
+ * {@link probeRemoteApiKey} asks the same question of the same endpoint with a
+ * key attached: not "what does this server want" but "does this key work". Both
+ * send one `initialize` through the pinned transport and read the answer the
+ * same way, because the thing that makes an answer trustworthy — a complete
+ * JSON-RPC handshake rather than a 2xx — does not change when a credential is
+ * added.
  */
 
 import type { MCPCatalogProbedAuthType } from '@agor/core/types';
@@ -111,21 +118,32 @@ function* jsonPayloadsIn(body: string): Generator<string> {
   if (event.length > 0) yield event.join('\n');
 }
 
+/** What one `initialize` attempt came back with, or why it never happened. */
+type ProbeAttempt = { response: Response } | { failure: 'refused' | 'unreachable' };
+
 /**
- * Probe one remote MCP URL.
+ * Send one `initialize` to `remoteUrl` and hand back whatever answered.
  *
  * Exactly one request is issued, to the URL given and nowhere else. Never
- * throws: an unreachable host, a timeout, or a malformed URL resolves to
- * `unknown` or `unreachable`, so a connect gets a clean refusal rather than a
- * stack trace. `unknown` means "not determined", never "open".
+ * throws — a malformed URL, a destination the outbound filter declined, a
+ * timeout, or a TLS error all come back as a `failure` for the caller to
+ * classify, because "the request was refused before it left" and "nothing
+ * answered" are different facts and only the caller knows what to call them.
+ *
+ * `authorization`, when given, is a credential. It is passed to the transport
+ * and never anywhere else: nothing in this module logs a request, a header, or
+ * a response body, and {@link createPinnedFetch} does not follow redirects — so
+ * the header reaches the host that was resolved and checked, and no other. A
+ * followed redirect would be a credential handed to whatever the vendor's DNS
+ * points at next, which is the whole reason the pinned transport is the default
+ * rather than `fetch`.
  */
-export async function probeRemoteAuthType(
+async function sendInitialize(
   remoteUrl: string,
-  options: AuthProbeOptions = {}
-): Promise<MCPCatalogProbedAuthType> {
+  options: AuthProbeOptions,
+  authorization?: string
+): Promise<ProbeAttempt> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
-
-  if (!isPublicHttpUrl(remoteUrl)) return 'unknown';
 
   // Review vouches for the URL as a string, not for where it lands. The host is
   // resolved at request time by whoever runs the domain and a redirect can name
@@ -133,6 +151,8 @@ export async function probeRemoteAuthType(
   // own network — so the request goes through the pinned transport: a
   // destination that is public both as a URL and as the address actually dialled,
   // no redirect following, and a bounded body.
+  if (!isPublicHttpUrl(remoteUrl)) return { failure: 'refused' };
+
   const probeFetch =
     options.fetchImpl ??
     createPinnedFetch({
@@ -144,14 +164,14 @@ export async function probeRemoteAuthType(
       isBodyComplete: isInitializeResult,
     });
 
-  let response: Response;
   try {
-    response = await probeFetch(remoteUrl, {
+    const response = await probeFetch(remoteUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         // Streamable HTTP servers negotiate between JSON and SSE replies.
         accept: 'application/json, text/event-stream',
+        ...(authorization ? { authorization } : {}),
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -164,13 +184,33 @@ export async function probeRemoteAuthType(
         },
       }),
     });
+    return { response };
   } catch (error) {
     // A destination the outbound filter declined was never contacted, so
     // "unreachable" would be a claim about a host nothing was learned about.
-    if (isOutboundRefusal(error)) return 'unknown';
+    if (isOutboundRefusal(error)) return { failure: 'refused' };
     // Timeout, DNS failure, connection refused, TLS error.
-    return 'unreachable';
+    return { failure: 'unreachable' };
   }
+}
+
+/**
+ * Probe one remote MCP URL.
+ *
+ * Exactly one request is issued, to the URL given and nowhere else. Never
+ * throws: an unreachable host, a timeout, or a malformed URL resolves to
+ * `unknown` or `unreachable`, so a connect gets a clean refusal rather than a
+ * stack trace. `unknown` means "not determined", never "open".
+ */
+export async function probeRemoteAuthType(
+  remoteUrl: string,
+  options: AuthProbeOptions = {}
+): Promise<MCPCatalogProbedAuthType> {
+  const attempt = await sendInitialize(remoteUrl, options);
+  if ('failure' in attempt) {
+    return attempt.failure === 'refused' ? 'unknown' : 'unreachable';
+  }
+  const { response } = attempt;
 
   if (isOAuthRequired(response.status, response.headers)) return 'oauth';
 
@@ -187,3 +227,56 @@ export async function probeRemoteAuthType(
 
   return 'unreachable';
 }
+
+/**
+ * What an endpoint made of a key that was presented to it.
+ *
+ * Three answers rather than a boolean, because "this key is wrong" and "nothing
+ * usable answered" call for different sentences and only one of them is the
+ * user's to fix. Collapsing them would tell somebody their key was rejected
+ * because the vendor was having an outage.
+ */
+export type MCPApiKeyProbeVerdict = 'accepted' | 'rejected' | 'unusable';
+
+/**
+ * Try `apiKey` against a remote MCP endpoint before anything is installed with
+ * it.
+ *
+ * A key that is wrong at install time produces a server whose every tool fails,
+ * at a moment far from the paste that caused it — the agent reports a broken
+ * tool, not a bad credential, and the row sits in Settings looking configured.
+ * The endpoint has already told us it wants credentials by this point, so one
+ * more `initialize` is the cheapest question that distinguishes a working key
+ * from a typo, and it is the same handshake the client will perform anyway.
+ *
+ * `accepted` has to be earned by a complete JSON-RPC handshake, exactly as
+ * `none` is in {@link probeRemoteAuthType}: a 2xx from a marketing page or an
+ * API gateway stub is not a server that will answer `tools/list`. Everything
+ * unrecognised lands on `unusable`, never on `accepted`, so the failure mode is
+ * a refused install rather than a broken one.
+ *
+ * `rejected` covers every authentication answer, OAuth challenge included. A
+ * key was presented and the endpoint still would not let the client in, which
+ * is one fact from the user's side however the server chose to phrase it.
+ */
+export async function probeRemoteBearerToken(
+  remoteUrl: string,
+  apiKey: string,
+  options: AuthProbeOptions = {}
+): Promise<MCPApiKeyProbeVerdict> {
+  const attempt = await sendInitialize(remoteUrl, options, `Bearer ${apiKey}`);
+  if ('failure' in attempt) return 'unusable';
+  const { response } = attempt;
+
+  if (response.status === 401 || response.status === 403) return 'rejected';
+  if (isOAuthRequired(response.status, response.headers)) return 'rejected';
+
+  if (response.ok) {
+    return isInitializeResult(await response.text()) ? 'accepted' : 'unusable';
+  }
+
+  return 'unusable';
+}
+
+/** @deprecated Use the scheme-explicit name. */
+export const probeRemoteApiKey = probeRemoteBearerToken;

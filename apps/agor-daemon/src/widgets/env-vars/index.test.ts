@@ -18,6 +18,7 @@
 
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTrustedUserMutationPurpose } from '../../services/user-mutation-trust';
 import { _resetWidgetRegistryForTests, getWidget } from '../registry';
 
 const sessionSelectionRepoMock = vi.hoisted(() => ({
@@ -293,14 +294,13 @@ describe('env_vars widget — applySubmit', () => {
       env_vars: { HUBSPOT_API_KEY: 'shh' },
       env_var_scopes: { HUBSPOT_API_KEY: 'global' },
     });
-    // Regression: must pass auth params so the users.patch hook accepts a
-    // write to a user other than the caller via the `trustedEnvVarWrite`
-    // escape hatch (the widget endpoint already authorized via canResolveWidget).
-    expect(params).toEqual({
+    // Regression: the non-serializable purpose marker cannot be forged by a
+    // transport caller, and the users service keeps its field allow-list.
+    expect(params).toMatchObject({
       user: { user_id: 'user-creator', role: 'member' },
       authenticated: true,
-      trustedEnvVarWrite: true,
     });
+    expect(getTrustedUserMutationPurpose(params)).toBe('env-vars-widget');
   });
 
   it('passes submitter identity through for audit when an admin submits', async () => {
@@ -317,11 +317,11 @@ describe('env_vars widget — applySubmit', () => {
     );
     const [, , params] = patchSpy.mock.calls[0];
     // Auth params carry the SUBMITTER identity so the patch is attributable.
-    expect(params).toEqual({
+    expect(params).toMatchObject({
       user: { user_id: 'user-admin', role: 'admin' },
       authenticated: true,
-      trustedEnvVarWrite: true,
     });
+    expect(getTrustedUserMutationPurpose(params)).toBe('env-vars-widget');
   });
 
   it('writes ALL submitted names in one patch call', async () => {

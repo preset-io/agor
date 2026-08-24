@@ -3,6 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout';
+import { InMemoryClaudeOAuthCoordinator } from './claude-oauth';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -38,8 +39,8 @@ function makeApp(
   return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
-function service(app: { service: () => unknown }) {
-  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, coordinator?: InMemoryClaudeOAuthCoordinator) {
+  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB, coordinator);
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -91,6 +92,37 @@ describe('claude-auth-logout', () => {
     expect(result).toEqual({ status: 'removed' });
   });
 
+  it('shares the OAuth coordinator so logout linearizes after an in-flight credential write', async () => {
+    const coordinator = new InMemoryClaudeOAuthCoordinator();
+    let releaseWrite!: () => void;
+    const events: string[] = [];
+    const write = coordinator.runCredentialMutation(
+      () =>
+        new Promise<void>((resolve) => {
+          events.push('write-start');
+          releaseWrite = () => {
+            events.push('write-end');
+            resolve();
+          };
+        })
+    );
+    await vi.waitFor(() => expect(events).toEqual(['write-start']));
+
+    const { app } = makeApp();
+    deleteClaudeAuthViaExecutorMock.mockImplementation(async () => {
+      events.push('delete');
+    });
+    const logout = service(app, coordinator).create({}, AUTH_PARAMS);
+    await Promise.resolve();
+    expect(deleteClaudeAuthViaExecutorMock).not.toHaveBeenCalled();
+
+    releaseWrite();
+    await write;
+    await logout;
+    expect(events).toEqual(['write-start', 'write-end', 'delete']);
+    expect(deleteClaudeAuthViaExecutorMock.mock.calls[0]?.[1]).toEqual(expect.any(Number));
+  });
+
   it('surfaces a friendly error and does NOT clear anything if the delete fails', async () => {
     deleteClaudeAuthViaExecutorMock.mockImplementation(async () => {
       throw new Error('sudo: a password is required; stderr: sk-ant-ort01-secret');
@@ -107,6 +139,18 @@ describe('claude-auth-logout', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('reports stale metadata safely when the file was deleted but the metadata patch fails', async () => {
+    const { app, usersService } = makeApp();
+    usersService.patch.mockRejectedValueOnce(
+      new Error('postgres password=secret should not reach the browser')
+    );
+
+    await expect(service(app).create({}, AUTH_PARAMS)).rejects.toThrow(
+      /login file was removed, but account metadata could not be updated/
+    );
+    expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledTimes(1);
   });
 
   it('refuses hosted multi-tenant mode before touching the shared login file', async () => {

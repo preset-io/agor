@@ -49,10 +49,10 @@ export interface TerminationInput {
   /** Deterministic test seam. */
   coordinationToken?: string;
   /**
-   * Background workers provide a fresh, short tenant DB scope for each
-   * durable unit. Containment and cooperative waits remain outside it.
+   * Mutation entry points provide a fresh, short, write-gated tenant DB scope
+   * for each durable unit. Containment and cooperative waits remain outside it.
    */
-  withTenantDatabase?: <T>(work: () => Promise<T>) => Promise<T>;
+  runInFreshTenantWriteDatabase: <T>(work: () => Promise<T>) => Promise<T>;
 }
 
 interface LocalTerminationOperation {
@@ -107,8 +107,11 @@ function internalParams(params?: Params): Params {
   return { ...(params ?? {}), provider: undefined };
 }
 
-function withTenantDatabase<T>(input: TerminationInput, work: () => Promise<T>): Promise<T> {
-  return input.withTenantDatabase ? input.withTenantDatabase(work) : work();
+function runInFreshTenantWriteDatabase<T>(
+  input: TerminationInput,
+  work: () => Promise<T>
+): Promise<T> {
+  return input.runInFreshTenantWriteDatabase(work);
 }
 
 function unverifiedMessage(taskId: string, detail: string): string {
@@ -121,7 +124,7 @@ function unverifiedMessage(taskId: string, detail: string): string {
 
 async function claimRequest(input: TerminationInput) {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
-  return withTenantDatabase(input, () =>
+  return runInFreshTenantWriteDatabase(input, () =>
     tasks.claimTermination(
       {
         taskId: String(input.taskId),
@@ -139,7 +142,7 @@ async function claimRequest(input: TerminationInput) {
 }
 
 async function loadAgenticTool(input: TerminationInput): Promise<PersistedAgenticToolName> {
-  return withTenantDatabase(input, async () => {
+  return runInFreshTenantWriteDatabase(input, async () => {
     const task = await input.app.service('tasks').get(input.taskId, internalParams(input.params));
     const session = await input.app
       .service('sessions')
@@ -169,7 +172,7 @@ async function waitForExecutorQuiescence(input: TerminationInput, requested: Tas
     await new Promise<void>((resolve) =>
       setTimeout(resolve, Math.min(COOPERATIVE_POLL_MS, Math.max(0, deadline - Date.now())))
     );
-    current = await withTenantDatabase(input, () =>
+    current = await runInFreshTenantWriteDatabase(input, () =>
       tasks.get(requested.task_id, internalParams(input.params))
     );
     if (
@@ -256,7 +259,7 @@ async function runContainment(
           last_pulse: current.latest_executor_pulse,
           termination: 'unverified',
         };
-    const settlement = await withTenantDatabase(input, () =>
+    const settlement = await runInFreshTenantWriteDatabase(input, () =>
       tasks.settleTermination(
         {
           taskId: current.task_id,
@@ -277,7 +280,7 @@ async function runContainment(
     return { status: 'unverified', task: settlement.task, reason };
   }
 
-  const settlement = await withTenantDatabase(input, () =>
+  const settlement = await runInFreshTenantWriteDatabase(input, () =>
     tasks.settleTermination(
       {
         taskId: current.task_id,
@@ -323,7 +326,7 @@ async function claimContainmentCoordination(
   };
   const token = input.coordinationToken ?? generateId();
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
-  const claim = await withTenantDatabase(input, () =>
+  const claim = await runInFreshTenantWriteDatabase(input, () =>
     tasks.claimTerminationCoordination(
       {
         taskId: task.task_id,

@@ -20,6 +20,7 @@ import type {
 import {
   EXECUTING_TASK_STATUSES,
   isTerminalTaskStatus,
+  NONTERMINAL_TASK_STATUSES,
   SessionStatus,
   sessionCanStartTask,
   TaskStatus,
@@ -236,6 +237,7 @@ export interface TaskFindPageOptions {
   sessionIds?: SessionID[];
   status?: Task['status'];
   createdAt?: Date;
+  createdBy?: UUID;
   visibleToUserId?: UUID;
   sort?: Record<string, 1 | -1>;
   selectTaskIdOnly?: boolean;
@@ -592,6 +594,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
     if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
+    if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
     if (opts.visibleToUserId) {
       conditions.push(
         visibleSessionReferenceAccessExists(this.db, opts.visibleToUserId, tasks.session_id)
@@ -653,6 +656,51 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     } catch (error) {
       throw new RepositoryError(
         `Failed to find tasks by session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Whether deleting this Session would cascade any unfinished Task. */
+  async hasNonterminalForSession(sessionId: string): Promise<boolean> {
+    try {
+      const row = await select(this.db, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.session_id, sessionId),
+            inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+          )
+        )
+        .limit(1)
+        .one();
+      return !!row;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to inspect unfinished session tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Whether deleting this Branch would cascade any unfinished Task. */
+  async hasNonterminalForBranch(branchId: string): Promise<boolean> {
+    try {
+      const row = await select(this.db, { task_id: tasks.task_id })
+        .from(tasks)
+        .innerJoin(sessions, eq(sessions.session_id, tasks.session_id))
+        .where(
+          and(
+            eq(sessions.branch_id, branchId),
+            inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+          )
+        )
+        .limit(1)
+        .one();
+      return !!row;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to inspect unfinished branch tasks: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

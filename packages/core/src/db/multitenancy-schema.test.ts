@@ -46,6 +46,12 @@ function migrationTenantTables(): string[] {
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
+  const externalIdentitiesMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0090_external_user_identities.sql'
+  );
+  const codexDeviceAuthMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -57,6 +63,8 @@ function migrationTenantTables(): string[] {
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -73,6 +81,8 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -229,6 +239,18 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toMatch(
       /CREATE POLICY "github_install_state_(?:callback_discovery|maintenance)"[\s\S]*WITH CHECK/
     );
+  });
+
+  it('limits Codex device attempt maintenance to due rows and its explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
+    );
+    expect(migration).toContain('FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain("COALESCE(current_setting('agor.system_scope', true), '') = ''");
+    expect(migration).toContain("= 'codex_device_auth_maintenance'");
+    expect(migration).toContain('"poll_lease_expires_at"');
+    expect(migration).toContain('"exchange_started_at"');
+    expect(migration).toContain('"finished_at"');
   });
 
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {

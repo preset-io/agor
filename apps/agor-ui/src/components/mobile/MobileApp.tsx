@@ -1,25 +1,27 @@
-import type { AgorClient, User } from '@agor-live/client';
-import { Drawer, Layout, Typography } from 'antd';
+import type { AgorClient, BranchArchiveOrDeleteOptions, Repo, User } from '@agor-live/client';
+import { Drawer, Layout } from 'antd';
 import { useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  selectArtifactById,
   selectBoardById,
+  selectBoardObjectsByBoardId,
   selectBranchById,
+  selectCardById,
   selectCommentById,
   selectRepoById,
   selectSessionById,
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
-import { BrandMark } from '../BrandMark';
+import { BranchModal, type BranchModalTab } from '../BranchModal';
+import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
-import { MobileHeader } from './MobileHeader';
+import { MobileHomePage } from './MobileHomePage';
 import { MobileNavTree } from './MobileNavTree';
 import { SessionPage } from './SessionPage';
-
-const { Content } = Layout;
-const { Text } = Typography;
 
 interface MobileAppProps {
   client: AgorClient | null;
@@ -34,8 +36,15 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
-  promptDrafts: Map<string, string>;
-  onUpdateDraft: (sessionId: string, draft: string) => void;
+  onOpenWorkspaceSettings: (section: string) => void;
+  onOpenUserSettings: () => void;
+  // The branch bottom sheet offers the same edit/archive controls as the
+  // desktop modal, so it needs the same handlers behind them — without these
+  // the controls render enabled and then do nothing when tapped.
+  onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
+  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onExecuteScheduleNow?: (branchId: string) => Promise<void>;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -48,20 +57,34 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
-  promptDrafts,
-  onUpdateDraft,
+  onOpenWorkspaceSettings,
+  onOpenUserSettings,
+  onUpdateBranch,
+  onUpdateRepo,
+  onArchiveOrDeleteBranch,
+  onExecuteScheduleNow,
 }) => {
+  const navigate = useNavigate();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
   // subscription boundary so the shell re-renders only on load-state.
   const sessionById = useAgorStore(selectSessionById);
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const boardById = useAgorStore(selectBoardById);
+  const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
+  const cardById = useAgorStore(selectCardById);
+  const artifactById = useAgorStore(selectArtifactById);
   const commentById = useAgorStore(selectCommentById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [branchEditor, setBranchEditor] = useState<{
+    branchId: string;
+    tab: BranchModalTab;
+  } | null>(null);
+  const selectedBranch = branchEditor ? (branchById.get(branchEditor.branchId) ?? null) : null;
+  const selectedRepo = selectedBranch ? (repoById.get(selectedBranch.repo_id) ?? null) : null;
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -82,6 +105,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           sessionsByBranch={sessionsByBranch}
           commentById={commentById}
           onNavigate={() => setDrawerOpen(false)}
+          onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+          onOpenUserSettings={onOpenUserSettings}
+          onLogout={onLogout}
+          currentUser={user}
         />
       </Drawer>
 
@@ -90,29 +117,31 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <Route
           path="/"
           element={
-            <>
-              <MobileHeader
-                showLogo
-                user={user}
-                onMenuClick={() => setDrawerOpen(true)}
-                onLogout={onLogout}
-              />
-              <Content
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 24,
-                  flexDirection: 'column',
-                  gap: 24,
-                }}
-              >
-                <BrandMark size={160} style={{ opacity: 0.5 }} />
-                <Text type="secondary" style={{ textAlign: 'center' }}>
-                  Tap the menu icon to browse boards and sessions
-                </Text>
-              </Content>
-            </>
+            <MobileHomePage
+              user={user}
+              boardById={boardById}
+              branchById={branchById}
+              sessionById={sessionById}
+              onMenuClick={() => setDrawerOpen(true)}
+              onOpenSettings={onOpenWorkspaceSettings}
+            />
+          }
+        />
+
+        <Route
+          path="/board/:boardId"
+          element={
+            <MobileBoardPage
+              boardById={boardById}
+              branchById={branchById}
+              repoById={repoById}
+              sessionsByBranch={sessionsByBranch}
+              boardObjectsByBoardId={boardObjectsByBoardId}
+              cardById={cardById}
+              artifactById={artifactById}
+              onMenuClick={() => setDrawerOpen(true)}
+              onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
+            />
           }
         />
 
@@ -129,8 +158,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               currentUser={user}
               onSendPrompt={onSendPrompt}
               onMenuClick={() => setDrawerOpen(true)}
-              promptDrafts={promptDrafts}
-              onUpdateDraft={onUpdateDraft}
             />
           }
         />
@@ -156,6 +183,34 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           }
         />
       </Routes>
+      <BranchModal
+        open={branchEditor !== null}
+        onClose={() => setBranchEditor(null)}
+        branch={selectedBranch}
+        repo={selectedRepo}
+        sessions={selectedBranch ? (sessionsByBranch.get(selectedBranch.branch_id) ?? []) : []}
+        boardObjects={
+          selectedBranch?.board_id ? (boardObjectsByBoardId.get(selectedBranch.board_id) ?? []) : []
+        }
+        client={client}
+        currentUser={user}
+        defaultTab={branchEditor?.tab}
+        presentation="bottom-sheet"
+        onUpdateBranch={onUpdateBranch}
+        onUpdateRepo={onUpdateRepo}
+        onArchiveOrDelete={onArchiveOrDeleteBranch}
+        onExecuteScheduleNow={onExecuteScheduleNow}
+        onSessionClick={(sessionId) => {
+          // Sessions live on their own mobile route, so this stays inside /m
+          // rather than reusing the desktop board-switching navigation.
+          setBranchEditor(null);
+          navigate(`/m/session/${sessionId}`);
+        }}
+        onOpenSettings={() => {
+          setBranchEditor(null);
+          onOpenWorkspaceSettings('repos');
+        }}
+      />
     </Layout>
   );
 };

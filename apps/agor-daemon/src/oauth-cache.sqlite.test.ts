@@ -105,6 +105,12 @@ describe('standalone OAuth token persistence', () => {
           db,
           userId: user.user_id as UserID,
           mcpServerId: server.mcp_server_id as MCPServerID,
+          observedRefreshVersion: {
+            grantGeneration: stored!.grant_generation,
+            grantBindingFingerprint: stored!.grant_binding_fingerprint,
+            refreshGeneration: stored!.refresh_generation,
+          },
+          validateGrant: async () => true,
         })
       ).resolves.toBe('refreshed-access');
       expect(new URLSearchParams(refreshBody).get('resource')).toBe(resourceUri);

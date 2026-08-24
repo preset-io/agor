@@ -2,7 +2,7 @@ import {
   credentialExecutorOptions,
   type ExecutorCredentialRouting,
 } from './executor-credential-auth.js';
-import { runExecutorCommand } from './spawn-executor.js';
+import { requestExecutor } from './spawn-executor.js';
 
 export type ExecutorClaudeAuthRouting = ExecutorCredentialRouting;
 
@@ -22,7 +22,7 @@ export type ExecutorClaudeAuthInspection =
 export async function inspectClaudeAuthViaExecutor(
   routing: ExecutorClaudeAuthRouting
 ): Promise<ExecutorClaudeAuthInspection> {
-  const result = await runExecutorCommand(
+  const result = await requestExecutor(
     { command: 'claude.auth-file', params: { operation: 'inspect' } },
     options(routing)
   );
@@ -41,10 +41,14 @@ export async function inspectClaudeAuthViaExecutor(
  */
 export async function writeClaudeAuthViaExecutor(
   content: string,
-  routing: ExecutorClaudeAuthRouting
+  routing: ExecutorClaudeAuthRouting,
+  generation?: number
 ): Promise<void> {
-  const result = await runExecutorCommand(
-    { command: 'claude.auth-file', params: { operation: 'write', content } },
+  const result = await requestExecutor(
+    {
+      command: 'claude.auth-file',
+      params: { operation: 'write', content, ...(generation ? { generation } : {}) },
+    },
     options(routing)
   );
   if (!result.success) throw new Error('Executor credential write failed');
@@ -55,10 +59,14 @@ export async function writeClaudeAuthViaExecutor(
 }
 
 export async function deleteClaudeAuthViaExecutor(
-  routing: ExecutorClaudeAuthRouting
+  routing: ExecutorClaudeAuthRouting,
+  generation?: number
 ): Promise<void> {
-  const result = await runExecutorCommand(
-    { command: 'claude.auth-file', params: { operation: 'delete' } },
+  const result = await requestExecutor(
+    {
+      command: 'claude.auth-file',
+      params: { operation: 'delete', ...(generation ? { generation } : {}) },
+    },
     options(routing)
   );
   if (!result.success) throw new Error('Executor credential delete failed');

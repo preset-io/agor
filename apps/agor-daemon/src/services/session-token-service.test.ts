@@ -5,7 +5,12 @@ import {
 } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
-import { type SessionTokenAuthorityStore, SessionTokenService } from './session-token-service';
+import {
+  fingerprintExecutorSessionToken,
+  issueExecutorCommandToken,
+  type SessionTokenAuthorityStore,
+  SessionTokenService,
+} from './session-token-service';
 
 const scopeOnlyDb = { run: () => undefined } as unknown as TenantScopeAwareDatabase;
 
@@ -21,7 +26,7 @@ function authorityStore(
       user_id: input.userId,
     })),
     revoke: vi.fn(async () => true),
-    revokeSession: vi.fn(async () => 0),
+    revokeByTask: vi.fn(async () => []),
     purgeRetained: vi.fn(async () => 0),
     ...overrides,
   };
@@ -82,6 +87,78 @@ describe('SessionTokenService runtime scoping', () => {
         branchId: 'branch-1',
       })
     ).resolves.toMatchObject({ session_id: 'session-1', task_id: 'task-1' });
+  });
+
+  it('allows command credentials to shorten but never extend configured expiry', async () => {
+    const now = new Date('2026-08-23T00:00:00.000Z');
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { now: () => now, startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+
+    const shortened = jwt.decode(
+      await service.generateToken('branch-clean', 'user-1', { expirationMs: 10_000 })
+    ) as jwt.JwtPayload;
+    const capped = jwt.decode(
+      await service.generateToken('branch-clean', 'user-1', { expirationMs: 120_000 })
+    ) as jwt.JwtPayload;
+
+    expect(shortened.exp! - shortened.iat!).toBe(10);
+    expect(capped.exp! - capped.iat!).toBe(60);
+    await expect(
+      service.generateToken('branch-clean', 'user-1', { expirationMs: 0 })
+    ).rejects.toThrow('token expiration must be positive');
+  });
+
+  it('centralizes the bounded taskless-command credential policy', async () => {
+    const now = new Date('2026-08-23T00:00:00.000Z');
+    const store = authorityStore();
+    const service = new SessionTokenService(
+      { expiration_ms: 60 * 60_000, max_uses: 1 },
+      { authorityStore: store, now: () => now, startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateCommandToken('branch-clean', 'user-1', 'branch-1')
+    );
+    const decoded = jwt.decode(token) as jwt.JwtPayload;
+
+    expect(decoded.purpose).toBe('executor-command');
+    expect(decoded.exp! - decoded.iat!).toBe(15 * 60);
+    expect(decoded.task_id).toBeUndefined();
+    expect(decoded.branch_id).toBe('branch-1');
+    expect(store.issue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'tenant-a',
+        purpose: 'executor-command',
+        sessionId: 'branch-clean',
+        taskId: null,
+        branchId: 'branch-1',
+        userId: 'user-1',
+      })
+    );
+
+    await expect(
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () => service.validateToken(token))
+    ).resolves.toMatchObject({ session_id: 'branch-clean', user_id: 'user-1' });
+    expect(store.validateAndConsume).toHaveBeenCalledWith(
+      expect.objectContaining({ purpose: 'executor-command', taskId: null })
+    );
+  });
+
+  it('centralizes command issuance through the daemon-owned service', async () => {
+    const generateCommandToken = vi.fn(async () => 'delegated-user-token');
+    const app = { sessionTokenService: { generateCommandToken } };
+
+    await expect(
+      issueExecutorCommandToken(app, 'branch-files-read', 'user-1', 'branch-1')
+    ).resolves.toBe('delegated-user-token');
+    expect(generateCommandToken).toHaveBeenCalledWith('branch-files-read', 'user-1', 'branch-1');
+    await expect(issueExecutorCommandToken({}, 'command', 'user-1')).rejects.toThrow(
+      'Session token service unavailable'
+    );
   });
 
   it('copies the ambient tenant scope into executor-session token claims', async () => {
@@ -149,15 +226,19 @@ describe('SessionTokenService runtime scoping', () => {
       requireScope: true,
       label: 'standalone token test',
     });
+    const onRevoked = vi.fn();
     const service = new SessionTokenService(
       { expiration_ms: 60_000, max_uses: -1 },
-      { db: guardedSqliteDb, now: () => now, startCleanupTimer: false }
+      { db: guardedSqliteDb, now: () => now, startCleanupTimer: false, onRevoked }
     );
     service.setJwtSecret('session-token-test-secret');
 
     const revoked = await service.generateToken('session-1', 'user-1');
     expect(service.getActiveTokenCount()).toBe(1);
     await expect(service.revokeToken(revoked)).resolves.toBe(true);
+    expect(onRevoked).toHaveBeenCalledWith({
+      tokenFingerprint: fingerprintExecutorSessionToken(revoked),
+    });
     await expect(service.validateToken(revoked)).resolves.toBeNull();
 
     const expired = await service.generateToken('session-2', 'user-1');
@@ -165,6 +246,43 @@ describe('SessionTokenService runtime scoping', () => {
     await expect(service.validateToken(expired)).resolves.toBeNull();
     await expect(service.cleanupExpiredTokens()).resolves.toBe(1);
     expect(service.getActiveTokenCount()).toBe(0);
+  });
+
+  it('retires every standalone bearer for one terminal task without widening to its session', async () => {
+    const onRevoked = vi.fn();
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { startCleanupTimer: false, onRevoked }
+    );
+    service.setJwtSecret('session-token-test-secret');
+    const first = await service.generateToken('session-1', 'user-1', { taskId: 'task-1' });
+    const retry = await service.generateToken('session-1', 'user-1', { taskId: 'task-1' });
+    const sibling = await service.generateToken('session-1', 'user-1', { taskId: 'task-2' });
+
+    await expect(service.revokeTaskTokens('task-1')).resolves.toBe(2);
+    await expect(service.validateToken(first)).resolves.toBeNull();
+    await expect(service.validateToken(retry)).resolves.toBeNull();
+    await expect(service.validateToken(sibling)).resolves.toMatchObject({ task_id: 'task-2' });
+    expect(onRevoked).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses tenant-scoped durable task revocation and relays only fingerprints', async () => {
+    const fingerprint = 'a'.repeat(64);
+    const store = authorityStore({ revokeByTask: vi.fn(async () => [fingerprint]) });
+    const onRevoked = vi.fn();
+    const service = new SessionTokenService(
+      { expiration_ms: 60_000, max_uses: -1 },
+      { authorityStore: store, startCleanupTimer: false, onRevoked }
+    );
+
+    await expect(
+      runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () => service.revokeTaskTokens('task-1'))
+    ).resolves.toBe(1);
+    expect(store.revokeByTask).toHaveBeenCalledWith('task-1', 'tenant-a');
+    expect(onRevoked).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      tokenFingerprint: fingerprint,
+    });
   });
 
   it('persists only a fingerprint and fails issuance before returning a bearer', async () => {

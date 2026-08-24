@@ -19,6 +19,7 @@ export default {
     },
   },
   'not-alone': heroVariantMeta,
+  'not-alone-problem': heroVariantMeta,
   'beyond-the-sandbox': heroVariantMeta,
   'not-just-a-tool': heroVariantMeta,
   'right-where-you-work': heroVariantMeta,
@@ -26,6 +27,7 @@ export default {
   'selfware-is-dead': heroVariantMeta,
   'dev-team': heroVariantMeta,
   'costs-under-control': heroVariantMeta,
+  'costs-under-control-solution': heroVariantMeta,
   // Agor Cloud marketing landing page. Reached via the navbar "Agor Cloud"
   // link (see NavbarCloudCTA); hidden from the sidebar and rendered full-bleed
   // like the homepage via `theme.layout: 'full'`. The request-invite form

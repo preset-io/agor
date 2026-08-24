@@ -39,8 +39,13 @@ import type {
   CodexAuthLogoutResult,
   UserID,
 } from '@agor/core/types';
-import { deleteCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
-import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
+import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import {
+  type AppLike,
+  CODEX_AUTH_DEFER_USER_REALTIME,
+  type CodexCredentialMutationCoordinator,
+  resolveCodexCredentialRoute,
+} from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the import service's structural typing. */
 interface UsersServiceLike {
@@ -51,7 +56,11 @@ interface UsersServiceLike {
   ): Promise<unknown>;
 }
 
-export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareDatabase) {
+export function createCodexAuthLogoutService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  credentialMutations?: CodexCredentialMutationCoordinator
+) {
   return {
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexAuthLogoutResult> {
       const authUser = params?.user;
@@ -78,40 +87,61 @@ export function createCodexAuthLogoutService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      // Delete the local login (idempotent — a missing file is success). A
-      // genuine delete failure is a real server problem worth surfacing, and we
-      // do NOT clear the method in that case so a login we couldn't remove keeps
-      // working. Log the error class only — never token bytes.
-      try {
-        await deleteCodexAuthViaExecutor({
-          delegatedHomeKey: identity.delegatedHomeKey,
-          userId: identity.userId,
-          codexHome: identity.codexHome,
-        });
-      } catch (err) {
-        console.error(
-          `[CodexAuth] Failed to delete auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
-        );
-        throw new BadRequest(
-          'Could not remove the Codex credentials file on the server. Check daemon logs.'
-        );
-      }
+      const mutate = async (authorityGeneration?: number): Promise<void> => {
+        // Delete the local login (idempotent — a missing file is success). A
+        // genuine delete failure is a real server problem worth surfacing, and we
+        // do NOT clear the method in that case so a login we couldn't remove keeps
+        // working. Log the error class only — never token bytes.
+        try {
+          const routing = {
+            delegatedHomeKey: identity.delegatedHomeKey,
+            userId: identity.userId,
+            codexHome: identity.codexHome,
+          };
+          if (authorityGeneration === undefined) await deleteCodexAuthCredential(routing);
+          else await deleteCodexAuthCredential(routing, authorityGeneration);
+        } catch (err) {
+          console.error(
+            `[CodexAuth] Failed to delete auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+          );
+          throw new BadRequest(
+            'Could not remove the Codex credentials file on the server. Check daemon logs.'
+          );
+        }
 
-      // Clear the stored method via the users SERVICE (not a direct db write) so
-      // the Feathers `patched` event fires and the settings pane + board banners
-      // re-probe to a disconnected state. Send ONLY the codex key so the
-      // service's merge clears it against the FRESH record — preserving any
-      // concurrently-updated method for another tool instead of clobbering it
-      // with a read-modify-write of a stale snapshot. This relies on the
-      // in-process service call: the explicitly-undefined key survives to the
-      // merge and is dropped when the JSON column serializes; a client-
-      // transported patch would lose the key in JSON and silently no-op.
-      const usersService = app.service('users') as UsersServiceLike;
-      await usersService.patch(
-        userId,
-        { agentic_auth_methods: { codex: undefined } },
-        { user: authUser, authenticated: true }
-      );
+        // Clear the stored method via the users SERVICE (not a direct db write) so
+        // the Feathers `patched` event fires and the settings pane + board banners
+        // re-probe to a disconnected state. Send ONLY the codex key so the
+        // service's merge clears it against the FRESH record — preserving any
+        // concurrently-updated method for another tool instead of clobbering it
+        // with a read-modify-write of a stale snapshot. This relies on the
+        // in-process service call: the explicitly-undefined key survives to the
+        // merge and is dropped when the JSON column serializes; a client-
+        // transported patch would lose the key in JSON and silently no-op.
+        const usersService = app.service('users') as UsersServiceLike;
+        await usersService.patch(
+          userId,
+          { agentic_auth_methods: { codex: undefined } },
+          {
+            user: authUser,
+            authenticated: true,
+            ...(authorityGeneration === undefined
+              ? {}
+              : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+          }
+        );
+      };
+
+      if (credentialMutations) {
+        await credentialMutations.runCredentialMutation(
+          String(tenantId),
+          userId,
+          'credentials_removed',
+          mutate
+        );
+      } else {
+        await mutate();
+      }
 
       return { status: 'removed' };
     },

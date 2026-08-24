@@ -499,6 +499,47 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 <FaqSection>
 
+## How do I get notified when a session on another branch finishes?
+
+**Ask your agent to set up a callback.** Callbacks are how one session pings another when it finishes — the mechanism that lets an orchestrating session on one branch learn when work happening on a _different_ branch is done. You don't wire this up by hand: your agent establishes the link from its own context (which session it's in, what it spawned), so the move is to tell it what you want — for example, "spawn an agent on the other branch and have it report back to you when it's done."
+
+### Two kinds of session links
+
+- **Genealogy** — the fork/spawn tree you see inside a branch card. It forms automatically when a session forks or spawns another within the same branch.
+- **Cross-branch links** — durable connections that span branches, keeping an orchestrator on one branch tied to work it kicked off on another. These also form automatically from the agent's context; there's no "pick a parent session" step.
+
+### What a callback delivers
+
+A callback isn't a full transcript — it's the finishing session's **last message**, plus enough identifying metadata that the receiving agent can go look up the rest (the full conversation, its tool calls, or the files it touched) if it needs to. Usually that single ping is enough for the orchestrator to decide what to do next.
+
+### Off, once, or persistent
+
+A session's callback can be in one of three states:
+
+- **Off** — no notification.
+- **Once** — fires a single time on the next completion, then turns itself off.
+- **Persistent** — fires every time that session completes.
+
+**Once** is handy when you only want a single "it's done" ping. **Persistent** keeps you posted through ongoing work — but on a multi-step board pipeline ("create PR" → "review" → "done") it re-fires at every step, which can get noisy and burn tokens on an orchestrator that only wanted one nudge.
+
+### One-off check-ins
+
+A callback doesn't have to be a standing subscription. When your agent reaches out to another existing session with a single request — "what's the status?", or a nudge to push that work forward — it can subscribe to just that one reply and get a single report back when that specific task finishes. That's how an orchestrator pulls a detail or unblocks another agent without leaving an ongoing subscription behind. And if a one-off reply and a standing callback would both notify the same session, you get a single combined ping, not two.
+
+### Quieting a chatty session
+
+If a linked session is pinging its parent too often, hover it and click the **link icon** — that toggles the callback off while keeping the relationship intact (turn it back on from Session Settings). It's the quick way to stop a noisy subsession from repeatedly interrupting the parent agent, without severing the link between them.
+
+### Why not just use a zone trigger?
+
+Zone triggers act on the branch you drop into the zone: the prompt runs against _that branch's_ files, so it can only target a session that already lives on that branch. You can't point a zone trigger at an orchestrator watching from somewhere else — to be notified about another branch's work, a callback is the right tool.
+
+---
+
+</FaqSection>
+
+<FaqSection>
+
 ## Fork vs Spawn: Quick Reference
 
 |                         | **Fork**                                   | **Spawn**                                      |

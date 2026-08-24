@@ -151,6 +151,8 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     leaseDurationMs: number;
     identity: DistributedWorkIdentity;
+    /** Explicit user probes may bypass cadence cooldown, never a live owner. */
+    ignoreCooldown?: boolean;
   }): Promise<EnvironmentHealthClaimResult> {
     this.validateClaimInput(input);
     return runDatabaseTransaction(
@@ -182,6 +184,7 @@ export class EnvironmentHealthRepository {
         // fleet-wide cooldown. An expired token means its owner died, so
         // takeover is admitted after lease expiry regardless of the cooldown.
         if (
+          !input.ignoreCooldown &&
           !row.environment_health_claim_token &&
           row.environment_health_next_observation_at &&
           new Date(row.environment_health_next_observation_at).getTime() > now.getTime()
@@ -375,18 +378,27 @@ export class EnvironmentHealthRepository {
               },
             }
           : activeEnvironment;
-        await update(txDb, branches)
-          .set({
-            ...(shouldRecord ? { data: { ...data, environment_instance: nextEnvironment } } : {}),
-            ...(stateChanged ? { updated_at: now } : {}),
-          })
-          .where(
-            and(
-              eq(branches.branch_id, input.branchId),
-              eq(branches.environment_health_claim_token, input.claimToken)
+        // A network failure while an environment is still starting is a
+        // legitimate, deliberately unrecorded observation: startup grace
+        // keeps the prior durable state until a recordable result arrives.
+        // The row lock and fences above still authorize it as a completed
+        // observation, but there are no branch columns to mutate. Do not hand
+        // an empty update to Drizzle, whose dialect-independent set mapper
+        // rejects it with "No values to set".
+        if (shouldRecord) {
+          await update(txDb, branches)
+            .set({
+              data: { ...data, environment_instance: nextEnvironment },
+              ...(stateChanged ? { updated_at: now } : {}),
+            })
+            .where(
+              and(
+                eq(branches.branch_id, input.branchId),
+                eq(branches.environment_health_claim_token, input.claimToken)
+              )
             )
-          )
-          .run();
+            .run();
+        }
         return {
           outcome: 'committed',
           mutated: shouldRecord,

@@ -3,7 +3,11 @@ import type { Application } from '@agor/core/feathers';
 import type { Params, SessionID } from '@agor/core/types';
 import { isSessionExecuting, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
-import { requestExecutorTermination, type TerminationResult } from '../termination-coordinator.js';
+import {
+  requestExecutorTermination,
+  type TerminationInput,
+  type TerminationResult,
+} from '../termination-coordinator.js';
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
 import type { findActiveTasksForSession } from './session-tasks.js';
 
@@ -21,6 +25,12 @@ export interface StopSessionDeps {
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
   findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
+  /**
+   * Opens one fresh, write-gated tenant database unit for each durable
+   * termination step. The Stop route itself deliberately has no route-wide
+   * database transaction because it may wait for executor quiescence.
+   */
+  runInFreshTenantWriteDatabase: TerminationInput['runInFreshTenantWriteDatabase'];
 }
 
 /**
@@ -119,6 +129,7 @@ export async function stopSessionPreserveQueue(
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
     params,
+    runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });
   if (termination.status !== 'terminal') {
     return {

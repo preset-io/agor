@@ -3,6 +3,9 @@ import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 const requestExecutorTermination = vi.hoisted(() => vi.fn().mockResolvedValue({}));
+const withFreshTenantWrite = vi.hoisted(() =>
+  vi.fn(async (_db: unknown, _tenantId: string, work: () => Promise<unknown>) => work())
+);
 const deferred = vi.hoisted(
   () =>
     ({ work: undefined as (() => Promise<void>) | undefined, schedule: vi.fn() }) as {
@@ -23,6 +26,7 @@ vi.mock('../utils/tenant-db-scope.js', () => ({
     deferred.work = work;
     deferred.schedule(params, onError);
   },
+  withFreshTenantWrite,
 }));
 
 import { TasksService } from './tasks';
@@ -45,6 +49,7 @@ describe('TasksService executor termination report', () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     Reflect.set(service, 'taskRepo', { recordExecutorQuiescence });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
+    Reflect.set(service, 'db', {});
 
     await expect(
       service.reportTerminationComplete(
@@ -60,6 +65,7 @@ describe('TasksService executor termination report', () => {
       task_id: task.task_id,
       requested_at: requestedAt,
     });
+    expect(withFreshTenantWrite).toHaveBeenCalledWith({}, 'tenant-a', expect.any(Function));
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
     expect(deferred.schedule).toHaveBeenCalledWith(
       expect.objectContaining({ tenant: { tenant_id: 'tenant-a' } }),
@@ -74,7 +80,13 @@ describe('TasksService executor termination report', () => {
         taskId: task.task_id,
         cause: 'user_stop',
         params: expect.objectContaining({ provider: undefined }),
+        runInFreshTenantWriteDatabase: expect.any(Function),
       })
     );
+    const runFreshWrite = requestExecutorTermination.mock.calls[0][0]
+      .runInFreshTenantWriteDatabase as (work: () => Promise<unknown>) => Promise<unknown>;
+    const work = vi.fn(async () => 'written');
+    await expect(runFreshWrite(work)).resolves.toBe('written');
+    expect(withFreshTenantWrite).toHaveBeenLastCalledWith({}, 'tenant-a', work);
   });
 });

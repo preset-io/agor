@@ -34,23 +34,25 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { isTenantAgenticToolEnabled } from '@agor/core/config';
+import { hasExactUserExecutorCredentialHome, isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
   AuthenticatedParams,
   ClaudeOAuthStatus,
   TenantID,
-  User,
   UserID,
 } from '@agor/core/types';
-import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
+import {
+  deleteClaudeAuthViaExecutor,
+  writeClaudeAuthViaExecutor,
+} from '../utils/executor-claude-auth.js';
 import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 // Constants are the PROD OAuth config (`yol`) read out of the native `claude`
@@ -89,6 +91,7 @@ const FETCH_TIMEOUT_MS = 15_000;
 const ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 /** How long a finished attempt stays queryable before eviction. */
 const TERMINAL_ATTEMPT_TTL_MS = 60 * 60 * 1000;
+const MAX_PASTED_CODE_LENGTH = 16 * 1024;
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -204,6 +207,7 @@ export async function exchangeCodeForTokens(
   try {
     res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
       method: 'POST',
+      redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         grant_type: 'authorization_code',
@@ -235,7 +239,15 @@ export async function exchangeCodeForTokens(
     );
   }
 
-  const body = (await res.json()) as Record<string, unknown>;
+  let body: Record<string, unknown>;
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude sign-in returned an unreadable response. Start over to get a fresh code.'
+    );
+  }
   const { access_token, refresh_token, expires_in, scope } = body;
   // A 2xx with a malformed body is a provider-contract break: Anthropic accepted
   // (and thus consumed) the code but we cannot use the response. Surface a
@@ -298,6 +310,7 @@ interface OAuthAttempt {
   tenantId: TenantID | string;
   authUser: NonNullable<AuthenticatedParams['user']>;
   delegatedHomeKey: string | null;
+  claudeConfigDir?: string;
   phase: ClaudeOAuthStatus['phase'];
   verifier: string;
   state: string;
@@ -312,7 +325,6 @@ interface OAuthAttempt {
 
 /** Minimal users-service surface — mirrors codex-auth-shared's structural typing. */
 interface UsersServiceLike {
-  get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
     data: {
@@ -323,6 +335,52 @@ interface UsersServiceLike {
     },
     params?: unknown
   ): Promise<unknown>;
+}
+
+/**
+ * Process-local authority for the standalone Claude credential boundary.
+ * Provider exchange never holds this lock; start, final persistence, and logout
+ * do, so a slow writer cannot land after a newer attempt or sign-out.
+ */
+export interface ClaudeCredentialMutationCoordinator {
+  runCredentialMutation<T>(work: (generation: number) => Promise<T>): Promise<T>;
+  invalidate(key: string, hint: string): void;
+}
+
+export class InMemoryClaudeOAuthCoordinator implements ClaudeCredentialMutationCoordinator {
+  readonly attempts = new Map<string, OAuthAttempt>();
+  private mutationTail: Promise<void> = Promise.resolve();
+  private lastGeneration = 0;
+
+  async runCredentialMutation<T>(work: (generation: number) => Promise<T>): Promise<T> {
+    // `simple` mode intentionally maps every user (and tenant) to one daemon
+    // home. Serialize the whole standalone Claude file boundary, not merely an
+    // attempt key, so user A's slow write cannot overtake user B's logout.
+    const previous = this.mutationTail;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.mutationTail = previous.catch(() => undefined).then(() => gate);
+    await previous.catch(() => undefined);
+    try {
+      // Persisted credential generation fences also protect delegated executor
+      // writes that outlive their request. Time supplies restart monotonicity;
+      // the local counter supplies uniqueness within one millisecond.
+      const generation = Math.max(Date.now() * 1_000, this.lastGeneration + 1);
+      this.lastGeneration = generation;
+      return await work(generation);
+    } finally {
+      release();
+    }
+  }
+
+  invalidate(key: string, hint: string): void {
+    const attempt = this.attempts.get(key);
+    if (!attempt) return;
+    attempt.cancelled = true;
+    finishAttempt(attempt, 'error', hint);
+  }
 }
 
 function statusOf(attempt: OAuthAttempt | undefined): ClaudeOAuthStatus {
@@ -337,8 +395,24 @@ function statusOf(attempt: OAuthAttempt | undefined): ClaudeOAuthStatus {
   return base;
 }
 
-export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatabase) {
-  const attempts = new Map<string, OAuthAttempt>();
+function finishAttempt(
+  attempt: OAuthAttempt,
+  phase: ClaudeOAuthStatus['phase'],
+  hint?: string
+): void {
+  attempt.phase = phase;
+  attempt.finishedAtMs = Date.now();
+  attempt.verifier = '';
+  attempt.state = '';
+  if (hint) attempt.hint = hint;
+}
+
+export function createClaudeOAuthService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  coordinator = new InMemoryClaudeOAuthCoordinator()
+) {
+  const { attempts } = coordinator;
 
   /** True while `attempt` is still the live attempt for its user. */
   function isCurrent(attempt: OAuthAttempt): boolean {
@@ -351,11 +425,7 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
    * in memory until the TTL sweep evicts the record.
    */
   function finish(attempt: OAuthAttempt, phase: ClaudeOAuthStatus['phase'], hint?: string): void {
-    attempt.phase = phase;
-    attempt.finishedAtMs = Date.now();
-    attempt.verifier = '';
-    attempt.state = '';
-    if (hint) attempt.hint = hint;
+    finishAttempt(attempt, phase, hint);
   }
 
   /**
@@ -393,16 +463,42 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
   }
 
   async function persist(attempt: OAuthAttempt, tokens: ExchangedTokens): Promise<void> {
-    await runWithTenantDatabaseScope(db, attempt.tenantId, async () => {
+    await coordinator.runCredentialMutation(async (generation) => {
       // Final ownership gate immediately before the write: a replacement
       // attempt registered during the exchange must not have its freshly written
       // credential clobbered by this older one.
       if (!isCurrent(attempt)) return;
+
+      // Re-resolve immediately before handling tokens. An admin may have moved
+      // the user's execution home while the browser was approving. Never write
+      // a credential to the stale (possibly reassigned) home pinned at start.
+      const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
+        runWithTenantDatabaseScope(db, attempt.tenantId, work);
+      const identity = await resolveCodexCredentialRoute(
+        attempt.userId,
+        withTenantDatabase,
+        app.get('config')
+      );
+      if (
+        !identity.ok ||
+        identity.delegatedHomeKey !== attempt.delegatedHomeKey ||
+        identity.claudeConfigDir !== attempt.claudeConfigDir
+      ) {
+        throw new BadRequest(
+          'The execution home for this Claude login changed while signing in. Start over.'
+        );
+      }
+
       try {
-        await writeClaudeAuthViaExecutor(buildClaudeCredentialsJson(tokens), {
-          delegatedHomeKey: attempt.delegatedHomeKey,
-          userId: attempt.userId,
-        });
+        await writeClaudeAuthViaExecutor(
+          buildClaudeCredentialsJson(tokens),
+          {
+            delegatedHomeKey: identity.delegatedHomeKey,
+            userId: identity.userId,
+            ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+          },
+          generation
+        );
       } catch (err) {
         // The error may carry sudo/bash stderr; log a class-level summary only
         // so token material never reaches daemon logs.
@@ -412,31 +508,55 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
           }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
         );
         throw new BadRequest(
-          'Could not write the Claude credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
+          'Could not write the Claude credentials file on the server. Check daemon logs, or use an API key instead.'
         );
       }
 
-      const usersService = app.service('users') as UsersServiceLike;
-      const current = await usersService.get(attempt.userId, {
-        user: attempt.authUser,
-        authenticated: true,
-      });
       // Flip to `subscription` AND drop any previously pasted
       // CLAUDE_CODE_OAUTH_TOKEN: with the field gone, resolveTenantAgenticTool
       // routes this user to native on-disk auth (no env injection), so the
       // higher-precedence env var can't shadow the managed, refreshing file.
       // `null` deletes just that field and leaves other Claude settings intact.
-      await usersService.patch(
-        attempt.userId,
-        {
-          agentic_auth_methods: {
-            ...current.agentic_auth_methods,
-            'claude-code': 'subscription',
+      const usersService = app.service('users') as UsersServiceLike;
+      try {
+        await usersService.patch(
+          attempt.userId,
+          {
+            // Send only this tool's method; UsersService merges against its fresh
+            // row so concurrent Codex changes cannot be overwritten.
+            agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
           },
-          agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
-        },
-        { user: attempt.authUser, authenticated: true }
-      );
+          { user: attempt.authUser, authenticated: true }
+        );
+      } catch (error) {
+        // The filesystem write precedes the short metadata transaction. If its
+        // write gate or DB commit fails, remove the just-written generation so
+        // no hidden credential remains active while metadata says API-key.
+        try {
+          await deleteClaudeAuthViaExecutor(
+            {
+              delegatedHomeKey: identity.delegatedHomeKey,
+              userId: identity.userId,
+              ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+            },
+            generation
+          );
+        } catch (cleanupError) {
+          console.error(
+            `[ClaudeOAuth] Credential compensation failed: ${
+              cleanupError instanceof Error ? cleanupError.constructor.name : 'unknown error'
+            }`
+          );
+        }
+        // Preserve the tenant freeze/write-gate status so callers receive the
+        // required 503. Other repository/driver errors are internal details and
+        // must not be reflected to the browser.
+        if (error instanceof Unavailable) throw error;
+        throw new BadRequest(
+          'Could not finish saving the Claude login. Start over, or ask an administrator to check daemon logs.'
+        );
+      }
     });
   }
 
@@ -528,48 +648,64 @@ export function createClaudeOAuthService(app: AppLike, db: TenantScopeAwareDatab
       ) {
         throw new BadRequest('Claude is disabled for this workspace.');
       }
+      const config = app.get('config');
+      if (
+        config.multi_tenancy?.mode === 'required_from_auth' &&
+        !hasExactUserExecutorCredentialHome(config)
+      ) {
+        throw new BadRequest(
+          'Claude subscription sign-in requires an exact per-user execution home in hosted mode.'
+        );
+      }
 
       // ── Submit step: a code was pasted back. Finish the existing attempt. ──
-      if (data?.code?.trim()) {
+      if (data && Object.hasOwn(data, 'code')) {
+        if (
+          typeof data.code !== 'string' ||
+          !data.code.trim() ||
+          data.code.length > MAX_PASTED_CODE_LENGTH
+        ) {
+          throw new BadRequest('Paste the complete Claude authorization code, or start over.');
+        }
         return submit(key, data.code);
       }
 
       // ── Start step: issue a fresh authorize URL, replacing any prior attempt. ──
-      // Invalidate the prior attempt up front so an in-flight submit of the old
-      // code cannot clobber this fresh one when it lands.
-      const prior = attempts.get(key);
-      if (prior) prior.cancelled = true;
+      return coordinator.runCredentialMutation(async () => {
+        // Resolve before invalidating the old attempt. A transient routing
+        // failure must not destroy an otherwise valid paste-back flow.
+        const identity = await resolveCodexCredentialRoute(userId, withTenantDatabase, config);
+        if (!identity.ok) {
+          throw new BadRequest(
+            `Cannot determine which Unix account should hold this Claude login: ${identity.message}`
+          );
+        }
 
-      // Resolve the destination identity up front so a strict-mode user with no
-      // unix_username fails fast instead of after approving in the browser.
-      const identity = await resolveCodexCredentialRoute(
-        userId,
-        withTenantDatabase,
-        app.get('config')
-      );
-      if (!identity.ok) {
-        throw new BadRequest(
-          `Cannot determine which Unix account should hold this Claude login: ${identity.message}`
-        );
-      }
+        const prior = attempts.get(key);
+        if (prior) {
+          prior.cancelled = true;
+          finish(prior, 'error', 'This sign-in was replaced by a newer attempt.');
+        }
 
-      const pkce = generatePkce();
-      const state = base64url(randomBytes(32));
-      const attempt: OAuthAttempt = {
-        key,
-        userId,
-        tenantId,
-        authUser,
-        delegatedHomeKey: identity.delegatedHomeKey,
-        phase: 'awaiting_code',
-        verifier: pkce.verifier,
-        state,
-        verificationUrl: buildAuthorizeUrl(pkce.challenge, state),
-        expiresAtMs: Date.now() + ATTEMPT_LIFETIME_MS,
-        cancelled: false,
-      };
-      attempts.set(key, attempt);
-      return statusOf(attempt);
+        const pkce = generatePkce();
+        const state = base64url(randomBytes(32));
+        const attempt: OAuthAttempt = {
+          key,
+          userId,
+          tenantId,
+          authUser,
+          delegatedHomeKey: identity.delegatedHomeKey,
+          ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+          phase: 'awaiting_code',
+          verifier: pkce.verifier,
+          state,
+          verificationUrl: buildAuthorizeUrl(pkce.challenge, state),
+          expiresAtMs: Date.now() + ATTEMPT_LIFETIME_MS,
+          cancelled: false,
+        };
+        attempts.set(key, attempt);
+        return statusOf(attempt);
+      });
     },
 
     async find(params?: AuthenticatedParams): Promise<ClaudeOAuthStatus> {

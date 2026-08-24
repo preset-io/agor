@@ -3,29 +3,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── External-dependency mocks (declared before importing the module) ─────────
 const writeClaudeAuthViaExecutor = vi.fn(async () => undefined);
+const deleteClaudeAuthViaExecutor = vi.fn(async () => undefined);
 vi.mock('../utils/executor-claude-auth.js', () => ({
   writeClaudeAuthViaExecutor: (...args: unknown[]) => writeClaudeAuthViaExecutor(...args),
-  deleteClaudeAuthViaExecutor: vi.fn(),
+  deleteClaudeAuthViaExecutor: (...args: unknown[]) => deleteClaudeAuthViaExecutor(...args),
 }));
 
 let identityResult: unknown = {
   ok: true,
   delegatedHomeKey: null,
   userId: 'user-A',
+  claudeConfigDir: '/homes/user-A/.claude',
 };
 vi.mock('./codex-auth-shared.js', () => ({
   resolveCodexCredentialRoute: vi.fn(async () => identityResult),
 }));
 
 let toolEnabled = true;
+let exactUserHome = true;
 vi.mock('@agor/core/config', () => ({
   isTenantAgenticToolEnabled: vi.fn(async () => toolEnabled),
+  hasExactUserExecutorCredentialHome: vi.fn(() => exactUserHome),
 }));
 
+let activeTenantId = 'tenant-1';
+let tenantDatabaseScopeDepth = 0;
 vi.mock('@agor/core/db', () => ({
-  getCurrentTenantId: () => 'tenant-1',
-  runWithTenantDatabaseScope: <T>(_db: unknown, _tid: unknown, work: (db: unknown) => Promise<T>) =>
-    work({}),
+  getCurrentTenantId: () => activeTenantId,
+  runWithTenantDatabaseScope: async <T>(
+    _db: unknown,
+    _tid: unknown,
+    work: (db: unknown) => Promise<T>
+  ) => {
+    tenantDatabaseScopeDepth += 1;
+    try {
+      return await work({});
+    } finally {
+      tenantDatabaseScopeDepth -= 1;
+    }
+  },
 }));
 
 import {
@@ -35,6 +51,7 @@ import {
   createClaudeOAuthService,
   exchangeCodeForTokens,
   generatePkce,
+  InMemoryClaudeOAuthCoordinator,
   parsePastedCode,
   TokenExchangeError,
 } from './claude-oauth.js';
@@ -65,19 +82,23 @@ async function startAndGetState(svc: {
   return state as string;
 }
 
-function makeService() {
+function makeService(
+  coordinator?: InMemoryClaudeOAuthCoordinator,
+  config: Record<string, unknown> = {}
+) {
   const usersGet = vi.fn(async () => ({ agentic_auth_methods: {} }));
   const usersPatch = vi.fn(async () => ({}));
   const app = {
-    get: () => ({}),
+    get: () => config,
     service: (path: string) =>
       path === 'users' ? { get: usersGet, patch: usersPatch } : undefined,
   };
   const svc = createClaudeOAuthService(
     app as unknown as Parameters<typeof createClaudeOAuthService>[0],
-    {} as unknown as Parameters<typeof createClaudeOAuthService>[1]
+    {} as unknown as Parameters<typeof createClaudeOAuthService>[1],
+    coordinator
   );
-  return { svc, usersGet, usersPatch };
+  return { svc, usersGet, usersPatch, app };
 }
 
 const asUserA = { user: { user_id: 'user-A' } };
@@ -85,8 +106,18 @@ const asUserA = { user: { user_id: 'user-A' } };
 beforeEach(() => {
   writeClaudeAuthViaExecutor.mockClear();
   writeClaudeAuthViaExecutor.mockResolvedValue(undefined);
+  deleteClaudeAuthViaExecutor.mockClear();
+  deleteClaudeAuthViaExecutor.mockResolvedValue(undefined);
   toolEnabled = true;
-  identityResult = { ok: true, delegatedHomeKey: null, userId: 'user-A' };
+  exactUserHome = true;
+  activeTenantId = 'tenant-1';
+  tenantDatabaseScopeDepth = 0;
+  identityResult = {
+    ok: true,
+    delegatedHomeKey: null,
+    userId: 'user-A',
+    claudeConfigDir: '/homes/user-A/.claude',
+  };
   vi.stubGlobal(
     'fetch',
     vi.fn(async () => jsonResponse(TOKENS))
@@ -151,6 +182,14 @@ describe('PKCE + pure helpers', () => {
 });
 
 describe('exchangeCodeForTokens contract validation', () => {
+  it('refuses redirects so an authorization code is never forwarded to another origin', async () => {
+    await exchangeCodeForTokens('c', 'v', 's');
+    expect(fetch).toHaveBeenCalledWith(
+      'https://platform.claude.com/v1/oauth/token',
+      expect.objectContaining({ method: 'POST', redirect: 'error' })
+    );
+  });
+
   it('classifies a definitive 4xx as a "rejected" (pre-consumption) failure', async () => {
     vi.stubGlobal(
       'fetch',
@@ -229,9 +268,14 @@ describe('createClaudeOAuthService — flow + security', () => {
 
     // Written as the identity resolved from the AUTHENTICATED user, not request data.
     expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1);
-    const [content, routing] = writeClaudeAuthViaExecutor.mock.calls[0];
-    expect(routing).toEqual({ delegatedHomeKey: null, userId: 'user-A' });
+    const [content, routing, generation] = writeClaudeAuthViaExecutor.mock.calls[0];
+    expect(routing).toEqual({
+      delegatedHomeKey: null,
+      userId: 'user-A',
+      claudeConfigDir: '/homes/user-A/.claude',
+    });
     expect(JSON.parse(content as string).claudeAiOauth.accessToken).toBe(TOKENS.access_token);
+    expect(generation).toEqual(expect.any(Number));
 
     // Flips to subscription AND deletes the stale pasted token (null) in one patch.
     expect(usersPatch).toHaveBeenCalledWith(
@@ -242,6 +286,38 @@ describe('createClaudeOAuthService — flow + security', () => {
       },
       expect.anything()
     );
+  });
+
+  it('generation-fenced deletes the new file when the metadata patch fails', async () => {
+    const { svc, usersPatch } = makeService();
+    usersPatch.mockRejectedValueOnce(new Error('database unavailable'));
+    const state = await startAndGetState(svc);
+
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
+      /Could not finish saving/
+    );
+    expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1);
+    const generation = writeClaudeAuthViaExecutor.mock.calls[0]?.[2];
+    expect(deleteClaudeAuthViaExecutor).toHaveBeenCalledWith(
+      {
+        delegatedHomeKey: null,
+        userId: 'user-A',
+        claudeConfigDir: '/homes/user-A/.claude',
+      },
+      generation
+    );
+    expect((await svc.find(asUserA)).phase).toBe('error');
+  });
+
+  it('does not hold a tenant database transaction across executor credential I/O', async () => {
+    writeClaudeAuthViaExecutor.mockImplementationOnce(async () => {
+      expect(tenantDatabaseScopeDepth).toBe(0);
+    });
+    const { svc } = makeService();
+    const state = await startAndGetState(svc);
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).resolves.toMatchObject({
+      phase: 'success',
+    });
   });
 
   it('rejects a wrong state without exchanging, leaving the attempt retryable', async () => {
@@ -306,6 +382,50 @@ describe('createClaudeOAuthService — flow + security', () => {
     // The stale submit must not have written credentials for the replaced attempt.
     expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
     expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
+  });
+
+  it('serializes a replacement requested while the credential write is in flight', async () => {
+    const coordinator = new InMemoryClaudeOAuthCoordinator();
+    const { svc } = makeService(coordinator);
+    const state = await startAndGetState(svc);
+    let releaseWrite!: () => void;
+    writeClaudeAuthViaExecutor.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseWrite = resolve))
+    );
+
+    const submit = svc.create({ code: `AUTHCODE#${state}` }, asUserA);
+    await vi.waitFor(() => expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1));
+    const replacement = svc.create({}, asUserA);
+    await flush();
+    expect((await svc.find(asUserA)).phase).toBe('exchanging');
+
+    releaseWrite();
+    await submit;
+    expect((await replacement).phase).toBe('awaiting_code');
+    expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
+  });
+
+  it('retains the prior attempt when replacement routing fails', async () => {
+    const { svc } = makeService();
+    const original = await svc.create({}, asUserA);
+    identityResult = { ok: false, reason: 'resolve-failed', message: 'temporary failure' };
+    await expect(svc.create({}, asUserA)).rejects.toThrow(/temporary failure/);
+    expect(await svc.find(asUserA)).toEqual(original);
+  });
+
+  it('refuses to persist when the execution home changes during approval', async () => {
+    const { svc } = makeService();
+    const state = await startAndGetState(svc);
+    identityResult = {
+      ok: true,
+      delegatedHomeKey: null,
+      userId: 'user-A',
+      claudeConfigDir: '/homes/reassigned/.claude',
+    };
+    await expect(svc.create({ code: `AUTHCODE#${state}` }, asUserA)).rejects.toThrow(
+      /execution home.*changed/i
+    );
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
   });
 
   it('a malformed provider response ends the attempt in error with no token leak and no write', async () => {
@@ -399,6 +519,30 @@ describe('createClaudeOAuthService — flow + security', () => {
     const { svc } = makeService();
     await svc.create({}, asUserA);
     expect((await svc.find({ user: { user_id: 'user-B' } })).phase).toBe('idle');
+  });
+
+  it('isolates attempts for the same user across tenants', async () => {
+    const { svc } = makeService();
+    await svc.create({}, asUserA);
+    activeTenantId = 'tenant-2';
+    expect((await svc.find(asUserA)).phase).toBe('idle');
+  });
+
+  it('rejects non-string, blank, and oversized pasted codes without starting a new flow', async () => {
+    const { svc } = makeService();
+    await expect(svc.create({ code: 42 } as never, asUserA)).rejects.toThrow(/complete/);
+    await expect(svc.create({ code: '   ' }, asUserA)).rejects.toThrow(/complete/);
+    await expect(svc.create({ code: 'x'.repeat(16 * 1024 + 1) }, asUserA)).rejects.toThrow(
+      /complete/
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed in hosted mode without an exact user execution home', async () => {
+    exactUserHome = false;
+    const { svc } = makeService(undefined, { multi_tenancy: { mode: 'required_from_auth' } });
+    await expect(svc.create({}, asUserA)).rejects.toThrow(/exact per-user/);
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
   });
 
   it('rejects when the tool is disabled for the workspace', async () => {

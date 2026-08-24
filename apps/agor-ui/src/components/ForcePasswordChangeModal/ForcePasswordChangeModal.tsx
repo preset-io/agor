@@ -9,6 +9,12 @@ import type { User } from '@agor-live/client';
 import { LockOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Input, Modal, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
+import {
+  passwordPolicyHelp,
+  passwordPolicyRequirements,
+  passwordRules,
+} from '../../utils/passwordPolicy';
 
 const { Text } = Typography;
 
@@ -29,6 +35,8 @@ export function ForcePasswordChangeModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { token } = theme.useToken();
+  const { config: authConfig } = useAuthConfig();
+  const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
 
   const handleSubmit = async () => {
     if (!user) return;
@@ -94,10 +102,8 @@ export function ForcePasswordChangeModal({
         <Form.Item
           name="newPassword"
           label="New Password"
-          rules={[
-            { required: true, message: 'Please enter a new password' },
-            { min: 8, message: 'Password must be at least 8 characters' },
-          ]}
+          help={passwordPolicyHelp(passwordRequirements)}
+          rules={passwordRules(passwordRequirements, { required: true })}
         >
           <Input.Password
             prefix={<LockOutlined style={{ color: token.colorTextQuaternary }} />}

@@ -20,10 +20,10 @@ describe('Claude model discovery materialization', () => {
       'claude-opus-5[1m]',
     ]);
     expect(options.map((option) => option.displayName)).toEqual([
-      'Claude Opus 4.8 — 200k',
-      'Claude Opus 4.8 — 1M',
-      'Claude Opus 5 — 200k',
-      'Claude Opus 5 — 1M',
+      'Claude Opus 4.8 · 200k',
+      'Claude Opus 4.8 · 1M',
+      'Claude Opus 5 · 200k',
+      'Claude Opus 5 · 1M',
     ]);
   });
 

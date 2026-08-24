@@ -4,6 +4,8 @@
 > Historical design record. Host Unix impersonation, `strict`/`insulated`, POSIX
 > projection, and `unix.sync-*` were removed in 0.25. Do not use the implementation
 > sketches below as current guidance; see `context/guides/rbac-and-unix-isolation.md`.
+> Its stdout-sentinel analysis is also historical: synchronous executor results now
+> use the bounded `executor-response-v1` channel, while stdout/stderr are logs only.
 
 **Status:** 🔬 Exploration / design-only (no code written)
 **Author:** design pass for Max
@@ -66,7 +68,7 @@ Cloud direction?_
 
 Every execution surface funnels through **one module**:
 `apps/agor-daemon/src/utils/spawn-executor.ts`
-(`spawnExecutor` / `spawnExecutorFireAndForget` / `runExecutorCommand` /
+(`spawnExecutor` / `spawnExecutorFireAndForget` / `requestExecutor` /
 `startInteractiveExecutor`). This module decides _local subprocess_ vs _templated_:
 
 - `spawnExecutor()` (`:368`) → if `executorCommandTemplate` set → `spawnExecutorWithTemplate()`
@@ -175,7 +177,7 @@ containment interface — the single largest correctness item.
 | Task executor (prompt)   | `spawnExecutor`                           | insulated→exec user; strict→user                      | yes (socket)  |
 | Terminal (zellij PTY)    | `spawnExecutorFireAndForget`              | insulated→exec user; strict→user                      | yes (PTY)     |
 | Environment / dev-server | `spawnExecutor` (`environment.lifecycle`) | **insulated+strict only**                             | maybe (watch) |
-| Files browse/read/write  | `runExecutorCommand`                      | **strict only** (+templated delegated)                | no (one-shot) |
+| Files browse/read/write  | `requestExecutor`                         | **strict only** (+templated delegated)                | no (one-shot) |
 | git clone / worktree add | executor `git.*`                          | daemon-user process; per-user _credentials_ in strict | no            |
 
 Nothing in the daemon reads the host FS directly for these; all go through the executor. A Docker
@@ -199,7 +201,7 @@ acceptable for a POC, but the design must state it explicitly (see §12 non-goal
   `~/.agor/agentic-tools/<version>/<tool>/` (`agentic-integrations.ts`, `apps/agor-cli/src/commands/install.ts`);
   `AGOR_MANAGED_AGENTIC_TOOLS=1` selects managed vs workspace SDKs. This is the reproducible mechanism
   for baking pinned CLIs into an executor image.
-- `.agor.yml` environment variants (`ha`, `docs`, `full`, `sqlite`, …) are **docker-compose commands that
+- `.agor.yml` environment variants (`ha`, `docs`, `rich`, `sqlite`, …) are **docker-compose commands that
   containerize _Agor-under-development_** — a different axis from Agor's own executor substrate (see §7).
 
 ---

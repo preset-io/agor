@@ -8,8 +8,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { ensureAgorHomeSync, getAgorHome } from '@agor/core/config';
 
 const DEFAULT_LOG_LINES = 50;
 const MIN_TAIL_READ_BYTES = 64 * 1024;
@@ -23,12 +23,7 @@ export interface DaemonLogRotationOptions {
   maxFiles?: number;
 }
 
-/**
- * Get Agor home directory (~/.agor)
- */
-export function getAgorHome(): string {
-  return path.join(os.homedir(), '.agor');
-}
+export { getAgorHome };
 
 /**
  * Get PID file path
@@ -73,6 +68,7 @@ export function getManagedDaemonInstanceId(): string | null {
  * Get log file path
  */
 export function getLogFilePath(): string {
+  ensureAgorHomeSync();
   const logsDir = path.join(getAgorHome(), 'logs');
   if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });

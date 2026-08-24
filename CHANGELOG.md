@@ -33,6 +33,22 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+### Breaking
+
+- **Socket clients authenticate only at the namespace handshake** — `createClient` requires `socketAuthentication` for protected services and no longer exposes Feathers' post-connect `authenticate`, `reAuthenticate`, or `logout` methods. Use `createRestClient` for credential exchange/refresh and let reconnect present the latest access token. ([#2520](https://github.com/preset-io/agor/pull/2520))
+
+### Security
+
+- **Tenant authority and realtime delivery are fail-closed end to end** — Socket.IO establishes one immutable server-owned principal/tenant projection per connection; tenant-qualified rooms, Feathers/Redis publication, executor and terminal capabilities, distributed revocation, and custom realtime handlers derive from that authenticated authority and re-authorize at replica boundaries. ([#2520](https://github.com/preset-io/agor/pull/2520))
+
+### Fixes
+
+- **Local CLI inspection no longer requires login** — `agor open` and `agor version` now target the local deployment by default, retain `--local` as a compatibility alias, and use the connected deployment only with `--remote`. ([#2468](https://github.com/preset-io/agor/pull/2468))
+- **Curated marketplace OAuth works across reviewed provider variations** — marketplace installs use a bounded interoperability profile while preserving PKCE S256 and issuer/resource binding; explicit strict and legacy policies remain available. Compatibility is re-evaluated against the current curated endpoint and auth policy, so imported, removed, or edited installs fail closed. ([#2377](https://github.com/preset-io/agor/pull/2377))
+  - GitHub, MongoDB, Box, HubSpot, Slack, Prisma, PagerDuty, and Kagi are no longer advertised because the read-only OAuth audit could not reach a safely bound client-registration boundary. Existing saved rows are not deleted.
+  - Existing strict grants retain their binding. Moving an install into or out of marketplace compatibility invalidates the old grant and requires authorization again.
+  - Standalone SQLite callbacks now bind the saved server through provider exchange, and Settings shows catalog-managed Marketplace policy instead of labeling it Strict.
+
 ## 0.25.2 (2026-08-18)
 
 ### Breaking

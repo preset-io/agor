@@ -12,7 +12,14 @@ import {
   shortId,
 } from '@agor/core/db';
 import { GatewayListenerError, getConnector } from '@agor/core/gateway';
-import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
+import type {
+  GatewayChannel,
+  GatewayOutboundMessage,
+  SessionID,
+  ThreadSessionMap,
+  User,
+  UserID,
+} from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
@@ -147,6 +154,7 @@ function makeGatewayHarness(args: {
   db?: TenantScopeAwareDatabase;
   user?: User;
   alignedUser?: User | null;
+  outboundSeed?: GatewayOutboundMessage | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
 }) {
   const channel = args.channel ?? slackChannel;
@@ -228,6 +236,8 @@ function makeGatewayHarness(args: {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => args.alignedUser ?? null);
+  const findOutboundSeed = vi.fn(async () => args.outboundSeed ?? null);
+  const markOutboundConsumed = vi.fn(async () => args.outboundSeed ?? null);
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
@@ -236,9 +246,12 @@ function makeGatewayHarness(args: {
     }
   ).usersRepo = { findByEmailForAlignment };
   (
-    service as unknown as { outboundRepo: { findUnconsumedByChannelAndThread: unknown } }
+    service as unknown as {
+      outboundRepo: { findUnconsumedByChannelAndThread: unknown; markConsumed: unknown };
+    }
   ).outboundRepo = {
-    findUnconsumedByChannelAndThread: vi.fn(async () => null),
+    findUnconsumedByChannelAndThread: findOutboundSeed,
+    markConsumed: markOutboundConsumed,
   };
   (
     service as unknown as { activeListeners: Map<string, Record<string, unknown>> }
@@ -257,6 +270,8 @@ function makeGatewayHarness(args: {
     channelRepo,
     threadMapRepo,
     findByEmailForAlignment,
+    findOutboundSeed,
+    markOutboundConsumed,
   };
 }
 
@@ -962,6 +977,343 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
     expect(threadMapRepo.updateLastMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService startup/bootstrap hint (#1982)', () => {
+  const STARTUP_BOOTSTRAP_HINT =
+    'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
+
+  function expectFinalStartupBootstrapHint(prompt: string): void {
+    expect(prompt.endsWith(STARTUP_BOOTSTRAP_HINT)).toBe(true);
+    expect(prompt.split(STARTUP_BOOTSTRAP_HINT)).toHaveLength(2);
+  }
+
+  function makeChannel(
+    channelType: GatewayChannel['channel_type'],
+    channelKey: string
+  ): GatewayChannel {
+    return {
+      ...slackChannel,
+      id: `chan-${channelType}`,
+      channel_type: channelType,
+      channel_key: channelKey,
+      config: channelType === 'slack' ? slackChannel.config : {},
+    } as GatewayChannel;
+  }
+
+  it('appends the hint after preserved Slack initial-thread context and instruction', async () => {
+    const sendMessage = vi.fn(async () => '100.000001');
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-100.000000',
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '99.000000',
+          iso_time: '2026-06-21T23:59:59.000Z',
+          actor_label: 'Bob',
+          text: 'Earlier thread context',
+          is_bot: false,
+          is_trigger: false,
+        },
+        {
+          ts: '100.000000',
+          iso_time: '2026-06-22T00:00:00.000Z',
+          actor_label: 'Alice',
+          text: '<@U_BOT> start',
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: null,
+      connector: { fetchThreadHistory, sendMessage },
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: 'start',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+        slack_user_name: 'Alice',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('**Slack context**');
+    expect(prompt).toContain('Earlier thread context');
+    expect(prompt).toContain(
+      '**Instruction:** Answer the current summon using the context above. Do not repeat the transcript unless asked.'
+    );
+    expect(prompt.indexOf('**Instruction:**')).toBeLessThan(prompt.indexOf(STARTUP_BOOTSTRAP_HINT));
+    expectFinalStartupBootstrapHint(prompt);
+  });
+
+  it('appends the hint when fresh Slack thread history falls back to the raw message', async () => {
+    const sendMessage = vi.fn(async () => '100.000001');
+    const fetchThreadHistory = vi.fn(async () => {
+      throw new Error('slack unavailable');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: null,
+      connector: { fetchThreadHistory, sendMessage },
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: 'fallback request',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('fallback request');
+    expect(prompt).not.toContain('**Slack context**');
+    expectFinalStartupBootstrapHint(prompt);
+    expect(warn).toHaveBeenCalledWith(
+      '[gateway] Failed to fetch Slack thread catch-up context:',
+      expect.any(Error)
+    );
+  });
+
+  it('appends the hint after preserved outbound-seed provenance and consumes the seed', async () => {
+    const outboundSeed = {
+      id: 'seed-1',
+      gateway_channel_id: slackChannel.id,
+      channel_type: 'slack',
+      platform_channel_id: 'C999',
+      platform_message_id: '500.000000',
+      platform_thread_id: 'C999-500.000000',
+      platform_permalink: null,
+      target_branch_id: slackChannel.target_branch_id,
+      emitted_by_user_id: 'user-1',
+      emitted_by_session_id: 'sess-origin',
+      emitted_by_task_id: 'task-origin',
+      emitted_by_schedule_id: null,
+      message_text: 'Heads up, deploy starting soon.',
+      message_preview: 'Heads up, deploy starting soon.',
+      metadata: null,
+      consumed_by_session_id: null,
+      consumed_at: null,
+      created_at: '2026-06-22T00:00:00.000Z',
+      updated_at: '2026-06-22T00:00:00.000Z',
+    } as unknown as GatewayOutboundMessage;
+    const sendMessage = vi.fn(async () => '500.000001');
+    const { service, promptCreate, markOutboundConsumed } = makeGatewayHarness({
+      existingMapping: null,
+      connector: { sendMessage },
+      outboundSeed,
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: outboundSeed.platform_thread_id,
+      text: 'Thanks, looks good.',
+      metadata: {
+        channel: 'C999',
+        channel_type: 'im',
+        slack_user_name: 'Alice',
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('This Slack thread began from a proactive Agor gateway message');
+    expect(prompt).toContain('Original proactive Agor message:');
+    expect(prompt).toContain('Heads up, deploy starting soon.');
+    expect(prompt).toContain('Human Slack reply:');
+    expect(prompt).toContain('Thanks, looks good.');
+    expect(markOutboundConsumed).toHaveBeenCalledWith(outboundSeed.id, 'sess-new');
+    expectFinalStartupBootstrapHint(prompt);
+  });
+
+  it('appends the hint after preserved GitHub initial-session content', async () => {
+    const githubChannel = makeChannel('github', 'github-key');
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: githubChannel,
+      existingMapping: null,
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: 'github-key',
+      thread_id: 'preset-io/agor#1982',
+      text: '@agor please take a look',
+      metadata: { github_user: 'octocat' },
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('[GitHub] @octocat mentioned you on preset-io/agor#1982');
+    expect(prompt).toContain('@agor please take a look');
+    expect(prompt).toContain('## GitHub Channel Behavior');
+    expectFinalStartupBootstrapHint(prompt);
+  });
+
+  it.each([
+    {
+      channelType: 'shortcut' as const,
+      channelKey: 'shortcut-key',
+      threadId: '42|7',
+      text: '@agor investigate the story',
+      userName: undefined,
+      metadata: {
+        shortcut_story_id: 42,
+        shortcut_story_name: 'Gateway bootstrap',
+        shortcut_user_name: 'Alice',
+      },
+      expected: ['[Shortcut] Alice mentioned you', '## Shortcut Channel Behavior'],
+    },
+    {
+      channelType: 'discord' as const,
+      channelKey: 'discord-key',
+      threadId: 'discord-thread',
+      text: 'generic connector request',
+      userName: 'Dana',
+      metadata: undefined,
+      expected: ['> 📡 **Message via Discord**', '> From: Dana'],
+    },
+  ])('appends the hint for a fresh $channelType prompt', async (testCase) => {
+    const channel = makeChannel(testCase.channelType, testCase.channelKey);
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: null,
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: testCase.channelKey,
+      thread_id: testCase.threadId,
+      text: testCase.text,
+      user_name: testCase.userName,
+      metadata: testCase.metadata,
+    });
+
+    expect(result).toMatchObject({ success: true, created: true });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain(testCase.text);
+    for (const expected of testCase.expected) expect(prompt).toContain(expected);
+    expectFinalStartupBootstrapHint(prompt);
+  });
+
+  it('keeps a concurrent mapping loser created=false and omits the hint', async () => {
+    const winner = makeMapping({ session_id: 'sess-winner' });
+    const { service, promptCreate, sessionsCreate, threadMapRepo } = makeGatewayHarness({
+      existingMapping: null,
+      connector: { sendMessage: vi.fn(async () => '100.000001') },
+    });
+    threadMapRepo.findByChannelAndThread.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+    threadMapRepo.create.mockRejectedValueOnce(new Error('mapping unique conflict'));
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: winner.thread_id,
+      text: 'concurrent initial delivery',
+      metadata: { channel_type: 'im' },
+    });
+
+    expect(sessionsCreate).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      success: true,
+      sessionId: winner.session_id,
+      created: false,
+    });
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({
+      route: { id: winner.session_id },
+    });
+    expect(promptCreate.mock.calls[0][0].prompt).not.toContain(STARTUP_BOOTSTRAP_HINT);
+  });
+
+  it('appends the generic hint when recovering initial delivery before Task admission', async () => {
+    const eventId = '01927f9d-0000-7000-8000-000000000099';
+    const taskId = '01927f9d-0000-7000-8000-000000000098';
+    const mapping = makeMapping();
+    const { service, promptCreate, sessionsCreate } = makeGatewayHarness({
+      existingMapping: mapping,
+      connector: { sendMessage: vi.fn(async () => '100.000001') },
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: mapping.thread_id,
+      text: 'recover initial delivery',
+      gateway_inbound_event_id: eventId as never,
+      idempotency_task_id: taskId as never,
+      idempotency_session_id: mapping.session_id,
+      listener_claim_token: 'opaque-owner',
+      listener_channel_id: slackChannel.id,
+      metadata: { channel_type: 'im' },
+    });
+
+    expect(sessionsCreate).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      success: true,
+      sessionId: mapping.session_id,
+      created: true,
+    });
+    expect(promptCreate.mock.calls[0][0]).toMatchObject({ idempotencyTaskId: taskId });
+    expect(promptCreate.mock.calls[0][1]).toMatchObject({
+      route: { id: mapping.session_id },
+    });
+    expectFinalStartupBootstrapHint(promptCreate.mock.calls[0][0].prompt as string);
+  });
+
+  it.each([
+    {
+      channelType: 'slack' as const,
+      channelKey: 'slack-key',
+      threadId: 'C123-100.000000',
+      metadata: { channel_type: 'im' },
+    },
+    {
+      channelType: 'github' as const,
+      channelKey: 'github-key',
+      threadId: 'preset-io/agor#1982',
+      metadata: { github_user: 'octocat' },
+    },
+  ])('does not add the hint to a continuing $channelType session', async (testCase) => {
+    const channel = makeChannel(testCase.channelType, testCase.channelKey);
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: testCase.threadId,
+      session_id: 'sess-existing',
+    });
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: mapping,
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: testCase.channelKey,
+      thread_id: testCase.threadId,
+      text: 'continuing request',
+      metadata: testCase.metadata,
+    });
+
+    expect(result).toMatchObject({ success: true, created: false });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('continuing request');
+    expect(prompt).not.toContain(STARTUP_BOOTSTRAP_HINT);
   });
 });
 
@@ -1800,6 +2152,60 @@ describe('GatewayService MCP resolution', () => {
       tenantId: 'tenant-channel',
     });
     expect(emitted).toHaveBeenCalledOnce();
+  });
+
+  it('warns when raw OAuth tokens exist but their authoritative binding is invalid', async () => {
+    const channel = {
+      ...slackChannel,
+      mcp_server_ids: [channelMcpId],
+    } as unknown as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({ channel, existingMapping: null });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      mcpServerRepo: {
+        findById: vi.fn(async () => ({
+          mcp_server_id: channelMcpId,
+          name: 'bound-oauth',
+          display_name: 'Bound OAuth',
+          transport: 'http',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          url: 'https://mcp.example.test',
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        })),
+      },
+      userTokenRepo: {
+        getToken: vi.fn(async () => ({
+          user_id: user.user_id,
+          mcp_server_id: channelMcpId,
+          oauth_access_token: 'raw-token-must-not-suppress-warning',
+          oauth_refresh_token: 'raw-refresh-must-not-suppress-warning',
+          grant_generation: 1,
+          grant_binding_version: 5,
+          refresh_status: 'idle',
+          refresh_generation: 0,
+          refresh_success_generation: 0,
+          created_at: new Date(),
+        })),
+      },
+    });
+
+    await service.create({
+      channel_key: channel.channel_key,
+      thread_id: 'C123-100.000000',
+      text: 'start',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+      },
+    });
+
+    expect(promptCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: expect.stringContaining('Bound OAuth') }),
+      expect.anything()
+    );
   });
 });
 

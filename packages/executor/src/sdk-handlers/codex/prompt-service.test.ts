@@ -459,7 +459,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
   ])(
-    'builds session config for $name permissions and uses the configured accessor',
+    'builds policy-enforced session config for $name permissions and uses the configured accessor',
     async ({
       persistedPermissionMode,
       promptPermissionMode,
@@ -504,7 +504,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
           ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
           codex: codexPermissions,
         },
-        model_config: { effort: 'medium' },
+        model_config: { model: 'gpt-5.4', effort: 'medium' },
         mcp_token: 'test-token',
       });
       mockSessionsRepo.update.mockResolvedValue(undefined);
@@ -533,7 +533,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
-          features: { goals: false },
+          features: { goals: false, multi_agent: false },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {
@@ -548,6 +548,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         threadId: 'mock-thread-id',
       });
       expect(mockStartThreadOptions.at(-1)).toMatchObject({
+        model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
       });
     }
@@ -2382,5 +2383,116 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers[name].required).toBeUndefined();
       expect(servers[name].startup_timeout_ms).toBeUndefined();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP `tool_permissions` enforcement
+//
+// `disabled_tools` is the ONLY thing standing between the model and a switched-
+// off tool on Codex. Every block above asserts Agor also emits
+// `default_tools_approval_mode: "approve"`, which auto-approves every MCP tool
+// call — so there is no prompt to fall back on, and no `canUseTool` equivalent:
+// Codex resolves the config in native code and Agor never sees the call.
+//
+// That makes an omission here silent and total. It is also easy to introduce:
+// the config is assembled in two separate transport branches, and the HTTP one
+// carries essentially every marketplace server (the catalog is remote
+// endpoints), so a `disabled_tools` line dropped from that branch alone would
+// leave stdio coverage intact and look fine.
+//
+// These cases therefore drive the real `buildMcpServersConfig` per transport.
+// The rest of the suite stubs that method out, which is exactly why this was
+// uncovered. Each case pairs the denied tool with an allowed one, so a passing
+// assertion means the filter is selective rather than empty or total.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('CodexPromptService - MCP tool_permissions', () => {
+  const sessionOwnerId = '019e3700-owner-owner-owner-owner000001';
+  const sessionId = '019e3700-aaaa-bbbb-cccc-dddddddddddd';
+  const mockMcpServerRepo = { findById: vi.fn() } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue(null);
+    configMocks.getDaemonUrl.mockResolvedValue('http://localhost:3030');
+  });
+
+  const makeService = () =>
+    new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockMcpServerRepo
+    );
+
+  const build = async () =>
+    (await (makeService() as any).buildMcpServersConfig(sessionId, undefined, {
+      sessionOwnerId,
+    })) as { servers: Record<string, any>; total: number };
+
+  /** Same server, same permissions, addressed over each transport Codex accepts. */
+  const gatedServer = (transport: 'stdio' | 'http' | 'sse') => ({
+    server: {
+      name: 'sentry',
+      transport,
+      ...(transport === 'stdio'
+        ? { command: 'npx', args: ['-y', 'sentry-mcp'] }
+        : { url: 'https://mcp.sentry.dev/mcp' }),
+      tool_permissions: { delete_project: 'deny', list_issues: 'allow' },
+    },
+  });
+
+  for (const transport of ['stdio', 'http', 'sse'] as const) {
+    it(`disables a denied tool on a ${transport} server, leaving allowed tools reachable`, async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([gatedServer(transport)]);
+
+      const { servers } = await build();
+
+      expect(servers.sentry.disabled_tools).toEqual(['delete_project']);
+      expect(servers.sentry.disabled_tools).not.toContain('list_issues');
+      // The gate has to coexist with the auto-approval that makes it load-bearing.
+      expect(servers.sentry.default_tools_approval_mode).toBe('approve');
+    });
+  }
+
+  it('fails closed on "ask", because Codex runs headless with no approval channel', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'sentry',
+          transport: 'http',
+          url: 'https://mcp.sentry.dev/mcp',
+          tool_permissions: { update_issue: 'ask', list_issues: 'allow' },
+        },
+      },
+    ]);
+
+    const { servers } = await build();
+
+    // An unanswerable "ask" must collapse onto deny, never onto allow.
+    expect(servers.sentry.disabled_tools).toEqual(['update_issue']);
+  });
+
+  it('leaves disabled_tools unset when a server gates nothing', async () => {
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'sentry',
+          transport: 'http',
+          url: 'https://mcp.sentry.dev/mcp',
+          tool_permissions: { list_issues: 'allow' },
+        },
+      },
+    ]);
+
+    const { servers } = await build();
+
+    // Guards the other direction: an empty list must not be emitted as a filter
+    // Codex could read as "disable everything", and must not appear as noise.
+    expect(servers.sentry.disabled_tools).toBeUndefined();
   });
 });

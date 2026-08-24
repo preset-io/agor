@@ -21,16 +21,33 @@
  * directly. Avoids spinning a real socket.io server / port.
  */
 
-import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
+import {
+  type ResolvedMultiTenancyConfig,
+  SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
+} from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  finalizeAuthenticatedConnectionAuthority,
+  getAuthenticatedConnectionAuthority,
+  retireAuthenticatedConnectionAuthority,
+} from '../auth/authenticated-connection-authority.js';
+import {
+  attachExecutorConnectionCandidate,
+  getOrCreateExecutorConnectionRevocationFence,
+} from '../auth/executor-connection-admission.js';
 import {
   boardPresenceRoomName,
+  HA_AUTHORIZATION_INVALIDATION_EVENT,
+  HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
+  LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   tenantChannelName,
   tenantUserChannelName,
+  terminalChannelName,
 } from '../realtime/routing';
+import { fingerprintExecutorSessionToken } from '../services/session-token-service';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
 import { executorTaskChannelName } from '../utils/realtime-publish';
@@ -63,6 +80,7 @@ interface FakeSocket {
   emit(event: string, data: unknown): void;
   join(channel: string): void | Promise<void>;
   leave(channel: string): void | Promise<void>;
+  disconnect(close?: boolean): void;
   broadcast: {
     emit: (event: string, data: unknown) => void;
     to: (channel: string) => { emit: (event: string, data: unknown) => void };
@@ -82,12 +100,15 @@ interface FakeIO {
   excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
   middlewares: Array<(socket: FakeSocket, next: (err?: Error) => void) => void>;
+  serverHandlers: Map<string, (...args: any[]) => void>;
+  serverSideEmitted: Array<{ event: string; data: unknown }>;
   engine: {
     closeHandler?: () => void;
     once(event: string, fn: () => void): void;
   };
   on(event: string, fn: any): void;
   use(fn: any): void;
+  serverSideEmit(event: string, data: unknown): void;
   to(channel: string): { emit: (event: string, data: unknown) => void };
   readonly local: Pick<FakeIO, 'to'>;
 }
@@ -118,6 +139,11 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
     leave(channel) {
       this.left.add(channel);
       this.joined.delete(channel);
+    },
+    disconnect() {
+      this.connected = false;
+      this.joined.clear();
+      this.handlers.get('disconnect')?.('server namespace disconnect');
     },
     broadcast: {
       emit: (event: string, data: unknown) => {
@@ -173,6 +199,8 @@ function makeIO(): FakeIO {
     excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
+    serverHandlers: new Map(),
+    serverSideEmitted: [],
     engine: {
       once(event, fn) {
         if (event === 'close') this.closeHandler = fn;
@@ -181,10 +209,15 @@ function makeIO(): FakeIO {
     on(event, fn) {
       if (event === 'connection') {
         this.connectionHandler = fn;
+      } else {
+        this.serverHandlers.set(event, fn);
       }
     },
     use(fn) {
       this.middlewares.push(fn);
+    },
+    serverSideEmit(event, data) {
+      this.serverSideEmitted.push({ event, data });
     },
     get local() {
       return this;
@@ -202,7 +235,7 @@ function makeIO(): FakeIO {
   return io;
 }
 
-function makeApp() {
+function makeApp(multiTenancy?: ResolvedMultiTenancyConfig) {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
   // app.on('login'), and app.emit for the terminal:ready/error relay.
   const eventHandlers = new Map<string, (...args: any[]) => void>();
@@ -214,26 +247,44 @@ function makeApp() {
       identity.branchId === BRANCH &&
       identity.ownerBootId === 'daemon-a-boot'
   );
-  return {
+  const app = {
     service: (path: string) =>
       path === 'terminals'
         ? { matchesOwnedAttachment }
-        : { get: async (userId: string) => ({ user_id: userId }) },
+        : path === 'authentication'
+          ? authentication
+          : { get: async (userId: string) => ({ user_id: userId }) },
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
     eventHandlers,
     matchesOwnedAttachment,
   };
+  const authentication = {
+    async authenticate(
+      _data: unknown,
+      params: { connection?: { pendingAuthenticationResult?: object } }
+    ) {
+      const result = params.connection?.pendingAuthenticationResult;
+      if (!result) throw new Error('Test handshake authentication result is unavailable');
+      return result;
+    },
+    async handleConnection(_event: 'login', connection: object, result: object) {
+      finalizeAuthenticatedConnectionAuthority({ connection, authResult: result, multiTenancy });
+    },
+  };
+  return app;
 }
 
-function buildHarness(opts: Partial<SocketIOOptions> = {}) {
-  const app = makeApp();
+function buildHarness(
+  opts: Partial<SocketIOOptions> = {},
+  authenticationMultiTenancy: ResolvedMultiTenancyConfig | null = opts.multiTenancy ?? null
+) {
+  const app = makeApp(authenticationMultiTenancy ?? undefined);
   const io = makeIO();
   const config = createSocketIOConfig(
     app as unknown as Application,
     {
       corsOrigin: '*',
-      jwtSecret: 'test-secret',
       credentialsAllowed: false,
       webTerminalEnabled: true,
       workIdentity: { instanceId: 'daemon-a', bootId: 'daemon-a-boot' },
@@ -291,176 +342,169 @@ it('does not bind a terminal subscription capability to an anonymous socket', ()
   expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
 });
 
-it('revokes a captured terminal subscription capability on logout', async () => {
-  const { app, io } = buildHarness();
-  const socket = makeSocket('logout-terminal-requester', io);
-  asUser(socket, ALICE);
-  connect(io, socket);
-  const connection = socket.feathers;
-  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-  expect(capturedJoin).toBeTypeOf('function');
+it('evicts stale tenant sockets locally and propagates the eviction across HA replicas', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const tenantA = makeSocket('tenant-a-socket', io);
+  const tenantB = makeSocket('tenant-b-socket', io);
+  asUser(tenantA, ALICE, 'tenant-a');
+  asUser(tenantB, BOB, 'tenant-b');
+  connect(io, tenantA);
+  connect(io, tenantB);
 
-  (app as any).eventHandlers.get('logout')?.({}, { connection });
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.({
+    tenantId: 'tenant-a',
+  });
 
-  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
-  await expect(capturedJoin?.(terminalChannel(), allocation)).resolves.toBe(false);
-  expect(socket.joined).not.toContain(terminalChannel());
-  expect(connection?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeUndefined();
+  expect(tenantA.connected).toBe(false);
+  expect(tenantB.connected).toBe(true);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: { tenantId: 'tenant-a' },
+  });
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+
+  io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({ tenantId: 'tenant-b' });
+  expect(tenantB.connected).toBe(false);
 });
 
-it('revokes the previous user and tenant capability on authentication replacement', async () => {
+it('clears distributed authorization caches without disconnecting sockets for additive grants', () => {
+  const { app, io } = buildHarness({ adapter: {} as never });
+  const tenantA = makeSocket('tenant-a-socket', io);
+  const tenantB = makeSocket('tenant-b-socket', io);
+  asUser(tenantA, ALICE, 'tenant-a');
+  asUser(tenantB, BOB, 'tenant-b');
+  connect(io, tenantA);
+  connect(io, tenantB);
+
+  const invalidation = { tenantId: 'tenant-a', disconnectSockets: false };
+  (app as any).eventHandlers.get('realtime:authorization-invalidated')?.(invalidation);
+
+  expect(tenantA.connected).toBe(true);
+  expect(tenantB.connected).toBe(true);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_AUTHORIZATION_INVALIDATION_EVENT,
+    data: invalidation,
+  });
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+  expect(app.emit).not.toHaveBeenCalledWith(LOCAL_AUTHORIZATION_INVALIDATION_EVENT, {
+    tenantId: 'tenant-a',
+  });
+
+  io.serverHandlers.get(HA_AUTHORIZATION_INVALIDATION_EVENT)?.({
+    tenantId: 'tenant-b',
+    disconnectSockets: false,
+  });
+  expect(tenantB.connected).toBe(true);
+  expect(app.emit).toHaveBeenCalledWith(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, {
+    tenantId: 'tenant-b',
+  });
+});
+
+it('fences already-authenticated task executors on local and HA exact revocation', async () => {
   const { app, io } = buildHarness({
+    adapter: {} as never,
     multiTenancy: {
       mode: 'required_from_auth',
       static_tenant_id: 'default' as never,
       auth_claim: 'tenant_id',
     },
   });
-  const socket = makeSocket('replacement-terminal-requester', io);
-  socket.feathers = { user: { user_id: ALICE } };
-  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
-  connect(io, socket);
-  const connection = socket.feathers;
-  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-
-  connection!.user = { user_id: BOB };
-  (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: BOB } },
-    {
-      connection,
-      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
-    }
-  );
-
-  await expect(
-    capturedJoin?.(terminalChannel(ALICE, TERMINAL, 'tenant-a'), {
-      userId: ALICE,
-      terminalId: TERMINAL,
-      branchId: BRANCH,
-    })
-  ).resolves.toBe(false);
-  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-  expect(replacementJoin).toBeTypeOf('function');
-  await expect(
-    replacementJoin?.(terminalChannel(BOB, TERMINAL, 'tenant-b'), {
-      userId: BOB,
-      terminalId: TERMINAL,
-      branchId: BRANCH,
-    })
-  ).resolves.toBe(true);
-  expect(socket.joined).not.toContain(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
-  expect(socket.joined).toContain(terminalChannel(BOB, TERMINAL, 'tenant-b'));
-});
-
-it('removes a terminal room when authentication changes while its join is pending', async () => {
-  const { app, io } = buildHarness({
-    multiTenancy: {
-      mode: 'required_from_auth',
-      static_tenant_id: 'default' as never,
-      auth_claim: 'tenant_id',
+  const exactToken = 'executor-token-exact';
+  const fence = getOrCreateExecutorConnectionRevocationFence(app);
+  const exact = makeSocket('executor-exact', io);
+  exact.feathers = {};
+  const tenantA = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
+  const exactResult = {
+    user: { user_id: ALICE },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-1',
+        task_id: 'task-1',
+        tenant_id: tenantA.tenant_id,
+      },
     },
-  });
-  const socket = makeSocket('pending-terminal-requester', io);
-  socket.feathers = { user: { user_id: ALICE } };
-  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
-  connect(io, socket);
-  const connection = socket.feathers;
-  const capturedJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
-  let releaseJoin!: () => void;
-  let markJoinStarted!: () => void;
-  const joinGate = new Promise<void>((resolve) => {
-    releaseJoin = resolve;
-  });
-  const joinStarted = new Promise<void>((resolve) => {
-    markJoinStarted = resolve;
-  });
-  const normalJoin = socket.join.bind(socket);
-  socket.join = async (candidate) => {
-    if (candidate === channel) {
-      markJoinStarted();
-      await joinGate;
-    }
-    await normalJoin(candidate);
   };
-
-  const pending = capturedJoin?.(channel, {
-    userId: ALICE,
-    terminalId: TERMINAL,
-    branchId: BRANCH,
+  attachExecutorConnectionCandidate(exactResult, {
+    tenantId: tenantA.tenant_id,
+    taskId: 'task-1',
+    tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
+    revocationGeneration: fence.snapshot(tenantA.tenant_id),
   });
-  await joinStarted;
-  connection!.user = { user_id: BOB };
-  (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: BOB } },
-    {
-      connection,
-      params: { authentication: { payload: { tenant_id: 'tenant-b' } } },
-    }
-  );
-  releaseJoin();
-
-  await expect(pending).resolves.toBe(false);
-  expect(socket.joined).not.toContain(channel);
-  expect(socket.left).toContain(channel);
-  expect(socket.received).not.toContainEqual({
-    event: 'terminal:allocated',
-    data: expect.objectContaining({ userId: ALICE }),
-  });
-});
-
-it('does not let a stale join remove the replacement generation from the same room', async () => {
-  const { app, io } = buildHarness({
+  finalizeAuthenticatedConnectionAuthority({
+    connection: exact.feathers,
+    authResult: exactResult,
     multiTenancy: {
       mode: 'required_from_auth',
       static_tenant_id: 'default' as never,
       auth_claim: 'tenant_id',
     },
+    executorRevocationFence: fence,
   });
-  const socket = makeSocket('same-identity-replacement', io);
-  socket.feathers = { user: { user_id: ALICE } };
-  socket.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
-  connect(io, socket);
-  const connection = socket.feathers;
-  const staleJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-  const channel = terminalChannel(ALICE, TERMINAL, 'tenant-a');
-  const allocation = { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH };
-  let releaseStaleJoin!: () => void;
-  let markStaleJoinStarted!: () => void;
-  const staleJoinGate = new Promise<void>((resolve) => {
-    releaseStaleJoin = resolve;
+  connect(io, exact);
+
+  (app as any).eventHandlers.get('realtime:executor-token-invalidated')?.({
+    tenantId: 'tenant-a',
+    tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
   });
-  const staleJoinStarted = new Promise<void>((resolve) => {
-    markStaleJoinStarted = resolve;
+  expect(getAuthenticatedConnectionAuthority(exact.feathers)).toBeUndefined();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(exact.connected).toBe(false);
+  expect(io.serverSideEmitted).toContainEqual({
+    event: HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
+    data: {
+      tenantId: 'tenant-a',
+      tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
+    },
   });
-  const normalJoin = socket.join.bind(socket);
-  let terminalJoinCount = 0;
-  socket.join = async (candidate) => {
-    if (candidate === channel && terminalJoinCount++ === 0) {
-      markStaleJoinStarted();
-      await staleJoinGate;
-    }
-    await normalJoin(candidate);
+
+  const session = makeSocket('executor-session', io);
+  session.feathers = {};
+  const tenantB = { tenant_id: 'tenant-b', source: 'auth_claim' } as const;
+  const sessionResult = {
+    user: { user_id: BOB },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-2',
+        task_id: 'task-2',
+        tenant_id: tenantB.tenant_id,
+      },
+    },
   };
+  attachExecutorConnectionCandidate(sessionResult, {
+    tenantId: tenantB.tenant_id,
+    taskId: 'task-2',
+    tokenFingerprint: fingerprintExecutorSessionToken('another-token'),
+    revocationGeneration: fence.snapshot(tenantB.tenant_id),
+  });
+  finalizeAuthenticatedConnectionAuthority({
+    connection: session.feathers,
+    authResult: sessionResult,
+    multiTenancy: {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default' as never,
+      auth_claim: 'tenant_id',
+    },
+    executorRevocationFence: fence,
+  });
+  connect(io, session);
 
-  const staleResult = staleJoin?.(channel, allocation);
-  await staleJoinStarted;
-  (app as any).eventHandlers.get('login')?.(
-    { user: { user_id: ALICE } },
-    {
-      connection,
-      params: { authentication: { payload: { tenant_id: 'tenant-a' } } },
-    }
-  );
-  const replacementJoin = connection?.[TERMINAL_REQUEST_JOIN_CHANNEL];
-  expect(replacementJoin).not.toBe(staleJoin);
-  const replacementResult = replacementJoin?.(channel, allocation);
-
-  releaseStaleJoin();
-  await expect(staleResult).resolves.toBe(false);
-  await expect(replacementResult).resolves.toBe(true);
-  expect(socket.joined).toContain(channel);
-  expect(socket.received).toContainEqual({ event: 'terminal:allocated', data: allocation });
+  io.serverHandlers.get(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT)?.({
+    tenantId: 'tenant-b',
+    tokenFingerprint: fingerprintExecutorSessionToken('another-token'),
+  });
+  expect(getAuthenticatedConnectionAuthority(session.feathers)).toBeUndefined();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(session.connected).toBe(false);
 });
 
 it('does not let a failed concurrent join remove a successful same-generation claim', async () => {
@@ -523,8 +567,9 @@ it('does not retry or remove an already-established authorized membership', asyn
   expect(socket.left).not.toContain(channel);
 });
 
-function attachTerminal(io: FakeIO, browser: FakeSocket): FakeSocket {
-  browser.handlers.get('join')?.(terminalChannel());
+async function attachTerminal(io: FakeIO, browser: FakeSocket): Promise<FakeSocket> {
+  const join = browser.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL];
+  await join?.(terminalChannel(), { userId: ALICE, terminalId: TERMINAL, branchId: BRANCH });
   const executor = makeSocket('exec-sock', io);
   asServiceForUser(executor, ALICE);
   connect(io, executor);
@@ -539,43 +584,55 @@ const TERMINAL = '33333333-cccc-cccc-cccc-333333333333';
 const BRANCH = '44444444-dddd-dddd-dddd-444444444444' as BranchID;
 
 function terminalChannel(userId = ALICE, terminalId = TERMINAL, tenantId = 'default') {
-  return `tenant/${tenantId}/user/${userId}/terminal/${terminalId}`;
+  return terminalChannelName(tenantId, userId, terminalId);
 }
 
-function asUser(socket: FakeSocket, userId: string) {
+function asUser(socket: FakeSocket, userId: string, tenantId = 'default') {
   socket.feathers = { user: { user_id: userId } };
-  socket.data.tenant = { tenant_id: 'default', source: 'static' };
+  finalizeAuthenticatedConnectionAuthority({
+    connection: socket.feathers,
+    authResult: {
+      user: { user_id: userId },
+      authentication: {
+        strategy: 'jwt',
+        payload: tenantId === 'default' ? {} : { tenant_id: tenantId },
+      },
+    },
+    multiTenancy:
+      tenantId === 'default'
+        ? { mode: 'static', static_tenant_id: 'default' as never }
+        : {
+            mode: 'required_from_auth',
+            static_tenant_id: 'default' as never,
+            auth_claim: 'tenant_id',
+          },
+  });
 }
-/**
- * Simulate a socket that presented a service token in the initial handshake.
- * The handshake middleware sets socket.data.isService AND attaches a synthetic
- * service user to feathers.user — we mirror both markers here.
- */
 function asServiceHandshake(socket: FakeSocket) {
   socket.feathers = {
     user: { user_id: 'executor-service', _isServiceAccount: true },
   };
-  socket.data.isService = true;
+  finalizeAuthenticatedConnectionAuthority({
+    connection: socket.feathers,
+    authResult: { user: socket.feathers.user, authentication: { strategy: 'jwt' } },
+    multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+  });
 }
-/**
- * Simulate an executor that connected anonymously and then authenticated
- * post-connect via `client.authenticate({ strategy: 'jwt', ... })`. The
- * Feathers login flow attaches the synthetic user with `_isServiceAccount:
- * true` but does NOT set socket.data.isService. This path is what
- * packages/executor/src/services/feathers-client.ts actually does.
- */
 function asServicePostConnect(socket: FakeSocket) {
-  socket.feathers = {
-    user: { user_id: 'executor-service', _isServiceAccount: true },
-  };
+  asServiceHandshake(socket);
 }
 /**
  * A terminal executor socket: a RESTRICTED identity user-scoped via
  * `terminal_user_id`. Deliberately NOT a full service account (no
  * `_isServiceAccount`) — that's the whole point of the terminal-scoped token.
- * Mirrors what ServiceJWTStrategy mints for a token carrying terminal_user_id.
+ * Mirrors what RuntimeJWTStrategy mints for a token carrying terminal_user_id.
  */
-function asServiceForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
+function asServiceForUser(
+  socket: FakeSocket,
+  userId: string,
+  terminalId = TERMINAL,
+  scope: { branchId?: string; ownerBootId?: string } = {}
+) {
   socket.feathers = {
     user: {
       user_id: 'executor-service',
@@ -583,30 +640,19 @@ function asServiceForUser(socket: FakeSocket, userId: string, terminalId = TERMI
       _isTerminalExecutor: true,
       terminal_user_id: userId,
       terminal_id: terminalId,
-      terminal_branch_id: BRANCH,
-      terminal_owner_boot_id: 'daemon-a-boot',
+      terminal_branch_id: scope.branchId ?? BRANCH,
+      terminal_owner_boot_id: scope.ownerBootId ?? 'daemon-a-boot',
     },
   };
-  socket.data.tenant = { tenant_id: 'default', source: 'static' };
+  finalizeAuthenticatedConnectionAuthority({
+    connection: socket.feathers,
+    authResult: { user: socket.feathers.user, authentication: { strategy: 'jwt' } },
+    multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+  });
 }
 /** Handshake-token variant of a user-scoped terminal executor socket. */
 function asServiceHandshakeForUser(socket: FakeSocket, userId: string, terminalId = TERMINAL) {
-  socket.feathers = {
-    user: {
-      user_id: 'executor-service',
-      role: 'terminal-executor',
-      _isTerminalExecutor: true,
-      terminal_user_id: userId,
-      terminal_id: terminalId,
-      terminal_branch_id: BRANCH,
-      terminal_owner_boot_id: 'daemon-a-boot',
-    },
-  };
-  socket.data.terminalUserId = userId;
-  socket.data.terminalId = terminalId;
-  socket.data.terminalBranchId = BRANCH;
-  socket.data.terminalOwnerBootId = 'daemon-a-boot';
-  socket.data.tenant = { tenant_id: 'default', source: 'static' };
+  asServiceForUser(socket, userId, terminalId);
 }
 
 // ---------------------------------------------------------------------------
@@ -661,234 +707,22 @@ describe('Socket.IO lifecycle logging', () => {
     warnSpy.mockRestore();
   });
 
-  it('logs first authentication and identity changes but omits same-identity repeats', () => {
-    const { app, io } = buildHarness();
-    const socket = makeSocket('alice-sock');
-    connect(io, socket);
-
-    const connection = {};
-    socket.feathers = connection;
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE, email: 'alice@example.com' } },
-      { connection }
-    );
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE, email: 'repeat@example.com' } },
-      { connection }
-    );
-
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(debugSpy.mock.calls.flat().join(' ')).not.toContain('re-authenticated');
-    expect(logSpy).toHaveBeenCalledWith(
-      'socket authenticated: alice-sock user:11111111aaaaaaaaaaaa1111'
-    );
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('repeat@example.com');
-
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: BOB, email: 'bob@example.com' } },
-      { connection }
-    );
-
-    expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'socket authenticated: alice-sock user:22222222bbbbbbbbbbbb2222'
-    );
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('bob@example.com');
-  });
-
-  it('keeps post-connect authenticated sockets out of unauthenticated disconnect metrics', () => {
+  it('treats handshake-authorized sockets as authenticated for disconnect metrics', () => {
     vi.useFakeTimers();
-    const { app, io } = buildHarness();
-    const socket = makeSocket('post-connect-auth');
+    const { io } = buildHarness();
+    const socket = makeSocket('authenticated');
+    asUser(socket, ALICE);
     connect(io, socket);
-
-    const connection = {};
-    socket.feathers = connection;
-    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
-    socket.feathers = {};
     debugSpy.mockClear();
     logSpy.mockClear();
-    warnSpy.mockClear();
 
     socket.handlers.get('disconnect')?.('ping timeout');
 
-    expect(debugSpy).not.toHaveBeenCalled();
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledOnce();
     expect(logSpy).toHaveBeenCalledWith(
-      '🔌 Socket.io disconnected: post-connect-auth (reason: ping timeout, remaining: 0)'
+      '🔌 Socket.io disconnected: authenticated (reason: ping timeout, remaining: 0)'
     );
-
     vi.advanceTimersByTime(5 * 60 * 1000);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
-    );
-  });
-
-  it('joins post-connect browser auth only to tenant-scoped raw rooms', () => {
-    const { app, io } = buildHarness({
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
-    const socket = makeSocket('alice-sock');
-    connect(io, socket);
-    const connection = { user: { user_id: ALICE } };
-    socket.feathers = connection;
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE } },
-      { connection, params: {} }
-    );
-
-    expect(socket.joined).toContain(tenantChannelName('tenant-a'));
-    expect(socket.joined).toContain(tenantUserChannelName('tenant-a', ALICE));
-    expect([...socket.joined]).not.toContain(`user:${ALICE}`);
-    expect(socket.feathers?.[TERMINAL_REQUEST_JOIN_CHANNEL]).toBeTypeOf('function');
-  });
-
-  it('uses the same single authentication signal for handshake-authenticated users', async () => {
-    const { app, io } = buildHarness();
-    const socket = makeSocket('handshake-sock');
-    socket.handshake.auth = {
-      token: issueRuntimeToken({ sub: ALICE, type: 'access' }, 'test-secret', '5m'),
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      io.middlewares[0]?.(socket, (error?: Error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-    connect(io, socket);
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: ALICE } },
-      { connection: socket.feathers }
-    );
-
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledWith(
-      'socket authenticated: handshake-sock user:11111111aaaaaaaaaaaa1111'
-    );
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('joined user room'));
-  });
-
-  it.each([
-    {
-      kind: 'full service',
-      user: {
-        user_id: 'executor-service',
-        email: 'executor@agor.internal',
-        role: 'service',
-        _isServiceAccount: true,
-      },
-      joinsUserRoom: false,
-    },
-    {
-      kind: 'terminal executor',
-      user: {
-        user_id: 'executor-service',
-        email: 'executor@agor.internal',
-        role: 'terminal-executor',
-        _isTerminalExecutor: true,
-        terminal_user_id: ALICE,
-      },
-      joinsUserRoom: false,
-    },
-  ])('logs post-connect $kind authentication as service', ({ user, joinsUserRoom }) => {
-    const { app, io } = buildHarness();
-    const socket = makeSocket('post-connect-service');
-    connect(io, socket);
-
-    const connection = {};
-    socket.feathers = connection;
-    (app as any).eventHandlers.get('login')?.({ user }, { connection });
-
-    expect(logSpy).toHaveBeenCalledOnce();
-    expect(logSpy).toHaveBeenCalledWith('socket authenticated: post-connect-service service');
-    expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
-      joinsUserRoom
-    );
-  });
-
-  it.each([
-    { kind: 'full service', terminalUserId: undefined, joinsUserRoom: false },
-    { kind: 'terminal executor', terminalUserId: ALICE, joinsUserRoom: false },
-  ])(
-    'deduplicates handshake $kind authentication followed by the same service login',
-    async ({ terminalUserId, joinsUserRoom }) => {
-      const { app, io } = buildHarness();
-      const socket = makeSocket('handshake-service');
-      socket.handshake.auth = {
-        token: issueRuntimeToken(
-          {
-            sub: 'executor-service',
-            type: 'service',
-            ...(terminalUserId ? { terminal_user_id: terminalUserId } : {}),
-          },
-          'test-secret',
-          '5m'
-        ),
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        io.middlewares[0]?.(socket, (error?: Error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-      connect(io, socket);
-      (app as any).eventHandlers.get('login')?.(
-        { user: socket.feathers?.user },
-        { connection: socket.feathers }
-      );
-
-      expect(logSpy).toHaveBeenCalledOnce();
-      expect(logSpy).toHaveBeenCalledWith('socket authenticated: handshake-service service');
-      expect([...socket.joined].some((room) => room.includes('executor-service'))).toBe(
-        joinsUserRoom
-      );
-    }
-  );
-
-  it('revokes prior raw tenant and board rooms when authentication is replaced by service', () => {
-    const { app, io } = buildHarness({
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
-    const socket = makeSocket('replacement-sock');
-    const connection = {};
-    socket.feathers = connection;
-    socket.data.tenant = { tenant_id: 'tenant-a', source: 'static' };
-    socket.data.currentBoardId = 'board-1';
-    socket.data.authorizedBoardIds = new Set(['board-1']);
-    socket.joined.add(tenantChannelName('tenant-a'));
-    socket.joined.add(tenantUserChannelName('tenant-a', ALICE));
-    socket.joined.add(boardPresenceRoomName('tenant-a', 'board-1'));
-    socket.joined.add(terminalChannel(ALICE, TERMINAL, 'tenant-a'));
-    connect(io, socket);
-
-    (app as any).eventHandlers.get('login')?.(
-      { user: { user_id: 'executor-service', _isServiceAccount: true } },
-      { connection }
-    );
-
-    expect([...socket.joined].filter((room) => room.startsWith('tenant:'))).toEqual([]);
-    expect(socket.joined.has(terminalChannel(ALICE, TERMINAL, 'tenant-a'))).toBe(false);
-    expect(socket.data.authorizedBoardIds).toEqual(new Set());
-    expect(socket.data.currentBoardId).toBeUndefined();
-    expect(socket.data.tenant).toBeUndefined();
-  });
-
-  it('revokes terminal output room membership on logout', () => {
-    const { app, io } = buildHarness();
-    const socket = makeSocket('logout-sock');
-    asUser(socket, ALICE);
-    const connection = socket.feathers;
-    socket.joined.add(terminalChannel());
-    connect(io, socket);
-
-    (app as any).eventHandlers.get('logout')?.({}, { connection });
-
-    expect(socket.joined.has(terminalChannel())).toBe(false);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
   });
 
   it('emits an unconditional five-minute gauge and stops it when Engine.IO closes', () => {
@@ -900,15 +734,11 @@ describe('Socket.IO lifecycle logging', () => {
 
     vi.advanceTimersByTime(5 * 60 * 1000 - 5_000);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
-    );
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
 
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(2);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
-    );
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
 
     io.engine.closeHandler?.();
     vi.advanceTimersByTime(5 * 60 * 1000);
@@ -946,75 +776,32 @@ describe('Socket.IO lifecycle logging', () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('reason: ping timeout'));
   });
 
-  it('aggregates sockets that disconnect before authentication and resets each interval', () => {
+  it('aggregates rejected handshakes and resets each interval', async () => {
     vi.useFakeTimers();
-    const { app, io } = buildHarness();
-    const firstAnonymousSocket = makeSocket('anonymous-1');
-    const secondAnonymousSocket = makeSocket('anonymous-2');
-    const previouslyAuthenticatedSocket = makeSocket('authenticated');
+    const { io } = buildHarness();
+    const missing = makeSocket('missing');
+    const conflicting = makeSocket('conflicting');
+    conflicting.handshake.auth = { token: 'auth-token' };
+    conflicting.handshake.headers = { authorization: 'Bearer header-token' };
 
-    connect(io, firstAnonymousSocket);
-    connect(io, secondAnonymousSocket);
-    connect(io, previouslyAuthenticatedSocket);
-    const connection = {};
-    previouslyAuthenticatedSocket.feathers = connection;
-    (app as any).eventHandlers.get('login')?.({ user: { user_id: ALICE } }, { connection });
-    previouslyAuthenticatedSocket.feathers = {};
-    debugSpy.mockClear();
-    logSpy.mockClear();
-    warnSpy.mockClear();
-
-    firstAnonymousSocket.handlers.get('disconnect')?.('ping timeout');
-    secondAnonymousSocket.handlers.get('disconnect')?.('client namespace disconnect');
-    previouslyAuthenticatedSocket.handlers.get('disconnect')?.('ping timeout');
-
-    expect(debugSpy).not.toHaveBeenCalled();
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Socket.io disconnected: authenticated (reason: ping timeout')
-    );
-    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('anonymous-');
+    await new Promise<void>((resolve) => io.middlewares[0]?.(missing, () => resolve()));
+    await new Promise<void>((resolve) => io.middlewares[0]?.(conflicting, () => resolve()));
 
     vi.advanceTimersByTime(5 * 60 * 1000);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=2'
-    );
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=2');
 
     vi.advanceTimersByTime(5 * 60 * 1000);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=0'
-    );
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
 
     io.engine.closeHandler?.();
     const logCountAfterClose = logSpy.mock.calls.length;
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
   });
-
-  it('preserves transport-error warnings while aggregating unauthenticated disconnects', () => {
-    vi.useFakeTimers();
-    const { io } = buildHarness();
-    const socket = makeSocket('transport-error');
-    connect(io, socket);
-    debugSpy.mockClear();
-
-    socket.handlers.get('disconnect')?.('transport error');
-
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reason: transport error'));
-    expect(debugSpy).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(5 * 60 * 1000);
-    expect(logSpy).toHaveBeenLastCalledWith(
-      'ws_active_connections=0 ws_unauthenticated_disconnects=1'
-    );
-  });
 });
 
 describe('getSocketAuthState', () => {
-  it('reports user auth when feathers.user.user_id is present', () => {
+  it('reports user auth from immutable connection authority', () => {
     const s = makeSocket();
     asUser(s, ALICE);
     expect(getSocketAuthState(s as any)).toEqual({
@@ -1023,21 +810,23 @@ describe('getSocketAuthState', () => {
       tenant: { tenant_id: 'default', source: 'static' },
     });
   });
-  it('reports service auth for handshake-tagged sockets (socket.data.isService)', () => {
+  it('reports full service authority', () => {
     const s = makeSocket();
     asServiceHandshake(s);
-    expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: true });
+    expect(getSocketAuthState(s as any)).toEqual({
+      userId: null,
+      isService: true,
+      tenant: { tenant_id: 'default', source: 'static' },
+    });
   });
-  it('reports service auth for post-connect authed sockets (_isServiceAccount only)', () => {
-    // This is the path the executor actually takes:
-    //   client.io.connect()  → anonymous, no socket.data.isService
-    //   client.authenticate({ strategy: 'jwt', ... })
-    //     → ServiceJWTStrategy.getEntity attaches _isServiceAccount: true
-    // The previous implementation rejected these sockets for terminal:output /
-    // exit / tab because it only checked socket.data.isService.
+  it('does not derive service authority from mutable socket data', () => {
     const s = makeSocket();
     asServicePostConnect(s);
-    expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: true });
+    expect(getSocketAuthState(s as any)).toEqual({
+      userId: null,
+      isService: true,
+      tenant: { tenant_id: 'default', source: 'static' },
+    });
   });
   it('reports a terminal-scoped identity as service-for-terminal WITH its terminalUserId', () => {
     const s = makeSocket();
@@ -1112,54 +901,167 @@ describe('createTokenBucket', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Handshake authentication
+// Handshake authentication transport boundary
 // ---------------------------------------------------------------------------
 
-describe('socket handshake tenant propagation', () => {
-  it('passes resolved JWT tenant context into the user lookup', async () => {
-    const usersGet = vi.fn(async () => ({ user_id: ALICE, email: 'alice@example.test' }));
-    const app = {
-      service: () => ({ get: usersGet }),
-      on: () => {},
-    } as unknown as Application;
-    const io = makeIO();
-    const config = createSocketIOConfig(app, {
-      corsOrigin: '*',
-      jwtSecret: 'test-secret',
-      credentialsAllowed: false,
-      webTerminalEnabled: true,
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
+describe('Socket.IO handshake credential extraction', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('rejects a missing bearer before accepting the namespace connection', async () => {
+    const { io } = buildHarness();
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(makeSocket('missing-bearer', io), resolve)
+    );
+    expect(error).toMatchObject({
+      message: 'Invalid or expired authentication token',
+      data: { code: 401, className: 'not-authenticated' },
+    });
+  });
+
+  it('rejects conflicting auth-object and Authorization-header credentials', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('conflicting-credentials', io);
+    socket.handshake.auth = { token: 'auth-object-token' };
+    socket.handshake.headers = { authorization: 'Bearer header-token' };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toMatchObject({
+      message: 'Invalid or expired authentication token',
+      data: { code: 401, className: 'not-authenticated' },
+    });
+  });
+
+  it('accepts an Authorization bearer through the normalized namespace boundary', async () => {
+    const { io } = buildHarness();
+    const socket = makeSocket('header-credential', io);
+    socket.handshake.headers = { authorization: 'Bearer signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: {
+          strategy: 'jwt',
+          payload: { exp: (Date.now() + 60_000) / 1000 },
+        },
       },
-    } as SocketIOOptions);
-    config.callback(io as any);
-    const socket = makeSocket('tenant-user-socket', io);
-    socket.handshake.auth = {
-      token: issueRuntimeToken(
-        { sub: ALICE, type: 'access', tenant_id: 'tenant-a' },
-        'test-secret',
-        '5m'
-      ),
     };
 
-    await new Promise<void>((resolve, reject) => {
-      io.middlewares[0]?.(socket, (error?: Error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-
-    expect(usersGet).toHaveBeenCalledWith(
-      ALICE,
-      expect.objectContaining({
-        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-        authentication: { payload: expect.objectContaining({ tenant_id: 'tenant-a' }) },
-      })
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
     );
-    expect(socket.feathers?.user).toMatchObject({ user_id: ALICE, tenant_id: 'tenant-a' });
-    expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+
+    expect(error).toBeUndefined();
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toMatchObject({
+      principal: { kind: 'user', userId: ALICE },
+    });
+  });
+
+  it('rejects an authority missing tenant scope on a tenant-aware daemon', async () => {
+    const { io } = buildHarness(
+      { multiTenancy: { mode: 'static', static_tenant_id: 'default' as never } },
+      null
+    );
+    const socket = makeSocket('unscoped-authority', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: {} },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toMatchObject({
+      message: 'Invalid or expired authentication token',
+      data: { code: 401, className: 'not-authenticated' },
+    });
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+  });
+
+  it('rejects a signed connection authority without a bounded expiry', async () => {
+    const { io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+    });
+    const socket = makeSocket('unbounded-authority', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: {} },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toMatchObject({
+      message: 'Invalid or expired authentication token',
+      data: { code: 401, className: 'not-authenticated' },
+    });
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+  });
+
+  it('keeps ordinary user authority across routine access-token expiry', async () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const socket = makeSocket('expiring-authority', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: {
+          strategy: 'jwt',
+          payload: { exp: (Date.now() + 1_000) / 1000 },
+        },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+    expect(error).toBeUndefined();
+    connect(io, socket);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+
+    expect(socket.connected).toBe(true);
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toMatchObject({
+      principal: { kind: 'user', userId: ALICE },
+      retireAtExpiry: false,
+    });
+  });
+
+  it('retires impersonated user authority at the verified JWT expiry', async () => {
+    vi.useFakeTimers();
+    const { io } = buildHarness();
+    const socket = makeSocket('expiring-impersonation', io);
+    socket.handshake.auth = { token: 'signed-impersonation-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: {
+          strategy: 'jwt',
+          payload: { exp: (Date.now() + 1_000) / 1000, is_impersonated: true },
+        },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+    expect(error).toBeUndefined();
+    connect(io, socket);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+
+    expect(socket.connected).toBe(false);
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
   });
 });
 
@@ -1204,12 +1106,12 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('does not match'));
     });
 
-    it('accepts and re-emits with the AUTHED userId when payload matches', () => {
+    it('accepts and re-emits with the AUTHED userId when payload matches', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:input')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1226,12 +1128,12 @@ describe('terminal:* handler authorization', () => {
       ]);
     });
 
-    it('rejects when allow_web_terminal is false', () => {
+    it('rejects when allow_web_terminal is false', async () => {
       const { io } = buildHarness({ webTerminalEnabled: false });
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:input')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1241,12 +1143,12 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('web terminal disabled'));
     });
 
-    it('rate-limits per socket (drops events past the burst cap)', () => {
+    it('rate-limits per socket (drops events past the burst cap)', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       // Burst = 1000 tokens. Fire 1500 events back-to-back; expect ~1000
       // through, the rest dropped. Use ≤1000 / ≥500 bounds to allow tiny
       // wall-clock refill during the loop without making the test flaky.
@@ -1269,12 +1171,12 @@ describe('terminal:* handler authorization', () => {
       expect(io.emitted).toEqual([]);
     });
 
-    it('accepts when payload userId matches authed user', () => {
+    it('accepts when payload userId matches authed user', async () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      attachTerminal(io, s);
+      await attachTerminal(io, s);
       s.handlers.get('terminal:resize')?.({
         userId: ALICE,
         terminalId: TERMINAL,
@@ -1313,10 +1215,7 @@ describe('terminal:* handler authorization', () => {
       }
     );
 
-    it('terminal:output accepts post-connect authed, user-scoped service sockets and relays', () => {
-      // Regression for executor flow: connect anonymously, then
-      // client.authenticate() attaches `_isServiceAccount: true` +
-      // `terminal_user_id` to feathers.user without setting socket.data.isService.
+    it('terminal:output accepts handshake-authenticated, user-scoped service sockets and relays', () => {
       const { io } = buildHarness();
       const s = makeSocket('exec-sock', io);
       asServiceForUser(s, ALICE);
@@ -1429,7 +1328,7 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('not scoped to a terminal user')
+        expect.stringContaining('terminal executor is not scoped to a user')
       );
     });
 
@@ -1596,13 +1495,16 @@ describe('terminal:* handler authorization', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('join rejected'));
     });
 
-    it('allows a user to join their own terminal channel', () => {
+    it('rejects a browser raw-joining even its own previously known terminal channel', () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
       s.handlers.get('join')?.(terminalChannel());
-      expect(s.joined.has(terminalChannel())).toBe(true);
+      expect(s.joined.has(terminalChannel())).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('browser terminal joins require an authorized allocation')
+      );
     });
 
     it('rejects the same user and terminal id in another tenant', () => {
@@ -1633,8 +1535,7 @@ describe('terminal:* handler authorization', () => {
     it('rejects an executor capability minted by a previous daemon boot', () => {
       const { io } = buildHarness();
       const s = makeSocket('stale-executor');
-      asServiceForUser(s, ALICE);
-      s.feathers.user.terminal_owner_boot_id = 'old-boot';
+      asServiceForUser(s, ALICE, TERMINAL, { ownerBootId: 'old-boot' });
       connect(io, s);
       s.handlers.get('join')?.(terminalChannel());
       expect(s.joined.has(terminalChannel())).toBe(false);
@@ -1644,8 +1545,7 @@ describe('terminal:* handler authorization', () => {
     it('rejects an executor capability for a different branch attachment', () => {
       const { io } = buildHarness();
       const s = makeSocket('wrong-branch-executor');
-      asServiceForUser(s, ALICE);
-      s.feathers.user.terminal_branch_id = 'other-branch';
+      asServiceForUser(s, ALICE, TERMINAL, { branchId: 'other-branch' });
       connect(io, s);
       s.handlers.get('join')?.(terminalChannel());
       expect(s.joined.has(terminalChannel())).toBe(false);
@@ -1707,16 +1607,15 @@ describe('terminal:* handler authorization', () => {
       expect(s.left.size).toBe(0);
     });
 
-    it('still allows leaving non-terminal channels (no auth check applied)', () => {
-      // The hardening is scoped to terminal channels; non-terminal channels
-      // (e.g. board-foo) keep the prior behavior so we don't regress
-      // unrelated WS features.
+    it('rejects arbitrary adapter-room leaves outside the terminal protocol', () => {
       const { io } = buildHarness();
       const s = makeSocket('alice-sock');
       asUser(s, ALICE);
       connect(io, s);
-      s.handlers.get('leave')?.('board:abc');
-      expect(s.left.has('board:abc')).toBe(true);
+      const foreignTenantRoom = tenantChannelName('tenant-b');
+      s.handlers.get('leave')?.(foreignTenantRoom);
+      expect(s.left.has(foreignTenantRoom)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid terminal channel'));
     });
   });
 
@@ -1725,10 +1624,8 @@ describe('terminal:* handler authorization', () => {
       const { io } = buildHarness();
       const tenantA = makeSocket('tenant-a', io);
       const tenantB = makeSocket('tenant-b', io);
-      asUser(tenantA, ALICE);
-      asUser(tenantB, BOB);
-      tenantA.data.tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
-      tenantB.data.tenant = { tenant_id: 'tenant-b', source: 'auth_claim' };
+      asUser(tenantA, ALICE, 'tenant-a');
+      asUser(tenantB, BOB, 'tenant-b');
       connect(io, tenantA);
       connect(io, tenantB);
       await tenantA.handlers.get('presence:watch-board')?.('shared-board-id');
@@ -1792,7 +1689,6 @@ describe('terminal:* handler authorization', () => {
         event: 'presence-updated',
         data: {
           userId: ALICE,
-          boardId: 'board-1',
           timestamp: 1_000,
         },
       });
@@ -1896,7 +1792,7 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     expect(io.emitted).toEqual([]);
   });
 
-  it('does not restore a board room when logout races an in-flight authorization', async () => {
+  it('does not restore a board room when disconnect races an in-flight authorization', async () => {
     const { app, io } = buildHarness();
     let resolveBoard!: (value: { board_id: string }) => void;
     const boardLookup = new Promise<{ board_id: string }>((resolve) => {
@@ -1912,7 +1808,7 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     const acknowledge = vi.fn();
 
     const watch = s.handlers.get('presence:watch-board')?.('board-1', acknowledge);
-    (app as any).eventHandlers.get('logout')?.({}, { connection: s.feathers });
+    s.disconnect();
     resolveBoard({ board_id: 'board-1' });
     await watch;
 
@@ -1922,6 +1818,12 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
 });
 
 describe('configureChannels tenant isolation', () => {
+  const REQUIRED_TENANCY = {
+    mode: 'required_from_auth',
+    static_tenant_id: 'default' as never,
+    auth_claim: 'tenant_id',
+  } as const;
+
   function makeChannelHarness() {
     const handlers = new Map<string, (...args: any[]) => void>();
     const joins = new Map<string, unknown[]>();
@@ -1951,63 +1853,149 @@ describe('configureChannels tenant isolation', () => {
     return { app: app as unknown as Application, handlers, joins, leaves };
   }
 
-  it('joins authenticated sockets to tenant-scoped channels on login', () => {
-    const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
-      },
+  function finalizeLogin(
+    app: Application,
+    handlers: Map<string, (...args: any[]) => void>,
+    connection: object,
+    authResult: object,
+    multiTenancy: ResolvedMultiTenancyConfig,
+    _params: Record<string, unknown> = {}
+  ) {
+    finalizeAuthenticatedConnectionAuthority({
+      connection,
+      authResult,
+      multiTenancy,
+      executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
     });
+    handlers.get('connection')?.(connection);
+  }
+
+  function attachTaskExecutorCandidate(
+    app: Application,
+    authResult: object,
+    tenantId: string,
+    sessionId: string,
+    taskId: string
+  ) {
+    const fence = getOrCreateExecutorConnectionRevocationFence(app);
+    attachExecutorConnectionCandidate(authResult, {
+      tenantId,
+      taskId,
+      tokenFingerprint: fingerprintExecutorSessionToken(`${sessionId}:${taskId}`),
+      revocationGeneration: fence.snapshot(tenantId),
+    });
+  }
+
+  it('joins authenticated sockets to tenant-scoped channels on connection', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app);
     const connection = { data: {} } as any;
 
-    handlers.get('login')?.(
+    finalizeLogin(
+      app,
+      handlers,
+      connection,
       {
         user: { user_id: ALICE, email: 'alice@example.test' },
-        authentication: { payload: { tenant_id: 'tenant-a' } },
+        authentication: { strategy: 'jwt', payload: { tenant_id: 'tenant-a' } },
       },
-      { connection }
+      REQUIRED_TENANCY
     );
 
     expect(connection.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
-    expect(connection.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
     expect(joins.get('authenticated')).toEqual([connection]);
     expect(joins.get(tenantChannelName('tenant-a'))).toEqual([connection]);
     expect(joins.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
     expect(joins.has(tenantChannelName('tenant-b'))).toBe(false);
   });
 
-  it('joins tenant channel from login params when auth result has no tenant claim yet', () => {
-    const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
-      },
+  it('keeps connection authority immutable and cannot rebind a retired connection', () => {
+    const { app } = makeChannelHarness();
+    const connection = {};
+    const authResult = {
+      user: { user_id: ALICE, email: 'alice@example.test' },
+      authentication: { strategy: 'jwt', payload: { tenant_id: 'tenant-a' } },
+    };
+
+    const authority = finalizeAuthenticatedConnectionAuthority({
+      connection,
+      authResult,
+      multiTenancy: REQUIRED_TENANCY,
+      executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
     });
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(Object.isFrozen(authority.principal)).toBe(true);
+    expect(Object.isFrozen(authority.tenant)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(connection, 'tenant')).toMatchObject({
+      enumerable: true,
+      writable: false,
+    });
+
+    retireAuthenticatedConnectionAuthority(connection);
+    expect(getAuthenticatedConnectionAuthority(connection)).toBeUndefined();
+    expect(connection).not.toHaveProperty('tenant');
+    expect(() =>
+      finalizeAuthenticatedConnectionAuthority({
+        connection,
+        authResult,
+        multiTenancy: REQUIRED_TENANCY,
+        executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+      })
+    ).toThrow(/immutable/i);
+  });
+
+  it('ignores caller-controlled login params and joins only from the signed tenant claim', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app);
     const connection = { data: {} } as any;
 
-    handlers.get('login')?.(
+    finalizeLogin(
+      app,
+      handlers,
+      connection,
       {
         user: { user_id: ALICE, email: 'alice@example.test' },
-        authentication: { payload: {} },
+        authentication: {
+          strategy: 'jwt',
+          payload: { tenant_id: 'tenant-from-signed-claim' },
+        },
       },
-      {
-        connection,
-        params: { tenant: { tenant_id: 'tenant-from-params', source: 'auth_claim' } },
-      }
+      REQUIRED_TENANCY,
+      { tenant: { tenant_id: 'tenant-from-params', source: 'auth_claim' } }
     );
 
-    expect(connection.tenant).toEqual({ tenant_id: 'tenant-from-params', source: 'auth_claim' });
-    expect(connection.data.tenant).toEqual({
-      tenant_id: 'tenant-from-params',
+    expect(connection.tenant).toEqual({
+      tenant_id: 'tenant-from-signed-claim',
       source: 'auth_claim',
     });
     expect(joins.get('authenticated')).toEqual([connection]);
-    expect(joins.get(tenantChannelName('tenant-from-params'))).toEqual([connection]);
-    expect(joins.get(tenantUserChannelName('tenant-from-params', ALICE))).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-from-signed-claim'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-from-signed-claim', ALICE))).toEqual([
+      connection,
+    ]);
+  });
+
+  it('uses the canonical signed tenant claim when the configured alias is absent', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app);
+    const connection = { data: {} } as any;
+
+    finalizeLogin(
+      app,
+      handlers,
+      connection,
+      {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { tenant_id: 'tenant-canonical' } },
+      },
+      { ...REQUIRED_TENANCY, auth_claim: 'workspace_id' }
+    );
+
+    expect(joins.get(tenantChannelName('tenant-canonical'))).toEqual([connection]);
+    expect(connection.tenant).toEqual({
+      tenant_id: 'tenant-canonical',
+      source: 'auth_claim',
+    });
   });
 
   it('does NOT join a terminal-executor identity to any broadcast channel', () => {
@@ -2015,21 +2003,25 @@ describe('configureChannels tenant isolation', () => {
     // subscription — it consumes only raw terminal:* room events, never
     // Feathers channel broadcasts.
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
-      },
-    });
+    configureChannels(app);
     const connection = { data: {} } as any;
 
-    handlers.get('login')?.(
+    finalizeLogin(
+      app,
+      handlers,
+      connection,
       {
-        user: { user_id: 'executor-service', _isTerminalExecutor: true },
-        authentication: { payload: { tenant_id: 'tenant-a' } },
+        user: {
+          user_id: 'executor-service',
+          _isTerminalExecutor: true,
+          terminal_user_id: ALICE,
+          terminal_id: TERMINAL,
+          terminal_branch_id: BRANCH,
+          terminal_owner_boot_id: 'daemon-a-boot',
+        },
+        authentication: { strategy: 'jwt', payload: { tenant_id: 'tenant-a' } },
       },
-      { connection }
+      REQUIRED_TENANCY
     );
 
     expect(joins.size).toBe(0);
@@ -2037,174 +2029,93 @@ describe('configureChannels tenant isolation', () => {
 
   it('still joins a full service account to broadcast channels (service delivery)', () => {
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
+    configureChannels(app);
     const connection = { data: {} } as any;
 
-    handlers.get('login')?.(
-      { user: { user_id: 'executor-service', _isServiceAccount: true }, authentication: {} },
-      { connection }
+    finalizeLogin(
+      app,
+      handlers,
+      connection,
+      {
+        user: { user_id: 'executor-service', _isServiceAccount: true },
+        authentication: { strategy: 'jwt' },
+      },
+      { mode: 'static', static_tenant_id: 'tenant-a' as never }
     );
 
     expect(joins.get('authenticated')).toEqual([connection]);
   });
 
-  it('joins only the Task room proven by a verified executor-session login', () => {
+  it('joins the task room from finalized executor authority', () => {
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
-      },
-    });
+    configureChannels(app);
     const connection = { data: {} } as any;
-
-    handlers.get('login')?.(
-      {
-        user: { user_id: ALICE },
-        task_id: 'task-1',
-        authentication: {
-          payload: {
-            type: 'executor-session',
-            purpose: 'executor-task',
-            task_id: 'task-1',
-            session_id: 'session-1',
-            tenant_id: 'tenant-a',
-          },
+    const authResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: 'task-1',
+          session_id: 'session-1',
+          tenant_id: 'tenant-a',
         },
       },
-      { connection }
-    );
+    };
+    attachTaskExecutorCandidate(app, authResult, 'tenant-a', 'session-1', 'task-1');
+    finalizeLogin(app, handlers, connection, authResult, REQUIRED_TENANCY);
 
     expect(joins.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
+    expect(getAuthenticatedConnectionAuthority(connection)).toMatchObject({
+      tenant: { tenant_id: 'tenant-a' },
+      principal: {
+        kind: 'executor',
+        taskId: 'task-1',
+      },
+    });
+  });
+
+  it('does not join a task room when revocation lands after authority commit', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app);
+    const connection = { data: {} } as any;
+    const authResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: 'task-1',
+          session_id: 'session-1',
+          tenant_id: 'tenant-a',
+        },
+      },
+    };
+    const fence = getOrCreateExecutorConnectionRevocationFence(app);
+    attachTaskExecutorCandidate(app, authResult, 'tenant-a', 'session-1', 'task-1');
+    finalizeAuthenticatedConnectionAuthority({
+      connection,
+      authResult,
+      multiTenancy: REQUIRED_TENANCY,
+      executorRevocationFence: fence,
+    });
+
+    fence.record({ tenantId: 'tenant-a', tokenFingerprint: fingerprintExecutorSessionToken('x') });
+    handlers.get('connection')?.(connection);
+
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
   });
 
   it('does not trust an unscoped login or mismatched result task claim', () => {
     const { app, handlers, joins } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
+    configureChannels(app);
     const connection = { data: {} } as any;
 
-    handlers.get('login')?.(
-      {
-        user: { user_id: ALICE },
-        task_id: 'task-2',
-        authentication: {
-          payload: {
-            type: 'executor-session',
-            purpose: 'executor-task',
-            task_id: 'task-1',
-          },
-        },
-      },
-      { connection }
-    );
+    handlers.get('connection')?.(connection);
 
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
-  });
-
-  it('drops the prior Task room before replacing socket authentication', () => {
-    const { app, handlers, joins, leaves } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
-    const connection = { data: {} } as any;
-    const login = (taskId: string) =>
-      handlers.get('login')?.(
-        {
-          user: { user_id: ALICE },
-          task_id: taskId,
-          authentication: {
-            payload: {
-              type: 'executor-session',
-              purpose: 'executor-task',
-              task_id: taskId,
-            },
-          },
-        },
-        { connection }
-      );
-
-    login('task-1');
-    login('task-2');
-
-    expect(joins.get(executorTaskChannelName('tenant-a', 'task-2'))).toEqual([connection]);
-    expect(leaves.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
-  });
-
-  it('revokes prior tenant and session-stream channels before replacing authentication', () => {
-    const { app, handlers, joins, leaves } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default' as never,
-        auth_claim: 'tenant_id',
-      },
-    });
-    const connection = { data: {} } as any;
-    const login = (tenantId: string, userId: string) =>
-      handlers.get('login')?.(
-        {
-          user: { user_id: userId },
-          authentication: { payload: { tenant_id: tenantId } },
-        },
-        { connection }
-      );
-
-    login('tenant-a', ALICE);
-    joins.set('session-stream:session-a', [connection]);
-    login('tenant-b', BOB);
-
-    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
-    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
-    expect(leaves.get('session-stream:session-a')).toEqual([connection]);
-    expect(joins.get(tenantChannelName('tenant-b'))).toEqual([connection]);
-    expect(joins.get(tenantUserChannelName('tenant-b', BOB))).toEqual([connection]);
-    expect(connection.tenant).toEqual({ tenant_id: 'tenant-b', source: 'auth_claim' });
-  });
-
-  it('revokes prior broadcast channels when authentication changes to a terminal executor', () => {
-    const { app, handlers, joins, leaves } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
-    const connection = { data: {} } as any;
-
-    handlers.get('login')?.({ user: { user_id: ALICE }, authentication: {} }, { connection });
-    handlers.get('login')?.(
-      { user: { user_id: 'executor-service', _isTerminalExecutor: true } },
-      { connection }
-    );
-
-    expect(joins.get(tenantChannelName('tenant-a'))).toEqual([connection]);
-    expect(leaves.get('authenticated')).toEqual([connection, connection]);
-    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
-    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
-    expect(connection.tenant).toBeUndefined();
-    expect(connection.data.tenant).toBeUndefined();
-  });
-
-  it('leaves tenant-scoped channels on logout', () => {
-    const { app, handlers, joins, leaves } = makeChannelHarness();
-    configureChannels(app, {
-      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
-    });
-    const connection = {
-      data: { tenant: { tenant_id: 'tenant-a', source: 'static' } },
-      feathers: { user: { user_id: ALICE } },
-    } as any;
-    // These channels exist only after an authenticated join in real Feathers.
-    joins.set(tenantChannelName('tenant-a'), [connection]);
-    joins.set(tenantUserChannelName('tenant-a', ALICE), [connection]);
-
-    handlers.get('logout')?.({}, { connection });
-
-    expect(leaves.get('authenticated')).toEqual([connection]);
-    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
-    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
   });
 });

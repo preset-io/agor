@@ -268,9 +268,9 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
  *   and nothing re-asked at the finish.
  * - `oauth-auth-headers` refreshes and persists new access tokens
  *   (`refreshAndPersistToken`), which is minting by the same definition, but is
- *   called by an executor under a session token or service account. Flooring
- *   that caller would floor a robot; the standing that matters is the grant
- *   owner's.
+ *   called by a delegated task executor or explicit daemon service account.
+ *   The task executor carries its user, but the grant owner's standing is
+ *   still read fresh; a daemon service identity has no user standing at all.
  *
  * So both ask this about the *subject* rather than the requester. `shared`
  * grants keep their admin floor — they were always admin-only to start
@@ -318,7 +318,7 @@ export async function isMcpGrantOwnerEntitled(
  * on the same question is how the first one was lost.
  *
  * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
- * provider, and an executor service account carries no role to floor.
+ * provider, and an explicit daemon service account carries no role to floor.
  */
 export function assertMcpCapabilityRole(
   params: AuthenticatedParams | undefined,
@@ -391,11 +391,19 @@ function assertScopeUnchangedOrAllowed(
  * Refuse a write the tenant's policy does not permit.
  *
  * The marketplace gets its own sentence. Installing a curated entry is a much
- * narrower thing than configuring a server — the entry is chosen from a list,
- * remote, and unauthenticated — so somebody who clicked Connect and is told
- * their organization "does not allow members to configure MCP servers" is being
- * answered about a capability they did not ask for, and reasonably reads it as
- * the marketplace being broken.
+ * narrower thing than configuring an arbitrary server: the entry, endpoint,
+ * transport, and auth recipe come from the checked-in catalog and live probe.
+ * A pasted bearer token can go only to that pinned catalog endpoint and is
+ * stored on the caller-owned row; OAuth is fixed to `per_user`, and credential
+ * reuse can select only a live caller grant bound to the same resource and
+ * catalog policy. The internal `marketplace` compatibility policy is derived,
+ * never stored or accepted from this request, and survives only while the row
+ * still matches the current catalog prescription; explicit saved-row modes and
+ * configuration drift take the strict/general path instead. So somebody who
+ * clicked Connect and is told their
+ * organization "does not allow members to configure MCP servers" is being
+ * answered about a broader capability than they asked for, and reasonably
+ * reads it as the marketplace being broken.
  *
  * Neither sentence promises the grant is coming. `use_existing_only` refusing
  * the marketplace is the deliberate current state, not a gap waiting on a fix:
@@ -441,7 +449,7 @@ async function decidePolicyAndOwnership(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
-  // Internal daemon calls and executor service accounts are not members;
+  // Internal daemon calls and explicit daemon service accounts are not members;
   // they carry no policy and no ownership, matching `ensureMinimumRole`.
   if (!params?.provider) return {};
   const user = params.user;

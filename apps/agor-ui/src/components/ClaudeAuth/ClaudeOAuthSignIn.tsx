@@ -1,7 +1,7 @@
 import type { AgorClient, ClaudeOAuthStatus } from '@agor-live/client';
 import { CheckCircleOutlined, ExportOutlined, LoadingOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Space, Typography, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 
 const { Text } = Typography;
@@ -9,6 +9,8 @@ const { useToken } = theme;
 
 export interface ClaudeOAuthSignInProps {
   client: AgorClient | null;
+  /** Whether the parent currently resolves this user to a subscription login. */
+  connected?: boolean;
   /** Fired once the daemon confirms tokens were saved for this user. */
   onVerified: () => void;
   /**
@@ -31,6 +33,7 @@ export interface ClaudeOAuthSignInProps {
  */
 export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   client,
+  connected = false,
   onVerified,
   autoStart = true,
 }: ClaudeOAuthSignInProps) {
@@ -40,6 +43,18 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const wasConnected = useRef(connected);
+
+  // A successful attempt remains queryable for an hour. When logout changes the
+  // persisted method, do not keep rendering that stale success as connected.
+  useEffect(() => {
+    if (wasConnected.current && !connected) {
+      setStatus({ phase: 'idle' });
+      setCode('');
+      setSubmitError(null);
+    }
+    wasConnected.current = connected;
+  }, [connected]);
 
   const service = useMemo(
     () =>
@@ -92,7 +107,11 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
       try {
         const existing = (await run(() => service.find())) as ClaudeOAuthStatus;
         if (cancelled) return;
-        if (existing.phase === 'awaiting_code' || (existing.phase === 'success' && autoStart)) {
+        if (
+          existing.phase === 'awaiting_code' ||
+          existing.phase === 'exchanging' ||
+          (existing.phase === 'success' && autoStart)
+        ) {
           setStatus(existing);
           return;
         }
@@ -105,6 +124,33 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
       cancelled = true;
     };
   }, [service, requestLink, autoStart, run]);
+
+  // A remounted pane can adopt an exchange whose create request is still owned
+  // by the previous component/tab. No service event is published for this
+  // caller-private control plane, so poll only while that adopted phase is
+  // active and render the terminal result when the owner request completes.
+  useEffect(() => {
+    if (!service || status.phase !== 'exchanging') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const latest = (await run(() => service.find())) as ClaudeOAuthStatus;
+        if (cancelled) return;
+        setStatus(latest);
+        if (latest.phase === 'exchanging') timer = setTimeout(poll, 500);
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 500);
+      }
+    };
+
+    timer = setTimeout(poll, 500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [service, status.phase, run]);
 
   const submitCode = useCallback(async () => {
     if (!service || !code.trim()) return;

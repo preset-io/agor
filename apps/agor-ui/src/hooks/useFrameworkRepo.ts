@@ -1,8 +1,13 @@
-import type { Repo } from '@agor-live/client';
+import {
+  type Repo,
+  TEAMMATE_FRAMEWORK_REPO_SLUG,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+} from '@agor-live/client';
 import { useMemo } from 'react';
 
-export const FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
-export const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
+/** Back-compatible UI aliases for the domain-owned framework identifiers. */
+export const FRAMEWORK_REPO_SLUG = TEAMMATE_FRAMEWORK_REPO_SLUG;
+export const FRAMEWORK_REPO_URL = TEAMMATE_FRAMEWORK_REPO_URL;
 
 /**
  * Match predicate with priority ordering:

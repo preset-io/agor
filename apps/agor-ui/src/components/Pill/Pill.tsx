@@ -1235,7 +1235,7 @@ export const ChannelPill: React.FC<ChannelPillProps> = ({ channelType, channelNa
   };
 
   return (
-    <Tag icon={getIcon()} color={PILL_COLORS.success} style={style}>
+    <Tag icon={getIcon()} color={PILL_COLORS.success} truncate title={channelName} style={style}>
       {channelName}
     </Tag>
   );

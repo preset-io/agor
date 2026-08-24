@@ -32,6 +32,7 @@
 
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
+  generateId,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
@@ -40,189 +41,38 @@ import {
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  CodexDeviceAuthAttemptID,
   CodexDeviceAuthStatus,
   TenantID,
   UserID,
 } from '@agor/core/types';
-import { codexIdTokenClaims } from '../utils/codex-auth-file.js';
+import {
+  exchangeCodexDeviceAuthorization,
+  pollCodexDeviceAuthorization,
+} from './codex-device-auth-flow.js';
+import {
+  buildDeviceAuthJson,
+  CODEX_AUTH_ISSUER,
+  codexDeviceAuthProvider,
+  DEVICE_CODE_LIFETIME_MS,
+  DeviceAuthProviderError,
+  requestUserCode,
+  type UserCodeGrant,
+} from './codex-device-auth-provider.js';
+
+export { buildDeviceAuthJson } from './codex-device-auth-provider.js';
+
 import {
   type AppLike,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
-const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
-/** Codex CLI's public OAuth client id (codex-rs/login/src/auth/manager.rs). */
-const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-/** Server-side validity window for a device code (fixed by OpenAI). */
-const DEVICE_CODE_LIFETIME_MS = 15 * 60 * 1000;
-const DEFAULT_POLL_INTERVAL_S = 5;
-const MIN_POLL_INTERVAL_MS = 2_000;
-const FETCH_TIMEOUT_MS = 15_000;
-
 const UNAVAILABLE_HINT =
   'Your ChatGPT account does not allow device-code sign-in. Personal accounts can turn it on under ChatGPT Settings → Security → "Device code authorization for Codex"; workspace accounts need an admin to enable it. You can also paste an auth.json or use an API key instead.';
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Provider failure with an explicit retry disposition, so callers never have
- * to infer transient-vs-terminal from message text. 5xx are transient (a
- * provider blip must not kill a 15-minute approval window); non-pending 4xx
- * and contract breaks (missing response fields) are terminal.
- */
-class DeviceAuthProviderError extends Error {
-  constructor(
-    readonly disposition: 'transient' | 'terminal',
-    message: string
-  ) {
-    super(message);
-  }
-}
-
-function providerStatusError(endpoint: string, status: number): DeviceAuthProviderError {
-  return new DeviceAuthProviderError(
-    status >= 500 ? 'transient' : 'terminal',
-    `${endpoint} failed with status ${status}`
-  );
-}
-
-interface UserCodeGrant {
-  deviceAuthId: string;
-  userCode: string;
-  intervalMs: number;
-}
-
-/** `unavailable` maps the server's refusal to issue a code (gated account/workspace). */
-async function requestUserCode(): Promise<UserCodeGrant | 'unavailable'> {
-  const res = await fetchWithTimeout(`${CODEX_AUTH_ISSUER}/api/accounts/deviceauth/usercode`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ client_id: CODEX_CLIENT_ID }),
-  });
-  if (res.status === 404 || res.status === 403) return 'unavailable';
-  if (!res.ok) throw providerStatusError('usercode request', res.status);
-
-  const body = (await res.json()) as Record<string, unknown>;
-  const deviceAuthId = body.device_auth_id;
-  const userCode = body.user_code ?? body.usercode;
-  if (typeof deviceAuthId !== 'string' || typeof userCode !== 'string') {
-    throw new DeviceAuthProviderError('terminal', 'usercode response missing expected fields');
-  }
-  // The server sends `interval` as a decimal string (seconds).
-  const intervalSeconds = Number.parseInt(String(body.interval ?? ''), 10);
-  const intervalMs = Math.max(
-    (Number.isFinite(intervalSeconds) && intervalSeconds > 0
-      ? intervalSeconds
-      : DEFAULT_POLL_INTERVAL_S) * 1000,
-    MIN_POLL_INTERVAL_MS
-  );
-  return { deviceAuthId, userCode, intervalMs };
-}
-
-interface ApprovedCode {
-  authorizationCode: string;
-  codeVerifier: string;
-}
-
-/** 403/404 are the server's "authorization pending" signals for this endpoint. */
-async function pollDeviceToken(
-  deviceAuthId: string,
-  userCode: string
-): Promise<ApprovedCode | 'pending'> {
-  const res = await fetchWithTimeout(`${CODEX_AUTH_ISSUER}/api/accounts/deviceauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
-  });
-  if (res.status === 403 || res.status === 404) return 'pending';
-  if (!res.ok) throw providerStatusError('device token poll', res.status);
-
-  const body = (await res.json()) as Record<string, unknown>;
-  const authorizationCode = body.authorization_code;
-  const codeVerifier = body.code_verifier;
-  if (typeof authorizationCode !== 'string' || typeof codeVerifier !== 'string') {
-    // The response contract broke — retrying the same request cannot help.
-    throw new DeviceAuthProviderError('terminal', 'device token response missing expected fields');
-  }
-  return { authorizationCode, codeVerifier };
-}
-
-interface ExchangedTokens {
-  idToken: string;
-  accessToken: string;
-  refreshToken: string;
-}
-
-async function exchangeCodeForTokens(approved: ApprovedCode): Promise<ExchangedTokens> {
-  const res = await fetchWithTimeout(`${CODEX_AUTH_ISSUER}/oauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: approved.authorizationCode,
-      redirect_uri: `${CODEX_AUTH_ISSUER}/deviceauth/callback`,
-      client_id: CODEX_CLIENT_ID,
-      code_verifier: approved.codeVerifier,
-    }).toString(),
-  });
-  if (!res.ok) throw providerStatusError('token exchange', res.status);
-
-  const body = (await res.json()) as Record<string, unknown>;
-  const { id_token, access_token, refresh_token } = body;
-  if (
-    typeof id_token !== 'string' ||
-    typeof access_token !== 'string' ||
-    typeof refresh_token !== 'string'
-  ) {
-    throw new DeviceAuthProviderError(
-      'terminal',
-      'token exchange response missing expected fields'
-    );
-  }
-  return { idToken: id_token, accessToken: access_token, refreshToken: refresh_token };
-}
-
-/**
- * The exchange runs once, AFTER the user already approved — a provider blip
- * here would otherwise force a whole new code+approval round-trip. One retry
- * on a transient failure mirrors the poll loop's own policy.
- */
-async function exchangeWithOneRetry(approved: ApprovedCode): Promise<ExchangedTokens> {
-  try {
-    return await exchangeCodeForTokens(approved);
-  } catch (err) {
-    if (err instanceof DeviceAuthProviderError && err.disposition === 'terminal') throw err;
-    return exchangeCodeForTokens(approved);
-  }
-}
-
-/** Codex-format auth.json content for a fresh ChatGPT login. */
-export function buildDeviceAuthJson(tokens: ExchangedTokens): string {
-  const { accountId } = codexIdTokenClaims(tokens.idToken);
-  const authDotJson = {
-    auth_mode: 'chatgpt',
-    OPENAI_API_KEY: null,
-    tokens: {
-      id_token: tokens.idToken,
-      access_token: tokens.accessToken,
-      refresh_token: tokens.refreshToken,
-      account_id: accountId ?? null,
-    },
-    last_refresh: new Date().toISOString(),
-  };
-  return `${JSON.stringify(authDotJson, null, 2)}\n`;
-}
-
 interface DeviceAuthAttempt {
+  attemptId: CodexDeviceAuthAttemptID;
   key: string;
   userId: UserID;
   tenantId: TenantID | string;
@@ -246,7 +96,7 @@ const TERMINAL_ATTEMPT_TTL_MS = 60 * 60 * 1000;
 
 function statusOf(attempt: DeviceAuthAttempt | undefined): CodexDeviceAuthStatus {
   if (!attempt) return { phase: 'idle' };
-  const base: CodexDeviceAuthStatus = { phase: attempt.phase };
+  const base: CodexDeviceAuthStatus = { phase: attempt.phase, attemptId: attempt.attemptId };
   // userCode is empty while the slot is reserved but the provider has not
   // answered yet — don't surface a blank code for that sub-second window.
   if (attempt.phase === 'pending' && attempt.userCode) {
@@ -301,29 +151,41 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       return;
     }
 
-    let approved: ApprovedCode | 'pending';
-    try {
-      approved = await pollDeviceToken(attempt.deviceAuthId, attempt.userCode);
-    } catch (err) {
-      // Network blips and provider 5xx are transient — keep polling until the
-      // code expires. Only a definitive rejection or contract break ends the
-      // attempt early.
-      if (err instanceof DeviceAuthProviderError && err.disposition === 'terminal') {
-        finish(attempt, 'error', 'ChatGPT sign-in failed — get a new code and try again.');
-        return;
-      }
-      scheduleNext(attempt);
-      return;
-    }
+    const polled = await pollCodexDeviceAuthorization(codexDeviceAuthProvider, {
+      deviceAuthId: attempt.deviceAuthId,
+      userCode: attempt.userCode,
+      intervalMs: attempt.intervalMs,
+    });
     if (attempt.cancelled) return;
 
-    if (approved === 'pending') {
+    if (polled.outcome === 'retry') {
+      attempt.intervalMs = polled.intervalMs;
       scheduleNext(attempt);
+      return;
+    }
+    if (polled.outcome === 'failed') {
+      finish(attempt, 'error', 'ChatGPT sign-in failed — get a new code and try again.');
+      return;
+    }
+    if (polled.outcome === 'denied') {
+      finish(attempt, 'error', 'ChatGPT sign-in was denied — get a new code and try again.');
+      return;
+    }
+    if (polled.outcome === 'expired') {
+      finish(attempt, 'expired', 'The sign-in code expired — get a new one and try again.');
       return;
     }
 
     try {
-      const tokens = await exchangeWithOneRetry(approved);
+      const exchanged = await exchangeCodexDeviceAuthorization(
+        codexDeviceAuthProvider,
+        polled.approved
+      );
+      if (exchanged.outcome === 'failed') {
+        finish(attempt, 'error', 'Signing in succeeded but saving the login failed — try again.');
+        return;
+      }
+      const { tokens } = exchanged;
       // Ownership check in addition to the cancelled flag: a replacement
       // attempt registered during the exchange must not have its freshly
       // written credential clobbered by this older one.
@@ -352,9 +214,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       // persistVerifiedCodexAuth, and everything else is service/DB failures
       // whose messages help operators.
       console.error(
-        `[CodexDeviceAuth] Finalizing sign-in failed: ${
-          err instanceof Error ? `${err.constructor.name}: ${err.message}` : 'unknown error'
-        }`
+        `[CodexDeviceAuth] Finalizing sign-in failed: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
       );
       finish(
         attempt,
@@ -422,6 +282,7 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       cancelAttempt(key);
       pruneFinishedAttempts();
       const attempt: DeviceAuthAttempt = {
+        attemptId: generateId() as CodexDeviceAuthAttemptID,
         key,
         userId,
         tenantId,
@@ -471,6 +332,17 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
       const { key } = await requireContext(params);
       pruneFinishedAttempts();
       return statusOf(attempts.get(key));
+    },
+
+    async remove(id: unknown, params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
+      const { key } = await requireContext(params);
+      if (typeof id !== 'string' || !id) {
+        throw new BadRequest('The Codex device sign-in attempt id is required.');
+      }
+      if (attempts.get(key)?.attemptId !== id) return statusOf(attempts.get(key));
+      cancelAttempt(key);
+      attempts.delete(key);
+      return { phase: 'idle' };
     },
   };
 }

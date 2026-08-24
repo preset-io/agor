@@ -211,8 +211,6 @@ export class GeminiTool implements ITool {
 
           if (streamingCallbacks) {
             streamingCallbacks.onStreamStart(currentMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.ASSISTANT,
               timestamp: new Date().toISOString(),
             });

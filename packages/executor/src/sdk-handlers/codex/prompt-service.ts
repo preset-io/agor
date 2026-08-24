@@ -58,6 +58,7 @@ import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
+import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 type CodexSdkReasoningEffort = NonNullable<
@@ -412,7 +413,9 @@ export class CodexPromptService {
    * `env` object is provided, so we forward all other vars explicitly.
    *
    * API-key mode omits `env` entirely so the SDK inherits `process.env`
-   * normally and injects `CODEX_API_KEY` itself.
+   * normally and injects `CODEX_API_KEY` itself. Agor's product policy is
+   * applied here, at the one SDK launch boundary shared by every Codex
+   * executor topology.
    */
   private buildCodexOptions(
     apiKey: string | undefined,
@@ -424,7 +427,7 @@ export class CodexPromptService {
     const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      ...(config ? { config } : {}),
+      config: applyAgorCodexLaunchPolicy(config),
     };
 
     if (useSubscription) {

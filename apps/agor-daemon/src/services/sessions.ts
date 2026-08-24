@@ -20,6 +20,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
   SessionRelationshipRepository,
@@ -35,6 +36,7 @@ import {
   Conflict,
   Forbidden,
   NotAuthenticated,
+  NotFound,
 } from '@agor/core/feathers';
 import {
   formatModelToolMismatchWarning,
@@ -1279,57 +1281,61 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     id: import('@agor/core/types').NullableId,
     params?: SessionParams
   ): Promise<Session | Session[]> {
-    if (id === null) {
-      const sessions = (await super.find(params)) as Session[];
-      const results: Session[] = [];
-
-      for (const session of sessions) {
-        const deleted = await this.removeOne(session.session_id, params, false);
-        results.push(deleted);
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const selected = id === null ? ((await super.find(params)) as Session[]) : null;
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const sessionRepo = new SessionRepository(scoped);
+      const taskRepo = new TaskRepository(scoped);
+      if (selected) {
+        const results: Session[] = [];
+        for (const session of selected) {
+          results.push(
+            await this.removeOne(session.session_id, params, false, sessionRepo, taskRepo)
+          );
+        }
+        return results;
       }
 
-      return results;
-    }
-
-    // "Switch tool" (`chooseAgenticTool` in the UI) removes the session it's
-    // replacing as an implementation detail of swapping — never a user-visible
-    // delete. It's only offered on a session with zero tasks at the moment the
-    // swap is *initiated*, but on a multiplayer canvas a task can land on that
-    // same session (another tab, a collaborator, an MCP `agor_sessions_prompt`
-    // call) before the swap *completes*. Callers performing that specific swap
-    // mark the request via `query._swapReplace`; a normal user-intentional
-    // delete of a session with history is unaffected and still allowed.
-    //
-    // The guard lives here at the top level (not in `removeOne`) so it only
-    // gates the replaced session itself. The cascade into children runs through
-    // `removeOne`, which never re-evaluates the marker — a child that has gained
-    // a task can't abort a legitimate cascade partway through.
-    if ((params?.query as { _swapReplace?: boolean } | undefined)?._swapReplace) {
-      const taskCount = await this.taskRepo.countBySession(String(id));
-      if (taskCount > 0) {
-        throw new Conflict(
-          `Cannot complete tool switch: session ${id} has gained ${taskCount} task(s) since the switch ` +
-            'was initiated. Refresh and try again — the in-flight work has not been touched.'
-        );
+      // "Switch tool" (`chooseAgenticTool` in the UI) removes the session it's
+      // replacing as an implementation detail of swapping. Keep its stronger
+      // zero-history invariant distinct from the general unfinished-task guard
+      // in removeOne: terminal history may be deliberately deleted, but live
+      // executor leases may never be orphaned by a metadata cascade.
+      if ((params?.query as { _swapReplace?: boolean } | undefined)?._swapReplace) {
+        const taskCount = await taskRepo.countBySession(String(id));
+        if (taskCount > 0) {
+          throw new Conflict(
+            `Cannot complete tool switch: session ${id} has gained ${taskCount} task(s) since the switch ` +
+              'was initiated. Refresh and try again — the in-flight work has not been touched.'
+          );
+        }
       }
-    }
 
-    return this.removeOne(String(id), params, false);
+      return this.removeOne(String(id), params, false, sessionRepo, taskRepo);
+    });
   }
 
   private async removeOne(
     id: string,
     params: SessionParams | undefined,
-    emitRemoved: boolean
+    emitRemoved: boolean,
+    sessionRepo: SessionRepository,
+    taskRepo: TaskRepository
   ): Promise<Session> {
-    const session = await this.get(id, params);
-    const children = await this.sessionRepo.findChildren(id);
+    const session = await sessionRepo.findById(id);
+    if (!session) throw new NotFound(`Session not found: ${id}`);
+    if (await taskRepo.hasNonterminalForSession(session.session_id)) {
+      throw new Conflict(
+        `Cannot delete session ${session.session_id} while it has unfinished tasks. Stop them first.`
+      );
+    }
+    const children = await sessionRepo.findChildren(id);
 
     for (const child of children) {
-      await this.removeOne(child.session_id, params, true);
+      await this.removeOne(child.session_id, params, true, sessionRepo, taskRepo);
     }
 
-    await this.sessionRepo.delete(id);
+    await sessionRepo.delete(id);
 
     if (emitRemoved) {
       emitServiceEvent(this.app, {

@@ -53,7 +53,11 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import {
+  minimumBranchAccessCondition,
+  sessionBranchAccessCondition,
+  visibleBranchAccessCondition,
+} from './branch-access';
 import { GroupRepository } from './groups';
 import { deepMerge } from './merge-utils';
 
@@ -213,6 +217,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       data: {
         path: branch.path!,
         base_ref: branch.base_ref,
+        base_remote_url: branch.base_remote_url,
         base_sha: branch.base_sha,
         last_commit_sha: branch.last_commit_sha,
         tracking_branch: branch.tracking_branch,
@@ -446,7 +451,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
     const rows = await select(this.db, columns)
       .from(branches)
-      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      .where(
+        and(eq(branches.archived, false), or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      )
       .all();
 
     return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({
@@ -469,6 +476,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     repo_id?: UUID;
     archived?: boolean;
     userId?: UUID;
+    minimumPermission?: 'view' | 'session';
     limit?: number;
     offset?: number;
   }): Promise<Branch[]> {
@@ -498,7 +506,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     const conditions = [or(...teammateKindConditions, hasEnabledSchedule) ?? sql`false`];
     if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
     if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
-    if (filter?.userId) conditions.push(visibleBranchAccessCondition(this.db, filter.userId));
+    if (filter?.userId) {
+      conditions.push(
+        filter.minimumPermission === 'session'
+          ? sessionBranchAccessCondition(this.db, filter.userId)
+          : visibleBranchAccessCondition(this.db, filter.userId)
+      );
+    }
 
     const baseQuery = select(this.db, getTableColumns(branches)).from(branches);
     const query = filter?.userId
@@ -1294,6 +1308,54 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       result.push(this.rowToBranch(row, baseUrl));
     }
     return result;
+  }
+
+  /** Find a branch by ID when the caller meets the requested point-access policy. */
+  async findAccessibleById(
+    branchId: string,
+    userId: UUID,
+    options: {
+      /** Minimum app-layer permission required when access enforcement is enabled. */
+      minimumPermission?: NonNullable<Branch['others_can']>;
+      /** Disable the point check when branch RBAC is disabled instance-wide. */
+      enforceAccess?: boolean;
+    } = {}
+  ): Promise<Branch | null> {
+    if (options.enforceAccess === false) return this.findById(branchId);
+
+    const minimumPermission = options.minimumPermission ?? 'view';
+    const accessCondition = minimumBranchAccessCondition(this.db, userId, minimumPermission);
+    try {
+      const fullId = await resolveByShortIdPrefix(branchId, 'Branch', async (pattern) => {
+        const rows = await select(this.db, { branch_id: branches.branch_id })
+          .from(branches)
+          .leftJoin(
+            branchOwners,
+            and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+          )
+          .where(and(like(branches.branch_id, pattern), accessCondition))
+          .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+          .all();
+        return rows.map((row: { branch_id: string }) => row.branch_id);
+      });
+
+      // Reapply the authorization predicate on retrieval. Besides keeping the
+      // point lookup self-contained, this fails closed if access changes after
+      // short-ID resolution but before the row is read.
+      const row = await select(this.db, getTableColumns(branches))
+        .from(branches)
+        .leftJoin(
+          branchOwners,
+          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
+        )
+        .where(and(eq(branches.branch_id, fullId), accessCondition))
+        .one();
+      if (!row) return null;
+      return this.rowToBranch(row as BranchRow, await getBaseUrl());
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw error;
+    }
   }
 
   /**

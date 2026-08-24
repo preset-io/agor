@@ -160,8 +160,11 @@ export class BoardObjectsService {
   /**
    * Get single board object
    */
-  async get(id: string, _params?: BoardObjectParams): Promise<BoardEntityObject> {
-    const object = await this.boardObjectRepo.findByObjectId(id);
+  async get(id: string, params?: BoardObjectParams): Promise<BoardEntityObject> {
+    const visibleToUserId = params?._agorSqlBoardAccessUserId;
+    const object = visibleToUserId
+      ? await this.boardObjectRepo.findVisibleByObjectId(visibleToUserId, id)
+      : await this.boardObjectRepo.findByObjectId(id);
     if (!object) {
       throw new Error(`Board object ${id} not found`);
     }

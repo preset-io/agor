@@ -1,13 +1,18 @@
 import type { AgorClient } from '@agor-live/client';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
-export interface StartTeammateBootstrapSessionInput<TSessionConfig> {
+export interface StartTeammateBootstrapSessionInput<
+  TSessionConfig,
+  TInitialization extends { sessionId: string },
+> {
   client: AgorClient | null;
   branchId: string;
   boardId: string;
   sessionConfig: TSessionConfig;
-  onCreateSession: (config: TSessionConfig, boardId: string) => Promise<string | null>;
+  onCreateSession: (config: TSessionConfig, boardId: string) => Promise<TInitialization | null>;
   onStatusChange?: (status: string) => void;
+  /** Abort caller-owned stages after an authenticated-identity change. */
+  shouldContinue?: () => boolean;
 }
 
 /**
@@ -17,22 +22,29 @@ export interface StartTeammateBootstrapSessionInput<TSessionConfig> {
  * consistent between onboarding and the Teammate create dialog while letting
  * each caller own its own navigation/fallback UI.
  */
-export async function startTeammateBootstrapSession<TSessionConfig>({
+export async function startTeammateBootstrapSession<
+  TSessionConfig,
+  TInitialization extends { sessionId: string },
+>({
   client,
   branchId,
   boardId,
   sessionConfig,
   onCreateSession,
   onStatusChange,
-}: StartTeammateBootstrapSessionInput<TSessionConfig>): Promise<string> {
+  shouldContinue = () => true,
+}: StartTeammateBootstrapSessionInput<TSessionConfig, TInitialization>): Promise<TInitialization> {
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
   onStatusChange?.('Preparing AI teammate worktree…');
   await waitForBranchFilesystemReady(client, branchId);
 
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
   onStatusChange?.('Starting first session…');
-  const sessionId = await onCreateSession(sessionConfig, boardId);
-  if (!sessionId) {
+  const initialization = await onCreateSession(sessionConfig, boardId);
+  if (!shouldContinue()) throw new Error('Teammate setup was cancelled.');
+  if (!initialization) {
     throw new Error('First AI teammate session could not be created.');
   }
 
-  return sessionId;
+  return initialization;
 }

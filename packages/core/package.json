@@ -442,6 +442,12 @@
       "import": "./dist/codex/auth-file.js",
       "require": "./dist/codex/auth-file.cjs"
     },
+    "./codex/credential-file": {
+      "source": "./src/codex/credential-file.ts",
+      "types": "./dist/codex/credential-file.d.ts",
+      "import": "./dist/codex/credential-file.js",
+      "require": "./dist/codex/credential-file.cjs"
+    },
     "./agentic-integrations": {
       "source": "./src/agentic-integrations.ts",
       "types": "./dist/agentic-integrations.d.ts",

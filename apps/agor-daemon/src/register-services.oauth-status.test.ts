@@ -19,7 +19,8 @@ describe('register-services durable OAuth status authority', () => {
   // route asks it rather than deciding for itself.
   it('resolves durable status through the one place that decides it', () => {
     expect(statusBlock).toContain('resolveAuthenticatedServerIds');
-    expect(statusBlock).toContain('requireGrantBinding: isPostgresDatabaseHandle(db)');
+    expect(statusBlock).toContain('requireGrantBinding: true');
+    expect(statusBlock).toContain('isMCPOAuthGrantAuthorizedForServer(');
   });
 
   it('gives the refresh owner and observer the same retryable known-failure response', () => {

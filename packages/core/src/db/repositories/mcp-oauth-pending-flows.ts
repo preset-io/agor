@@ -22,6 +22,7 @@ import {
   executeRaw,
   insert,
   isPostgresDatabase,
+  rawRows,
   select,
   update,
 } from '../database-wrapper';
@@ -29,11 +30,10 @@ import { sanitizeDbError } from '../sanitize-error';
 // This repository is intentionally PostgreSQL-only. Import the concrete table
 // rather than the dialect union so tenant_id remains part of the static type.
 import { mcpOauthPendingFlows } from '../schema.postgres';
-import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertAuthorityFailureCode, lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
-const SAFE_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
 
 export interface MCPOAuthPendingFlowCreate {
   tenantId: string;
@@ -84,12 +84,6 @@ export interface MCPOAuthPendingFlowRecord {
 export type MCPOAuthPendingFlowClaimResult =
   | { outcome: 'claimed'; flow: MCPOAuthPendingFlowRecord }
   | { outcome: 'not_claimed'; flow: MCPOAuthPendingFlowRecord | null };
-
-function rowsOf(result: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
-  const rows = (result as { rows?: unknown[] } | undefined)?.rows;
-  return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
-}
 
 function asDate(value: unknown, field: string): Date {
   const date = value instanceof Date ? value : new Date(String(value));
@@ -159,12 +153,6 @@ function assertStateHash(stateHash: string): void {
   }
 }
 
-function assertFailureCode(failureCode: string): void {
-  if (!SAFE_FAILURE_CODE.test(failureCode)) {
-    throw new RepositoryError('MCP OAuth failure code is invalid');
-  }
-}
-
 function databaseFailure(operation: string, error: unknown): RepositoryError {
   return new RepositoryError(`MCP OAuth pending flow ${operation} failed`, sanitizeDbError(error));
 }
@@ -178,23 +166,15 @@ export class MCPOAuthPendingFlowRepository {
   }
 
   private async lockGrantSubject(subject: MCPOAuthGrantSubject): Promise<void> {
-    const scope = getCurrentTenantDatabaseScope();
-    if (scope?.kind !== 'tenant' || scope.db !== this.db || scope.tenantId !== subject.tenantId) {
-      throw new RepositoryError('MCP OAuth grant-subject lock requires its tenant transaction');
-    }
-    await executeRaw(
+    await lockTenantAuthoritySubject(
       this.db,
-      sql`SELECT pg_advisory_xact_lock(
-        hashtextextended(
-          ${[
-            subject.tenantId,
-            subject.mcpServerId,
-            subject.oauthMode,
-            subject.subjectUserId ?? '<shared>',
-          ].join('\u001f')},
-          0
-        )
-      )`
+      subject.tenantId,
+      [
+        subject.tenantId,
+        subject.mcpServerId,
+        subject.oauthMode,
+        subject.subjectUserId ?? '<shared>',
+      ].join('\u001f')
     );
   }
 
@@ -210,7 +190,7 @@ export class MCPOAuthPendingFlowRepository {
         this.db,
         sql`SELECT nextval('mcp_oauth_grant_generation_seq') AS generation`
       );
-      const generation = Number(rowsOf(result)[0]?.generation);
+      const generation = Number(rawRows(result)[0]?.generation);
       if (!Number.isSafeInteger(generation) || generation <= 0) {
         throw new RepositoryError('MCP OAuth grant generation is invalid');
       }
@@ -371,7 +351,7 @@ export class MCPOAuthPendingFlowRepository {
           RETURNING *
         `
       );
-      const claimedRow = rowsOf(claimed)[0];
+      const claimedRow = rawRows(claimed)[0];
       if (claimedRow) return { outcome: 'claimed', flow: mapRow(claimedRow) };
 
       const observed = await select(this.db)
@@ -399,7 +379,7 @@ export class MCPOAuthPendingFlowRepository {
   /** Provider returned an authorization error before an exchange was attempted. */
   async failPendingForCallback(stateHash: string, failureCode: string): Promise<boolean> {
     assertStateHash(stateHash);
-    assertFailureCode(failureCode);
+    assertAuthorityFailureCode(failureCode, 'MCP OAuth');
     try {
       await this.bindCallbackStateFingerprint(stateHash);
       const result = await executeRaw(
@@ -419,7 +399,7 @@ export class MCPOAuthPendingFlowRepository {
           RETURNING attempt_id
         `
       );
-      return rowsOf(result).length > 0;
+      return rawRows(result).length > 0;
     } catch (error) {
       throw databaseFailure('authorization failure transition', error);
     }
@@ -474,7 +454,7 @@ export class MCPOAuthPendingFlowRepository {
     if (status !== 'succeeded' && !failureCode) {
       throw new RepositoryError('Terminal MCP OAuth failure requires a failure code');
     }
-    if (failureCode) assertFailureCode(failureCode);
+    if (failureCode) assertAuthorityFailureCode(failureCode, 'MCP OAuth');
     try {
       const result = await executeRaw(
         this.db,
@@ -493,7 +473,7 @@ export class MCPOAuthPendingFlowRepository {
           RETURNING attempt_id
         `
       );
-      return rowsOf(result).length > 0;
+      return rawRows(result).length > 0;
     } catch (error) {
       throw databaseFailure(`${status} transition`, error);
     }

@@ -16,8 +16,9 @@
 #   docker compose -p agor-postgres-support up -d
 #   docker compose -p agor-main up -d
 #
-# PostgreSQL (optional - for multi-user or production-like setup):
-#   docker compose --profile postgres up
+# PostgreSQL (optional - for database/schema parity):
+#   docker compose -f docker-compose.yml -f docker-compose.override.postgres.yml \
+#     --profile postgres up
 #
 # Or set in .env file:
 #   COMPOSE_PROFILES=postgres
@@ -47,11 +48,11 @@
 #    - Database stored in ~/.agor/agor.db (inside container volume)
 #    - Lightweight, perfect for single-user development
 #
-# 2. PostgreSQL Mode (with --profile postgres):
+# 2. PostgreSQL Mode (with the PostgreSQL overlay + --profile postgres):
 #    - PostgreSQL container runs automatically
 #    - Database in postgres-data volume
-#    - Better for multi-user scenarios or testing production setup
-#    - Set DATABASE_URL or it auto-connects to postgres:5432
+#    - Exercises PostgreSQL-specific behavior and row-level-security policies
+#    - The overlay sets AGOR_DB_DIALECT and DATABASE_URL
 #
 # ==============================================================================
 # Configuration
@@ -107,6 +108,10 @@ services:
 
       # Daemon configuration
       - NODE_ENV=development
+      # Exact triple gate for the deliberately fixed development-only admin.
+      # Production Compose files do not carry these defaults.
+      - AGOR_ADMIN_PASSWORD=admin
+      - AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=${DAEMON_HOST:-0.0.0.0}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}
@@ -126,9 +131,9 @@ services:
       # Public, browser-facing base URL used in Slack/GitHub/email links.
       - AGOR_BASE_URL=${AGOR_BASE_URL:-}
 
-      # Database configuration
-      # AUTO-DETECT: If postgres container is running, use PostgreSQL; otherwise SQLite
-      # This allows `docker compose --profile postgres up` to just work!
+      # Database configuration. Activating the Compose `postgres` profile only
+      # starts that service; select a PostgreSQL overlay or set both variables
+      # explicitly to make the daemon use it.
       - AGOR_DB_DIALECT=${AGOR_DB_DIALECT:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-}
 
@@ -162,6 +167,10 @@ services:
       # persistent private home inside the sandbox. Default (unset/shared) uses
       # the daemon user's home.
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+      # Optional PostgreSQL/RBAC development fixtures. This must be forwarded
+      # explicitly: --env-file supplies Compose interpolation values but does
+      # not inject arbitrary variables into the container by itself.
+      - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-}
 
       # Instance identification (optional - displayed in UI navbar)
       - INSTANCE_LABEL=${INSTANCE_LABEL:-}
@@ -227,8 +236,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Init SQL is baked into docker/postgres-dev.Dockerfile rather than
-      # bind-mounted because branch worktrees may be group/private under Unix
-      # isolation, making host files unreadable to the postgres container.
+      # bind-mounted because a checkout may carry restrictive host permissions
+      # or ACLs that make the source file unreadable to the postgres container.
     healthcheck:
       # Only gate on PostgreSQL accepting connections. Agor owns schema creation
       # through Drizzle migrations during daemon startup; checking for the

@@ -9,6 +9,15 @@ import { ScrollTable } from '../../components/ScrollTable';
 
 Agor integrates with multiple AI coding agents. Each SDK has different capabilities based on their native features and API design.
 
+> **Codex subagent policy:** Agor disables Codex's native multi-agent feature for every
+> Agor-launched Codex process with the per-process SDK override
+> `features.multi_agent=false`. Agor does not edit `~/.codex/config.toml`, and the
+> override leaves unrelated user, project, model, and feature configuration intact. Use
+> [Agor sessions and subsessions](/guide/sessions) for delegation so child work, genealogy,
+> status, and callbacks remain observable. Agor's version-aligned Codex package pins an
+> SDK/CLI pair that supports this switch; an incompatible CLI configuration fails the Task
+> rather than silently enabling native subagents.
+
 ## Feature Matrix
 
 <ScrollTable>

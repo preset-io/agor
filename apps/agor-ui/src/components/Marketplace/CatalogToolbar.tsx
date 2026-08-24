@@ -11,19 +11,7 @@
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { SearchOutlined } from '@ant-design/icons';
-import {
-  Card,
-  Col,
-  Input,
-  Row,
-  Segmented,
-  Select,
-  Space,
-  Switch,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Card, Col, Input, Row, Segmented, Select, Space, Typography, theme } from 'antd';
 import { memo } from 'react';
 import {
   ALL_CATEGORIES,
@@ -47,14 +35,12 @@ const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
 export interface CatalogToolbarProps {
   category?: MCPCatalogCategory;
   capability?: string;
-  connectableOnly: boolean;
   sort: MCPCatalogSort;
   /** The active search term. */
   search: string;
   onSearchChange: (value: string) => void;
   onCategoryChange: (value?: MCPCatalogCategory) => void;
   onCapabilityChange: (value?: string) => void;
-  onConnectableOnlyChange: (value: boolean) => void;
   onSortChange: (value: MCPCatalogSort) => void;
   /** `null` while the unfiltered catalog size is still unknown. */
   matchSummary: { matched: number; total: number } | null;
@@ -63,13 +49,11 @@ export interface CatalogToolbarProps {
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   category,
   capability,
-  connectableOnly,
   sort,
   search,
   onSearchChange,
   onCategoryChange,
   onCapabilityChange,
-  onConnectableOnlyChange,
   onSortChange,
   matchSummary,
 }) => {
@@ -108,27 +92,13 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
               options={CAPABILITY_OPTIONS}
             />
           </Col>
-          <Col flex="none">
-            <Space size={token.marginXS}>
-              {/* Named for what it removes, because what it keeps includes
-                  endpoints nobody has checked yet. Servers that sign the user
-                  in are no longer among the removed: they connect, and the
-                  sign-in happens afterwards. What is left to remove is the
-                  servers wanting an API key, which the marketplace cannot
-                  set up at all. */}
-              <Tooltip title="Hides servers Agor knows need an API key, which cannot be set up here. Servers you sign into stay, and so do endpoints nobody has checked — connecting is what checks them.">
-                <Text type="secondary" style={{ cursor: 'help' }}>
-                  Hide key-only
-                </Text>
-              </Tooltip>
-              <Switch
-                size="small"
-                checked={connectableOnly}
-                onChange={onConnectableOnlyChange}
-                aria-label="Hide servers known to need an API key"
-              />
-            </Space>
-          </Col>
+          {/* The "Hide key-only" switch stood here. It hid the entries the
+              marketplace could not install, which since the API-key field is
+              none of them: `CONNECTABLE_AUTH_TYPES` now names every stated auth
+              type, so the switch removed nothing from any catalog the loader
+              would serve. A control that provably cannot change the result set
+              is worse than no control — it reads as a filter that is broken.
+              What it used to distinguish, the card still says per entry. */}
           <Col flex="none">
             <Select<MCPCatalogSort>
               value={sort}

@@ -1,6 +1,6 @@
 import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../utils/spawn-executor.js';
+import { requestExecutor } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
 
 const impersonationMocks = vi.hoisted(() => ({
@@ -12,10 +12,16 @@ vi.mock('../utils/executor-delegated-home.js', () => ({
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
 }));
+
+function createApp() {
+  return {
+    get: () => ({}),
+    sessionTokenService: { generateCommandToken: vi.fn(async () => 'user-token') },
+  } as never;
+}
 
 describe('FileService executor failures', () => {
   beforeEach(() => {
@@ -24,14 +30,14 @@ describe('FileService executor failures', () => {
   });
 
   it('does not report executor failure as an empty repository', async () => {
-    vi.mocked(runExecutorCommand).mockResolvedValue({
+    vi.mocked(requestExecutor).mockResolvedValue({
       success: false,
       error: { code: 'EXECUTOR_FAILED', message: 'executor unavailable' },
     });
     const service = new FileService(
       { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
       { run: vi.fn() } as never,
-      { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
+      createApp()
     );
 
     await expect(
@@ -78,11 +84,11 @@ describe('FileService executor failures', () => {
     'passes the resolved execution-substrate identity through file $operation',
     async ({ invoke, command, data }) => {
       impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue('alice');
-      vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data });
+      vi.mocked(requestExecutor).mockResolvedValue({ success: true, data });
       const service = new FileService(
         { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
         { run: vi.fn() } as never,
-        { get: () => ({}), settings: { authentication: { secret: 'test' } } } as never
+        createApp()
       );
       const params = {
         query: { branch_id: 'branch-1' },
@@ -95,7 +101,7 @@ describe('FileService executor failures', () => {
 
       await runWithTenantContext('tenant-a', () => invoke(service, params));
 
-      expect(runExecutorCommand).toHaveBeenCalledWith(
+      expect(requestExecutor).toHaveBeenCalledWith(
         expect.objectContaining({ command }),
         expect.objectContaining({ delegatedHomeKey: 'alice' })
       );
@@ -112,14 +118,11 @@ describe('FileService executor failures', () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
       return 'alice';
     });
-    vi.mocked(runExecutorCommand).mockImplementation(async () => {
+    vi.mocked(requestExecutor).mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { files: [] } };
     });
-    const service = new FileService({ findById } as never, db, {
-      get: () => ({}),
-      settings: { authentication: { secret: 'test' } },
-    } as never);
+    const service = new FileService({ findById } as never, db, createApp());
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -129,19 +132,12 @@ describe('FileService executor failures', () => {
     );
 
     expect(findById).toHaveBeenCalledOnce();
-    expect(runExecutorCommand).toHaveBeenCalledOnce();
+    expect(requestExecutor).toHaveBeenCalledOnce();
   });
 
   it('fails before repository access when tenant identity is missing', async () => {
     const findById = vi.fn();
-    const service = new FileService(
-      { findById } as never,
-      { run: vi.fn() } as never,
-      {
-        get: () => ({}),
-        settings: { authentication: { secret: 'test' } },
-      } as never
-    );
+    const service = new FileService({ findById } as never, { run: vi.fn() } as never, createApp());
 
     await expect(
       service.find({
@@ -154,15 +150,8 @@ describe('FileService executor failures', () => {
 
   it('reuses the branch authorized by the registered RBAC preload', async () => {
     const findById = vi.fn();
-    vi.mocked(runExecutorCommand).mockResolvedValue({ success: true, data: { files: [] } });
-    const service = new FileService(
-      { findById } as never,
-      { run: vi.fn() } as never,
-      {
-        get: () => ({}),
-        settings: { authentication: { secret: 'test' } },
-      } as never
-    );
+    vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { files: [] } });
+    const service = new FileService({ findById } as never, { run: vi.fn() } as never, createApp());
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -173,6 +162,6 @@ describe('FileService executor failures', () => {
     );
 
     expect(findById).not.toHaveBeenCalled();
-    expect(runExecutorCommand).toHaveBeenCalledOnce();
+    expect(requestExecutor).toHaveBeenCalledOnce();
   });
 });

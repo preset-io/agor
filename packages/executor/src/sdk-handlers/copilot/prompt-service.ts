@@ -36,6 +36,11 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import type { McpToolPermissionIndex } from '../base/mcp-tool-permissions.js';
+import {
+  buildMcpToolPermissionIndex,
+  EMPTY_MCP_TOOL_PERMISSION_INDEX,
+} from '../base/mcp-tool-permissions.js';
 import {
   collectWithheldMcpServers,
   reportWithheldMcpServers,
@@ -157,14 +162,14 @@ export class CopilotPromptService {
     sessionId: SessionID,
     taskId: TaskID,
     mcpToken?: string
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{ servers: Record<string, unknown>; toolPermissions: McpToolPermissionIndex }> {
     const copilotMcpServers: Record<string, unknown> = {};
 
     // Fetch MCP servers for this session
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
       console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
-      return copilotMcpServers;
+      return { servers: copilotMcpServers, toolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX };
     }
     const contextUserId = await resolveContextUserId({
       session,
@@ -182,16 +187,19 @@ export class CopilotPromptService {
         sessionOwnerId: session.created_by,
         onServerWithheld: reporter.onServerWithheld,
       },
-      // The per-server `tools` field below is an include-list, which cannot
-      // express "all but these" without enumerating a tool set that changes
-      // under us. `SessionConfig.excludedTools` is a true exclude-list, but the
-      // SDK forwards it verbatim to the Copilot CLI, which resolves it in
-      // native code against a name it mints itself (`namespacedName`) — a name
-      // Agor cannot construct, and a miss here reads as "allow". The CLI does
-      // document a `<mcp-server-name>(tool-name?)` permission pattern built
-      // from names Agor holds verbatim, but only for its `--deny-tool` flag,
-      // which `SessionConfig` does not expose.
-      { toolFiltering: 'none' }
+      // Still no way to filter the tool list handed to the model: the
+      // per-server `tools` field is an include-list, which cannot say "all but
+      // these" without enumerating a set that changes under us, and
+      // `SessionConfig.excludedTools` is resolved in the CLI's native code
+      // against a name it mints itself (`namespacedName`) that Agor cannot
+      // construct — a miss there reads as "allow".
+      //
+      // Enforcement happens at call time instead. `onPermissionRequest`
+      // delivers every MCP tool call as `kind: 'mcp'` carrying `serverName`
+      // and `toolName` as separate fields, which is an exact match against
+      // `tool_permissions` with nothing to guess. So a gated server no longer
+      // has to be withheld whole.
+      { toolFiltering: 'intercept' }
     );
     await reportWithheldMcpServers(this.messagesRepo, {
       sessionId,
@@ -244,7 +252,10 @@ export class CopilotPromptService {
       console.log(`   📝 [Copilot MCP] Configured Agor MCP server (HTTP)`);
     }
 
-    return copilotMcpServers;
+    return {
+      servers: copilotMcpServers,
+      toolPermissions: buildMcpToolPermissionIndex(mcpServers),
+    };
   }
 
   /**
@@ -309,6 +320,15 @@ export class CopilotPromptService {
       await this.client.start();
       console.log(`✅ [Copilot] Client started`);
 
+      // MCP resolution runs first: it produces the `tool_permissions` index the
+      // permission handler enforces from, and that handler is the only place a
+      // denied tool can be stopped on this runtime.
+      const { servers: mcpServers, toolPermissions } = await this.buildMcpServers(
+        sessionId,
+        taskId || ('' as TaskID),
+        session.mcp_token
+      );
+
       // Build session configuration with interactive permission support
       const permissionDeps: PermissionDeps | undefined =
         this.permissionService && this.tasksService && taskId
@@ -322,6 +342,7 @@ export class CopilotPromptService {
               permissionLocks: this.permissionLocks,
               mcpServerRepo: this.mcpServerRepo,
               sessionMCPRepo: this.sessionMCPServerRepo,
+              mcpToolPermissions: toolPermissions,
             }
           : undefined;
 
@@ -330,11 +351,6 @@ export class CopilotPromptService {
         taskId || ('' as TaskID),
         permissionMode,
         permissionDeps
-      );
-      const mcpServers = await this.buildMcpServers(
-        sessionId,
-        taskId || ('' as TaskID),
-        session.mcp_token
       );
       const systemMessage = await this.buildSystemMessage(sessionId);
 

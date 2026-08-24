@@ -177,6 +177,28 @@ async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydra
   return { handle, messageFindAll };
 }
 
+describe('ReactiveSessionHandle prompt contract', () => {
+  it('returns the admitted Task from the shared sessions helper', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const admittedTask = makeTask('task-admitted', TaskStatus.DISPATCHING);
+    const prompt = vi.fn().mockResolvedValue(admittedTask);
+    Object.assign(mock.client, { sessions: { prompt } });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, {
+      taskHydration: 'none',
+    });
+    await handle.ready();
+
+    const result = await handle.prompt('Fix failing tests', {
+      permissionMode: 'auto',
+    });
+
+    expect(prompt).toHaveBeenCalledWith(SESSION_ID, 'Fix failing tests', {
+      permissionMode: 'auto',
+    });
+    expect(result).toBe(admittedTask);
+  });
+});
+
 describe('ReactiveSessionHandle bootstrap hydration', () => {
   const tasks = [
     makeTask('task-1', TaskStatus.COMPLETED),

@@ -43,7 +43,7 @@ let currentTabName: string | undefined;
  *
  * A transient network blip or a daemon restart drops the socket, but the
  * zellij session is long-lived and survives detach, so the PTY bridge is
- * recoverable: the feathers client auto-reconnects (and re-authenticates)
+ * recoverable: the Feathers client establishes a new authenticated handshake
  * on its own. We keep the PTY + zellij session alive for this long and only
  * exit if the socket has not come back by the time it elapses. Exiting
  * immediately (the old behavior) turned every blip into a dead terminal that
@@ -51,16 +51,22 @@ let currentTabName: string | undefined;
  */
 const DISCONNECT_GRACE_MS = 30_000;
 
+/** Quiet output window that proves the PTY-attached shell finished its first draw. */
+const ZELLIJ_PTY_OUTPUT_QUIET_MS = 250;
+/** Do not hold readiness forever when a terminal produces continuous startup output. */
+const ZELLIJ_PTY_OUTPUT_SETTLE_MAX_MS = 3_000;
+
+/** Bound input received while the PTY-attached shell is starting. */
+const MAX_PENDING_TERMINAL_INPUT_BYTES = 64 * 1024;
+
 /** Active grace controller for the running attach, so cleanup can cancel it. */
 let graceController: ReturnType<typeof createReconnectGrace> | null = null;
 
 /**
- * Whether the socket is not just transport-connected but actually
- * re-authenticated as the executor service — i.e. the daemon will accept our
- * emits again. Set true only after (re)authentication succeeds, false on
- * disconnect. The grace window keys teardown off THIS, not raw
- * `socket.connected`, so a socket that reconnects transport-only but never
- * re-authenticates doesn't keep a dead PTY alive forever.
+ * Whether the daemon accepted the latest authenticated namespace handshake
+ * and will therefore accept our emits. Set true only after `connect`, false on
+ * disconnect. A rejected handshake never emits `connect`, so the grace window
+ * cannot mistake a transport attempt for a healthy terminal bridge.
  */
 let bridgeHealthy = false;
 
@@ -101,6 +107,19 @@ export function buildZellijLaunchArgs(sessionName: string, sessionKnown: boolean
     '1000',
     '--serialization-interval',
     '1',
+    // An isolated per-user home may not have inherited the image's optional
+    // Zellij config yet. Keep first attach usable for both typed input and
+    // server-supplied initial commands instead of letting a startup overlay
+    // consume them.
+    '--show-startup-tips',
+    'false',
+    '--show-release-notes',
+    'false',
+    // The browser is the terminal frontend. Start locked so ordinary input is
+    // delivered to the shell rather than interpreted as a Zellij command;
+    // Ctrl-g still unlocks the normal Zellij controls when needed.
+    '--default-mode',
+    'locked',
   ];
   if (sessionKnown) return ['attach', sessionName, ...lifecycleOptions];
 
@@ -188,6 +207,91 @@ export function createReconnectGrace(opts: {
     cancel: clear,
     isPending: () => timer !== null,
   };
+}
+
+export interface TerminalInputGate {
+  /** Returns false when accepting the input would exceed the startup bound. */
+  write(input: string): boolean;
+  /** Flush pending input in order, then pass all future input straight through. */
+  open(): void;
+  /** Drop pending input during failure/exit cleanup. */
+  clear(): void;
+  isOpen(): boolean;
+}
+
+/**
+ * Preserve input that arrives after the executor joins its terminal room but
+ * before Zellij's PTY-attached shell is ready. This is deliberately bounded:
+ * startup must not become an unbounded client-controlled memory queue.
+ */
+export function createTerminalInputGate(
+  write: (input: string) => void,
+  maxPendingBytes: number = MAX_PENDING_TERMINAL_INPUT_BYTES,
+  shouldPassThroughDuringStartup: (input: string) => boolean = () => false
+): TerminalInputGate {
+  let open = false;
+  let pending: string[] = [];
+  let pendingBytes = 0;
+
+  return {
+    write(input) {
+      if (open || shouldPassThroughDuringStartup(input)) {
+        write(input);
+        return true;
+      }
+      const bytes = Buffer.byteLength(input, 'utf8');
+      if (pendingBytes + bytes > maxPendingBytes) return false;
+      pending.push(input);
+      pendingBytes += bytes;
+      return true;
+    },
+    open() {
+      if (open) return;
+      open = true;
+      const queued = pending;
+      pending = [];
+      pendingBytes = 0;
+      for (const input of queued) write(input);
+    },
+    clear() {
+      pending = [];
+      pendingBytes = 0;
+    },
+    isOpen: () => open,
+  };
+}
+
+/**
+ * Wait until the attached PTY has produced output and then stayed quiet long
+ * enough for its initial Zellij/shell draw to finish. A Zellij control action
+ * can succeed before this data-plane boundary is ready, which previously made
+ * `terminal:ready` race and swallow the first browser command.
+ */
+export async function waitForTerminalOutputSettled(
+  getLastOutputAt: () => number | null,
+  opts: {
+    quietMs?: number;
+    maxWaitMs?: number;
+    pollMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
+): Promise<boolean> {
+  const quietMs = opts.quietMs ?? ZELLIJ_PTY_OUTPUT_QUIET_MS;
+  const maxWaitMs = opts.maxWaitMs ?? ZELLIJ_PTY_OUTPUT_SETTLE_MAX_MS;
+  const pollMs = opts.pollMs ?? 25;
+  const now = opts.now ?? Date.now;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const startedAt = now();
+
+  while (true) {
+    const current = now();
+    const lastOutputAt = getLastOutputAt();
+    if (lastOutputAt !== null && current - lastOutputAt >= quietMs) return true;
+    const elapsed = current - startedAt;
+    if (elapsed >= maxWaitMs) return false;
+    await sleep(Math.min(pollMs, maxWaitMs - elapsed));
+  }
 }
 
 /**
@@ -353,16 +457,15 @@ export async function handleZellijAttach(
   }
 
   try {
-    // Connect to the owning daemon. A transient connection can reauthenticate
-    // only to the same boot; the token's owner fence rejects replica/boot
-    // adoption and the grace timer then tears down this bridge.
+    // Connect to the owning daemon. A transient disconnect can authenticate a
+    // new namespace connection only to the same boot; the token's owner fence
+    // rejects replica/boot adoption and the grace timer tears down this bridge.
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     feathersClient = await createExecutorClient(daemonUrl, payload.sessionToken, {
-      // Fires only after a reconnect RE-AUTHENTICATES (not on raw transport
-      // connect). This is when the daemon will accept our emits again, so it's
-      // the only safe point to mark the bridge healthy, cancel the pending
+      // Fires only after the daemon accepts a reconnect handshake. This is the
+      // only safe point to mark the bridge healthy, cancel the pending
       // teardown, re-join the channel, and re-announce readiness.
-      onReauthenticated: () => {
+      onReconnected: () => {
         bridgeHealthy = true;
         graceController?.onReconnect();
         const s = feathersClient?.io;
@@ -372,7 +475,7 @@ export async function handleZellijAttach(
       },
     });
     _currentUserId = userId;
-    // Initial connect + authenticate already succeeded inside createExecutorClient.
+    // The initial authenticated handshake succeeded inside createExecutorClient.
     bridgeHealthy = true;
 
     console.log(`[zellij.attach] Connected to owner daemon for terminal ${shortId(terminalId)}`);
@@ -384,9 +487,8 @@ export async function handleZellijAttach(
 
     graceController = createReconnectGrace({
       graceMs: DISCONNECT_GRACE_MS,
-      // Key teardown off re-authentication, NOT raw transport connectivity: a
-      // socket can be transport-connected yet unauthenticated (reauth failing),
-      // in which case the bridge is dead and we should still exit.
+      // Key teardown off an accepted namespace connection, not an underlying
+      // transport attempt: a rejected handshake must still let the bridge die.
       isConnected: () => bridgeHealthy,
       onGraceElapsed: () => {
         console.log('[zellij.attach] Reconnect grace elapsed without a healthy bridge — exiting');
@@ -399,13 +501,12 @@ export async function handleZellijAttach(
     });
 
     // A disconnect is recoverable — hold the PTY through a grace window and let
-    // the client's auto-reconnect + re-auth restore the bridge. The teardown is
-    // cancelled in onReauthenticated (above), not on raw `connect`, so a
-    // transport-only reconnect that never re-authenticates still tears down.
+    // the client's authenticated reconnect restore the bridge. The teardown is
+    // cancelled in onReconnected above only after the namespace is accepted.
     socket.on('disconnect', (reason: string) => {
       bridgeHealthy = false;
       console.log(
-        `[zellij.attach] Socket disconnected: ${reason} — holding PTY for ${DISCONNECT_GRACE_MS}ms pending re-auth`
+        `[zellij.attach] Socket disconnected: ${reason} — holding PTY for ${DISCONNECT_GRACE_MS}ms pending reconnect`
       );
       graceController?.onDisconnect();
     });
@@ -465,9 +566,9 @@ export async function handleZellijAttach(
     const sessionKnown = await isZellijSessionKnown(sessionName, cwd, zellijEnv);
     const zellijArgs = buildZellijLaunchArgs(sessionName, sessionKnown);
 
-    // Zellij will use ~/.config/zellij/config.kdl by default
-    // The docker entrypoint copies Agor's default config there on user creation
-    // Users can customize their config as needed
+    // Zellij will use ~/.config/zellij/config.kdl by default. Users can
+    // customize it; the launch arguments above retain only Agor's attachment
+    // lifecycle and first-input invariants for empty/isolated homes.
 
     console.log(`[zellij.attach] Spawning PTY: zellij ${zellijArgs.join(' ')}`);
     console.log(`[zellij.attach] CWD: ${cwd}, Size: ${cols}x${rows}`);
@@ -496,13 +597,37 @@ export async function handleZellijAttach(
     const outputCoalescer = createOutputCoalescer((data) => {
       socket.emit('terminal:output', { userId, terminalId, data });
     });
-    pty.onData((chunk) => outputCoalescer.push(chunk));
+    // Terminal emulators answer Zellij's OSC/CSI capability queries through
+    // the same input stream as keystrokes. Pass those ESC-prefixed responses
+    // through during startup while retaining ordinary user/initial-command
+    // input until the first complete Zellij frame is visible.
+    const inputGate = createTerminalInputGate(
+      (input) => pty.write(input),
+      MAX_PENDING_TERMINAL_INPUT_BYTES,
+      (input) => input.startsWith('\u001b')
+    );
+    let lastPtyOutputAt: number | null = null;
+    let startupOutputTail = '';
+    let sawCompleteZellijFrame = false;
+    pty.onData((chunk) => {
+      lastPtyOutputAt = Date.now();
+      if (!sawCompleteZellijFrame) {
+        startupOutputTail = `${startupOutputTail}${chunk}`.slice(-16 * 1024);
+        // `--default-mode locked` renders this action in Zellij's standard
+        // status bar only after its terminal capability handshake and pane
+        // frame are complete. Custom status bars fall back to the bounded
+        // readiness deadline below.
+        sawCompleteZellijFrame = startupOutputTail.includes('UNLOCK');
+      }
+      outputCoalescer.push(chunk);
+    });
 
     // Handle PTY exit
     pty.onExit(({ exitCode, signal }) => {
       console.log(`[zellij.attach] PTY exited: code=${exitCode}, signal=${signal}`);
       // Emit any buffered tail before the socket tears down.
       outputCoalescer.dispose();
+      inputGate.clear();
       ptyProcess = null;
 
       // Notify daemon that terminal ended
@@ -536,7 +661,11 @@ export async function handleZellijAttach(
     // Listen for input from browser via channel
     socket.on('terminal:input', (data: { userId: string; terminalId: string; input: string }) => {
       if (data.userId === userId && data.terminalId === terminalId && ptyProcess) {
-        ptyProcess.write(data.input);
+        if (!inputGate.write(data.input)) {
+          console.warn(
+            `[zellij.attach] Dropping terminal input while startup buffer is full for ${shortId(terminalId)}`
+          );
+        }
       }
     });
 
@@ -602,13 +731,6 @@ export async function handleZellijAttach(
         ptyProcess?.kill();
         return;
       }
-      zellijAttached = true;
-      emitTerminalReady(socket, userId, terminalId);
-
-      // Reattaching to an existing session does not repaint on its own; nudge a
-      // resize so the frame and pane content draw without the user hitting Enter.
-      forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
-
       // Create the initial tab now that the session is confirmed up. Keep a
       // bounded retry as belt-and-suspenders against a residual boot race:
       // without the catch, a rejection here crashes the executor (Node 22+).
@@ -631,6 +753,28 @@ export async function handleZellijAttach(
           }
         }
       }
+
+      // Reattaching/new-session startup may not paint the complete shell frame
+      // until a SIGWINCH or keypress. Trigger that repaint before the readiness
+      // boundary; doing it after terminal:ready lets the browser's first input
+      // race (and get consumed by) the repaint transition.
+      forceZellijRepaint(ptyProcess, currentPtyCols, currentPtyRows);
+
+      // The control socket can answer before the attached PTY finishes its
+      // first draw. Wait for the data plane to produce and settle the repaint,
+      // retaining a bounded timeout for continuously noisy shells.
+      const outputSettled = await waitForTerminalOutputSettled(() =>
+        sawCompleteZellijFrame ? lastPtyOutputAt : null
+      );
+      if (!ptyProcess) return;
+      if (!outputSettled) {
+        console.warn(
+          `[zellij.attach] PTY startup output did not settle before the readiness deadline for ${shortId(terminalId)}`
+        );
+      }
+      zellijAttached = true;
+      inputGate.open();
+      emitTerminalReady(socket, userId, terminalId);
     })();
 
     // Return success - executor stays running until PTY exits

@@ -5,7 +5,7 @@
  * Safe to run multiple times (idempotent).
  */
 
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -13,16 +13,21 @@ import { fileURLToPath } from 'node:url';
 import { resolveAgenticToolSelectionPolicy } from '@agor/core/agentic-integrations';
 import {
   type AgorConfig,
+  assertSecurePassword,
   createInitialConfig,
+  ensureAgorHome,
   getConfigPath,
   getDaemonUrl,
   getDefaultConfig,
   loadConfig,
+  prepareInitialDeploymentConfig,
 } from '@agor/core/config';
 import {
   createDatabaseAsync,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
+  isDevelopmentDefaultAdminEnvironment,
   runMigrations,
   seedInitialData,
 } from '@agor/core/db';
@@ -71,8 +76,21 @@ export function createInstallTelemetryConfig(config: AgorConfig, instanceId: str
   };
 }
 
-export function shouldDeferAdminSetup(nonInteractive: boolean, nodeEnv = process.env.NODE_ENV) {
-  return nonInteractive || (nodeEnv !== 'development' && nodeEnv !== 'test');
+export function shouldDeferAdminSetup(
+  nonInteractive: boolean,
+  env: NodeJS.ProcessEnv = process.env
+) {
+  return nonInteractive || !isDevelopmentDefaultAdminEnvironment(env);
+}
+
+/** Inquirer-compatible validation using the canonical server password policy. */
+export function validateInitAdminPassword(input: unknown, email?: string): true | string {
+  try {
+    assertSecurePassword(input, { email });
+    return true;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 export function formatInitBackupTimestamp(date = new Date()): string {
@@ -181,12 +199,10 @@ export default class Init extends Command {
 
   /** Init owns config creation until this command returns; no other flow may use this helper. */
   private async persistDuringInitialCreation(config: AgorConfig): Promise<void> {
-    config.daemon = {
-      ...config.daemon,
-      ...this.initialDaemonConfig,
-      jwtSecret: config.daemon?.jwtSecret ?? randomBytes(32).toString('hex'),
-      masterSecret: config.daemon?.masterSecret ?? randomBytes(32).toString('hex'),
-    };
+    config = prepareInitialDeploymentConfig(
+      { ...config, daemon: { ...config.daemon, ...this.initialDaemonConfig } },
+      { deploymentId: this.deploymentId }
+    );
     if (await this.pathExists(getConfigPath())) return;
     await createInitialConfig(config);
   }
@@ -214,16 +230,39 @@ export default class Init extends Command {
     // Use the same environment/config resolution and health probe as
     // `agor daemon status` so re-init cannot drift from the CLI's canonical
     // answer about which daemon endpoint is active.
-    const configuredUrl = await getDaemonUrl();
+    //
+    // Only consider daemons that belong to *this* Agor home. A daemon this home
+    // manages (PID file present) always counts. The configured URL counts only once
+    // a config exists here — otherwise `getDaemonUrl()` hands back the global
+    // default and initializing a brand-new home fails because some unrelated
+    // deployment happens to occupy that port. That false positive also made the
+    // `agor init` test suite dependent on no daemon running on 3030.
     const managedUrl = getDaemonPid() !== null ? getManagedDaemonIdentity()?.daemonUrl : undefined;
-    const urls = [...new Set([managedUrl, configuredUrl].filter((url): url is string => !!url))];
-    for (const daemonUrl of urls) {
-      if ((await probeAgorDaemon(daemonUrl)).running) {
-        throw new Error(
-          `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`
-        );
-      }
+
+    // A daemon this home manages is unambiguously ours, whatever it answers with.
+    if (managedUrl && (await probeAgorDaemon(managedUrl)).running) {
+      throw new Error(this.daemonRunningMessage(managedUrl));
     }
+
+    if (!(await this.pathExists(getConfigPath()))) return;
+
+    const configuredUrl = await getDaemonUrl();
+    if (!configuredUrl || configuredUrl === managedUrl) return;
+
+    const probe = await probeAgorDaemon(configuredUrl);
+    if (!probe.running) return;
+
+    // Something is answering on our configured port, but a port is not ownership.
+    // Only block when it is demonstrably the same deployment; otherwise this is an
+    // unrelated daemon and re-initializing here cannot disturb it.
+    const ourDeploymentId = (await loadConfig().catch(() => undefined))?.daemon?.deployment_id;
+    if (ourDeploymentId && probe.deploymentId && probe.deploymentId !== ourDeploymentId) return;
+
+    throw new Error(this.daemonRunningMessage(configuredUrl));
+  }
+
+  private daemonRunningMessage(daemonUrl: string): string {
+    return `The Agor daemon is running at ${daemonUrl}. Stop it with \`agor daemon stop\` (or Ctrl+C for a development daemon) before re-initializing.`;
   }
 
   /**
@@ -517,8 +556,10 @@ export default class Init extends Command {
     // Create directory structure
     this.log('');
     this.log('📁 Creating directory structure...');
+    await ensureAgorHome(baseDir);
+    this.log(`${chalk.green('   ✓')} ${baseDir}`);
+
     const dirs = [
-      baseDir,
       join(baseDir, 'repos'),
       join(baseDir, 'worktrees'),
       join(baseDir, 'concepts'),
@@ -567,12 +608,7 @@ export default class Init extends Command {
         try {
           const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
           try {
-            await createUser(db, {
-              email: DEVELOPMENT_DEFAULT_ADMIN_USER.email,
-              password: DEVELOPMENT_DEFAULT_ADMIN_USER.password,
-              name: DEVELOPMENT_DEFAULT_ADMIN_USER.name,
-              role: 'admin',
-            });
+            await createDevelopmentDefaultAdminUser(db);
           } finally {
             this.closeSQLiteDatabase(db);
           }
@@ -978,12 +1014,7 @@ export default class Init extends Command {
         name: 'password',
         message: 'Password:',
         mask: '*',
-        validate: (input: string) => {
-          if (!input || input.length < 4) {
-            return 'Password must be at least 4 characters';
-          }
-          return true;
-        },
+        validate: (input: string) => validateInitAdminPassword(input),
       },
     ]);
 

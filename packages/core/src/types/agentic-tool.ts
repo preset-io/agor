@@ -1,6 +1,6 @@
 // src/types/agentic-tool.ts
 
-import type { AgenticToolID } from './id';
+import type { AgenticToolID, UUID } from './id';
 import type { EffortLevel } from './session';
 
 /**
@@ -45,6 +45,9 @@ export const AGENTIC_TOOL_NAMES = [
 ] as const;
 
 export type AgenticToolName = (typeof AGENTIC_TOOL_NAMES)[number];
+
+/** Default used only while a user has not chosen a primary agentic tool. */
+export const DEFAULT_AGENTIC_TOOL_NAME: AgenticToolName = 'claude-code';
 
 /**
  * Removed tool identifiers that may still exist on persisted historical rows.
@@ -282,6 +285,45 @@ export interface CodexAuthLogoutResult {
   status: 'removed';
 }
 
+/** Durable identity for one Codex device-sign-in attempt. */
+export type CodexDeviceAuthAttemptID = UUID & { readonly __entity: 'CodexDeviceAuthAttempt' };
+
+/**
+ * Internal PostgreSQL lifecycle for a Codex device-sign-in attempt. Public
+ * callers see the smaller {@link CodexDeviceAuthPhase} projection below.
+ */
+export type CodexDeviceAuthAttemptStatus =
+  | 'starting'
+  | 'pending'
+  | 'exchanging'
+  | 'persisting'
+  | 'succeeded'
+  | 'unavailable'
+  | 'denied'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired'
+  | 'superseded'
+  | 'cancelled';
+
+/**
+ * Secret material sealed at rest for a durable Codex device-sign-in attempt.
+ * The database row binds this envelope to its exact tenant, user, attempt, and
+ * monotonic generation. It must never be logged, returned wholesale, or sent
+ * through realtime/Redis.
+ */
+export interface CodexDeviceAuthSealedMaterial {
+  version: 1;
+  attemptId: CodexDeviceAuthAttemptID;
+  tenantId: string;
+  userId: string;
+  attemptGeneration: number;
+  delegatedHomeKey: string | null;
+  codexHome?: string;
+  deviceAuthId?: string;
+  userCode?: string;
+}
+
 /**
  * Result of removing a Claude subscription login via the daemon's
  * `/claude-auth/logout` endpoint. Delete-only and Agor-scoped: it removes the
@@ -319,6 +361,8 @@ export type CodexDeviceAuthPhase =
  */
 export interface CodexDeviceAuthStatus {
   phase: CodexDeviceAuthPhase;
+  /** Opaque attempt identity used to keep reconnect/status behavior deterministic. */
+  attemptId?: CodexDeviceAuthAttemptID;
   /** One-time code the user enters on the verification page (pending only). */
   userCode?: string;
   /** Page where the user approves the code (pending only). */

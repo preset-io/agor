@@ -175,7 +175,7 @@ describe('OpenCode executor adapter', () => {
         forUserId: 'task-creator',
         sessionOwnerId: 'session-owner',
       }),
-      { toolFiltering: 'none' }
+      { toolFiltering: 'intercept' }
     );
   });
 

@@ -9,10 +9,14 @@ export const HA_UNSUPPORTED_FEATURES = {
   providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
-  codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
-  codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
-  claudeAuth: 'Claude credential-file logout without a consistent executor user home',
-  claudeOAuth: 'Claude subscription OAuth sign-in without durable attempt ownership',
+  codexAuth:
+    'Codex credential-file import/logout without a consistent executor user home and execution.executor_storage.user_home_locking: cross-replica-flock',
+  codexDeviceAuth:
+    'Codex device authentication without durable attempt ownership, exact per-user credential routing, and execution.executor_storage.user_home_locking: cross-replica-flock',
+  claudeAuth:
+    'Claude credential mutation without cross-replica writer serialization and generation fencing',
+  claudeOAuth:
+    'Claude subscription OAuth without durable attempt ownership and cross-replica credential mutation authority',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -37,8 +41,12 @@ export function isHaFeatureUnavailable(
   feature: HaUnsupportedFeature
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
-  if (feature === 'codexAuth' || feature === 'claudeAuth')
-    return !deployment.capabilities.codexCredentialFiles;
+  if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
+  if (feature === 'codexDeviceAuth') return !deployment.capabilities.codexDeviceAuth;
+  // A consistent home is not sufficient for Claude: the standalone services
+  // have neither durable attempt ownership nor the generation-fenced mutation
+  // authority used by Codex. Keep start/completion and logout fail-closed in HA.
+  if (feature === 'claudeAuth' || feature === 'claudeOAuth') return true;
   return true;
 }
 

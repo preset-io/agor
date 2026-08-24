@@ -201,4 +201,47 @@ describe('MCPServerFormFields OAuth start', () => {
     await waitFor(() => expect(onPrepareOAuthStart).toHaveBeenCalledTimes(1));
     expect(startOAuth).not.toHaveBeenCalled();
   });
+
+  it('shows a catalog-managed Marketplace policy read-only', async () => {
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn().mockReturnValue({ create: vi.fn() }),
+    } as unknown as AgorClient;
+
+    const Harness = () => {
+      const [form] = Form.useForm();
+      useEffect(() => {
+        form.setFieldsValue({
+          name: 'catalog-server',
+          url: 'https://mcp.example/mcp',
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'marketplace',
+        });
+      }, [form]);
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="edit"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={client}
+            serverId="saved-server"
+            onPrepareOAuthStart={vi.fn().mockResolvedValue('saved-server')}
+            managedOAuthCompatibilityMode="marketplace"
+          />
+        </Form>
+      );
+    };
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByText('Advanced — OAuth settings'));
+    expect(await screen.findByText('Marketplace compatibility (catalog managed)')).toBeVisible();
+    const compatibility = screen.getByLabelText('OAuth Compatibility');
+    expect(compatibility).toBeDisabled();
+    expect(
+      screen.getByText(/current Marketplace catalog manages this server's interoperability/i)
+    ).toBeVisible();
+  });
 });

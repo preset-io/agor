@@ -370,4 +370,25 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
   it('FAILS CLOSED (throws) when per_user is set but no store resolved — no silent shared fallback', () => {
     expect(() => resolveBwrapArgs({ home_mode: 'per_user' }, CTX)).toThrow(/fail closed/i);
   });
+
+  // Contract relied upon by `shouldUseCloneReferencePath`
+  // (apps/agor-daemon/src/utils/clone-reference.ts): a clone-mode branch gets
+  // NO `baseRepoPath` from the daemon (register-services.ts / terminals.ts skip
+  // it for `storage_mode === 'clone'`), so under this overlay nothing under
+  // `<data_home>/repos` is reachable. A `git clone --reference` alternates
+  // pointer into the base clone is therefore permanently unresolvable here —
+  // which is why the daemon must not create one for this deployment shape.
+  //
+  // If this ever changes (repos re-exposed to clone-mode branches), revisit
+  // that gate: the borrow would become safe again.
+  it('leaves the base object store unreachable for a clone-mode branch (no baseRepoPath)', () => {
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user' },
+      { ...PER_USER_CTX, baseRepoPath: undefined }
+    );
+    // The overlay hides <data_home> wholesale…
+    expect(hasTriple(args, '--bind', STORE, '/home/agor')).toBe(true);
+    // …and nothing re-exposes the base clone or its object store.
+    expect(args.some((arg) => arg.startsWith('/home/agor/.agor/repos'))).toBe(false);
+  });
 });

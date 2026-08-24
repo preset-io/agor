@@ -1,11 +1,4 @@
-import type {
-  AgorClient,
-  Message,
-  Session,
-  SessionPromptOptions,
-  SessionPromptResult,
-  Task,
-} from '@agor/core/client';
+import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
 import { MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager';
@@ -320,7 +313,7 @@ export class ReactiveSessionHandle {
     await this.readyPromise;
   }
 
-  async prompt(prompt: string, options?: SessionPromptOptions): Promise<SessionPromptResult> {
+  async prompt(prompt: string, options?: SessionPromptOptions): Promise<Task> {
     return this.client.sessions.prompt(this.sessionId, prompt, options);
   }
 

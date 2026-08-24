@@ -13,8 +13,7 @@ vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/spawn-executor.js')>();
   return {
     ...actual,
-    generateScopedServiceToken: vi.fn(() => 'service-token'),
-    runExecutorCommand: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
+    requestExecutor: vi.fn(async (payload: { params?: { branchIds?: string[] } }) => ({
       success: true,
       data: {
         statuses: (payload.params?.branchIds ?? []).map((branchId) => ({
@@ -1298,6 +1297,9 @@ describe('agor_branches_cleanup_candidates', () => {
       reposGet,
       app: {
         get: () => ({}),
+        sessionTokenService: {
+          generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+        },
         service(name: string) {
           if (name === 'branches') return { find: branchesFind };
           if (name === 'repos') return { get: reposGet };

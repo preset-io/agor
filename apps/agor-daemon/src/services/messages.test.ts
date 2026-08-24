@@ -19,7 +19,7 @@ import { SessionRepository } from '../../../../packages/core/src/db/repositories
 import { TaskRepository } from '../../../../packages/core/src/db/repositories/tasks';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { ServiceJWTStrategy } from '../auth/service-jwt-strategy';
+import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy';
 import { validateMessageCreate } from '../hooks/validate-message-create';
 import {
   resolveSessionContext,
@@ -360,7 +360,7 @@ dbTest(
     const usersService = createUsersService(db);
     const bearer = await usersService.create({
       email: 'messages-rest-bearer@example.test',
-      password: 'password-123',
+      password: 'test-password-1234',
       role: ROLES.MEMBER,
     });
     const ownerId = generateId() as UUID;
@@ -412,7 +412,7 @@ dbTest(
     });
     app.use('/users', usersService);
     const authentication = new AuthenticationService(app);
-    authentication.register('jwt', new ServiceJWTStrategy());
+    authentication.register('jwt', new RuntimeJWTStrategy());
     app.use('/authentication', authentication);
     app.use('/messages', createMessagesService(db), {
       methods: [...MESSAGES_SERVICE_TRANSPORT_METHODS],

@@ -16,7 +16,15 @@ docker compose up
 # Visit http://localhost:5173 → Login: admin@agor.live / admin
 ```
 
-That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, multiplayer + RBAC, or the docs site, see the variant system below.
+That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, RBAC + sandbox testing, HA smoke testing, or the docs site, see the variant system below.
+
+The fixed login is an intentionally narrow bootstrap exception, not a weak
+deployment-wide password profile. It requires all three checked-in values:
+`AGOR_ADMIN_PASSWORD=admin`, `AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true`, and
+`NODE_ENV=development`. Every newly created or changed password still follows
+the secure daemon policy. An existing development `admin` password remains
+usable until you change it, after which it cannot be assigned again through
+normal user APIs.
 
 ## Seeding test data
 
@@ -53,24 +61,32 @@ extra demo logins are available (passwords printed in the seed log):
 | `demo.carol@agor.live` | `demo-password-carol` | member |
 | `demo.dave@agor.live`  | `demo-password-dave`  | viewer |
 
+The `rich` RBAC fixture uses `alice@agor.live / alice-development-only` and
+`bob@agor.live / bob-development-only`. All fixture passwords are local-only;
+do not expose a managed development environment to an untrusted network.
+
 See [`packages/core/src/seed/README.md`](https://github.com/preset-io/agor/blob/main/packages/core/src/seed/README.md) for the full inventory.
 
 ## `.agor.yml` (the variant system)
 
 Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml), a declarative schema describing how to spawn an environment for this codebase. The same schema you'd write for any repo you load into Agor: Agor uses it to develop itself. Each variant is a Handlebars-templated `start` / `stop` / `nuke` / `logs` / `health` / `app` block.
 
-| Variant                  | What you get                                                                                                                                  | Base ports                                        |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot.                                                                                                | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
-| **`postgres`**           | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog).       | same as `sqlite`                                  |
-| **`full`**               | Postgres + branch RBAC + fail-closed local bubblewrap filesystem isolation. Same PG13+ floor as `postgres`. | same as `sqlite`                                  |
-| **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone (no daemon, no DB).                                   | `7000 + branch.unique_id`                         |
-| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true`, which boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.         | same as `sqlite`                                  |
-| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true`, with the same demo fixtures on a Postgres backend. Dev-only.                                            | same as `sqlite`                                  |
+| Variant                  | What you get                                                                                                                                                                                                                                   | Base ports                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **`sqlite`** _(default)_ | Standalone source-mode dev with SQLite, no branch RBAC, and no Agor executor sandbox. Fastest to boot.                                                                                                                                         | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
+| **`postgres`**           | `sqlite` topology with PostgreSQL schema parity. RBAC and the Agor sandbox remain off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from `pg_catalog`).                                                                       | same as `sqlite`                                  |
+| **`sandbox`**            | SQLite plus the tunable, shared-home bubblewrap filesystem sandbox. RBAC remains off and sandbox unavailability is not fail-closed.                                                                                                            | same as `sqlite`                                  |
+| **`sandbox-peruser`**    | SQLite plus `execution.unix_user_mode: sandbox`, which forces branch RBAC, a per-user home, and fail-closed bubblewrap isolation. It does not impersonate host users.                                                                          | same as `sqlite`                                  |
+| **`rich`**               | Standalone PostgreSQL + branch RBAC + fail-closed per-user sandbox profile. Also creates Alice/Bob RBAC fixtures. HA remains a separate variant.                                                                                               | same as `sqlite`                                  |
+| **`full`**               | Deprecated compatibility alias for `rich`, retained so existing branches can still re-render safely.                                                                                                                                           | same as `rich`                                    |
+| **`ha`**                 | Hosted control-plane smoke: PostgreSQL/RLS, ephemeral Redis, two production-source daemons, nginx affinity, auth-resolved Acme/Globex personas, RBAC, and per-user sandbox homes. The Compose-only picker intentionally has no authentication. | ingress: `3000 + branch.unique_id`                |
+| **`docs`**               | Nextra docs site (`apps/agor-docs`) in a self-contained container. No daemon or database.                                                                                                                                                      | `7000 + branch.unique_id`                         |
+| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true`, which adds a populated demo board and four loginable demo users.                                                                                                                                           | same as `sqlite`                                  |
+| **`postgres-demo`**      | `postgres` plus the same demo fixtures on PostgreSQL.                                                                                                                                                                                          | same as `sqlite`                                  |
 
-Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
+Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host. Except for `ha`, daemon variants use the standalone deployment mode; a managed-environment variant name does not select a daemon deployment mode by itself.
 
-Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the branch's environment settings. You can also render it manually with the appropriate `docker compose` invocation from the file.
+Pick a variant in the branch's environment settings or through `agor_environment_set`. There is no daemon-wide `AGOR_VARIANT` switch: variant selection is repository/branch data, and rendering stores the resolved commands on that branch.
 
 A representative variant block, abridged from the file:
 
@@ -97,7 +113,7 @@ The whole point of `.agor.yml` is that Agor can develop itself. The natural work
 1. **Run a "host" Agor** (any way you like, via `npm i -g agor-live`, `docker compose up`, anything).
 2. **Register the agor repo** in your host Agor. Clone or point it at your local checkout.
 3. **Create a branch per feature**. Each branch gets a unique `branch.unique_id` → unique ports → fully isolated dev stack.
-4. **Pick a variant** in the branch's environment settings (sqlite for most things, postgres if you're touching DB code, full if you're testing RBAC, docs for documentation work).
+4. **Pick a variant** in the branch's environment settings (`sqlite` for most things, `postgres` for DB-only parity, `rich` for single-tenant PostgreSQL + RBAC + per-user sandbox testing, `ha` for multi-tenant hosted/HA control-plane behavior, or `docs` for documentation work).
 5. **Spawn an agent session**. The session has [Agor MCP](/guide/internal-mcp) access, so it can spin up environments, monitor health and logs, run tasks against the running stack, and tear it down, all without you ever leaving the canvas.
 
 This is also the only sane way to develop multiple Agor features in parallel: each branch's variant picks its own ports, mounts source for HMR, and persists `node_modules` in a named volume.

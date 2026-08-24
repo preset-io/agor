@@ -12,16 +12,13 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   type TenantScopeAwareDatabase,
-  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 
 // Constants for file search
 const MAX_FILE_RESULTS = 10;
@@ -62,7 +59,6 @@ function extractResults(data: unknown): FileResult[] {
 export class FilesService {
   private sessionRepo: SessionRepository;
   private branchRepo: BranchRepository;
-  private usersRepo: UsersRepository;
 
   constructor(
     private db: TenantScopeAwareDatabase,
@@ -70,7 +66,6 @@ export class FilesService {
   ) {
     this.sessionRepo = new SessionRepository(db);
     this.branchRepo = new BranchRepository(db);
-    this.usersRepo = new UsersRepository(db);
   }
 
   /**
@@ -114,22 +109,25 @@ export class FilesService {
       if (!branch?.path) return null;
 
       const currentUserId = params.user?.user_id as UserID | undefined;
-      const currentUser = currentUserId ? await this.usersRepo.findById(currentUserId) : null;
+      if (!currentUserId) throw new NotAuthenticated('Authentication required');
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        currentUser ?? currentUserId,
+        currentUserId,
         this.app.get('config')
       );
-      return { branchId: branch.branch_id, delegatedHomeKey };
+      return { branchId: branch.branch_id, delegatedHomeKey, userId: currentUserId };
     });
     if (!resolved) return [];
 
     try {
-      const sessionToken = generateScopedServiceToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      const sessionToken = await issueExecutorCommandToken(
+        this.app,
+        'branch-files-list',
+        resolved.userId,
+        resolved.branchId
       );
 
-      const result = await runExecutorCommand(
+      const result = await requestExecutor(
         {
           command: 'branch.files.list',
           sessionToken,

@@ -21,7 +21,7 @@ interface SocketParams {
 
 function requireSocketAuthentication(params?: SocketParams): void {
   if (params?.provider && params.connection?.testAuthenticated !== true) {
-    throw new Error('Socket request arrived before executor reauthentication');
+    throw new Error('Socket request arrived without handshake authentication');
   }
 }
 
@@ -92,12 +92,12 @@ describe('executor acknowledgement failure convergence', () => {
   it('rejects a stranded mutation once and converges through the executor terminal boundary', async () => {
     const app = feathersExpress(feathers());
     let mutationCount = 0;
-    let authenticationCount = 0;
-    let reauthenticationCount = 0;
+    let handshakeAuthenticationCount = 0;
+    let reconnectCount = 0;
     let shouldStrandAcknowledgement = true;
-    let resolveReauthenticated!: () => void;
-    const reauthenticated = new Promise<void>((resolve) => {
-      resolveReauthenticated = resolve;
+    let resolveReconnected!: () => void;
+    const reconnected = new Promise<void>((resolve) => {
+      resolveReconnected = resolve;
     });
     let session = {
       session_id: SESSION_ID,
@@ -177,20 +177,22 @@ describe('executor acknowledgement failure convergence', () => {
         return data;
       },
     });
-    app.use('authentication', {
-      async create(data: { accessToken?: string }, params?: SocketParams) {
-        authenticationCount += 1;
-        if (params?.connection) params.connection.testAuthenticated = true;
-        return {
-          accessToken: data.accessToken ?? SESSION_TOKEN,
-          authentication: { strategy: 'jwt' },
-          user: { user_id: 'executor-user' },
-        };
-      },
-    });
-
     app.configure(
       socketio({}, (io) => {
+        io.use((socket, next) => {
+          if (socket.handshake.auth?.token !== SESSION_TOKEN) {
+            next(new Error('Invalid executor handshake token'));
+            return;
+          }
+          const connection = (socket as unknown as { feathers?: Record<string, unknown> }).feathers;
+          if (!connection) {
+            next(new Error('Missing Feathers connection'));
+            return;
+          }
+          handshakeAuthenticationCount += 1;
+          connection.testAuthenticated = true;
+          next();
+        });
         io.on('connection', (socket) => {
           socket.use((packet, next) => {
             const [event, path] = packet;
@@ -215,9 +217,9 @@ describe('executor acknowledgement failure convergence', () => {
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
 
     client = await createExecutorClient(`http://127.0.0.1:${address.port}`, SESSION_TOKEN, {
-      onReauthenticated: () => {
-        reauthenticationCount += 1;
-        resolveReauthenticated();
+      onReconnected: () => {
+        reconnectCount += 1;
+        resolveReconnected();
       },
     });
 
@@ -254,10 +256,10 @@ describe('executor acknowledgement failure convergence', () => {
 
     expect(rejection).toBeInstanceOf(Error);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
-    await reauthenticated;
+    await reconnected;
     expect(mutationCount).toBe(1);
-    expect(authenticationCount).toBeGreaterThanOrEqual(2);
-    expect(reauthenticationCount).toBe(1);
+    expect(handshakeAuthenticationCount).toBeGreaterThanOrEqual(2);
+    expect(reconnectCount).toBe(1);
 
     expect(task).toMatchObject({
       status: TaskStatus.FAILED,

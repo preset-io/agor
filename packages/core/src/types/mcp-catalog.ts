@@ -163,12 +163,24 @@ export interface MCPCatalogEntry {
 
   auth_type: MCPCatalogAuthType;
 
+  /** Reviewed instructions for a non-OAuth credential. Generic 401/403 responses never imply a scheme. */
+  credentials?: MCPCatalogEntryCredentials;
+
   /**
    * Per-server OAuth settings, for the endpoints discovery cannot fully
    * describe. See {@link MCPCatalogEntryOAuth}. Omitted by every entry that
    * does not need one, which is the intended state.
    */
   oauth?: MCPCatalogEntryOAuth;
+}
+
+export interface MCPCatalogEntryCredentials {
+  /** The only marketplace credential scheme currently supported. */
+  scheme: 'bearer';
+  /** Vendor documentation for creating the bearer access token. */
+  acquisition_url: string;
+  /** Vendor-specific label, e.g. "personal access token". */
+  label?: string;
 }
 
 /**
@@ -181,9 +193,11 @@ export interface MCPCatalogEntry {
  * metadata (RFC 9728), that names its authorization server, that publishes its
  * endpoints and registration endpoint (RFC 8414), and Dynamic Client
  * Registration (RFC 7591) mints the client. Connect declares none of that, and
- * every entry in `curated.yaml` today states nothing here, because a fact
- * fetched from the vendor at the moment of use cannot go stale and an authored
- * one silently can — and nothing sweeps this file for rot.
+ * entries should normally state nothing here, because a fact fetched from the
+ * vendor at the moment of use cannot go stale and an authored one silently can
+ * — and nothing sweeps this file for rot. A reviewed explicit `strict` opt-in
+ * is useful when the production discovery boundary proves a provider supports
+ * the complete strict contract.
  *
  * So this is an escape hatch for the servers that fall short of that, not a
  * place to restate what discovery already returns. Each field is here because
@@ -200,8 +214,10 @@ export interface MCPCatalogEntry {
  *   in the browser's address bar during the flow.
  * - `dcr_mode` decides whether registration may fall back to an unadvertised
  *   `/register`, for a server that runs DCR without publishing the endpoint.
- * - `compatibility_mode` decides whether authorization-server metadata may be
- *   fetched straight from the MCP origin, for a server that predates RFC 9728.
+ * - `compatibility_mode` is an explicit `strict` or `legacy` opt-in. Omission
+ *   uses the daemon's marketplace-only interoperability profile: standard and
+ *   OIDC discovery fallbacks with same-origin resource binding, issuer
+ *   validation, and PKCE S256 retained.
  *
  * What is deliberately absent is as load-bearing as what is here:
  *
@@ -228,7 +244,7 @@ export interface MCPCatalogEntryOAuth {
   client_id?: string;
   /** Dynamic Client Registration policy; defaults to `advertised`. */
   dcr_mode?: MCPOAuthDCRMode;
-  /** Authorization-metadata discovery strictness; defaults to `strict`. */
+  /** Explicit authorization-metadata policy; omission uses marketplace interoperability. */
   compatibility_mode?: MCPOAuthCompatibilityMode;
 }
 
@@ -250,8 +266,8 @@ const GENERIC_CATALOG_NAME_LABELS = new Set(['mcp', 'mcp-server', 'server', 'api
  *
  * Shared because both sides of the wire need this and disagreed: the catalog
  * UI derived the publisher while connect took the last path segment, so the
- * server name the agent saw was the word "mcp" for 38 of 50 entries. One rule,
- * two formattings — never two rules.
+ * server name the agent saw was often the word "mcp". One rule, two
+ * formattings — never two rules.
  *
  * The publisher identifies the server only while every name is hand-reviewed.
  * `io.github.<user>/<repo>` inverts it — every server one GitHub user publishes
@@ -320,10 +336,11 @@ export type MCPCatalogSort = 'popularity' | 'name';
 /**
  * What the Marketplace narrows the catalog by.
  *
- * These are exactly the toolbar's controls. The catalog is a few dozen frozen
- * objects the browser already holds, so applying them is a pass over an array,
- * not a request — which is why there is no `limit`/`offset` here: paging a list
- * you hold is a `slice`, and it is the grid's business rather than a filter's.
+ * These are exactly the toolbar's controls. The catalog is a bounded set of
+ * frozen objects the browser already holds, so applying them is a pass over an
+ * array, not a request — which is why there is no `limit`/`offset` here: paging
+ * a list you hold is a `slice`, and it is the grid's business rather than a
+ * filter's.
  */
 export interface MCPCatalogFilters {
   /** Case-insensitive substring match over name, title, and description. */
@@ -345,15 +362,33 @@ export interface MCPCatalogFilters {
 /**
  * Request body of `POST /mcp-catalog/connect`.
  *
- * A catalog key and where the session should live, and nothing else. URL,
- * transport, and auth come from the catalog entry server-side, so this cannot
- * be used to register an arbitrary server.
+ * A catalog key, where the session should live, and — for an endpoint that asks
+ * for one — the caller's own API key. Nothing else. URL, transport, and the
+ * *kind* of auth still come from the catalog entry and the live endpoint
+ * server-side, so this cannot be used to register an arbitrary server, and a
+ * client cannot name the destination its own credential is sent to.
  */
 export interface MCPCatalogConnectData {
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   branch_id: string;
   agentic_tool: AgenticToolName;
+  /**
+   * An API key for an endpoint that answers unauthenticated clients with a
+   * non-OAuth challenge.
+   *
+   * The one secret this request carries, and the only field on it that is the
+   * caller's rather than the catalog's — precisely because it is the one thing
+   * a checked-in, publicly readable, every-tenant-identical file must never
+   * hold. It is stored as `auth.token` on the installed server row, which is
+   * where every other bearer credential in Agor lives and therefore what the
+   * read-path redaction already covers.
+   *
+   * Required when the endpoint asks for credentials, refused when it does not:
+   * a key sent to a server that never asked for one would be a secret written
+   * to a row with no reason to carry it.
+   */
+  bearer_token?: string;
   /**
    * The `permission_disclosure` the user was shown and accepted.
    *
@@ -378,4 +413,75 @@ export interface MCPCatalogConnectResult {
   starter_prompt?: string;
   /** True when an existing install was reused rather than a second row created. */
   reused_existing_server: boolean;
+  /** Why this server row was selected. Credential peers retain their own lifecycle. */
+  reuse_kind:
+    | 'new_catalog_install'
+    | 'catalog_install'
+    | 'credential_peer'
+    | 'refreshed_credential_peer';
+  /** Effective, secret-free OAuth compatibility policy for the attached row. */
+  effective_oauth_policy?: NonNullable<MCPServer['oauth_compatibility_policy']>;
+}
+
+/**
+ * What the live endpoint turned out to want, on a connect refused over the API
+ * key.
+ *
+ * The catalog file is presentational and the endpoint decides — which is the
+ * right layering, and is exactly what strands a client that built its form from
+ * the file. A drawer showing a key field because the entry says `credentials`
+ * cannot submit when the endpoint has since opened up, because the daemon
+ * refuses every keyed request; a drawer showing no field because the entry says
+ * `none` cannot submit when the endpoint has since closed, because the daemon
+ * demands a key there is nowhere to type. Both are dead ends, and both are
+ * reachable from a `curated.yaml` nobody has got round to correcting.
+ *
+ * `logProbeDisagreement` already records the disagreement, but a `warn` line is
+ * addressed to whoever maintains the file. This is the same fact addressed to
+ * the person standing in front of the form, in a shape a client can act on
+ * without parsing prose: the daemon knows what the endpoint asked for at the
+ * moment it refuses, so it says so, and the refusal becomes one extra round trip
+ * instead of an impasse.
+ *
+ * Two values rather than a boolean, because "no requirement was in question"
+ * has to stay distinguishable from both — every other refusal carries none of
+ * this, and a client must not read a missing field as `not_accepted`.
+ */
+export const MCP_CATALOG_CREDENTIAL_REQUIREMENTS = [
+  'required',
+  'not_accepted',
+  'oauth',
+  'unsupported',
+] as const;
+
+export type MCPCatalogCredentialRequirement = (typeof MCP_CATALOG_CREDENTIAL_REQUIREMENTS)[number];
+
+/** The machine-readable half of a connect refusal. Rides on `error.data`. */
+export interface MCPCatalogConnectErrorData {
+  credential_requirement: MCPCatalogCredentialRequirement;
+}
+
+/**
+ * The endpoint's key requirement carried by a failed connect, if it stated one.
+ *
+ * Lives beside the type it reads rather than in the browser bundle, so the
+ * daemon that writes this field and the drawer that reacts to it are looking at
+ * one definition. The alternative — a client-side `err.data.credential_requirement`
+ * spelled out at the call site — is a string literal that no longer matches the
+ * moment anybody renames the field, and it fails by silently doing nothing,
+ * which is indistinguishable from the endpoint not having stated a requirement.
+ *
+ * Defensive about its input because it is handed whatever a `catch` caught:
+ * a Feathers error, a `TypeError` from a dropped socket, or a string.
+ */
+export function readCredentialRequirement(
+  error: unknown
+): MCPCatalogCredentialRequirement | undefined {
+  const data = (error as { data?: unknown } | null | undefined)?.data;
+  const requirement = (data as MCPCatalogConnectErrorData | undefined)?.credential_requirement;
+  return MCP_CATALOG_CREDENTIAL_REQUIREMENTS.includes(
+    requirement as MCPCatalogCredentialRequirement
+  )
+    ? (requirement as MCPCatalogCredentialRequirement)
+    : undefined;
 }

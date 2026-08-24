@@ -2,6 +2,7 @@
  * `agor user update` - Update a user
  */
 
+import { assertSecurePassword } from '@agor/core/config';
 import type { User } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
@@ -15,7 +16,7 @@ export default class UserUpdate extends BaseCommand {
   static examples = [
     '<%= config.bin %> <%= command.id %> test@example.com --name "New Name"',
     '<%= config.bin %> <%= command.id %> 0199d1bd --role member',
-    '<%= config.bin %> <%= command.id %> test@example.com --password newpassword123',
+    '<%= config.bin %> <%= command.id %> test@example.com --password "a-new-unique-passphrase"',
     '<%= config.bin %> <%= command.id %> test@example.com --unix-username testuser',
     '<%= config.bin %> <%= command.id %> 0199d1bd --force-password-change',
   ];
@@ -132,8 +133,11 @@ export default class UserUpdate extends BaseCommand {
             message: 'New password:',
             when: fields.includes('password'),
             validate: (input: string) => {
-              if (!input) return 'Password is required';
-              if (input.length < 8) return 'Password must be at least 8 characters';
+              try {
+                assertSecurePassword(input, { email: user.email });
+              } catch (error) {
+                return error instanceof Error ? error.message : String(error);
+              }
               return true;
             },
             mask: '*',
@@ -181,7 +185,10 @@ export default class UserUpdate extends BaseCommand {
       } = {};
       if (flags.email) updates.email = flags.email;
       if (flags.name) updates.name = flags.name;
-      if (flags.password) updates.password = flags.password;
+      if (flags.password) {
+        assertSecurePassword(flags.password, { email: flags.email ?? user.email });
+        updates.password = flags.password;
+      }
       if (flags.role) updates.role = flags.role as 'superadmin' | 'admin' | 'member' | 'viewer';
       if (flags['unix-username']) updates.unix_username = flags['unix-username'];
       if (flags['filesystem-home']) updates.filesystem_home = flags['filesystem-home'];

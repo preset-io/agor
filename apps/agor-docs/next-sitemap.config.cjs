@@ -22,6 +22,7 @@ module.exports = {
     '/_document',
     '/guide/assistants',
     '/not-alone',
+    '/not-alone-problem',
     '/beyond-the-sandbox',
     '/not-just-a-tool',
     '/right-where-you-work',
@@ -29,6 +30,7 @@ module.exports = {
     '/selfware-is-dead',
     '/dev-team',
     '/costs-under-control',
+    '/costs-under-control-solution',
   ],
 
   // Include static LLM-related files

@@ -180,22 +180,24 @@ sequenceDiagram
 
 ## Mapping onto the Codex module structure
 
-| Codex                                            | Claude equivalent                                                                     |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| `codex-device-auth.ts` service (`create`+`find`) | `claude-oauth.ts` service (two-call `create` + `find`)                                |
-| device usercode + daemon poll loop               | authorize URL + user paste-back (no poll)                                             |
-| server-issued PKCE (returned by poll)            | **daemon-generated PKCE** (we own verifier/challenge/state)                           |
-| `buildDeviceAuthJson` → Codex `auth.json`        | `buildClaudeCredentialsJson` → `.credentials.json`                                    |
-| `persistVerifiedCodexAuth` (shared)              | inline persist in `claude-oauth.ts` (single caller → no shared module yet, YAGNI)     |
-| `resolveCodexUnixIdentity`                       | **reused as-is** (identity resolution is tool-agnostic; see open questions on rename) |
-| `writeCodexAuthViaExecutor` / `codex.auth-file`  | `writeClaudeAuthViaExecutor` / `claude.auth-file`                                     |
-| `agentic_auth_methods.codex = 'subscription'`    | `agentic_auth_methods['claude-code'] = 'subscription'`                                |
-| `CodexDeviceAuthStatus` type                     | `ClaudeOAuthStatus` type                                                              |
+| Codex                                            | Claude equivalent                                                             |
+| ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `codex-device-auth.ts` service (`create`+`find`) | `claude-oauth.ts` service (two-call `create` + `find`)                        |
+| device usercode + daemon poll loop               | authorize URL + user paste-back (no poll)                                     |
+| server-issued PKCE (returned by poll)            | **daemon-generated PKCE** (we own verifier/challenge/state)                   |
+| `buildDeviceAuthJson` → Codex `auth.json`        | `buildClaudeCredentialsJson` → `.credentials.json`                            |
+| durable Codex mutation authority                 | standalone in-memory coordinator + file generation fence; HA remains disabled |
+| `resolveCodexCredentialRoute`                    | **reused as-is** (routing is provider-neutral despite the legacy name)        |
+| `writeCodexAuthViaExecutor` / `codex.auth-file`  | `writeClaudeAuthViaExecutor` / `claude.auth-file`                             |
+| `agentic_auth_methods.codex = 'subscription'`    | `agentic_auth_methods['claude-code'] = 'subscription'`                        |
+| `CodexDeviceAuthStatus` type                     | `ClaudeOAuthStatus` type                                                      |
 
-Reused verbatim: `resolveCodexUnixIdentity` (unix-identity resolution + hosted
-tenant-safe home checks), the executor atomic-write pattern
-(temp file → `chmod 0600` → `rename` → read-back verify), and the
-`isTenantAgenticToolEnabled` gate.
+Reused: `resolveCodexCredentialRoute` (execution-home resolution plus hosted
+tenant-safe home checks), the hardened `@agor/core/codex/credential-file`
+primitive (directory capability, `O_NOFOLLOW`, locks, fsync, and generations),
+and the `isTenantAgenticToolEnabled` gate. Claude deliberately does **not**
+claim Codex's complete cross-replica authority yet, so its mutation services
+stay unavailable in HA.
 
 ---
 
@@ -212,8 +214,8 @@ real `.credentials.json` is still worth doing:
    token, but that is a different, coarser artifact than a subscription login.)
 2. **Identical to a real `/login`.** The daemon-written file is byte-compatible
    with what interactive `/login` produces, so downstream behavior is the same.
-3. **Avoids env↔file conflicts under strict impersonation.** In `strict` mode a
-   session runs as the user's own unix account, which may already hold a stale
+3. **Avoids env↔file conflicts under isolated execution.** A sandbox/delegated
+   session uses the user's routed execution home, which may already hold a stale
    `~/.claude/.credentials.json` from a prior interactive login. Injecting an
    env token _and_ leaving a conflicting on-disk file is the kind of split-brain
    that produces confusing 401s. Writing (and owning) the file gives one
@@ -254,8 +256,8 @@ Why this is correct and non-breaking:
 - The claude executor tool already accepts a `useNativeAuth` flag with "no
   special handling needed" (`packages/executor/src/sdk-handlers/claude/claude-tool.ts`),
   so native auth just means "read the file". In hosted `required_from_auth`
-  multitenancy, `config.ts` already rejects native subscription auth — the new
-  branch inherits that guard for free.
+  multitenancy, start is admitted only when the deployment supplies an exact
+  per-user executor credential home; otherwise it fails closed before exchange.
 
 **One-source invariant:** a user who _both_ pasted a token earlier _and_ runs the
 OAuth flow would otherwise have `stored.CLAUDE_CODE_OAUTH_TOKEN` present, so the
@@ -269,19 +271,32 @@ source. `claude-auth/logout` clears it the same way on disconnect.
 
 ## Credential-write path (executor)
 
-Mirrors `codex.auth-file` exactly, so ownership and permissions hold in
-insulated/strict modes:
+Uses the same hardened credential-file primitive as `codex.auth-file`, without
+regressing Codex, so ownership, symlink resistance, durability, and fencing
+hold in sandbox/delegated modes:
 
 - Executor command `claude.auth-file` (`inspect` / `write` / `delete`), handled by
   `packages/executor/src/commands/claude-auth-file.ts`. `inspect` backs the
   connection probe (confirms the file exists without returning token bytes);
   `delete` backs `claude-auth/logout`.
-- `resolveClaudeCredentialsPath()` → `${CLAUDE_CONFIG_DIR || ~/.claude}/.credentials.json`.
-- Write is atomic and private: `mkdir 0700` → temp file `wx` `0600` →
-  `chmod 0600` → `rename` → read-back verify.
+- The daemon carries the provider-neutral routed home through executor launch as
+  `CLAUDE_CONFIG_DIR`; inspect, write, and delete all target exactly
+  `${CLAUDE_CONFIG_DIR || ~/.claude}/.credentials.json`.
+- Write/delete use `mutateCredentialFile`: locked directory capability,
+  `O_NOFOLLOW`, private temporary file, fsync + rename, parent-directory fsync,
+  and monotonic generation fencing. A delayed stale writer/deleter returns
+  `AUTH_FILE_STALE` rather than winning.
 - The daemon resolves the target unix identity from the **authenticated user**
-  (never from request data) via `resolveCodexUnixIdentity` and runs the command
-  _as_ that identity (`asUser`), so the file lands 0600-owned by the right user.
+  (never from request data) via `resolveCodexCredentialRoute` and invokes the
+  executor with the resulting delegated home key and Claude config directory.
+
+OAuth start/replacement, final persistence, and logout share one standalone
+credential mutation coordinator. Provider exchange happens outside its lock;
+the route is re-resolved immediately before mutation, and the file generation
+fence protects work that outlives the request. The short tenant write-admission
+gate commits before provider/executor I/O; no tenant database transaction spans
+that I/O. The metadata patch is a separate short transaction. If it fails after
+the file write, the same generation is deleted as compensation.
 
 This also fixes the known strict-impersonation gap where subscription auth had
 no daemon-driven on-disk path at all (only env injection).
@@ -318,8 +333,15 @@ agentic-tool resolver already keys on to select subscription auth for Claude.
   modes.
 - Multi-tenancy: `.credentials.json` is a tenant-owned, per-user derived
   resource. Identity resolution goes through `resolveCodexCredentialRoute`, which
-  fails closed for hosted multi-tenant modes without a `persistent-per-user`
-  executor home; cross-tenant negative coverage mirrors the Codex device flow.
+  fails closed for hosted multi-tenant modes without an **exact** per-user
+  executor home. Sandbox coverage proves distinct tenants/users route to their
+  owner home rather than the daemon's shared `~/.claude`.
+- Frozen tenants are rejected with 503 before executor/provider I/O. The
+  credential control-plane services are non-realtime and denied from the Redis
+  Feathers relay.
+- Claude OAuth and logout remain fail-closed in constrained HA. Enabling them
+  requires durable attempt ownership plus complete cross-replica mutation
+  serialization/fencing, not just a shared home or the Codex capability flag.
 
 ---
 
@@ -342,15 +364,21 @@ across two components under `apps/agor-ui/src/components/ClaudeAuth/`:
 - **`ClaudeOAuthSignIn.tsx`** — the paste-back pane the "Sign in with Claude" tab
   renders: `create({})` surfaces `verificationUrl` as a link, an `Input` +
   `Button` submits the `CODE#STATE` string via `create({ code })`, and
-  success/expired/error states render inline. No poll loop or server-code
-  countdown (unlike Codex's device pane).
+  success/expired/error states render inline. There is no provider-approval poll
+  loop or server-code countdown (unlike Codex's device pane). A remount adopts an existing
+  `exchanging` attempt instead of replacing it, then briefly polls its private
+  status until the owner request reaches a terminal phase.
+
+`check-auth` treats an out-of-band missing/malformed managed file as
+disconnected when the user or UI performs the native-auth recheck; it does not
+silently mutate account metadata in a background read.
 
 ---
 
 ## Follow-ups
 
-1. **`resolveCodexUnixIdentity` rename**: it is used by a non-Codex flow. Rename
-   to `resolveAgenticUnixIdentity` (and generalize its Codex-specific error
+1. **`resolveCodexCredentialRoute` rename**: it is used by a non-Codex flow.
+   Rename to `resolveAgenticCredentialRoute` (and generalize its Codex-specific error
    strings), left as a separate change to keep this diff focused.
 2. **`subscriptionType` response field** (cosmetic; see UNVERIFIED).
 3. **ToS / acceptable use** (see below).
@@ -373,7 +401,7 @@ this needs a human/legal skim before GA — it is not cleared here.**
   increase volume.
 - In **hosted multi-tenant** mode, storing another user's subscription tokens
   requires the strict per-user isolation guarantees (the
-  `hasTenantSafeExecutorCredentialHome` gate). Do not enable this path in modes
+  `hasExactUserExecutorCredentialHome` gate). Do not enable this path in modes
   that can't guarantee per-user credential homes.
 - Recommendation: before GA, confirm with Anthropic (or via the Claude Code
   terms) that daemon-driven `/login`-equivalent sign-in on the user's behalf is

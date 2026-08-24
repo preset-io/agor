@@ -122,6 +122,12 @@ const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
+async function openCreateForm(): Promise<void> {
+  const addButton = screen.getByRole('button', { name: /New MCP Server/i });
+  await waitFor(() => expect(addButton).toBeEnabled());
+  fireEvent.click(addButton);
+}
+
 /**
  * Switch to the policy pane; the servers are what the tab opens on.
  *
@@ -219,7 +225,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_crud', currentUser: MEMBER });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     // stdio runs a command on the executor host, so it is admin-only: a member
     // must not be handed a form pre-filled towards a refusal. The form follows
@@ -233,7 +239,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_private_only', currentUser: MEMBER });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     // The endpoint refuses a member's `global` row under this policy, so the
     // form must not invite one.
@@ -248,7 +254,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'allow_private_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     const scope = await screen.findByLabelText('Scope');
     fireEvent.mouseDown(scope);
@@ -259,7 +265,7 @@ describe('MCPServersTable member policy', () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/i }));
+    await openCreateForm();
 
     expect(await screen.findByLabelText('Command')).toBeInTheDocument();
   });
@@ -483,5 +489,67 @@ describe('MCPServersTable ownership', () => {
 
     expect(own.map((button) => button.disabled)).toEqual([false, false, false]);
     expect(shared.map((button) => button.disabled)).toEqual([false, true, true]);
+  });
+});
+
+/**
+ * An install that was created but never authenticated.
+ *
+ * `usableByUserId` filters on ownership alone, so a marketplace connect the
+ * user walked away from is listed here in full — enabled, owned, and otherwise
+ * reading as a working server. Health is the column that answers "does this
+ * work", so it is the one that has to say so.
+ */
+describe('MCPServersTable unfinished installs', () => {
+  const oauthServer = (overrides: Partial<MCPServer> = {}) =>
+    makeServer({
+      name: 'linear',
+      display_name: 'Linear',
+      source: 'catalog',
+      auth: { type: 'oauth' },
+      ...overrides,
+    } as Partial<MCPServer>);
+
+  it('names an unauthenticated OAuth install rather than calling it untested', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [oauthServer()],
+    });
+
+    expect(await screen.findByText('Not signed in')).toBeVisible();
+    // "Not tested" is the reading it would otherwise get, and it says nothing
+    // about the thing that actually stops this server working.
+    expect(screen.queryByText('Not tested')).not.toBeInTheDocument();
+  });
+
+  it('reports health normally once a live token is present', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [
+        oauthServer({
+          auth: {
+            type: 'oauth',
+            oauth_access_token: '••••••••',
+            oauth_token_expires_at: 4102444800000,
+          },
+        } as Partial<MCPServer>),
+      ],
+    });
+
+    expect(await screen.findByText('Not tested')).toBeVisible();
+    expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
+  });
+
+  it('leaves the health of a non-OAuth server alone', async () => {
+    renderTable({
+      policy: 'allow_crud',
+      currentUser: ADMIN,
+      servers: [makeServer({ tools: [{ name: 'search' }] } as Partial<MCPServer>)],
+    });
+
+    expect(await screen.findByText('1 tools')).toBeVisible();
+    expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
   });
 });

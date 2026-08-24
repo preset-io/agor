@@ -116,6 +116,20 @@ describe('force-fail route authorization and request fencing', () => {
     expect(findTask).not.toHaveBeenCalled();
   });
 
+  it('authorizes an administrator without requiring branch ownership', async () => {
+    const isBranchOwner = vi.fn().mockResolvedValue(false);
+    await expect(
+      authorizeForceFailRoute({
+        session: { session_id: 'session-a' as never, branch_id: 'branch-a' as never },
+        params: { user: { user_id: 'admin-a', role: 'admin' } } as never,
+        body,
+        findTask: async () => stopping,
+        isBranchOwner,
+      })
+    ).resolves.toMatchObject({ task: stopping });
+    expect(isBranchOwner).not.toHaveBeenCalled();
+  });
+
   it('rejects a stale Task epoch instead of selecting a later unverified Task', async () => {
     const later = {
       ...stopping,

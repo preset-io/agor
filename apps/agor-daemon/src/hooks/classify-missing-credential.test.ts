@@ -18,9 +18,15 @@ function makeContext(data: Partial<Message> | undefined): HookContext {
     data,
     params: {
       provider: 'socketio',
-      authentication: { strategy: 'jwt' },
-      task_id: 'task-1',
-      session_id: 'session-1',
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: 'task-1',
+          session_id: 'session-1',
+        },
+      },
     },
   } as unknown as HookContext;
 }
@@ -385,6 +391,25 @@ describe('classifyMissingCredentialFailure', () => {
 
     expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
     expect((ctx.data as Message).content).toEqual(zeroTurnBillingResult.content);
+    expect(taskRepository.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects provider-failure markers attributed to another task or session', async () => {
+    const wrongTask = makeContext({ ...zeroTurnBillingResult });
+    const payload = wrongTask.params.authentication?.payload as Record<string, unknown>;
+    wrongTask.params.authentication = {
+      strategy: 'jwt',
+      payload: { ...payload, task_id: 'task-2' },
+    };
+    await expect(runHook()(wrongTask)).rejects.toThrow('this task executor');
+
+    const wrongSession = makeContext({ ...zeroTurnBillingResult });
+    const sessionPayload = wrongSession.params.authentication?.payload as Record<string, unknown>;
+    wrongSession.params.authentication = {
+      strategy: 'jwt',
+      payload: { ...sessionPayload, session_id: 'session-2' },
+    };
+    await expect(runHook()(wrongSession)).rejects.toThrow('this task executor');
     expect(taskRepository.findById).not.toHaveBeenCalled();
   });
 
