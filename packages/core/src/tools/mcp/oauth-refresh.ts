@@ -12,6 +12,11 @@ import type { MCPServerID, UserID } from '../../types';
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
+import {
+  applyClientAuthentication,
+  selectTokenEndpointAuthMethod,
+  type TokenEndpointAuthMethod,
+} from './oauth-client-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -90,6 +95,13 @@ export interface RefreshMCPTokenOptions {
   clientId: string;
   clientSecret?: string;
   resourceUri?: string;
+  /**
+   * Client-authentication method recorded when the grant was issued. The
+   * refresh grant hits the same token endpoint as the code exchange, so it
+   * must authenticate the same way. Omitted for grants stored before the
+   * method was persisted; those fall back to the RFC 8414 default.
+   */
+  authMethod?: TokenEndpointAuthMethod;
   /** Exact loopback HTTP exception for standalone development/tests only. */
   allowLocalhostHttp?: boolean;
 }
@@ -124,11 +136,14 @@ export async function refreshMCPToken(
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-  if (opts.clientSecret) {
-    headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
-  } else {
-    body.client_id = opts.clientId;
-  }
+  applyClientAuthentication({
+    method:
+      opts.authMethod ?? selectTokenEndpointAuthMethod({ hasClientSecret: !!opts.clientSecret }),
+    clientId: opts.clientId,
+    clientSecret: opts.clientSecret,
+    headers,
+    body,
+  });
 
   let response: Response;
   try {
@@ -163,6 +178,27 @@ export async function refreshMCPToken(
     token_type: parsed.token_type,
     scope: parsed.scope,
   };
+}
+
+/**
+ * Resolve the client-authentication method for a refresh from what the grant
+ * recorded, reconciled against the credentials actually available now.
+ *
+ * Running the persisted value back through the selector rather than trusting
+ * it verbatim covers three cases at once: an unrecognized value (written by a
+ * newer or corrupted writer) degrades to the RFC 8414 default instead of being
+ * sent as-is; a grant authorized as a public client that has since been given
+ * a client secret is not stuck withholding it; and a grant with no secret
+ * available stays a public-client request.
+ */
+function refreshAuthMethod(
+  stored: string | undefined,
+  clientSecret: string | undefined
+): TokenEndpointAuthMethod {
+  return selectTokenEndpointAuthMethod({
+    hasClientSecret: !!clientSecret,
+    registeredMethod: stored,
+  });
 }
 
 type MutexKey = string;
@@ -377,6 +413,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       clientId: row.oauth_client_id,
       clientSecret: row.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
+      authMethod: refreshAuthMethod(row.oauth_token_auth_method, row.oauth_client_secret),
       allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
@@ -481,13 +518,15 @@ async function refreshStandalone(
   let tokenEndpoint = row.oauth_token_endpoint ?? server?.auth?.oauth_token_url;
   if (!tokenEndpoint && server?.url) tokenEndpoint = inferOAuthTokenUrl(server.url);
   if (!tokenEndpoint) throw new MissingTokenEndpointError();
+  const clientSecret = row.oauth_client_secret ?? server?.auth?.oauth_client_secret;
   try {
     const result = await refreshMCPToken({
       tokenEndpoint,
       refreshToken: row.oauth_refresh_token,
       clientId,
-      clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      clientSecret,
       resourceUri: row.oauth_resource_uri,
+      authMethod: refreshAuthMethod(row.oauth_token_auth_method, clientSecret),
       allowLocalhostHttp: true,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);

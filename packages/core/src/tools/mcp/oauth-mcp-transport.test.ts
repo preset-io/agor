@@ -957,6 +957,80 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(String(tokenCall?.[1]?.body)).not.toContain('client_id=');
   });
 
+  it('uses advertised client_secret_post for the authorization-code exchange', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://api.hubspot.example/oauth/v1/token' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ access_token: 'hubspot-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow(
+      '',
+      'manual-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://app.hubspot.example',
+          authorization_endpoint: 'https://app.hubspot.example/oauth/authorize',
+          token_endpoint: 'https://api.hubspot.example/oauth/v1/token',
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
+        },
+        clientSecret: 'manual-secret',
+        cacheKey: 'https://mcp.hubspot.example/',
+        resourceUri: 'https://mcp.hubspot.example/',
+        compatibilityMode: 'legacy',
+        dcrMode: 'disabled',
+      }
+    );
+
+    expect(ctx.tokenEndpointAuthMethod).toBe('client_secret_post');
+
+    const tokenResponse = await completeMCPOAuthFlow(ctx, 'auth-code', ctx.state, {
+      cacheToken: false,
+    });
+    expect(tokenResponse.access_token).toBe('hubspot-token');
+
+    const tokenCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url) === 'https://api.hubspot.example/oauth/v1/token');
+    expect(tokenCall).toBeTruthy();
+    const headers = (tokenCall?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(String(tokenCall?.[1]?.body));
+    expect(body.get('client_id')).toBe('manual-client');
+    expect(body.get('client_secret')).toBe('manual-secret');
+  });
+
+  it('records client_secret_basic when the server advertises no auth methods', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow(
+      '',
+      'manual-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://provider.example.test',
+          authorization_endpoint: 'https://provider.example.test/authorize',
+          token_endpoint: 'https://provider.example.test/token',
+        },
+        clientSecret: 'manual-secret',
+        cacheKey: 'https://mcp.example.test/mcp',
+        resourceUri: 'https://mcp.example.test/mcp',
+        compatibilityMode: 'legacy',
+        dcrMode: 'disabled',
+      }
+    );
+
+    expect(ctx.tokenEndpointAuthMethod).toBe('client_secret_basic');
+  });
+
   it('throws when cacheKey is missing (would silently break token reuse)', async () => {
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
 

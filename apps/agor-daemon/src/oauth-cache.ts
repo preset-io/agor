@@ -51,6 +51,11 @@ export async function persistOAuthToken(
      * the MCP resource URL or mutate server configuration.
      */
     tokenEndpoint?: SaveTokenInput['tokenEndpoint'];
+    /**
+     * Client-authentication method the code exchange used. Persisted so the
+     * refresh grant authenticates the same way the provider accepts.
+     */
+    tokenAuthMethod?: SaveTokenInput['tokenAuthMethod'];
     resourceUri?: SaveTokenInput['resourceUri'];
     grantBinding?: SaveTokenInput['grantBinding'];
   },
@@ -105,6 +110,7 @@ export async function persistOAuthToken(
     clientId: pendingFlow.clientId,
     clientSecret: pendingFlow.clientSecret,
     tokenEndpoint: pendingFlow.tokenEndpoint,
+    tokenAuthMethod: pendingFlow.tokenAuthMethod,
     resourceUri: pendingFlow.resourceUri,
     grantBinding: pendingFlow.grantBinding,
   });

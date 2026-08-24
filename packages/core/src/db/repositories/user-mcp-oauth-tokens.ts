@@ -44,6 +44,7 @@ export interface UserMCPOAuthToken {
   oauth_issuer?: string;
   oauth_authorization_endpoint?: string;
   oauth_token_endpoint?: string;
+  oauth_token_auth_method?: string;
   oauth_redirect_uri?: string;
   refresh_status: 'idle' | 'refreshing' | 'ambiguous';
   refresh_generation: number;
@@ -86,6 +87,8 @@ export interface SaveTokenInput {
    * grants take this value only from the authoritative grant binding below.
    */
   tokenEndpoint?: string;
+  /** Token-endpoint authentication method selected when this grant was issued. */
+  tokenAuthMethod?: string;
   /**
    * Protected resource retained for standalone/SQLite refresh requests.
    * PostgreSQL grants take this value only from the authoritative binding.
@@ -186,6 +189,9 @@ function rowToToken(
       ? String(raw.oauth_authorization_endpoint)
       : undefined,
     oauth_token_endpoint: raw.oauth_token_endpoint ? String(raw.oauth_token_endpoint) : undefined,
+    oauth_token_auth_method: raw.oauth_token_auth_method
+      ? String(raw.oauth_token_auth_method)
+      : undefined,
     oauth_redirect_uri: raw.oauth_redirect_uri ? String(raw.oauth_redirect_uri) : undefined,
     refresh_status: (raw.refresh_status ?? 'idle') as UserMCPOAuthToken['refresh_status'],
     refresh_generation: Number(raw.refresh_generation ?? 0),
@@ -372,6 +378,7 @@ export class UserMCPOAuthTokenRepository {
             oauth_issuer: binding.issuer,
             oauth_authorization_endpoint: binding.authorizationEndpoint,
             oauth_token_endpoint: binding.tokenEndpoint,
+            oauth_token_auth_method: input.tokenAuthMethod ?? null,
             oauth_redirect_uri: binding.redirectUri,
             refresh_status: 'idle' as const,
             refresh_generation: 0,
@@ -405,6 +412,7 @@ export class UserMCPOAuthTokenRepository {
         oauth_issuer: binding?.issuer,
         oauth_authorization_endpoint: binding?.authorizationEndpoint,
         oauth_token_endpoint: binding?.tokenEndpoint ?? input.tokenEndpoint,
+        oauth_token_auth_method: input.tokenAuthMethod,
         oauth_redirect_uri: binding?.redirectUri,
         refresh_status: 'idle',
         refresh_generation: 0,
@@ -476,6 +484,11 @@ export class UserMCPOAuthTokenRepository {
                     : {}),
                   ...(input.resourceUri != null ? { oauth_resource_uri: input.resourceUri } : {}),
                 }),
+            ...(input.tokenAuthMethod != null
+              ? { oauth_token_auth_method: input.tokenAuthMethod }
+              : binding
+                ? { oauth_token_auth_method: null }
+                : {}),
             updated_at: now,
           })
           .where(

@@ -1,0 +1,13 @@
+-- Token-endpoint client authentication method (RFC 8414 §2) the grant was
+-- issued under. The refresh grant hits the same token endpoint as the code
+-- exchange, so it has to authenticate the same way; without this the refresh
+-- would fall back to HTTP Basic and be rejected by servers that advertise only
+-- client_secret_post (e.g. HubSpot's MCP authorization server).
+--
+-- Nullable with no backfill on purpose: existing grants were issued under the
+-- old always-Basic behaviour, and NULL reads back as "use the RFC 8414 default"
+-- (client_secret_basic), which is exactly what they were issued with.
+--
+-- Not a secret, so it is stored in the clear rather than through the PostgreSQL
+-- OAuth secret envelope used for the token/client-secret columns.
+ALTER TABLE `user_mcp_oauth_tokens` ADD `oauth_token_auth_method` text;

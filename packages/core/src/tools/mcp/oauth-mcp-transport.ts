@@ -16,6 +16,11 @@ import type {
 } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { OAuthTokenResponse } from './oauth-auth.js';
+import {
+  applyClientAuthentication,
+  selectTokenEndpointAuthMethod,
+  type TokenEndpointAuthMethod,
+} from './oauth-client-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
@@ -145,6 +150,8 @@ export interface AuthorizationServerMetadata {
   response_types_supported?: string[];
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
+  /** RFC 8414 §2; omitted means `client_secret_basic`. */
+  token_endpoint_auth_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
 }
 
@@ -422,7 +429,12 @@ async function fetchResourceMetadata(
 // Cache for dynamically registered clients (per authorization server)
 const dynamicClientCache = new Map<
   string,
-  { client_id: string; client_secret?: string; redirect_uri: string }
+  {
+    client_id: string;
+    client_secret?: string;
+    redirect_uri: string;
+    token_endpoint_auth_method?: string;
+  }
 >();
 
 const MAX_DCR_RESPONSE_BYTES = 16 * 1024;
@@ -508,7 +520,12 @@ export function __dynamicClientCacheSizeForTests(): number {
  */
 export function __seedDynamicClientCacheForTests(
   registrationEndpoint: string,
-  entry: { client_id: string; client_secret?: string; redirect_uri: string }
+  entry: {
+    client_id: string;
+    client_secret?: string;
+    redirect_uri: string;
+    token_endpoint_auth_method?: string;
+  }
 ): void {
   dynamicClientCache.set(registrationEndpoint, entry);
 }
@@ -533,7 +550,11 @@ async function registerDynamicClient(
   const cached = reuseLocalCache ? dynamicClientCache.get(cacheKey) : undefined;
   if (cached && cached.redirect_uri === redirectUri) {
     console.log('[MCP OAuth] Using cached dynamic client registration');
-    return { client_id: cached.client_id, client_secret: cached.client_secret };
+    return {
+      client_id: cached.client_id,
+      client_secret: cached.client_secret,
+      token_endpoint_auth_method: cached.token_endpoint_auth_method,
+    };
   }
 
   console.log('[MCP OAuth] Performing Dynamic Client Registration');
@@ -626,12 +647,13 @@ async function registerDynamicClient(
       client_id: result.client_id,
       client_secret: result.client_secret,
       redirect_uri: redirectUri,
+      token_endpoint_auth_method: authMethod,
     });
   }
 
   console.log('[MCP OAuth] Dynamic client registered');
 
-  return result;
+  return { ...result, token_endpoint_auth_method: authMethod };
 }
 
 /**
@@ -876,7 +898,9 @@ async function exchangeCodeForToken(
   clientId: string,
   clientSecret?: string,
   resourceUri?: string,
-  allowLocalhostHttp = false
+  allowLocalhostHttp = false,
+  /** Method selected from the authorization server/client metadata. */
+  authMethod?: TokenEndpointAuthMethod
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -886,8 +910,6 @@ async function exchangeCodeForToken(
   };
   if (resourceUri) body.resource = resourceUri;
 
-  // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1),
-  // fall back to body params for public clients or providers that don't support Basic auth.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
     // GitHub's classic OAuth endpoint returns a form-encoded response by
@@ -896,15 +918,17 @@ async function exchangeCodeForToken(
     Accept: 'application/json',
   };
 
-  if (clientSecret) {
-    // Slack and other providers recommend HTTP Basic auth for credentials
-    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
-  } else {
-    // Public client — send client_id in body
-    body.client_id = clientId;
-  }
+  const resolvedAuthMethod =
+    authMethod ?? selectTokenEndpointAuthMethod({ hasClientSecret: !!clientSecret });
+  applyClientAuthentication({
+    method: resolvedAuthMethod,
+    clientId,
+    clientSecret,
+    headers,
+    body,
+  });
 
-  console.log('[MCP OAuth] Starting authorization-code exchange');
+  console.log(`[MCP OAuth] Starting authorization-code exchange client_auth=${resolvedAuthMethod}`);
 
   let response: Response;
   try {
@@ -1094,6 +1118,7 @@ export async function performMCPOAuthFlow(
     // Step 5.5: Get or register client_id
     let actualClientId = clientId;
     let clientSecret: string | undefined;
+    let registeredAuthMethod: string | undefined;
 
     // Compute scopes early — needed for both DCR registration and auth URL.
     // Skip auto-populating from resource metadata when client_id is pre-registered.
@@ -1118,6 +1143,7 @@ export async function performMCPOAuthFlow(
         );
         actualClientId = registration.client_id;
         clientSecret = registration.client_secret;
+        registeredAuthMethod = registration.token_endpoint_auth_method;
       } else {
         throw new Error(
           'OAuth client_id is required but the authorization server does not advertise ' +
@@ -1179,7 +1205,12 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true
+      true,
+      selectTokenEndpointAuthMethod({
+        hasClientSecret: !!clientSecret,
+        supportedMethods: authServerMetadata.token_endpoint_auth_methods_supported,
+        registeredMethod: registeredAuthMethod,
+      })
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1302,6 +1333,8 @@ export interface OAuthFlowContext {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /** RFC 8414/RFC 7591 method selected when the flow started. */
+  tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1508,6 +1541,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   // Client ID resolution (DCR if available)
   let actualClientId = clientId;
   let resolvedClientSecret = opts.clientSecret;
+  let registeredAuthMethod: string | undefined;
 
   if (!actualClientId && dcrMode !== 'disabled') {
     const registrationEndpoint =
@@ -1530,6 +1564,7 @@ async function startMCPOAuthFlowWithAS(opts: {
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
+        registeredAuthMethod = registration.token_endpoint_auth_method;
       } catch (error) {
         if (error instanceof OAuthDCRFailure) throw error;
         throw registrationFailure({
@@ -1580,6 +1615,11 @@ async function startMCPOAuthFlowWithAS(opts: {
     pkceVerifier: pkce.verifier,
     clientId: actualClientId!,
     clientSecret: resolvedClientSecret,
+    tokenEndpointAuthMethod: selectTokenEndpointAuthMethod({
+      hasClientSecret: !!resolvedClientSecret,
+      supportedMethods: authServerMetadata?.token_endpoint_auth_methods_supported,
+      registeredMethod: registeredAuthMethod,
+    }),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
@@ -1819,7 +1859,8 @@ export async function completeMCPOAuthFlow(
     context.clientId,
     context.clientSecret,
     context.resourceUri,
-    context.allowLocalhostHttp
+    context.allowLocalhostHttp,
+    context.tokenEndpointAuthMethod
   );
 
   console.log('[MCP OAuth] Access token received successfully');
