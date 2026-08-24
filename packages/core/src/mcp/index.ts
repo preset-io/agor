@@ -44,6 +44,8 @@ export {
   AGOR_MCP_SERVER_NAME,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
+  MCPOAuthAuthorityUnavailableError,
+  type MCPOAuthAuthResolution,
   type MCPResolutionDeps,
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,

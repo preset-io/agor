@@ -23,11 +23,7 @@ import {
   getMcpServersForSession,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
-<<<<<<< HEAD
-  sanitizeMCPExternalError,
-=======
   resolveScopedMCPAuthHeaders,
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -468,16 +464,10 @@ export async function setupQuery(
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const deniedTools: string[] = [];
-<<<<<<< HEAD
-        const authDiagnostics = new McpAuthDiagnostics();
-        for (const { server } of attachableServers) {
-=======
         const authDiagnostics = new McpAuthDiagnosticAccumulator();
 
         for (const scoped of attachableServers) {
-          const { server } = scoped;
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
-          // Infer transport if missing (backwards compatibility)
+          const { server } = scoped; // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
 
           // Build server config (convert 'transport' field to 'type' for Claude Code)
@@ -499,7 +489,9 @@ export async function setupQuery(
 
           try {
             // Pass mcpUrl for OAuth token cache lookup
-            const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             const missingRequiredAuth =
               !!server.auth &&
               server.auth.type !== 'none' &&

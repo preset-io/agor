@@ -2094,11 +2094,13 @@ export class SlackConnector implements GatewayConnector {
       );
     }
 
-    this.socketLogger = createSlackSdkLoggerController();
-    this.socketMode = new SocketModeClient({
+    const socketLogger = createSlackSdkLoggerController();
+    const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
-      logger: this.socketLogger.logger,
+      logger: socketLogger.logger,
     });
+    this.socketLogger = socketLogger;
+    this.socketMode = socketMode;
 
     // Read config options (with defaults matching UI)
     const enableChannels = this.config.enable_channels ?? false;
@@ -2129,7 +2131,7 @@ export class SlackConnector implements GatewayConnector {
     }
 
     // Handle incoming Slack events
-    this.socketMode.on('slack_event', async ({ type, body, ack }) => {
+    socketMode.on('slack_event', async ({ type, body, ack }) => {
       // Event received - process based on type
 
       // Handle both 'message' events (DMs, threads) and 'app_mention' events (channel mentions)
@@ -2416,12 +2418,14 @@ export class SlackConnector implements GatewayConnector {
     });
 
     try {
-      await this.socketMode.start();
-      this.socketLogger.setLifecycleState('active');
+      await socketMode.start();
+      socketLogger.setLifecycleState(
+        this.socketMode === socketMode && this.socketLogger === socketLogger ? 'active' : 'stopped'
+      );
     } catch (error) {
-      this.socketLogger.setLifecycleState('stopped');
-      this.socketLogger = null;
-      this.socketMode = null;
+      socketLogger.setLifecycleState('stopped');
+      if (this.socketLogger === socketLogger) this.socketLogger = null;
+      if (this.socketMode === socketMode) this.socketMode = null;
       const code =
         typeof error === 'object' && error !== null
           ? `${String((error as { code?: unknown }).code ?? '')} ${String(
@@ -2447,14 +2451,16 @@ export class SlackConnector implements GatewayConnector {
    * Stop Socket Mode listener
    */
   async stopListening(): Promise<void> {
-    if (this.socketMode) {
-      this.socketLogger?.setLifecycleState('stopping');
+    const socketMode = this.socketMode;
+    const socketLogger = this.socketLogger;
+    if (socketMode) {
+      socketLogger?.setLifecycleState('stopping');
       try {
-        await this.socketMode.disconnect();
+        await socketMode.disconnect();
       } finally {
-        this.socketLogger?.setLifecycleState('stopped');
-        this.socketLogger = null;
-        this.socketMode = null;
+        socketLogger?.setLifecycleState('stopped');
+        if (this.socketLogger === socketLogger) this.socketLogger = null;
+        if (this.socketMode === socketMode) this.socketMode = null;
       }
     }
   }

@@ -31,11 +31,7 @@ import {
   isMCPAbortError,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
-<<<<<<< HEAD
-  sanitizeMCPExternalError,
-=======
   resolveScopedMCPAuthHeaders,
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -753,7 +749,9 @@ export class GeminiPromptService {
           const { server } = scoped;
           let headers: Record<string, string> | undefined;
           try {
-            const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (
               server.transport !== 'stdio' &&

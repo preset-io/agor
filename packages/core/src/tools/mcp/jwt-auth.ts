@@ -202,18 +202,14 @@ export async function resolveMCPAuthHeaders(
     allowLocalhostHttp?: boolean;
     cacheNamespace?: string;
     disableProcessTokenCache?: boolean;
-<<<<<<< HEAD
     /** Optional live request authority for provider/token use. */
-    assertCurrent?: () => void;
-=======
-    /**
+    assertCurrent?: () => void /**
      * Identifies the authority that supplied OAuth credentials for this
      * handoff. The executor repository is tenant/user/generation scoped and
      * authoritative: an empty result must not fall through to a second
      * client-credentials exchange from persisted configuration.
-     */
+     */;
     oauthCredentialAuthority?: 'configuration' | 'executor_repository';
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
   } = {}
 ): Promise<Record<string, string> | undefined> {
   options.assertCurrent?.();

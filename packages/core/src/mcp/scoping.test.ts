@@ -432,6 +432,20 @@ describe('getMcpServersForSession', () => {
       }
     }
   );
+  it('can surface a sanitized authority failure separately from credential unavailability', async () => {
+    const server = makeServer('oauth-server', 'session', 'oauth');
+    server.auth = { type: 'oauth' };
+
+    await expect(
+      resolveScopedMCPAuthHeaders(
+        { server, source: 'session-assigned', oauthAuthResolution: 'error' },
+        { surfaceAuthorityError: true }
+      )
+    ).rejects.toMatchObject({
+      name: 'MCPOAuthAuthorityUnavailableError',
+      message: 'OAuth credential authority unavailable',
+    });
+  });
 });
 
 describe('getMcpServersForSession - tool_permissions admission gate', () => {

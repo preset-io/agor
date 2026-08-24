@@ -72,13 +72,31 @@ export interface MCPServerWithSource {
   server: MCPServer;
   source: 'session-assigned' | 'global';
   /** Non-persisted result from the tenant/user-scoped executor credential authority. */
-  oauthAuthResolution: 'not_applicable' | 'not_attempted' | 'available' | 'unavailable' | 'error';
+  oauthAuthResolution: MCPOAuthAuthResolution;
+}
+
+export type MCPOAuthAuthResolution =
+  | 'not_applicable'
+  | 'not_attempted'
+  | 'available'
+  | 'unavailable'
+  | 'error';
+
+export class MCPOAuthAuthorityUnavailableError extends Error {
+  constructor() {
+    super('OAuth credential authority unavailable');
+    this.name = 'MCPOAuthAuthorityUnavailableError';
+  }
 }
 
 /** Resolve adapter headers while preserving the explicit credential-authority boundary. */
 export function resolveScopedMCPAuthHeaders(
-  scoped: MCPServerWithSource
+  scoped: MCPServerWithSource,
+  options: { surfaceAuthorityError?: boolean } = {}
 ): Promise<Record<string, string> | undefined> {
+  if (scoped.oauthAuthResolution === 'error' && options.surfaceAuthorityError) {
+    return Promise.reject(new MCPOAuthAuthorityUnavailableError());
+  }
   return resolveMCPAuthHeaders(scoped.server.auth, scoped.server.url, {
     oauthCredentialAuthority:
       scoped.oauthAuthResolution === 'not_attempted' ||
@@ -370,16 +388,10 @@ export async function getMcpServersForSession(
           }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
         } catch {
-<<<<<<< HEAD
-          // Credential hydration failures may carry provider URLs or reflected
-          // headers. The caller receives structured recovery elsewhere.
-          console.warn('[mcp-auth] oauth_header_hydration_failed');
-=======
           for (const scoped of servers) {
             if (scoped.server.auth?.type === 'oauth') scoped.oauthAuthResolution = 'error';
           }
           console.warn('[mcp.auth] authority_unavailable authority=executor_repository');
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
         }
       }
     }

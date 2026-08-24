@@ -35,11 +35,7 @@ import {
   listMcpToolsWithPermission,
   MCPExternalError,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
-<<<<<<< HEAD
-  sanitizeMCPExternalError,
-=======
   resolveScopedMCPAuthHeaders,
->>>>>>> 4d02a837 (Address integration diagnostics review feedback)
 } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
@@ -837,7 +833,9 @@ export class CodexPromptService {
       // out of the SDK's generated `--config` arguments. Non-bearer schemes
       // log a warning since Codex's CLI only supports bearer auth.
       try {
-        const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+        const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+          surfaceAuthorityError: true,
+        });
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
         const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
