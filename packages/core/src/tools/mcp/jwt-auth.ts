@@ -41,6 +41,17 @@ export interface JWTTokenFetchOptions {
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
 const tokenCache = new Map<string, CachedToken>();
+const authoritativelyResolvedOAuthAuth = new WeakSet<MCPAuth>();
+
+/**
+ * Record that the tenant/user-scoped credential owner already resolved this
+ * OAuth config for the current executor handoff. This is deliberately object-
+ * local, not a credential cache: it cannot survive a fresh DB generation or
+ * be shared with another user/tenant's material.
+ */
+export function markMCPAuthoritativeOAuthResolution(auth: MCPAuth): void {
+  if (auth.type === 'oauth') authoritativelyResolvedOAuthAuth.add(auth);
+}
 
 // Token validity duration: 15 minutes (in milliseconds)
 const TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -260,6 +271,11 @@ export async function resolveMCPAuthHeaders(
         };
       }
     }
+
+    // The executor repository is authoritative for per-user OAuth grants. If
+    // it returned no token, do not fan out into a second client-credentials
+    // probe with persisted configuration from the same server row.
+    if (authoritativelyResolvedOAuthAuth.has(auth)) return undefined;
 
     // Browser authorization-code tokens must arrive through the caller's
     // trusted, server/user-scoped durable record. The legacy origin-only

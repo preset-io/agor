@@ -57,6 +57,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { McpAuthDiagnostics } from '../../services/mcp-auth-diagnostics';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -757,6 +758,7 @@ export class CodexPromptService {
     );
 
     const result: CodexConfigObject = {};
+    const authDiagnostics = new McpAuthDiagnostics();
     const claimedNames = new Set<string>();
 
     // Built-in Agor MCP server (streamable HTTP). Token travels via
@@ -873,22 +875,10 @@ export class CodexPromptService {
           }
         } else if (missingRequiredAuth) {
           canRequireServer = false;
-          console.warn(
-            `   ⚠️  [Codex MCP] Server "${server.name}" has configured auth but no valid token found.`
-          );
-          const action =
-            server.auth?.type === 'oauth'
-              ? `Start OAuth Flow for ${server.name}`
-              : `check credentials for ${server.name}`;
-          console.warn(`      💡 Go to Settings → MCP Servers → ${action}.`);
+          authDiagnostics.recordUnavailable();
         }
       } catch {
-        // Auth-resolution exceptions may include a provider endpoint or
-        // reflected credential material. Recovery is surfaced by the daemon;
-        // executor logs retain only a stable category and server identity.
-        console.warn(
-          `   ⚠️  [Codex MCP] Auth header resolution failed server_id=${server.mcp_server_id}`
-        );
+        authDiagnostics.recordResolutionFailure();
         canRequireServer = false;
       }
 
@@ -897,6 +887,7 @@ export class CodexPromptService {
     }
 
     const total = stdioServers.length + httpServers.length + (mcpToken ? 1 : 0);
+    authDiagnostics.flush('codex');
     if (total > 0) {
       console.info(`✅ [Codex MCP] Configured ${total} MCP server(s)`);
     }

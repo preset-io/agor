@@ -46,7 +46,7 @@ import type {
 } from '../connector';
 import { GatewayListenerError } from '../listener-error';
 import { sanitizeGatewayProviderError } from '../provider-error';
-import { createSlackSdkLogger } from './slack-sdk-logger';
+import { createSlackSdkLoggerController, type SlackSdkLoggerController } from './slack-sdk-logger';
 
 function slackProviderFailure(prefix: string, error: unknown): Error {
   return new Error(`${prefix}: ${sanitizeGatewayProviderError(error)}`);
@@ -843,6 +843,7 @@ export class SlackConnector implements GatewayConnector {
 
   private web: WebClient;
   private socketMode: SocketModeClient | null = null;
+  private socketLogger: SlackSdkLoggerController | null = null;
   private config: SlackConfig;
   private botUserId: string | null = null;
 
@@ -2093,9 +2094,10 @@ export class SlackConnector implements GatewayConnector {
       );
     }
 
+    this.socketLogger = createSlackSdkLoggerController();
     this.socketMode = new SocketModeClient({
       appToken: this.config.app_token,
-      logger: createSlackSdkLogger(),
+      logger: this.socketLogger.logger,
     });
 
     // Read config options (with defaults matching UI)
@@ -2415,7 +2417,10 @@ export class SlackConnector implements GatewayConnector {
 
     try {
       await this.socketMode.start();
+      this.socketLogger.setLifecycleState('active');
     } catch (error) {
+      this.socketLogger.setLifecycleState('stopped');
+      this.socketLogger = null;
       this.socketMode = null;
       const code =
         typeof error === 'object' && error !== null
@@ -2443,8 +2448,14 @@ export class SlackConnector implements GatewayConnector {
    */
   async stopListening(): Promise<void> {
     if (this.socketMode) {
-      await this.socketMode.disconnect();
-      this.socketMode = null;
+      this.socketLogger?.setLifecycleState('stopping');
+      try {
+        await this.socketMode.disconnect();
+      } finally {
+        this.socketLogger?.setLifecycleState('stopped');
+        this.socketLogger = null;
+        this.socketMode = null;
+      }
     }
   }
 

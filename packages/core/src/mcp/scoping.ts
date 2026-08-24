@@ -19,6 +19,7 @@
  * must never silently borrow the owner's Agor-managed connectors or credentials.
  */
 
+import { markMCPAuthoritativeOAuthResolution } from '../tools/mcp/jwt-auth';
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
 import { isMCPServerUsableBy } from './ownership';
 import {
@@ -315,6 +316,9 @@ export async function getMcpServersForSession(
         );
       } else {
         try {
+          for (const server of oauthServers) {
+            if (server.auth) markMCPAuthoritativeOAuthResolution(server.auth);
+          }
           const authHeaders = await deps.mcpOAuthAuthHeadersRepo.getAuthHeaders(
             oauthServers.map((server) => server.mcp_server_id)
           );
