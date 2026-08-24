@@ -103,11 +103,13 @@ function Harness({
   client = makeClient(),
   initialSource,
   tool = 'claude-code',
+  collapsibleChips,
 }: {
   user: User;
   client?: AgorClient | null;
   initialSource?: string;
   tool?: 'claude-code' | 'codex' | 'gemini';
+  collapsibleChips?: boolean;
 }) {
   const [form] = Form.useForm();
   return (
@@ -118,6 +120,7 @@ function Harness({
         mcpServerById={new Map()}
         currentUser={user}
         enableSaveAsDefault
+        collapsibleChips={collapsibleChips}
       />
       <Form.Item shouldUpdate noStyle>
         {() => {
@@ -323,6 +326,30 @@ describe('AgenticConfigChipRow', () => {
     render(<Harness user={{ user_id: 'gemini-user' } as User} tool="gemini" />);
     await screen.findByTestId('permission-chip');
     expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
+  });
+
+  it('collapses the chip row behind a one-line summary when collapsibleChips is set', async () => {
+    render(<Harness user={userWithDefault} collapsibleChips />);
+
+    // The Configuration select stays visible even while chips are collapsed.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/My default · Claude Opus 4.8 — 200k · Accept edits/)
+      ).toBeInTheDocument()
+    );
+
+    // The collapsed summary keeps every resolved value on one middot-joined line.
+    const summary = screen.getByText(
+      'Opus 4.8 — 200k · Accept edits · Effort: High · No MCP servers · Advisor: Off'
+    );
+    const header = summary.closest('[role="button"]');
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+
+    // Expanding is keyboard operable and reveals the editable chips.
+    if (!header) throw new Error('missing disclosure header');
+    fireEvent.click(header);
+    await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
   });
 });
 

@@ -472,6 +472,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             branchId={primaryBranch?.branch_id}
             validateModelSelection
             showEffort
+            collapsibleChips
             onConfigValidityChange={handleConfigValidity}
             leadingField={
               <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>

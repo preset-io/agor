@@ -15,11 +15,23 @@ import type {
 import { getDefaultModelForTool, getDefaultPermissionMode } from '@agor-live/client';
 import {
   ApiOutlined,
+  DownOutlined,
   ExperimentOutlined,
   InfoCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Flex, Form, Popover, Select, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Collapse,
+  Flex,
+  Form,
+  Popover,
+  Select,
+  Typography,
+  theme,
+} from 'antd';
 import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import {
@@ -57,6 +69,12 @@ export interface AgenticConfigChipRowProps {
   enableSaveAsDefault?: boolean;
   /** Hide effort where changes cannot affect the active runtime. */
   showEffort?: boolean;
+  /**
+   * Tuck the chip row into a disclosure that starts collapsed, showing a
+   * single-line summary of the resolved values. Keeps the "Configuration"
+   * select visible. Opt-in for tight surfaces like the navbar composer.
+   */
+  collapsibleChips?: boolean;
   /**
    * Reports the same source validity enforced by the registered form field so
    * callers can disable submission proactively. `reason` explains why.
@@ -110,6 +128,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
   showEffort = true,
+  collapsibleChips = false,
   onConfigValidityChange,
   leadingField,
 }) => {
@@ -173,6 +192,33 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const resolvedEffort = explicitEffort ?? toolCapabilities.defaultReasoningEffort;
   const advisorModel = resolved.modelConfig?.advisorModel;
   const mcpCount = formMcp?.length ?? 0;
+  const requiresModelSelection = agenticToolRequiresModelSelection(tool);
+
+  // Chip labels, also composed into the collapsed one-line summary so the two
+  // can never drift apart.
+  const showModelChip = Boolean(resolvedModel) || requiresModelSelection;
+  const modelLabel = requiresModelSelection
+    ? resolvedModelConfig?.provider && resolvedModel
+      ? `${resolvedModelConfig.provider}/${resolvedModel}`
+      : 'Select provider/model'
+    : shortModelName(tool, resolvedModel);
+  const permissionLabel = getPermissionModeLabel(tool, resolvedPermission);
+  const effortLabel = `Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`;
+  const mcpLabel =
+    mcpCount > 0 ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}` : 'No MCP servers';
+  const advisorLabel = advisorModel
+    ? `Advisor: ${shortModelName(tool, advisorModel)}`
+    : 'Advisor: Off';
+
+  const chipSummary = [
+    showModelChip ? modelLabel : null,
+    permissionLabel,
+    supportsEffort ? effortLabel : null,
+    mcpLabel,
+    isClaude ? advisorLabel : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   // Seed inline fields from the currently-resolved config, then flip to Custom.
   const seedCustom = () => {
@@ -261,6 +307,115 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     </Form.Item>
   );
 
+  const chipRow = (
+    <Flex gap={token.marginXS} align="center" wrap="wrap">
+      {showModelChip && (
+        <EditableChip
+          icon={<RobotOutlined />}
+          label={modelLabel}
+          title="Model"
+          editable={inlineAllowed}
+          managedNote={managedNote}
+          width={440}
+          testid="model-chip"
+          renderContent={() => (
+            <ModelSelector
+              value={resolved.modelConfig as ModelConfig | undefined}
+              onChange={onModelChange}
+              agentic_tool={tool}
+              client={client}
+              branchId={branchId}
+              catalogEnabled={catalogEnabled}
+              showAdvisor={false}
+            />
+          )}
+        />
+      )}
+
+      <EditableChip
+        icon={permissionMeta?.icon}
+        label={permissionLabel}
+        title="Permission mode"
+        editable={inlineAllowed}
+        managedNote={managedNote}
+        color={permissionColor}
+        width={340}
+        testid="permission-chip"
+        renderContent={(close) => (
+          <PermissionModeSelector
+            value={resolvedPermission}
+            onChange={(mode) => {
+              onPermissionChange(mode);
+              close();
+            }}
+            agentic_tool={tool}
+            fullWidth
+          />
+        )}
+      />
+
+      {supportsEffort && (
+        <EditableChip
+          icon={<ExperimentOutlined />}
+          label={effortLabel}
+          title="Reasoning effort"
+          editable={inlineAllowed}
+          managedNote={managedNote}
+          width={300}
+          testid="effort-chip"
+          renderContent={(close) => (
+            <EffortSelector
+              value={resolvedEffort}
+              levels={effortLevels}
+              fallbackValue={toolCapabilities.defaultReasoningEffort}
+              allowInherited={!toolCapabilities.defaultReasoningEffort}
+              onChange={(effort) => {
+                onEffortChange(effort);
+                close();
+              }}
+              fullWidth
+            />
+          )}
+        />
+      )}
+
+      {/* MCP servers — orthogonal to preset config, always editable; multi-select stays open */}
+      <EditableChip
+        icon={<ApiOutlined />}
+        label={mcpLabel}
+        title="MCP servers"
+        editable
+        width={360}
+        testid="mcp-chip"
+        renderContent={() => (
+          <MCPServerSelect
+            mcpServers={mapToArray(mcpServerById)}
+            value={formMcp}
+            onChange={onMcpChange}
+            placeholder="No MCP servers attached"
+            style={{ width: '100%' }}
+          />
+        )}
+      />
+
+      {/* Advisor — applied from any source, so it must stay clearable from any source */}
+      {isClaude && (
+        <EditableChip
+          icon={<InfoCircleOutlined />}
+          label={advisorLabel}
+          title="Advisor model"
+          editable={inlineAllowed}
+          managedNote={managedNote}
+          width={340}
+          testid="advisor-chip"
+          renderContent={() => (
+            <AdvisorModelSelect value={advisorModel} onChange={onAdvisorChange} client={client} />
+          )}
+        />
+      )}
+    </Flex>
+  );
+
   return (
     <div style={{ marginBottom: token.marginLG }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
@@ -293,120 +448,30 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         />
       )}
 
-      <Flex gap={token.marginXS} align="center" wrap="wrap">
-        {(resolvedModel || agenticToolRequiresModelSelection(tool)) && (
-          <EditableChip
-            icon={<RobotOutlined />}
-            label={
-              agenticToolRequiresModelSelection(tool)
-                ? resolvedModelConfig?.provider && resolvedModel
-                  ? `${resolvedModelConfig.provider}/${resolvedModel}`
-                  : 'Select provider/model'
-                : shortModelName(tool, resolvedModel)
-            }
-            title="Model"
-            editable={inlineAllowed}
-            managedNote={managedNote}
-            width={440}
-            testid="model-chip"
-            renderContent={() => (
-              <ModelSelector
-                value={resolved.modelConfig as ModelConfig | undefined}
-                onChange={onModelChange}
-                agentic_tool={tool}
-                client={client}
-                branchId={branchId}
-                catalogEnabled={catalogEnabled}
-                showAdvisor={false}
-              />
-            )}
-          />
-        )}
-
-        <EditableChip
-          icon={permissionMeta?.icon}
-          label={getPermissionModeLabel(tool, resolvedPermission)}
-          title="Permission mode"
-          editable={inlineAllowed}
-          managedNote={managedNote}
-          color={permissionColor}
-          width={340}
-          testid="permission-chip"
-          renderContent={(close) => (
-            <PermissionModeSelector
-              value={resolvedPermission}
-              onChange={(mode) => {
-                onPermissionChange(mode);
-                close();
-              }}
-              agentic_tool={tool}
-              fullWidth
-            />
-          )}
+      {collapsibleChips ? (
+        <Collapse
+          ghost
+          destroyOnHidden={false}
+          expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+          items={[
+            {
+              key: 'chips',
+              label: (
+                <Typography.Text
+                  type="secondary"
+                  ellipsis={{ tooltip: chipSummary }}
+                  style={{ display: 'block', fontSize: token.fontSizeSM, minWidth: 0 }}
+                >
+                  {chipSummary}
+                </Typography.Text>
+              ),
+              children: chipRow,
+            },
+          ]}
         />
-
-        {supportsEffort && (
-          <EditableChip
-            icon={<ExperimentOutlined />}
-            label={`Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`}
-            title="Reasoning effort"
-            editable={inlineAllowed}
-            managedNote={managedNote}
-            width={300}
-            testid="effort-chip"
-            renderContent={(close) => (
-              <EffortSelector
-                value={resolvedEffort}
-                levels={effortLevels}
-                fallbackValue={toolCapabilities.defaultReasoningEffort}
-                allowInherited={!toolCapabilities.defaultReasoningEffort}
-                onChange={(effort) => {
-                  onEffortChange(effort);
-                  close();
-                }}
-                fullWidth
-              />
-            )}
-          />
-        )}
-
-        {/* MCP servers — orthogonal to preset config, always editable; multi-select stays open */}
-        <EditableChip
-          icon={<ApiOutlined />}
-          label={
-            mcpCount > 0 ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}` : 'No MCP servers'
-          }
-          title="MCP servers"
-          editable
-          width={360}
-          testid="mcp-chip"
-          renderContent={() => (
-            <MCPServerSelect
-              mcpServers={mapToArray(mcpServerById)}
-              value={formMcp}
-              onChange={onMcpChange}
-              placeholder="No MCP servers attached"
-              style={{ width: '100%' }}
-            />
-          )}
-        />
-
-        {/* Advisor — applied from any source, so it must stay clearable from any source */}
-        {isClaude && (
-          <EditableChip
-            icon={<InfoCircleOutlined />}
-            label={advisorModel ? `Advisor: ${shortModelName(tool, advisorModel)}` : 'Advisor: Off'}
-            title="Advisor model"
-            editable={inlineAllowed}
-            managedNote={managedNote}
-            width={340}
-            testid="advisor-chip"
-            renderContent={() => (
-              <AdvisorModelSelect value={advisorModel} onChange={onAdvisorChange} client={client} />
-            )}
-          />
-        )}
-      </Flex>
+      ) : (
+        chipRow
+      )}
 
       {enableSaveAsDefault && isInline && currentUser && client && (
         <div style={{ marginTop: token.marginSM }}>
