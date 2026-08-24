@@ -304,13 +304,22 @@ function disconnectRevokedExecutorAfterTransportDrain(socket: Socket): void {
   let finished = false;
   let pendingTransport: Socket['conn']['transport'] | undefined;
   let onReady: (() => void) | undefined;
-  let deadline: ReturnType<typeof setTimeout>;
+  let onSocketDisconnect: (() => void) | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
 
   const cleanup = () => {
     if (pendingTransport && onReady) pendingTransport.removeListener('ready', onReady);
-    clearTimeout(deadline);
+    if (onSocketDisconnect) socket.removeListener('disconnect', onSocketDisconnect);
+    if (deadline) clearTimeout(deadline);
     pendingTransport = undefined;
     onReady = undefined;
+    onSocketDisconnect = undefined;
+    deadline = undefined;
+  };
+  onSocketDisconnect = () => {
+    if (finished) return;
+    finished = true;
+    cleanup();
   };
   const disconnect = () => {
     if (finished) return;
@@ -339,6 +348,7 @@ function disconnectRevokedExecutorAfterTransportDrain(socket: Socket): void {
     pendingTransport.once('ready', onReady);
   };
 
+  socket.once('disconnect', onSocketDisconnect);
   deadline = setTimeout(disconnect, EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS);
   deadline.unref?.();
   // Feathers queues the acknowledgement after the service promise resolves.

@@ -447,6 +447,8 @@ describe('executor Socket.IO connection capability', () => {
     if (!serverSocket) throw new Error('Expected connected executor socket');
     const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> }).feathers;
     const transport = serverSocket.conn.transport;
+    const disconnectListenersBefore = serverSocket.listenerCount('disconnect');
+    const readyListenersBefore = transport.listenerCount('ready');
     const send = transport.send.bind(transport);
     let releaseAcknowledgement: (() => void) | undefined;
     transport.send = ((packets: Parameters<typeof send>[0]) => {
@@ -481,6 +483,8 @@ describe('executor Socket.IO connection capability', () => {
     expect(serverSocket.connected).toBe(true);
     expect(harness.client.io.connected).toBe(true);
     expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+    expect(serverSocket.listenerCount('disconnect')).toBe(disconnectListenersBefore + 1);
+    expect(transport.listenerCount('ready')).toBe(readyListenersBefore + 1);
     releaseAcknowledgement?.();
     await expect(finish).resolves.toEqual({
       accepted: true,
@@ -488,6 +492,8 @@ describe('executor Socket.IO connection capability', () => {
     });
 
     await disconnected;
+    expect(serverSocket.listenerCount('disconnect')).toBe(disconnectListenersBefore);
+    expect(transport.listenerCount('ready')).toBeLessThanOrEqual(readyListenersBefore);
   });
 
   it('rejects login when revocation lands after authority validation starts', async () => {
