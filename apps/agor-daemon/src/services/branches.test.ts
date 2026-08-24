@@ -2339,6 +2339,81 @@ describe('BranchesService environment health requests', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  dbTest(
+    'treats repeated automatic and explicit startup network failures as unrecorded observations',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `${generateId()}@example.com`,
+        name: 'Startup health no-op',
+      });
+      const repo = await new RepoRepository(db).create({
+        repo_id: generateId(),
+        slug: `startup-health-noop-${generateId()}`,
+        name: 'Startup health no-op',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/startup-health-noop.git',
+        local_path: `/tmp/${generateId()}`,
+        default_branch: 'main',
+      });
+      const branchRepo = new BranchRepository(db);
+      const branch = await branchRepo.create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        name: `startup-health-noop-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: 8_700_000,
+        path: `/tmp/${generateId()}`,
+        created_by: user.user_id,
+        health_check_url: 'https://example.invalid/health',
+        environment_instance: { status: 'starting' },
+      });
+      const branchesService = { emit: vi.fn() };
+      const app = {
+        get(name: string) {
+          return name === 'distributedWorkIdentity'
+            ? { instanceId: 'daemon-a', bootId: 'boot-a' }
+            : {};
+        },
+        service(path: string) {
+          if (path === 'repos') return { get: vi.fn(async () => repo) };
+          if (path === 'branches') return branchesService;
+          throw new Error(`Unknown service: ${path}`);
+        },
+      } as unknown as Application;
+      const service = new BranchesService(db as never, app);
+      const fetchMock = vi.fn(async () => {
+        throw new Error('Health endpoint unreachable');
+      });
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      globalThis.fetch = fetchMock;
+
+      try {
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          await expect(
+            service.checkHealth(branch.branch_id, undefined, { intent: 'automatic' })
+          ).resolves.toMatchObject({
+            environment_instance: { status: 'starting' },
+          });
+        }
+        await expect(service.checkHealth(branch.branch_id)).resolves.toMatchObject({
+          environment_instance: { status: 'starting' },
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(
+          (await branchRepo.findById(branch.branch_id))?.environment_instance?.last_health_check
+        ).toBeUndefined();
+        expect(branchesService.emit).not.toHaveBeenCalled();
+        expect(errorLog).not.toHaveBeenCalled();
+        expect(warnLog).not.toHaveBeenCalled();
+      } finally {
+        errorLog.mockRestore();
+        warnLog.mockRestore();
+      }
+    }
+  );
+
   dbTest('fences late health success across stop and archive races', async ({ db }) => {
     const user = await new UsersRepository(db).create({
       email: `${generateId()}@example.com`,
