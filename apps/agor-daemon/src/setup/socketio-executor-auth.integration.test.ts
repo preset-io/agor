@@ -437,10 +437,29 @@ describe('executor Socket.IO connection capability', () => {
     ).resolves.toBeNull();
   });
 
-  it('acknowledges a self-revoking task RPC before disconnecting its executor', async () => {
+  it('drains a self-revoking task RPC acknowledgement before disconnecting its executor', async () => {
     const harness = await startHarness();
     harnesses.push(harness);
     await waitForConnect(harness.client);
+    const serverSocket = harness.socketConfig
+      .getSocketServer()
+      ?.sockets.sockets.get(harness.client.io.id!);
+    if (!serverSocket) throw new Error('Expected connected executor socket');
+    const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> }).feathers;
+    const transport = serverSocket.conn.transport;
+    const send = transport.send.bind(transport);
+    let releaseAcknowledgement: (() => void) | undefined;
+    transport.send = ((packets: Parameters<typeof send>[0]) => {
+      // Deterministically model production transport backpressure. The Task
+      // mutation and token revocation commit before Feathers queues its RPC
+      // acknowledgement; closing the namespace while this write is held makes
+      // the client report a false task failure even though terminality won.
+      transport.writable = false;
+      releaseAcknowledgement = () => {
+        transport.send = send;
+        send(packets);
+      };
+    }) as typeof transport.send;
     const disconnected = waitForDisconnect(harness.client);
 
     const tasks = harness.client.service('tasks') as unknown as {
@@ -448,7 +467,22 @@ describe('executor Socket.IO connection capability', () => {
       finish(data: { task_id: string }): Promise<unknown>;
     };
     tasks.methods?.('finish');
-    await expect(tasks.finish({ task_id: TASK_ID })).resolves.toEqual({
+    const finish = tasks.finish({ task_id: TASK_ID });
+    void finish.catch(() => undefined);
+    await waitFor(
+      () =>
+        releaseAcknowledgement !== undefined &&
+        getAuthenticatedConnectionAuthority(connection) === undefined
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Revocation is already authoritative and the Task room is already gone,
+    // but transport retirement must not overtake the terminal RPC response.
+    expect(serverSocket.connected).toBe(true);
+    expect(harness.client.io.connected).toBe(true);
+    expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+    releaseAcknowledgement?.();
+    await expect(finish).resolves.toEqual({
       accepted: true,
       task_id: TASK_ID,
     });

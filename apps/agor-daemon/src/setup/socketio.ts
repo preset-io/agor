@@ -272,6 +272,79 @@ export interface SocketIOResult {
  * user stays on the same board.
  */
 const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
+const EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS = 5_000;
+
+function deferExecutorTransportWork(work: () => void): void {
+  // Transport-only callback: it must never perform database or tenant-owned
+  // work while retaining the revoking request's async context.
+  setImmediate(work);
+}
+
+/**
+ * Retire a revoked executor transport without overtaking the RPC response that
+ * caused the revocation.
+ *
+ * Task terminality revokes the bearer inside the Feathers service call. Its
+ * Socket.IO acknowledgement is queued only after that call returns, so an
+ * unconditional next-turn disconnect can close a backpressured transport
+ * before the already-committed terminal result reaches the executor. Wait for
+ * the current transport write to become writable again; authority and Task
+ * room membership have already been removed synchronously, so this bounded
+ * drain window grants no residual service or realtime access.
+ */
+function disconnectRevokedExecutorAfterTransportDrain(socket: Socket): void {
+  // The lightweight Socket.IO unit harness has no Engine.IO transport. Keep
+  // its behavior representative without requiring transport internals there.
+  const connection = socket.conn;
+  if (!connection) {
+    deferExecutorTransportWork(() => socket.disconnect(true));
+    return;
+  }
+
+  let finished = false;
+  let pendingTransport: Socket['conn']['transport'] | undefined;
+  let onReady: (() => void) | undefined;
+  let deadline: ReturnType<typeof setTimeout>;
+
+  const cleanup = () => {
+    if (pendingTransport && onReady) pendingTransport.removeListener('ready', onReady);
+    clearTimeout(deadline);
+    pendingTransport = undefined;
+    onReady = undefined;
+  };
+  const disconnect = () => {
+    if (finished) return;
+    finished = true;
+    cleanup();
+    if (socket.connected) socket.disconnect(true);
+  };
+  const inspectTransport = () => {
+    if (finished) return;
+    if (!socket.connected) {
+      finished = true;
+      cleanup();
+      return;
+    }
+    if (connection.readyState !== 'open' || connection.transport.writable) {
+      disconnect();
+      return;
+    }
+
+    pendingTransport = connection.transport;
+    onReady = () => {
+      // Engine.IO's own ready listener flushes queued packets first. Inspect on
+      // the following turn so a newly-started write can finish before close.
+      deferExecutorTransportWork(inspectTransport);
+    };
+    pendingTransport.once('ready', onReady);
+  };
+
+  deadline = setTimeout(disconnect, EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS);
+  deadline.unref?.();
+  // Feathers queues the acknowledgement after the service promise resolves.
+  // Inspect on the next turn, after that queueing opportunity.
+  deferExecutorTransportWork(inspectTransport);
+}
 
 function bearerTokenFromHeader(value: string | string[] | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -682,10 +755,11 @@ export function createSocketIOConfig(
         if (tenantId && authority.tenant?.tenant_id !== tenantId) continue;
         if (authority.principal.tokenFingerprint === tokenFingerprint) {
           // Retire the Feathers projection synchronously so no subsequent RPC
-          // can reuse the lease. Disconnect on the next turn so the terminal
-          // lifecycle RPC that committed revocation can still deliver its ack.
+          // can reuse the lease. Drain the terminal lifecycle acknowledgement
+          // before closing so a successful durable write is not reported as a
+          // task failure by the executor.
           retireSocketConnectionAuthority(app, feathers);
-          setImmediate(() => socket.disconnect(true));
+          disconnectRevokedExecutorAfterTransportDrain(socket);
         }
       }
     };

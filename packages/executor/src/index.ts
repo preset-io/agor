@@ -32,7 +32,7 @@ import { globalPermissionManager } from './permissions/permission-manager.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
-import { tryMarkTaskTerminal } from './terminal-task.js';
+import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
 import { reportExecutorQuiescence } from './termination-report.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
@@ -144,6 +144,14 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
+      if (isTaskFailurePersisted(error)) {
+        console.log(
+          `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
+            'code=1 reason=task_failure_persisted'
+        );
+        process.exit(1);
+        return;
+      }
       const terminationRecovered = await this.recoverTerminationAfterExecutionError();
       if (terminationRecovered) {
         console.log(

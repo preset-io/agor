@@ -29,6 +29,7 @@ import { formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { markTaskFailurePersisted } from '../../terminal-task.js';
 import { isDaemonOwnedAbort } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
@@ -100,6 +101,7 @@ export async function settleTaskFailure(
     ...patch,
     ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
   });
+  markTaskFailurePersisted(failure);
 }
 
 /**

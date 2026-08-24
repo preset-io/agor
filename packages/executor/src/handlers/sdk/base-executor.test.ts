@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isTaskFailurePersisted } from '../../terminal-task.js';
 import {
   createStreamingCallbacks,
   executeToolTask,
@@ -136,7 +137,8 @@ describe('settleTaskFailure', () => {
       },
     } as never;
 
-    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, new Error('failed'), {
+    const failure = new Error('failed');
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
       status: 'failed',
       error_message: 'failed',
     });
@@ -150,6 +152,33 @@ describe('settleTaskFailure', () => {
       },
     });
     expect(messageCreate).toHaveBeenCalledWith(expect.objectContaining({ index: 3 }));
+    expect(isTaskFailurePersisted(failure)).toBe(true);
+  });
+
+  it('does not mark a failure persisted until the terminal patch is acknowledged', async () => {
+    const failure = new Error('failed');
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { patch: vi.fn().mockRejectedValue(new Error('socket disconnected')) };
+        }
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: vi.fn().mockResolvedValue(undefined),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+        status: 'failed',
+        error_message: 'failed',
+      })
+    ).rejects.toThrow('socket disconnected');
+    expect(isTaskFailurePersisted(failure)).toBe(false);
   });
 
   it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {

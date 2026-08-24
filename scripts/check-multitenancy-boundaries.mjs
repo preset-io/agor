@@ -145,9 +145,9 @@ const checks = [
     baseline: {
       // Test-only async flush helpers / event loop flushes.
       'apps/agor-daemon/src/services/branches.test.ts': 1,
-      // Executor-token revocation clears authority synchronously, then yields
-      // one event-loop turn before transport teardown so the terminal RPC ack
-      // can flush. The callback performs no database or tenant-owned work.
+      // Executor-token revocation clears authority synchronously, then uses a
+      // transport-only deferral helper to drain the terminal RPC ack before
+      // teardown. Its callbacks perform no database or tenant-owned work.
       'apps/agor-daemon/src/setup/socketio.ts': 1,
       // Event-loop flushes for the exact-token disconnect assertions above.
       'apps/agor-daemon/src/setup/socketio.test.ts': 2,
