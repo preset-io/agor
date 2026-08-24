@@ -55,7 +55,7 @@ interface UsersServiceLike {
 export function createClaudeAuthLogoutService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  /** Present when attempts are durable; absent for a standalone daemon. */
+  /** Shared with the OAuth service so logout fences its in-flight attempts. */
   attemptStore?: ClaudeOAuthAttemptStore
 ) {
   return {
@@ -70,61 +70,66 @@ export function createClaudeAuthLogoutService(
       if (!tenantId) throw new Error('Missing active tenant context for Claude auth logout');
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
         runWithTenantDatabaseScope(db, tenantId, work);
+      const attemptContext = { tenantId: String(tenantId), userId };
 
-      const identity = await resolveCodexCredentialRoute(
-        userId,
-        withTenantDatabase,
-        app.get('config')
-      );
-      if (!identity.ok) {
-        throw new BadRequest(
-          `Cannot determine which Unix account holds this Claude login: ${identity.message}`
+      const remove = async (): Promise<ClaudeAuthLogoutResult> => {
+        const identity = await resolveCodexCredentialRoute(
+          userId,
+          withTenantDatabase,
+          app.get('config')
         );
-      }
+        if (!identity.ok) {
+          throw new BadRequest(
+            `Cannot determine which Unix account holds this Claude login: ${identity.message}`
+          );
+        }
 
-      // Fence any sign-in still in flight BEFORE removing anything. A submit
-      // that is already exchanging — possibly on another replica — would
-      // otherwise land after this logout and re-write the credential the user
-      // just removed, leaving them signed in against their wishes. The
-      // attempt's pre-write and pre-patch revalidations observe this.
-      await attemptStore?.invalidate({ tenantId: String(tenantId), userId }, 'signed_out');
+        // Fence any sign-in still in flight BEFORE removing anything. A submit
+        // that is already exchanging — possibly on another replica — would
+        // otherwise land after this logout and re-write the credential the user
+        // just removed, leaving them signed in against their wishes. The
+        // attempt's pre-write and pre-patch revalidations observe this.
+        await attemptStore?.invalidate(attemptContext, 'signed_out');
 
-      // Delete the local login (idempotent — a missing file is success). A
-      // genuine delete failure is a real server problem worth surfacing, and we
-      // do NOT clear the method/token in that case so a login we couldn't remove
-      // keeps working. Log the error class only — never token bytes.
-      try {
-        await deleteClaudeAuthViaExecutor({
-          delegatedHomeKey: identity.delegatedHomeKey,
-          userId: identity.userId,
-        });
-      } catch (err) {
-        console.error(
-          `[ClaudeAuth] Failed to delete .credentials.json${
-            identity.delegatedHomeKey ? ` as ${identity.delegatedHomeKey}` : ''
-          }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+        // Delete the local login (idempotent — a missing file is success). A
+        // genuine delete failure is a real server problem worth surfacing, and we
+        // do NOT clear the method/token in that case so a login we couldn't remove
+        // keeps working. Log the error class only — never token bytes.
+        try {
+          await deleteClaudeAuthViaExecutor({
+            delegatedHomeKey: identity.delegatedHomeKey,
+            userId: identity.userId,
+          });
+        } catch (err) {
+          console.error(
+            `[ClaudeAuth] Failed to delete .credentials.json${
+              identity.delegatedHomeKey ? ` as ${identity.delegatedHomeKey}` : ''
+            }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
+          );
+          throw new BadRequest(
+            'Could not remove the Claude credentials file on the server. Check daemon logs and sudo configuration.'
+          );
+        }
+
+        // Clear the stored method AND any pasted token via the users SERVICE (not a
+        // direct db write) so the Feathers `patched` event fires and the settings
+        // pane + board banners re-probe to a disconnected state. Send ONLY the
+        // claude-code keys so the service's merge clears them against the FRESH
+        // record — preserving any concurrently-updated method for another tool.
+        const usersService = app.service('users') as UsersServiceLike;
+        await usersService.patch(
+          userId,
+          {
+            agentic_auth_methods: { 'claude-code': undefined },
+            agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
+          },
+          { user: authUser, authenticated: true }
         );
-        throw new BadRequest(
-          'Could not remove the Claude credentials file on the server. Check daemon logs and sudo configuration.'
-        );
-      }
 
-      // Clear the stored method AND any pasted token via the users SERVICE (not a
-      // direct db write) so the Feathers `patched` event fires and the settings
-      // pane + board banners re-probe to a disconnected state. Send ONLY the
-      // claude-code keys so the service's merge clears them against the FRESH
-      // record — preserving any concurrently-updated method for another tool.
-      const usersService = app.service('users') as UsersServiceLike;
-      await usersService.patch(
-        userId,
-        {
-          agentic_auth_methods: { 'claude-code': undefined },
-          agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
-        },
-        { user: authUser, authenticated: true }
-      );
+        return { status: 'removed' };
+      };
 
-      return { status: 'removed' };
+      return attemptStore ? attemptStore.withCredentialMutation(attemptContext, remove) : remove();
     },
   };
 }

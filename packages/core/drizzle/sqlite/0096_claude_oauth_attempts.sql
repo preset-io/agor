@@ -27,5 +27,9 @@ CREATE UNIQUE INDEX `claude_oauth_attempts_state_hash_unique`
 CREATE INDEX `claude_oauth_attempts_user_idx`
 	ON `claude_oauth_attempts` (`user_id`, `created_at`);
 --> statement-breakpoint
+CREATE UNIQUE INDEX `claude_oauth_attempts_current_user_uq`
+	ON `claude_oauth_attempts` (`user_id`)
+	WHERE `is_current` = 1;
+--> statement-breakpoint
 CREATE INDEX `claude_oauth_attempts_maintenance_idx`
 	ON `claude_oauth_attempts` (`status`, `expires_at`, `exchange_started_at`, `finished_at`);

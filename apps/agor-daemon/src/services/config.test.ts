@@ -339,7 +339,10 @@ describe('ConfigService.resolveApiKey', () => {
     };
 
     /** Executor asking for the on-disk Claude subscription login of `prompter`. */
-    const resolveNative = (service: ConfigService, opts: { prompter: string; owner: string }) => {
+    const resolveNative = (
+      service: ConfigService,
+      opts: { prompter: string; owner: string; sessionHomeKey?: string | null }
+    ) => {
       service.app = {
         service(name: string) {
           if (name === 'tasks') {
@@ -349,7 +352,11 @@ describe('ConfigService.resolveApiKey', () => {
           }
           if (name === 'sessions') {
             return {
-              get: vi.fn(async () => ({ agentic_tool: 'claude-code', created_by: opts.owner })),
+              get: vi.fn(async () => ({
+                agentic_tool: 'claude-code',
+                created_by: opts.owner,
+                unix_username: opts.sessionHomeKey ?? opts.owner,
+              })),
             };
           }
           throw new Error(`unexpected service ${name}`);
@@ -401,8 +408,20 @@ describe('ConfigService.resolveApiKey', () => {
       await expect(
         resolveNative(service, { prompter: 'alice', owner: 'alice' })
       ).resolves.toMatchObject({ useNativeAuth: true });
-      // Identical identities share a home by construction — no lookup needed.
-      expect(dbMocks.UsersRepository).not.toHaveBeenCalled();
+      // The current user row is compared with the Session's immutable stamp.
+      expect(dbMocks.UsersRepository).toHaveBeenCalled();
+    });
+
+    it('refuses native auth when an owner current home drifted from the Session stamp', async () => {
+      const service = new ConfigService({} as never, DELEGATED as never);
+
+      await expect(
+        resolveNative(service, {
+          prompter: 'alice',
+          owner: 'alice',
+          sessionHomeKey: 'alice-before-rename',
+        })
+      ).rejects.toThrow(/different execution home/);
     });
 
     it('allows cross-user native auth in simple mode, where the home is shared', async () => {

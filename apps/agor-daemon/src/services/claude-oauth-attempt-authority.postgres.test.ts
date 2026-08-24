@@ -137,6 +137,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const opened = authorityB.openClaim(claim.attempt);
       expect(opened.material.codeVerifier).toBe('pkce-verifier-handoff');
       expect(opened.material.delegatedHomeKey).toBe('alice');
+      expect(opened.material).not.toHaveProperty('state');
 
       expect(await authorityB.finish(claim.attempt, 'succeeded', { subscriptionType: 'max' })).toBe(
         true
@@ -161,6 +162,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       expect(isMCPOAuthSecretEnvelope(String(row?.sealed_material))).toBe(true);
+      expect(String(row?.sealed_material)).toMatch(/^agor-mcp-oauth:v1:claude-signin-attempt:/);
       expect(row?.state_hash).toBe(fingerprintClaudeOAuthState(stateFor('secrets')));
       const serialized = JSON.stringify(row);
       expect(serialized).not.toContain('pkce-verifier-secrets');
@@ -336,6 +338,28 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       // Cross-tenant status reads must not surface the row either.
       expect(await authorityA.getForUser(other.tenantId, seeded.userId, attemptId)).toBeNull();
+    });
+
+    it('does not expose default-tenant rows when no tenant GUC is active', async () => {
+      const seeded = await runWithTenantDatabaseScope(dbA, 'default', async (scoped) => {
+        const user = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'Claude OAuth default tenant RLS',
+        });
+        return { tenantId: 'default', userId: user.user_id as UserID };
+      });
+      const attemptId = await start(authorityA, seeded, 'default-no-guc');
+
+      // rawB is the verified NOSUPERUSER/NOBYPASSRLS application handle. With
+      // neither tenant nor system scope set, even tenant `default` must be
+      // invisible; omission cannot silently become default-tenant authority.
+      const result = await executeRaw(
+        rawB,
+        sql`SELECT COUNT(*) AS visible
+            FROM ${claudeOauthAttempts}
+            WHERE attempt_id = ${attemptId}`
+      );
+      expect(Number(rowsOf(result)[0]?.visible)).toBe(0);
     });
 
     it('fails closed when the master secret is missing or does not match', async () => {

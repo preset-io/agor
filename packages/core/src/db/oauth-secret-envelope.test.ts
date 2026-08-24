@@ -50,4 +50,22 @@ describe('MCP OAuth secret envelope', () => {
       )
     ).toThrow('Unsupported MCP OAuth secret envelope');
   });
+
+  it('keeps Claude attempt ciphertext outside the MCP exchange purpose domain', () => {
+    const binding = 'tenant\0user\0attempt\x01';
+    const envelope = sealMCPOAuthSecret(
+      '{"codeVerifier":"verifier"}',
+      master,
+      'claude-signin-attempt',
+      binding
+    );
+
+    expect(envelope).toMatch(/^agor-mcp-oauth:v1:claude-signin-attempt:/);
+    expect(() => openMCPOAuthSecret(envelope, master, 'pending-exchange', binding)).toThrow(
+      'Unsupported MCP OAuth secret envelope'
+    );
+    expect(openMCPOAuthSecret(envelope, master, 'claude-signin-attempt', binding)).toContain(
+      'verifier'
+    );
+  });
 });

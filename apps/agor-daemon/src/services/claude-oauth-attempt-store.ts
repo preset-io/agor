@@ -13,11 +13,11 @@
  *   material, a per-user generation, and a one-shot exchange claim, so any
  *   replica can finish an attempt any other replica started.
  *
- * SECURITY CONTRACT (both implementations): the verifier and the raw state are
- * held only to complete the exchange. They never appear in a status response, a
- * log line, or any agent/LLM context. The durable store additionally keeps them
- * only inside an AES-256-GCM envelope that is AAD-bound to the row, and stores
- * a SHA-256 fingerprint of the state rather than the state itself.
+ * SECURITY CONTRACT (both implementations): the verifier and raw state are
+ * held only to complete the exchange. They never appear in a log line or any
+ * agent/LLM context. The durable store seals the verifier in an AES-256-GCM
+ * envelope AAD-bound to the row and persists only a SHA-256 fingerprint of
+ * state. Raw state remains browser/request material and is never stored.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -95,6 +95,33 @@ export interface ClaudeOAuthAttemptStore {
   ): Promise<void>;
   /** Invalidate any live attempt — logout, or another auth-relevant change. */
   invalidate(ctx: ClaudeOAuthAttemptContext, failureCode: string): Promise<void>;
+  /**
+   * Serialize the final credential-file/user mutation with logout on this
+   * daemon. Constrained HA remains gated until this local guard is replaced by
+   * the shared generation-fenced credential coordinator.
+   */
+  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T>;
+}
+
+class InProcessCredentialMutationQueue {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => mine);
+    this.tails.set(key, tail);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    }
+  }
 }
 
 /** How long a finished attempt stays queryable before eviction. */
@@ -155,6 +182,7 @@ interface MemoryAttempt {
  */
 export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
   private readonly attempts = new Map<string, MemoryAttempt>();
+  private readonly credentialMutations = new InProcessCredentialMutationQueue();
   private sequence = 0;
 
   private key(ctx: ClaudeOAuthAttemptContext): string {
@@ -316,6 +344,10 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
       this.settle(attempt, 'error', hintForFailureCode(failureCode));
     }
   }
+
+  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
+    return this.credentialMutations.run(this.key(ctx), work);
+  }
 }
 
 /** Constant-time compare that tolerates unequal lengths. */
@@ -331,10 +363,9 @@ function timingSafeStringEqual(a: string, b: string): boolean {
  * database owns the generation fence and the one-shot exchange claim.
  */
 export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
-  constructor(
-    private readonly authority: ClaudeOAuthAttemptAuthority,
-    private readonly buildVerificationUrl: (verifier: string, state: string) => string
-  ) {}
+  private readonly credentialMutations = new InProcessCredentialMutationQueue();
+
+  constructor(private readonly authority: ClaudeOAuthAttemptAuthority) {}
 
   async start(
     ctx: ClaudeOAuthAttemptContext,
@@ -365,11 +396,6 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     const status: ClaudeOAuthStatus = { phase, attemptId: record.attemptId };
     if (phase === 'awaiting_code') {
       status.expiresAt = record.expiresAt.toISOString();
-      // The authorize URL carries the raw state, which is deliberately not a
-      // column. Rebuild it from the sealed material so a client that reconnects
-      // to another replica still gets its link.
-      const url = this.rebuildVerificationUrl(record);
-      if (url) status.verificationUrl = url;
     }
     if (record.subscriptionType) status.subscriptionType = record.subscriptionType;
     const hint =
@@ -380,20 +406,6 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
         : hintForFailureCode(record.failureCode);
     if (hint) status.hint = hint;
     return status;
-  }
-
-  private rebuildVerificationUrl(
-    record: Parameters<ClaudeOAuthAttemptAuthority['openClaim']>[0]
-  ): string | undefined {
-    if (!record.sealedMaterial) return undefined;
-    try {
-      // openClaim insists on a claimed row; a pending row is unsealed through
-      // the same envelope binding here purely to recover the display URL.
-      const { material } = this.authority.openClaim({ ...record, status: 'exchanging' });
-      return this.buildVerificationUrl(material.codeVerifier, material.state);
-    } catch {
-      return undefined;
-    }
   }
 
   async claimForExchange(
@@ -422,7 +434,10 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
           attemptId: record.attemptId,
           claimId: record.exchangeClaimId!,
           verifier: material.codeVerifier,
-          state: material.state,
+          // claimForExchange atomically matched this request's state hash to
+          // the row. Carry the request value forward; raw state is not durable
+          // material and never needs to be unsealed.
+          state,
           delegatedHomeKey: material.delegatedHomeKey,
         },
       };
@@ -472,5 +487,9 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
 
   async invalidate(ctx: ClaudeOAuthAttemptContext, failureCode: string): Promise<void> {
     await this.authority.invalidateForUser(ctx.tenantId, ctx.userId, failureCode);
+  }
+
+  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
+    return this.credentialMutations.run(`${ctx.tenantId}:${ctx.userId}`, work);
   }
 }

@@ -45,8 +45,8 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     () =>
       client
         ? (client.service('claude-auth/oauth') as unknown as {
-            create(data: { code?: string }): Promise<unknown>;
-            find(): Promise<unknown>;
+            create(data: { code?: string; attemptId?: string }): Promise<unknown>;
+            find(params?: { query?: { attemptId?: string } }): Promise<unknown>;
           })
         : null,
     [client]
@@ -111,7 +111,9 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const next = (await run(() => service.create({ code: code.trim() }))) as ClaudeOAuthStatus;
+      const next = (await run(() =>
+        service.create({ code: code.trim(), attemptId: status.attemptId })
+      )) as ClaudeOAuthStatus;
       setStatus(next);
       if (next.phase === 'success') setCode('');
     } catch (err) {
@@ -123,7 +125,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     } finally {
       setSubmitting(false);
     }
-  }, [service, code, run]);
+  }, [service, code, status.attemptId, run]);
 
   useEffect(() => {
     if (status.phase === 'success') onVerified();
@@ -169,6 +171,13 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
             Open the Claude sign-in page
           </Button>
         )}
+        {!status.verificationUrl && (
+          <Alert
+            type="warning"
+            showIcon
+            message="This browser no longer has the original sign-in link. Start over to get a fresh one."
+          />
+        )}
         <Space.Compact style={{ width: '100%' }}>
           <Input
             aria-label="Claude authorization code"
@@ -183,6 +192,11 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
           </Button>
         </Space.Compact>
         {submitError && <Alert type="error" showIcon message={submitError} />}
+        {!busy && !status.verificationUrl && (
+          <div>
+            <Button onClick={requestLink}>Start over</Button>
+          </div>
+        )}
       </Space>
     );
   }

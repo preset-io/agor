@@ -441,6 +441,20 @@ try {
   const rejectedCodexDeviceBody = await rejectedCodexDeviceAuth.json();
   assert.equal(rejectedCodexDeviceBody.data?.feature, 'codexDeviceAuth');
 
+  for (const [path, feature] of [
+    ['claude-auth/oauth', 'claudeOAuth'],
+    ['claude-auth/logout', 'claudeAuth'],
+  ]) {
+    const rejected = await fetch(`${ingress}/${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(rejected.status, 503, `${path} was admitted without a shared mutation fence`);
+    const body = await rejected.json();
+    assert.equal(body.data?.feature, feature);
+  }
+
   // A deliberately empty document proves that import reached validation
   // instead of the HA feature gate without writing a credential.
   const admittedCodexImport = await fetch(`${ingress}/codex-auth/import`, {
@@ -451,7 +465,9 @@ try {
   assert.equal(admittedCodexImport.status, 400);
   const admittedCodexImportBody = await admittedCodexImport.json();
   assert.notEqual(admittedCodexImportBody.data?.code, 'HA_FEATURE_UNSUPPORTED');
-  console.log('ok - consistent-home Codex import is admitted while device polling stays gated');
+  console.log(
+    'ok - consistent-home Codex import is admitted while device polling and Claude credential mutation stay gated'
+  );
 
   const ingressInstances = new Set();
   for (let attempt = 0; attempt < 12; attempt++) {

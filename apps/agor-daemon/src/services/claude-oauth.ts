@@ -26,8 +26,9 @@
  * exchange claim when replicas must be able to finish each other's attempts.
  * See `claude-oauth-attempt-store.ts`.
  *
- * SECURITY CONTRACT: tokens transit UI ↔ daemon ↔ Anthropic and the target
- * user's filesystem only. Status responses carry the authorize URL and
+ * SECURITY CONTRACT: the browser carries the authorize URL and pasted
+ * authorization code/state, but never tokens. Token material flows Anthropic
+ * → daemon → the target user's filesystem only. Status responses carry the authorize URL and
  * non-secret metadata; token material and the PKCE verifier are never returned,
  * logged, or exposed to any agent/LLM context. `state` is verified before
  * exchange. Callers act only on their own credentials.
@@ -49,7 +50,6 @@ import type {
   AuthenticatedParams,
   ClaudeOAuthStatus,
   TenantID,
-  User,
   UserID,
 } from '@agor/core/types';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
@@ -298,7 +298,6 @@ export function buildClaudeCredentialsJson(tokens: ExchangedTokens): string {
 
 /** Minimal users-service surface — mirrors codex-auth-shared's structural typing. */
 interface UsersServiceLike {
-  get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
     data: {
@@ -312,9 +311,9 @@ interface UsersServiceLike {
 }
 
 /**
- * Rebuild the authorize URL from the attempt's own PKCE verifier and state.
- * The URL is never persisted — it carries the raw state, of which the durable
- * row keeps only a fingerprint — so both stores reconstruct it on demand.
+ * Build the authorize URL from the attempt's PKCE verifier and state. The URL
+ * and raw state are returned only by the start request and are never persisted;
+ * durable rows retain only the state fingerprint and sealed verifier.
  */
 export function claudeVerificationUrlFrom(verifier: string, state: string): string {
   return buildAuthorizeUrl(base64url(createHash('sha256').update(verifier).digest()), state);
@@ -363,8 +362,8 @@ export function createClaudeOAuthService(
     claim: ClaudeOAuthExchangeClaim,
     authUser: NonNullable<AuthenticatedParams['user']>,
     tokens: ExchangedTokens
-  ): Promise<boolean> {
-    return runWithTenantDatabaseScope(db, ctx.tenantId, async () => {
+  ): Promise<ClaudeOAuthStatus | false> {
+    return store.withCredentialMutation(ctx, async () => {
       if (!(await store.isClaimLive(ctx, claim))) return false;
 
       // The attempt fixed its destination home when it started. Re-resolve and
@@ -407,10 +406,6 @@ export function createClaudeOAuthService(
       if (!(await store.isClaimLive(ctx, claim))) return false;
 
       const usersService = app.service('users') as UsersServiceLike;
-      const current = await usersService.get(ctx.userId, {
-        user: authUser,
-        authenticated: true,
-      });
       // Flip to `subscription` AND drop any previously pasted
       // CLAUDE_CODE_OAUTH_TOKEN: with the field gone, resolveTenantAgenticTool
       // routes this user to native on-disk auth (no env injection), so the
@@ -419,15 +414,19 @@ export function createClaudeOAuthService(
       await usersService.patch(
         ctx.userId,
         {
-          agentic_auth_methods: {
-            ...current.agentic_auth_methods,
-            'claude-code': 'subscription',
-          },
+          // Send only this tool's key. The users service merges against its
+          // fresh row, so a concurrent Codex auth change is not overwritten by
+          // a stale read/whole-map write.
+          agentic_auth_methods: { 'claude-code': 'subscription' },
           agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
         },
         { user: authUser, authenticated: true }
       );
-      return true;
+      await store.finish(ctx, claim, {
+        status: 'succeeded',
+        subscriptionType: tokens.subscriptionType,
+      });
+      return store.status(ctx, claim.attemptId);
     });
   }
 
@@ -476,7 +475,7 @@ export function createClaudeOAuthService(
       throw err;
     }
 
-    let persisted: boolean;
+    let persisted: ClaudeOAuthStatus | false;
     try {
       persisted = await persist(ctx, claim, authUser, tokens);
     } catch (err) {
@@ -491,11 +490,7 @@ export function createClaudeOAuthService(
     // store now considers current rather than claiming success.
     if (!persisted) return store.status(ctx, claim.attemptId);
 
-    await store.finish(ctx, claim, {
-      status: 'succeeded',
-      subscriptionType: tokens.subscriptionType,
-    });
-    return store.status(ctx, claim.attemptId);
+    return persisted;
   }
 
   return {
@@ -530,12 +525,14 @@ export function createClaudeOAuthService(
 
       const pkce = generatePkce();
       const state = base64url(randomBytes(32));
-      const started = await store.start(ctx, {
-        verifier: pkce.verifier,
-        state,
-        delegatedHomeKey: identity.delegatedHomeKey,
-        buildVerificationUrl: claudeVerificationUrlFrom,
-      });
+      const started = await store.withCredentialMutation(ctx, () =>
+        store.start(ctx, {
+          verifier: pkce.verifier,
+          state,
+          delegatedHomeKey: identity.delegatedHomeKey,
+          buildVerificationUrl: claudeVerificationUrlFrom,
+        })
+      );
       return {
         phase: 'awaiting_code',
         attemptId: started.attemptId,

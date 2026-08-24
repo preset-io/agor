@@ -168,7 +168,7 @@ sequenceDiagram
   Daemon-->>UI: {phase: awaiting_code, verificationUrl}
   UI->>Anthropic: open authorize URL, user approves
   Anthropic-->>UI: shows CODE#STATE (user copies)
-  UI->>Daemon: create({ code: "CODE#STATE" }) — submit
+  UI->>Daemon: create({ code: "CODE#STATE", attemptId }) — submit
   Daemon->>Anthropic: POST /v1/oauth/token (code + verifier)
   Anthropic-->>Daemon: access/refresh/expires
   Daemon->>Exec: write ~/.claude/.credentials.json 0600
@@ -310,9 +310,13 @@ agentic-tool resolver already keys on to select subscription auth for Claude.
 - Status responses (`ClaudeOAuthStatus`) carry only non-secret metadata: the
   phase, the authorize URL, an expiry, an optional plan/subscription hint.
 - The pasted `CODE#STATE` is a short-lived, single-use authorization code, not a
-  credential; it is exchanged immediately and never persisted.
-- `state` is verified against the attempt before exchange (CSRF / mix-up
-  defense); the PKCE `verifier` never leaves the daemon.
+  credential; it is exchanged immediately and never persisted. PostgreSQL
+  stores only SHA-256 of state. Raw state is not retained even inside the sealed
+  attempt envelope.
+- `state` and the browser's `attemptId` are verified against the attempt before
+  exchange (CSRF / mix-up and stale-tab defense). The PKCE verifier is sealed at
+  rest under the deployment master secret in PostgreSQL and never leaves the
+  daemon boundary.
 - Writes happen in the execution home the daemon routes to (via the delegated
   home key, content over stdin), so 0600 ownership holds in sandbox/delegated
   modes.
@@ -340,10 +344,29 @@ across two components under `apps/agor-ui/src/components/ClaudeAuth/`:
   the sign-in view rather than jumping tabs. Wired into `UserSettingsModal` the
   same way as `CodexAuthSettings`.
 - **`ClaudeOAuthSignIn.tsx`** — the paste-back pane the "Sign in with Claude" tab
-  renders: `create({})` surfaces `verificationUrl` as a link, an `Input` +
-  `Button` submits the `CODE#STATE` string via `create({ code })`, and
+  renders: `create({})` surfaces `verificationUrl` and `attemptId`, an `Input` +
+  `Button` submits the `CODE#STATE` string via `create({ code, attemptId })`, and
   success/expired/error states render inline. No poll loop or server-code
   countdown (unlike Codex's device pane).
+
+---
+
+## HA activation status
+
+PostgreSQL now supplies the durable attempt prerequisite: tenant/user-scoped
+generations, DB-clock expiry, a one-shot exchange claim, purpose-separated
+sealed PKCE material, and fleet-safe maintenance. Any replica can accept a
+paste-back for an attempt another replica started. The authorize URL itself is
+not reconstructed after reload because that would require persisting raw OAuth
+state; the UI offers a fresh attempt instead.
+
+That does **not** make the credential side HA-safe. The final filesystem write,
+logout, and auth-method mutation still need to reuse the cross-replica
+credential mutation coordinator: a non-age-stealable home lock plus a monotonic
+generation tombstone, with a containable exact-user writer. Until that reuse is
+landed and tested, constrained HA keeps both `claude-auth/oauth` and
+`claude-auth/logout` fail-closed even when the home bytes are durable. Durable
+attempt ownership is necessary, not a substitute for final-mutation authority.
 
 ---
 

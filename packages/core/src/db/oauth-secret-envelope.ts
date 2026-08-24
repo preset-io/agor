@@ -9,6 +9,11 @@ const IV_LENGTH = 12;
 
 export type MCPOAuthSecretPurpose =
   | 'pending-exchange'
+  // Claude sign-in attempts share the authenticated-envelope primitive, not
+  // MCP's purpose domain. Keeping a distinct purpose makes ciphertext from one
+  // protocol unusable in the other even if a caller accidentally reuses the
+  // same row binding.
+  | 'claude-signin-attempt'
   | 'access-token'
   | 'refresh-token'
   | 'client-id'

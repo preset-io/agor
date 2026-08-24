@@ -265,11 +265,10 @@ export class ConfigService {
    * home than the one this session runs in.
    *
    * Native auth resolves against the PROMPTER (`task.created_by`) but the
-   * executor runs in the SESSION OWNER's home. Equal identities share a home by
-   * construction, so the common path costs nothing. When they differ — a
-   * collaborator prompting a shared session, or a child session that kept the
-   * parent creator's identity under `dangerously_allow_session_sharing` — the
-   * homes are compared for real. A mismatch means "read the on-disk login"
+   * executor runs in the SESSION OWNER's home. In delegated mode the runtime
+   * home is the Session's immutable `unix_username` stamp, not the owner's
+   * current user row; even an owner prompting their own older Session can drift.
+   * A mismatch means "read the on-disk login"
    * would find the owner's file or none at all, so the prompter would either
    * borrow someone else's credential or run unauthenticated while the UI still
    * says they are signed in. Fail closed instead.
@@ -283,22 +282,23 @@ export class ConfigService {
     const sessionsService = this.app?.service('sessions');
     if (!sessionsService) return;
     const session = (await sessionsService.get(sessionId, internalParams)) as
-      | { created_by?: string }
+      | { created_by?: string; unix_username?: string | null }
       | undefined;
     const ownerUserId = session?.created_by;
-    if (!ownerUserId || ownerUserId === promptingUserId) return;
+    if (!ownerUserId) return;
 
     const tenantId = internalParams.tenant?.tenant_id;
-    const homeOf = (userId: UserID) =>
+    const homeOf = (userId: UserID, sessionDelegatedHomeKey?: string | null) =>
       resolveExecutionCredentialHome({
         userId,
         tenantId,
         config: this.config,
+        sessionDelegatedHomeKey,
         withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
       });
     const [prompterHome, ownerHome] = await Promise.all([
       homeOf(promptingUserId),
-      homeOf(ownerUserId as UserID),
+      homeOf(ownerUserId as UserID, session?.unix_username ?? null),
     ]);
     if (sameExecutionCredentialHome(prompterHome, ownerHome)) return;
 

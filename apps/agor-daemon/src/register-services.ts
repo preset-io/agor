@@ -115,9 +115,12 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
 import { createClaudeModelsService } from './services/claude-models.js';
-import { claudeVerificationUrlFrom, createClaudeOAuthService } from './services/claude-oauth.js';
+import { createClaudeOAuthService } from './services/claude-oauth.js';
 import { ClaudeOAuthAttemptAuthority } from './services/claude-oauth-attempt-authority.js';
-import { DurableClaudeOAuthAttemptStore } from './services/claude-oauth-attempt-store.js';
+import {
+  DurableClaudeOAuthAttemptStore,
+  InMemoryClaudeOAuthAttemptStore,
+} from './services/claude-oauth-attempt-store.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
@@ -709,12 +712,27 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Attempt state is process-local for a standalone daemon and durable on
   // PostgreSQL, where any replica may answer the paste-back that another
   // replica's authorize URL produced.
-  const claudeOAuthStore = isPostgresDatabaseHandle(db)
-    ? new DurableClaudeOAuthAttemptStore(
-        new ClaudeOAuthAttemptAuthority(db),
-        claudeVerificationUrlFrom
-      )
+  const claudeOAuthAuthority = isPostgresDatabaseHandle(db)
+    ? new ClaudeOAuthAttemptAuthority(db)
     : undefined;
+  // Share one store with logout in both modes. Constructing the OAuth service's
+  // default store internally would leave standalone logout unable to invalidate
+  // an in-flight attempt from the same daemon.
+  const claudeOAuthStore = claudeOAuthAuthority
+    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
+    : new InMemoryClaudeOAuthAttemptStore();
+  if (claudeOAuthAuthority) {
+    // Fleet-safe and idempotent: every replica may sweep. Claim/status paths
+    // enforce expiry synchronously; this loop handles abandoned exchanges and
+    // terminal retention even when no browser returns to the attempt.
+    const claudeOAuthMaintenanceTimer = setInterval(() => {
+      runWithoutTenantDatabaseScope(() => claudeOAuthAuthority.maintain()).catch(() => {
+        // Sealed material and provider identifiers must never reach logs.
+        console.warn('[Claude OAuth Maintenance] Attempt maintenance failed');
+      });
+    }, 60_000);
+    claudeOAuthMaintenanceTimer.unref();
+  }
   app.use('/claude-auth/oauth', createClaudeOAuthService(app, db, claudeOAuthStore));
   app
     .service('/claude-auth/oauth')

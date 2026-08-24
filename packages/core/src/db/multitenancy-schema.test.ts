@@ -47,7 +47,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
   const claudeOauthMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0088_claude_oauth_attempts.sql'
+    'packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -77,7 +77,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0088_claude_oauth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -103,6 +103,17 @@ describe('Postgres multitenancy schema coverage', () => {
     const sqliteSchema = readRepoFile('packages/core/src/db/schema.sqlite.ts');
     expect(sqliteSchema).not.toContain('tenant_id');
     expect(sqliteSchema).not.toContain("tenant_id'");
+  });
+
+  it('requires an explicit tenant GUC for Claude OAuth rows, including default', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql');
+    const policy = migration.slice(
+      migration.indexOf('CREATE POLICY "tenant_isolation_claude_oauth_attempts"'),
+      migration.indexOf('CREATE POLICY "claude_oauth_maintenance_select"')
+    );
+
+    expect(policy).toContain("\"tenant_id\" = NULLIF(current_setting('agor.tenant_id', true), '')");
+    expect(policy).not.toContain("COALESCE(NULLIF(current_setting('agor.tenant_id'");
   });
 
   it('limits cross-tenant gateway discovery to enabled rows and an explicit capability', () => {

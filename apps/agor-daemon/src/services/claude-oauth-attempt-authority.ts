@@ -23,7 +23,7 @@ import {
 } from '@agor/core/db';
 import type { ClaudeOAuthAttemptID, ClaudeOAuthSealedMaterial, UserID } from '@agor/core/types';
 
-/** How long an attempt keeps its verifier/state before it must be restarted. */
+/** How long an attempt keeps its sealed verifier/state fingerprint before restart. */
 const ATTEMPT_TTL_MS = 10 * 60 * 1000;
 
 export interface DurableClaudeOAuthCreate {
@@ -53,7 +53,6 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is ClaudeOAuthSeale
     typeof material.userId === 'string' &&
     Number.isSafeInteger(material.attemptGeneration) &&
     typeof material.codeVerifier === 'string' &&
-    typeof material.state === 'string' &&
     (material.delegatedHomeKey === null || typeof material.delegatedHomeKey === 'string')
   );
 }
@@ -97,13 +96,12 @@ export class ClaudeOAuthAttemptAuthority {
         userId: input.userId,
         attemptGeneration,
         codeVerifier: input.codeVerifier,
-        state: input.state,
         delegatedHomeKey: input.delegatedHomeKey,
       };
       const sealedMaterial = sealMCPOAuthSecret(
         JSON.stringify(material),
         this.masterSecret!,
-        'pending-exchange',
+        'claude-signin-attempt',
         attemptEnvelopeBinding({
           attemptId,
           tenantId: input.tenantId,
@@ -158,7 +156,7 @@ export class ClaudeOAuthAttemptAuthority {
         openMCPOAuthSecret(
           record.sealedMaterial,
           this.masterSecret!,
-          'pending-exchange',
+          'claude-signin-attempt',
           attemptEnvelopeBinding({
             attemptId: record.attemptId,
             tenantId: record.tenantId,
@@ -180,8 +178,7 @@ export class ClaudeOAuthAttemptAuthority {
       material.userId !== record.userId ||
       material.attemptGeneration !== record.attemptGeneration ||
       record.envelopeVersion !== MCP_OAUTH_SECRET_ENVELOPE_VERSION ||
-      !record.isCurrent ||
-      fingerprintClaudeOAuthState(material.state) !== record.stateHash
+      !record.isCurrent
     ) {
       throw new Error('Claude OAuth attempt material binding is invalid');
     }

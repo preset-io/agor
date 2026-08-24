@@ -11,8 +11,10 @@ export const HA_UNSUPPORTED_FEATURES = {
   mcpOAuth: 'MCP OAuth flows',
   codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
   codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
-  claudeAuth: 'Claude credential-file logout without a consistent executor user home',
-  claudeOAuth: 'Claude subscription OAuth sign-in without a consistent executor user home',
+  claudeAuth:
+    'Claude credential mutation without cross-replica writer serialization and generation fencing',
+  claudeOAuth:
+    'Claude subscription OAuth without cross-replica credential mutation serialization and generation fencing',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -37,14 +39,13 @@ export function isHaFeatureUnavailable(
   feature: HaUnsupportedFeature
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
-  // Claude subscription sign-in keeps its attempt state in PostgreSQL, sealed
-  // and claimed one-shot, so any replica can finish an attempt another one
-  // started — HA already requires both PostgreSQL and an AGOR_MASTER_SECRET, so
-  // that store is always available here. What remains is the same condition the
-  // credential-file operations have: the executor home the credential is
-  // written to must be the one every replica's sessions read.
-  if (feature === 'codexAuth' || feature === 'claudeAuth' || feature === 'claudeOAuth')
-    return !deployment.capabilities.codexCredentialFiles;
+  if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
+  // The attempt authority is durable, but that is not the final mutation
+  // authority. A logout/new generation may race a credential writer after its
+  // last DB claim check, and an external writer may survive loss of the daemon
+  // that owned the claim. Keep both Claude mutation endpoints fail-closed until
+  // they reuse the generation-fenced, cross-replica credential coordinator.
+  if (feature === 'claudeAuth' || feature === 'claudeOAuth') return true;
   return true;
 }
 

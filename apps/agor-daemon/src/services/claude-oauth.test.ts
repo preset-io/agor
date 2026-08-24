@@ -38,6 +38,7 @@ import {
   parsePastedCode,
   TokenExchangeError,
 } from './claude-oauth.js';
+import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 
 const base64urlOf = (buf: Buffer) =>
   buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -58,7 +59,10 @@ const TOKENS = {
 
 // Drive an attempt to `awaiting_code` and pull the `state` back out of the URL.
 async function startAndGetState(svc: {
-  create: (d: { code?: string }, p?: unknown) => Promise<{ verificationUrl?: string }>;
+  create: (
+    d: { code?: string; attemptId?: string },
+    p?: unknown
+  ) => Promise<{ verificationUrl?: string }>;
 }) {
   const status = await svc.create({}, { user: { user_id: 'user-A' } });
   const state = new URL(status.verificationUrl as string).searchParams.get('state');
@@ -73,11 +77,13 @@ function makeService() {
     service: (path: string) =>
       path === 'users' ? { get: usersGet, patch: usersPatch } : undefined,
   };
+  const store = new InMemoryClaudeOAuthAttemptStore();
   const svc = createClaudeOAuthService(
     app as unknown as Parameters<typeof createClaudeOAuthService>[0],
-    {} as unknown as Parameters<typeof createClaudeOAuthService>[1]
+    {} as unknown as Parameters<typeof createClaudeOAuthService>[1],
+    store
   );
-  return { svc, usersGet, usersPatch };
+  return { svc, store, usersGet, usersPatch };
 }
 
 const asUserA = { user: { user_id: 'user-A' } };
@@ -315,6 +321,48 @@ describe('createClaudeOAuthService — flow + security', () => {
     // The stale submit must not have written credentials for the replaced attempt.
     expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
     expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
+  });
+
+  it('serializes a replacement start behind an already-running credential mutation', async () => {
+    const { svc } = makeService();
+    const state = await startAndGetState(svc);
+    let releaseWrite!: () => void;
+    writeClaudeAuthViaExecutor.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        })
+    );
+
+    const completing = svc.create({ code: `AUTHCODE#${state}` }, asUserA);
+    await vi.waitFor(() => expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1));
+
+    let replacementFinished = false;
+    const replacement = svc.create({}, asUserA).then((value) => {
+      replacementFinished = true;
+      return value;
+    });
+    await flush();
+    expect(replacementFinished).toBe(false);
+
+    releaseWrite();
+    expect((await completing).phase).toBe('success');
+    expect((await replacement).phase).toBe('awaiting_code');
+  });
+
+  it('binds a paste-back to the attempt id echoed to that browser tab', async () => {
+    const { svc } = makeService();
+    const first = await svc.create({}, asUserA);
+    const firstState = new URL(first.verificationUrl as string).searchParams.get('state');
+    const second = await svc.create({}, asUserA);
+
+    await expect(
+      svc.create({ code: `AUTHCODE#${firstState}`, attemptId: first.attemptId }, asUserA)
+    ).rejects.toThrow(/No sign-in is in progress/);
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await svc.find({ ...asUserA, query: { attemptId: second.attemptId } })).phase).toBe(
+      'awaiting_code'
+    );
   });
 
   it('a malformed provider response ends the attempt in error with no token leak and no write', async () => {

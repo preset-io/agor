@@ -126,19 +126,22 @@ describe('constrained HA support profile', () => {
     ]);
   });
 
-  it('admits Codex/Claude auth-file operations only with a consistent executor home', () => {
-    // claudeOAuth joins these now that its attempt state is durable: HA always
-    // supplies PostgreSQL and a master secret, so the executor home is the only
-    // remaining precondition.
-    for (const feature of ['codexAuth', 'claudeAuth', 'claudeOAuth'] as const) {
-      expect(isHaFeatureUnavailable(ha, feature)).toBe(false);
-      expect(
-        isHaFeatureUnavailable(
-          { ...ha, capabilities: { ...ha.capabilities, codexCredentialFiles: false } },
-          feature
-        )
-      ).toBe(true);
-    }
+  it('admits only the already-audited Codex auth-file capability', () => {
+    expect(isHaFeatureUnavailable(ha, 'codexAuth')).toBe(false);
+    expect(
+      isHaFeatureUnavailable(
+        { ...ha, capabilities: { ...ha.capabilities, codexCredentialFiles: false } },
+        'codexAuth'
+      )
+    ).toBe(true);
+  });
+
+  it('keeps Claude mutation endpoints gated after making attempt state durable', () => {
+    // Durable exchange ownership is necessary but insufficient: the filesystem
+    // write/logout boundary still needs a cross-replica lock and generation
+    // tombstone before either endpoint can be advertised as HA-safe.
+    expect(isHaFeatureUnavailable(ha, 'claudeAuth')).toBe(true);
+    expect(isHaFeatureUnavailable(ha, 'claudeOAuth')).toBe(true);
   });
 
   it('still gates the process-local Codex device flow in constrained HA', () => {

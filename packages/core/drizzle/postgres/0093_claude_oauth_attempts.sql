@@ -54,11 +54,11 @@ ALTER TABLE "claude_oauth_attempts" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "tenant_isolation_claude_oauth_attempts" ON "claude_oauth_attempts"
 	USING (
 		COALESCE(current_setting('agor.system_scope', true), '') = ''
-		AND "tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
+		AND "tenant_id" = NULLIF(current_setting('agor.tenant_id', true), '')
 	)
 	WITH CHECK (
 		COALESCE(current_setting('agor.system_scope', true), '') = ''
-		AND "tenant_id" = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')
+		AND "tenant_id" = NULLIF(current_setting('agor.tenant_id', true), '')
 	);
 --> statement-breakpoint
 -- Every daemon may age due attempts and delete old terminal tombstones. The

@@ -372,8 +372,9 @@ export interface ClaudeOAuthStatus {
   hint?: string;
   /**
    * Identifies the attempt to the client that started it, so a reconnect landing
-   * on another replica resolves the same attempt. Safe to expose: it is not the
-   * OAuth `state` capability, of which only a SHA-256 fingerprint is stored.
+   * on another replica can submit against the same attempt. Safe to expose: it
+   * is not the OAuth `state` capability, of which only a SHA-256 fingerprint is
+   * stored.
    */
   attemptId?: string;
 }
@@ -401,8 +402,7 @@ export type ClaudeOAuthAttemptStatus =
  *
  * Only ever produced/consumed inside the daemon's OAuth authority, sealed with
  * the deployment master secret and AAD-bound to the row it belongs to. The PKCE
- * verifier and the raw `state` live here and nowhere else — never in a column,
- * a log line, a status response, or any agent/LLM context.
+ * verifier lives here; raw OAuth `state` is never persisted, even encrypted.
  */
 export interface ClaudeOAuthSealedMaterial {
   version: 1;
@@ -410,10 +410,8 @@ export interface ClaudeOAuthSealedMaterial {
   tenantId: string;
   userId: string;
   attemptGeneration: number;
-  /** PKCE verifier; the challenge is rederived from it when rebuilding the URL. */
+  /** PKCE verifier used only for the one-shot provider exchange. */
   codeVerifier: string;
-  /** Raw one-time OAuth state, of which the row stores only the fingerprint. */
-  state: string;
   /**
    * Execution home the credential must land in, fixed when the attempt started.
    * Re-resolved and compared before the write so a mid-flow identity change

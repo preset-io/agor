@@ -46,6 +46,11 @@ export async function resolveExecutionCredentialHome(options: {
   userId: UserID;
   tenantId: string | undefined;
   config: DeepReadonly<AgorConfig>;
+  /**
+   * Immutable delegated execution-home stamp from a Session. Omit when
+   * resolving the authenticated user's current credential-write route.
+   */
+  sessionDelegatedHomeKey?: string | null;
   withTenantDatabase: <T>(work: (db: TenantScopedDatabase) => Promise<T>) => Promise<T>;
 }): Promise<ExecutionCredentialHome> {
   const { userId, tenantId, config, withTenantDatabase } = options;
@@ -53,15 +58,20 @@ export async function resolveExecutionCredentialHome(options: {
   const sandbox = config.execution?.sandbox;
   const perOwnerHome = sandbox?.enabled === true && sandbox?.home_mode === 'per_user';
 
+  const needsCurrentDelegatedIdentity =
+    mode === 'delegated' && options.sessionDelegatedHomeKey === undefined;
   const row =
-    perOwnerHome || mode === 'delegated'
+    perOwnerHome || needsCurrentDelegatedIdentity
       ? await withTenantDatabase((db) => new UsersRepository(db).findById(userId))
       : null;
 
   return {
     delegatedHomeKey: resolveDelegatedHomeKey({
       mode,
-      executionHomeKey: row?.unix_username ?? null,
+      executionHomeKey:
+        options.sessionDelegatedHomeKey === undefined
+          ? (row?.unix_username ?? null)
+          : options.sessionDelegatedHomeKey,
     }).delegatedHomeKey,
     homeStore: perOwnerHome
       ? resolveOwnerHomeStore({

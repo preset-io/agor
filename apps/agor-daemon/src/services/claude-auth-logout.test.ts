@@ -3,6 +3,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout';
+import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -38,8 +39,8 @@ function makeApp(
   return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
-function service(app: { service: () => unknown }) {
-  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, store?: InMemoryClaudeOAuthAttemptStore) {
+  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB, store);
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -89,6 +90,26 @@ describe('claude-auth-logout', () => {
     expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledTimes(1);
     expect(usersService.patch).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ status: 'removed' });
+  });
+
+  it('invalidates the shared standalone attempt before deleting credentials', async () => {
+    const store = new InMemoryClaudeOAuthAttemptStore();
+    const context = { tenantId: 'tenant-test', userId: 'user-1' as never };
+    const started = await store.start(context, {
+      verifier: 'verifier',
+      state: 'state',
+      delegatedHomeKey: null,
+      buildVerificationUrl: () => 'https://claude.example/authorize',
+    });
+    const claimed = await store.claimForExchange(context, started.attemptId, 'state');
+    expect(claimed.outcome).toBe('claimed');
+    if (claimed.outcome !== 'claimed') return;
+
+    const { app } = makeApp();
+    await service(app, store).create({}, AUTH_PARAMS);
+
+    expect(await store.isClaimLive(context, claimed.claim)).toBe(false);
+    expect((await store.status(context, started.attemptId)).phase).toBe('error');
   });
 
   it('surfaces a friendly error and does NOT clear anything if the delete fails', async () => {

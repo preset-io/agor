@@ -1780,6 +1780,9 @@ export const claudeOauthAttempts = sqliteTable(
   (table) => ({
     stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
     userIdx: index('claude_oauth_attempts_user_idx').on(table.user_id, table.created_at),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
     maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
