@@ -1,6 +1,6 @@
 import type { MCPServer, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { getMcpServersForSession } from './scoping';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from './scoping';
 import type { HandlerPermissionCapabilities } from './tool-permissions';
 
 const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer =>
@@ -42,8 +42,8 @@ describe('getMcpServersForSession', () => {
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(servers).toEqual([
-      { server: globalServer, source: 'global' },
-      { server: sessionServer, source: 'session-assigned' },
+      { server: globalServer, source: 'global', oauthAuthResolution: 'not_applicable' },
+      { server: sessionServer, source: 'session-assigned', oauthAuthResolution: 'not_applicable' },
     ]);
   });
 
@@ -214,6 +214,7 @@ describe('getMcpServersForSession', () => {
         type: 'oauth',
         oauth_mode: 'per_user',
         oauth_access_token: '••••••••',
+        oauth_token_expires_at: 1,
       },
     } as MCPServer;
     const tokenServer = makeServer('token-server', 'global', 'token');
@@ -233,11 +234,44 @@ describe('getMcpServersForSession', () => {
     );
 
     expect(getAuthHeaders).toHaveBeenCalledWith(['oauth-server']);
-    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server')?.server;
-    expect(hydrated?.auth).toMatchObject({
+    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server');
+    expect(hydrated?.server.auth).toMatchObject({
       type: 'oauth',
       oauth_access_token: 'real-oauth-token',
     });
+    expect(hydrated?.oauthAuthResolution).toBe('available');
+    await expect(resolveScopedMCPAuthHeaders(hydrated!)).resolves.toEqual({
+      Authorization: 'Bearer real-oauth-token',
+    });
+  });
+
+  it('does not fall through when the scoped credential authority has no OAuth grant', async () => {
+    const oauthServer = {
+      ...makeServer('oauth-server', 'session', 'oauth'),
+      url: 'https://provider.example/mcp',
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'client-id',
+        oauth_client_secret: 'client-secret',
+        oauth_token_url: 'https://provider.example/token',
+      },
+    } as MCPServer;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([oauthServer]),
+        } as never,
+        mcpOAuthAuthHeadersRepo: { getAuthHeaders: vi.fn().mockResolvedValue({}) } as never,
+      },
+      ENFORCING
+    );
+
+    expect(servers[0].oauthAuthResolution).toBe('unavailable');
+    await expect(resolveScopedMCPAuthHeaders(servers[0])).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each([

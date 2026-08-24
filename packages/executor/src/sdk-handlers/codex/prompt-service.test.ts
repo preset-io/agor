@@ -74,7 +74,13 @@ async function* streamMockEvents() {
 vi.mock('./app-server-client.js', () => appServerMocks);
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, ...mcpScopingMocks };
+  return {
+    ...actual,
+    ...mcpScopingMocks,
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);

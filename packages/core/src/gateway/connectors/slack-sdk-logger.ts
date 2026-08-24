@@ -115,6 +115,24 @@ class SlackSdkLogger implements Logger {
 }
 
 function classifySlackSdkError(value: unknown): string {
+  const code =
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    typeof (value as { code?: unknown }).code === 'string'
+      ? (value as { code: string }).code.toLowerCase()
+      : undefined;
+  if (
+    code &&
+    ['invalid_auth', 'not_authed', 'token_revoked', 'account_inactive', 'token_expired'].includes(
+      code
+    )
+  ) {
+    return 'authentication';
+  }
+  if (code && ['ratelimited', 'rate_limited'].includes(code)) return 'rate_limited';
+  if (code && ['slack_websocket_error', 'request_error'].includes(code)) return 'transport';
+
   const message = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
   if (/invalid_auth|not_authed|token_revoked|account_inactive/i.test(message)) {
     return 'authentication';

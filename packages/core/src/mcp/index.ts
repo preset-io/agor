@@ -48,6 +48,7 @@ export {
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,
   type MCPServerWithSource,
+  resolveScopedMCPAuthHeaders,
 } from './scoping';
 export {
   buildMCPTemplateContextFromEnv,

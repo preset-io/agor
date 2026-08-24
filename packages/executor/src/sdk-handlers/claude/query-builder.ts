@@ -11,10 +11,9 @@ import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { isGatewaySession } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
-import { McpAuthDiagnostics } from '../../services/mcp-auth-diagnostics';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 type PermissionMode = ClaudeSdk.PermissionMode;
 type Options = ClaudeSdk.Options;
@@ -24,7 +23,11 @@ import {
   getMcpServersForSession,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+<<<<<<< HEAD
   sanitizeMCPExternalError,
+=======
+  resolveScopedMCPAuthHeaders,
+>>>>>>> 4d02a837 (Address integration diagnostics review feedback)
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -465,8 +468,15 @@ export async function setupQuery(
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const deniedTools: string[] = [];
+<<<<<<< HEAD
         const authDiagnostics = new McpAuthDiagnostics();
         for (const { server } of attachableServers) {
+=======
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
+
+        for (const scoped of attachableServers) {
+          const { server } = scoped;
+>>>>>>> 4d02a837 (Address integration diagnostics review feedback)
           // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
 
@@ -489,7 +499,7 @@ export async function setupQuery(
 
           try {
             // Pass mcpUrl for OAuth token cache lookup
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
             const missingRequiredAuth =
               !!server.auth &&
               server.auth.type !== 'none' &&
@@ -540,7 +550,7 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
-        authDiagnostics.flush('claude');
+        authDiagnostics.emitSummary('claude');
         if (deniedTools.length > 0) {
           queryOptions.disallowedTools = [
             ...(queryOptions.disallowedTools as string[]),

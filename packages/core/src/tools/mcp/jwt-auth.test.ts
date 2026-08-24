@@ -1,12 +1,7 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UnsafeOutboundUrlError } from '../../utils/safe-outbound-fetch';
-import {
-  clearAllJWTTokens,
-  fetchJWTToken,
-  markMCPAuthoritativeOAuthResolution,
-  resolveMCPAuthHeaders,
-} from './jwt-auth';
+import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 
 const servers: http.Server[] = [];
@@ -46,10 +41,10 @@ describe('resolveMCPAuthHeaders OAuth authority', () => {
       oauth_client_secret: 'secret',
       oauth_token_url: 'https://provider.example/token',
     };
-    markMCPAuthoritativeOAuthResolution(auth);
-
     await expect(
-      resolveMCPAuthHeaders(auth, 'https://provider.example/mcp')
+      resolveMCPAuthHeaders(auth, 'https://provider.example/mcp', {
+        oauthCredentialAuthority: 'executor_repository',
+      })
     ).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
   });

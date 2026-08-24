@@ -16,10 +16,9 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
-import { McpAuthDiagnostics } from '../../services/mcp-auth-diagnostics';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ResumedSessionData = GeminiTypes.ResumedSessionData;
@@ -32,7 +31,11 @@ import {
   isMCPAbortError,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+<<<<<<< HEAD
   sanitizeMCPExternalError,
+=======
+  resolveScopedMCPAuthHeaders,
+>>>>>>> 4d02a837 (Address integration diagnostics review feedback)
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -744,12 +747,13 @@ export class GeminiPromptService {
           { toolFiltering: 'exclude' }
         );
 
-        const authDiagnostics = new McpAuthDiagnostics();
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
         // Convert to Gemini SDK format
-        for (const { server } of serversWithSource) {
+        for (const scoped of serversWithSource) {
+          const { server } = scoped;
           let headers: Record<string, string> | undefined;
           try {
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (
               server.transport !== 'stdio' &&
@@ -812,7 +816,7 @@ export class GeminiPromptService {
           }
         }
 
-        authDiagnostics.flush('gemini');
+        authDiagnostics.emitSummary('gemini');
 
         if (Object.keys(mcpServersConfig).length > 0) {
           console.log(

@@ -120,7 +120,7 @@ describe('Slack SDK logger', () => {
     );
     expect(errorSpy.mock.calls).toEqual([
       ['[slack.socket_mode] sdk_error category=rate_limited lifecycle=active'],
-      ['[slack.socket_mode] sdk_error category=unclassified lifecycle=active'],
+      ['[slack.socket_mode] sdk_error category=authentication lifecycle=active'],
     ]);
     const output = [...warnSpy.mock.calls, ...errorSpy.mock.calls].flat().join(' ');
     expect(output).not.toContain('sensitive');

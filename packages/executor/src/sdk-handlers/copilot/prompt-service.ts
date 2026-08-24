@@ -13,10 +13,9 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
-import { getMcpServersForSession } from '@agor/core/mcp';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -209,7 +208,8 @@ export class CopilotPromptService {
     const mcpServers = serversWithSource.map((s) => s.server);
     console.log(`📊 [Copilot MCP] Found ${mcpServers.length} MCP server(s) for session`);
 
-    for (const server of mcpServers) {
+    for (const scoped of serversWithSource) {
+      const { server } = scoped;
       const serverName = server.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
 
       if (server.transport === 'stdio') {
@@ -228,7 +228,7 @@ export class CopilotPromptService {
           tools: ['*'],
         };
 
-        const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         if (headers) serverConfig.headers = headers;
 
