@@ -2473,16 +2473,20 @@ describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { app, created } = buildApp(CURATED);
     attachOf(app).create.mockRejectedValue(new Error('forbidden'));
-    sessionsOf(app).remove.mockRejectedValue(new Error('cleanup exploded'));
+    sessionsOf(app).remove.mockRejectedValue(
+      new Error('cleanup exploded SENTINEL_CATALOG_CLEANUP')
+    );
 
     await expect(createMCPCatalogConnectService(app).create(request, params)).rejects.toThrow(
       /forbidden/
     );
 
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('Left session session-1 behind'),
-      expect.anything()
+      expect.stringContaining(
+        'compensation_failed resource=session session_id=session-1 category=unknown type=Error'
+      )
     );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SENTINEL_CATALOG_CLEANUP');
     // Honest about the residual: the session really is still there.
     expect(created.sessions).toHaveLength(1);
     warn.mockRestore();

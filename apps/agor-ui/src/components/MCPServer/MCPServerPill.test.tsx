@@ -3,16 +3,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPServerPill } from './MCPServerPill';
 
-const permissionState = vi.hoisted(() => ({ isAdmin: false }));
 const refreshAndRefetchMCPOAuthGrant = vi.hoisted(() => vi.fn());
 const showError = vi.fn();
 const showInfo = vi.fn();
 const showSuccess = vi.fn();
 const showWarning = vi.fn();
-
-vi.mock('@/hooks/usePermissions', () => ({
-  usePermissions: () => permissionState,
-}));
 
 vi.mock('@/utils/message', () => ({
   useThemedMessage: () => ({ showError, showInfo, showSuccess, showWarning }),
@@ -27,19 +22,23 @@ vi.mock('@/utils/mcpOAuthAttempt', () => ({
 describe('MCPServerPill OAuth recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    permissionState.isAdmin = false;
   });
 
-  it('uses the shared OAuth start path and exposes DCR diagnostics', async () => {
+  it('uses the shared OAuth start path and exposes sanitized DCR recovery', async () => {
     const startOAuth = vi.fn().mockResolvedValue({
       success: false,
-      error: 'Dynamic Client Registration failed',
-      diagnostic: { stage: 'dcr_registration', http_status: 404 },
-      redirect_uri: 'https://agor.example.com/mcp-servers/oauth-callback',
+      error: 'The provider could not register an OAuth client automatically.',
+      recovery: {
+        category: 'client_registration_failed',
+        action: 'configure_client',
+        message: 'The provider could not register an OAuth client automatically.',
+        redirect_uri: 'https://agor.example.com/mcp-servers/oauth-callback',
+      },
     });
     const client = {
       service: vi.fn(() => ({ create: startOAuth })),
     } as unknown as AgorClient;
+    const onEdit = vi.fn();
     const server = {
       mcp_server_id: '01900000-0000-7000-8000-000000000004',
       name: 'oauth-server',
@@ -58,6 +57,9 @@ describe('MCPServerPill OAuth recovery', () => {
         authorityKey="user-a:member:1"
         actionAllowed
         actionBlockedReason="OAuth unavailable"
+        configureAllowed
+        configureBlockedReason="Only an administrator can change saved credentials."
+        onEdit={onEdit}
       />
     );
 
@@ -72,12 +74,118 @@ describe('MCPServerPill OAuth recovery', () => {
       mcp_server_id: '01900000-0000-7000-8000-000000000004',
     });
     expect(await screen.findByText('OAuth setup needs attention')).toBeVisible();
-    expect(screen.getByText(/HTTP 404/)).toBeVisible();
+    const configure = screen.getByRole('button', { name: 'Configure OAuth client' });
+    expect(configure).toBeVisible();
+    fireEvent.click(configure);
+    expect(onEdit).toHaveBeenCalledWith(server);
     expect(screen.getByText(/mcp-servers\/oauth-callback/)).toBeVisible();
+    expect(screen.queryByText(/dcr_registration|HTTP 404/)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['bearer', { type: 'bearer' as const }],
+    ['JWT', { type: 'jwt' as const, api_url: 'https://auth.example.test/token' }],
+  ])(
+    'opens configuration, never OAuth, for a %s server with a cleared secret',
+    async (_label, auth) => {
+      const service = vi.fn();
+      const client = { service } as unknown as AgorClient;
+      const onEdit = vi.fn();
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000014',
+        name: 'static-auth-server',
+        display_name: 'Static Auth Server',
+        transport: 'http',
+        url: 'https://mcp.example.test/mcp',
+        scope: 'global',
+        enabled: true,
+        auth,
+      } as MCPServer;
+
+      const { container } = render(
+        <MCPServerPill
+          server={server}
+          needsAuth
+          client={client}
+          authorityKey="user-a:member:1"
+          actionAllowed
+          actionBlockedReason="OAuth unavailable"
+          configureAllowed
+          configureBlockedReason="Only an administrator can change saved credentials."
+          onEdit={onEdit}
+        />
+      );
+
+      const configure = screen.getByRole('button', {
+        name: 'Needs configuration: Static Auth Server',
+      });
+      expect(configure).toHaveAccessibleName('Needs configuration: Static Auth Server');
+      expect(container.querySelector('.anticon-setting')).toBeInTheDocument();
+
+      // A browser-generated keyboard click has detail=0. Exercising the
+      // native button path proves it is not pointer-only.
+      act(() => configure.focus());
+      expect(configure).toHaveFocus();
+      fireEvent.click(configure, { detail: 0 });
+
+      expect(onEdit).toHaveBeenCalledOnce();
+      expect(onEdit).toHaveBeenCalledWith(server);
+      expect(service).not.toHaveBeenCalled();
+
+      fireEvent.mouseEnter(configure);
+      expect(
+        await screen.findByText(/needs configuration.*activate to configure/i)
+      ).toBeInTheDocument();
+    }
+  );
+
+  it.each(['bearer', 'jwt'] as const)(
+    'does not offer %s configuration to a viewer without mutation authority',
+    (type) => {
+      const service = vi.fn();
+      const onEdit = vi.fn();
+      const server = {
+        mcp_server_id: '01900000-0000-7000-8000-000000000015',
+        name: 'restricted-static-auth',
+        display_name: 'Restricted Credentials',
+        transport: 'http',
+        url: 'https://mcp.example.test/mcp',
+        scope: 'global',
+        enabled: true,
+        auth:
+          type === 'bearer'
+            ? { type: 'bearer' as const }
+            : { type: 'jwt' as const, api_url: 'https://auth.example.test/token' },
+      } as MCPServer;
+
+      render(
+        <MCPServerPill
+          server={server}
+          needsAuth
+          client={{ service } as unknown as AgorClient}
+          authorityKey="viewer:1"
+          actionAllowed={false}
+          actionBlockedReason="OAuth unavailable"
+          configureAllowed={false}
+          configureBlockedReason="Only an administrator can change saved credentials."
+          onEdit={onEdit}
+        />
+      );
+
+      const status = screen.getByRole('button', {
+        name: /Restricted Credentials MCP server\. Needs configuration\. Only an administrator/i,
+      });
+      expect(status).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(status);
+      expect(onEdit).not.toHaveBeenCalled();
+      expect(service).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole('button', { name: 'Edit Restricted Credentials MCP server' })
+      ).not.toBeInTheDocument();
+    }
+  );
+
   it('names the admin edit action for the server it edits', () => {
-    permissionState.isAdmin = true;
     const onEdit = vi.fn();
     const server = {
       mcp_server_id: '01900000-0000-7000-8000-000000000005',
@@ -97,6 +205,8 @@ describe('MCPServerPill OAuth recovery', () => {
         authorityKey={null}
         actionAllowed={false}
         actionBlockedReason="OAuth unavailable"
+        configureAllowed
+        configureBlockedReason="Only an administrator can change saved credentials."
         onEdit={onEdit}
       />
     );
@@ -128,6 +238,8 @@ describe('MCPServerPill OAuth recovery', () => {
         authorityKey="user-a:member:1"
         actionAllowed
         actionBlockedReason="OAuth unavailable"
+        configureAllowed
+        configureBlockedReason="Only an administrator can change saved credentials."
       />
     );
 
@@ -146,6 +258,49 @@ describe('MCPServerPill OAuth recovery', () => {
         expect.any(Function)
       )
     );
+  });
+
+  it('uses a real visually-hidden live region and announces transitions, not initial ready state', async () => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000009',
+      name: 'oauth-server',
+      display_name: 'OAuth Server',
+      transport: 'http',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+    const common = {
+      server,
+      client: {} as AgorClient,
+      authorityKey: 'user-a:member:1',
+      actionAllowed: true,
+      actionBlockedReason: 'OAuth unavailable',
+      configureAllowed: true,
+      configureBlockedReason: 'Only an administrator can change saved credentials.',
+    };
+    const { container, rerender } = render(<MCPServerPill {...common} needsAuth={false} />);
+
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).toBeInTheDocument();
+    expect(liveRegion).toHaveTextContent('');
+    expect(liveRegion).not.toHaveClass('sr-only');
+    expect(liveRegion).toHaveStyle({
+      position: 'absolute',
+      width: '1px',
+      height: '1px',
+      overflow: 'hidden',
+      whiteSpace: 'nowrap',
+      clipPath: 'inset(50%)',
+    });
+
+    rerender(<MCPServerPill {...common} needsAuth />);
+    await waitFor(() =>
+      expect(liveRegion).toHaveTextContent('OAuth Server requires authentication.')
+    );
+
+    rerender(<MCPServerPill {...common} needsAuth={false} />);
+    await waitFor(() => expect(liveRegion).toHaveTextContent('OAuth Server is ready.'));
   });
 
   it.each([
@@ -182,6 +337,8 @@ describe('MCPServerPill OAuth recovery', () => {
           authorityKey="user-a:member:1"
           actionAllowed
           actionBlockedReason="OAuth unavailable"
+          configureAllowed
+          configureBlockedReason="Only an administrator can change saved credentials."
         />
       );
 
@@ -200,6 +357,8 @@ describe('MCPServerPill OAuth recovery', () => {
           authorityKey={authorityKey}
           actionAllowed={actionAllowed}
           actionBlockedReason="OAuth unavailable"
+          configureAllowed
+          configureBlockedReason="Only an administrator can change saved credentials."
         />
       );
       expect(shouldApply()).toBe(false);
@@ -245,6 +404,8 @@ describe('MCPServerPill OAuth recovery', () => {
         authorityKey="user-a:member:1"
         actionAllowed
         actionBlockedReason="OAuth unavailable"
+        configureAllowed
+        configureBlockedReason="Only an administrator can change saved credentials."
       />
     );
 

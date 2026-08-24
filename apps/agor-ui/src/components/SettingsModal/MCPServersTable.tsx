@@ -271,7 +271,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       transport: values.transport as 'stdio' | 'http' | 'sse',
       scope: (values.scope as MCPScope | undefined) ?? offeredScopes[0],
       enabled: (values.enabled as boolean | undefined) ?? true,
-      source: 'user',
     };
 
     if (values.transport === 'stdio') {
@@ -319,7 +318,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         return newServerId;
       }
 
-      const { name: _name, source: _source, ...updates } = data;
+      const { name: _name, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
       if (!operation.isCurrent()) return null;

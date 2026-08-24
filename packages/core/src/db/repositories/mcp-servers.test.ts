@@ -6,9 +6,12 @@
  */
 
 import type { MCPServer, MCPServerID, UpdateMCPServerInput, UserID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { MCP_HEADER_REDACTED_SENTINEL } from '../../tools/mcp/http-headers';
+import { select, update } from '../database-wrapper';
+import { mcpServers } from '../schema';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { MCPServerRepository } from './mcp-servers';
@@ -17,15 +20,19 @@ import { MCPServerRepository } from './mcp-servers';
  * Create test MCP server data with required fields
  */
 function createMCPServerData(overrides?: Partial<MCPServer>) {
+  const transport = overrides?.transport ?? (overrides?.auth || overrides?.url ? 'http' : 'stdio');
   return {
     mcp_server_id: overrides?.mcp_server_id ?? (generateId() as MCPServerID),
     name: overrides?.name ?? 'test-server',
-    transport: overrides?.transport ?? ('stdio' as const),
+    transport,
     scope: overrides?.scope ?? ('global' as const),
     enabled: overrides?.enabled ?? true,
     source: overrides?.source ?? ('user' as const),
     created_at: overrides?.created_at ?? new Date(),
     updated_at: overrides?.updated_at ?? new Date(),
+    ...(transport === 'stdio'
+      ? { command: overrides?.command ?? 'npx' }
+      : { url: overrides?.url ?? 'https://mcp.example.test/mcp' }),
     ...overrides,
   };
 }
@@ -227,6 +234,104 @@ describe('MCPServerRepository.findAll', () => {
 // ============================================================================
 
 describe('MCPServerRepository.update', () => {
+  dbTest('keeps daemon-owned config revisions monotonic', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create({
+      ...createMCPServerData({
+        display_name: 'Before',
+        transport: 'http',
+        url: 'https://before.example.test/mcp',
+      }),
+      config_version: Number.MAX_SAFE_INTEGER,
+    } as never);
+    expect(created).toMatchObject({ config_version: 1 });
+
+    const metadataOnly = await repo.update(created.mcp_server_id, {
+      display_name: 'After',
+      expected_config_version: 1,
+    });
+    expect(metadataOnly).toMatchObject({ config_version: 2 });
+
+    const endpointEdit = await repo.update(created.mcp_server_id, {
+      url: 'https://changed.example.test/mcp',
+      expected_config_version: 2,
+    });
+    expect(endpointEdit).toMatchObject({ config_version: 3 });
+  });
+
+  dbTest(
+    'fails closed at revision exhaustion without making revision 1 valid again',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(createMCPServerData({ display_name: 'Before' }));
+      const row = await select(db)
+        .from(mcpServers)
+        .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+        .one();
+      for (const exhausted of [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER]) {
+        await update(db, mcpServers)
+          .set({ data: { ...row!.data, config_version: exhausted } })
+          .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+          .run();
+
+        await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+          display_name: 'Before',
+          config_version: exhausted,
+        });
+        await expect(
+          repo.update(created.mcp_server_id, {
+            display_name: 'Must not advance into an exhausted revision',
+            expected_config_version: exhausted,
+          })
+        ).rejects.toThrow('configuration revision is invalid or exhausted');
+
+        // A client which retained the initial revision must never regain CAS
+        // authority after exhaustion (ABA).
+        await expect(
+          repo.update(created.mcp_server_id, {
+            display_name: 'Ancient stale edit',
+            expected_config_version: 1,
+          })
+        ).rejects.toThrow('configuration revision is invalid or exhausted');
+      }
+
+      const stored = await select(db)
+        .from(mcpServers)
+        .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+        .one();
+      expect(stored?.data.config_version).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stored?.data.display_name).toBe('Before');
+    }
+  );
+
+  dbTest('projects a pre-existing invalid revision as baseline 1', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(createMCPServerData({ display_name: 'Invalid revision' }));
+    const row = await select(db)
+      .from(mcpServers)
+      .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+      .one();
+    await update(db, mcpServers)
+      .set({ data: { ...row!.data, config_version: 0 } })
+      .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+      .run();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+        config_version: 1,
+      });
+      await expect(
+        repo.update(created.mcp_server_id, {
+          display_name: 'Recovered invalid revision',
+          expected_config_version: 1,
+        })
+      ).resolves.toMatchObject({ config_version: 2 });
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('Invalid revision');
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   dbTest('should update MCP server', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const created = await repo.create(createMCPServerData({ name: 'original', enabled: true }));
@@ -260,6 +365,80 @@ describe('MCPServerRepository.update', () => {
         auth: { type: 'oauth', oauth_compatibility_mode: 'marketplace' } as never,
       })
     ).rejects.toThrow(/must be either strict or legacy/);
+  });
+
+  dbTest(
+    'merges a narrow auth patch without clobbering credentials or compatibility',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({
+          transport: 'http',
+          url: 'https://calendar.example.test/mcp',
+          auth: {
+            type: 'oauth',
+            oauth_scope: 'calendar.readonly',
+            oauth_client_id: 'registered-client',
+            oauth_client_secret: 'registered-secret',
+            oauth_compatibility_mode: 'legacy',
+          },
+        })
+      );
+
+      const updated = await repo.update(created.mcp_server_id, {
+        auth: { oauth_scope: 'calendar.events' },
+        expected_config_version: created.config_version,
+      });
+
+      expect(updated.config_version).toBe((created.config_version ?? 1) + 1);
+      expect(updated.auth).toEqual({
+        type: 'oauth',
+        oauth_scope: 'calendar.events',
+        oauth_client_id: 'registered-client',
+        oauth_client_secret: 'registered-secret',
+        oauth_compatibility_mode: 'legacy',
+      });
+    }
+  );
+
+  dbTest('clears one auth field with null and rejects a stale config version', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        auth: { type: 'oauth', oauth_scope: 'one', oauth_client_id: 'client' },
+      })
+    );
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { oauth_scope: null },
+      expected_config_version: created.config_version,
+    });
+    expect(updated.auth).toEqual({ type: 'oauth', oauth_client_id: 'client' });
+    await expect(
+      repo.update(created.mcp_server_id, {
+        auth: { oauth_scope: 'stale' },
+        expected_config_version: created.config_version,
+      })
+    ).rejects.toMatchObject({ name: 'MCPServerConfigConflictError' });
+  });
+
+  dbTest('supports an explicit same-mode whole-auth replacement', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        auth: {
+          type: 'oauth',
+          oauth_scope: 'old',
+          oauth_client_id: 'old-client',
+          oauth_client_secret: 'old-secret',
+        },
+      })
+    );
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { type: 'oauth', oauth_scope: 'new' },
+      replace_auth: true,
+      expected_config_version: created.config_version,
+    });
+    expect(updated.auth).toEqual({ type: 'oauth', oauth_scope: 'new' });
   });
 
   dbTest(

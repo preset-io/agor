@@ -40,7 +40,7 @@ describe('register-hooks MCP server secret redaction', () => {
     // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
     // ownership, which is what lets a member hold a server of their own at all.
     expect(source).toMatch(
-      /update:\s*\[validateMcpServerOAuthCompatibility,\s*authorizeMcpServerWriteHook\]/
+      /update:\s*\[\s*authorizeMcpServerWriteHook,[\s\S]*?validateMcpServerOAuthCompatibility,?\s*\]/
     );
   });
 

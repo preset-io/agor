@@ -1,0 +1,153 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  asMCPExternalError,
+  isMCPAbortError,
+  MCPExternalError,
+  sanitizeMCPExternalError,
+} from './external-error';
+
+describe('MCP external error boundary', () => {
+  it.each([
+    new TypeError('DNS failed for https://SENTINEL-DNS.example/private'),
+    Object.assign(new Error('TLS certificate reflected SENTINEL-TLS'), { code: 'ENOTFOUND' }),
+    { message: 'provider said SENTINEL-PROVIDER', code: 'ATTACKER_SECRET_CODE' },
+    'SENTINEL-STRING-THROW',
+  ])('returns and throws only the closed contract for %#', (failure) => {
+    const safe = sanitizeMCPExternalError(failure, { stage: 'discovery' });
+    const thrown = asMCPExternalError(failure, { stage: 'discovery' });
+    const serialized = JSON.stringify({ safe, thrown: String(thrown), stack: thrown.stack });
+
+    expect(serialized).not.toContain('SENTINEL');
+    expect(safe.diagnostic.event).toBe('mcp_external_failure');
+    expect(safe.diagnostic.stage).toBe('discovery');
+    expect(['Error', 'TypeError', 'UnknownError']).toContain(safe.diagnostic.type);
+    expect(thrown.message).toBe(safe.message);
+  });
+
+  it('allowlists stable network codes without retaining arbitrary codes', () => {
+    const allowed = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL'), { code: 'ECONNREFUSED' }),
+      { stage: 'jwt' }
+    );
+    const rejected = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL'), { code: 'SENTINEL_CODE' }),
+      { stage: 'jwt' }
+    );
+
+    expect(allowed.diagnostic.code).toBe('ECONNREFUSED');
+    expect(rejected.diagnostic.code).toBeUndefined();
+    expect(JSON.stringify({ allowed, rejected })).not.toContain('SENTINEL');
+  });
+
+  it('fails closed when hostile code and name getters throw', () => {
+    const failure = new Error('SENTINEL_HOSTILE_ERROR');
+    const codeGetter = vi.fn(() => {
+      throw new Error('SENTINEL_CODE_GETTER');
+    });
+    const nameGetter = vi.fn(() => {
+      throw new Error('SENTINEL_NAME_GETTER');
+    });
+    Object.defineProperties(failure, {
+      code: { get: codeGetter },
+      name: { get: nameGetter },
+    });
+
+    const safe = sanitizeMCPExternalError(failure, { stage: 'runtime' });
+    expect(safe).toMatchObject({
+      category: 'unknown',
+      action: 'retry',
+      diagnostic: { type: 'Error' },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+    expect(codeGetter).not.toHaveBeenCalled();
+    expect(nameGetter).not.toHaveBeenCalled();
+  });
+
+  it('recognizes genuine platform and SDK abort errors without trusting hostile getters', () => {
+    const domAbort = new DOMException('SENTINEL_DOM_ABORT', 'AbortError');
+    const sdkAbort = Object.assign(new Error('SENTINEL_SDK_ABORT'), { name: 'AbortError' });
+    const codeAbort = Object.assign(new Error('SENTINEL_CODE_ABORT'), { code: 'ABORT_ERR' });
+    const hostileGetter = vi.fn(() => {
+      throw new Error('SENTINEL_HOSTILE_ABORT_GETTER');
+    });
+    const hostile = new Proxy(new Error('SENTINEL_HOSTILE_ABORT'), {
+      getOwnPropertyDescriptor(target, property) {
+        if (property === 'name' || property === 'code') {
+          return { configurable: true, get: hostileGetter };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    });
+
+    expect(isMCPAbortError(domAbort)).toBe(true);
+    expect(isMCPAbortError(sdkAbort)).toBe(true);
+    expect(isMCPAbortError(codeAbort)).toBe(true);
+    expect(isMCPAbortError(hostile)).toBe(false);
+    expect(hostileGetter).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['provider_rejected', 'reauthenticate'],
+    ['invalid_response', 'retry'],
+    ['configuration_required', 'review_configuration'],
+  ] as const)('preserves the closed %s category/action pair', (category, action) => {
+    const typed = asMCPExternalError(undefined, { stage: 'jwt', category });
+    expect(sanitizeMCPExternalError(typed, { stage: 'oauth' })).toMatchObject({
+      category,
+      action,
+      diagnostic: { stage: 'oauth' },
+    });
+  });
+
+  it('re-closes forged typed errors instead of trusting their public prose or metadata', () => {
+    const forged = new MCPExternalError({
+      category: 'provider_unavailable',
+      action: 'retry',
+      message: 'SENTINEL_FORGED_MESSAGE',
+      diagnostic: {
+        event: 'mcp_external_failure',
+        stage: 'jwt',
+        type: 'Error',
+        code: 'SENTINEL_FORGED_CODE',
+      },
+    });
+    const safe = sanitizeMCPExternalError(forged, { stage: 'oauth_callback' });
+
+    expect(JSON.stringify({ forged: String(forged), safe })).not.toContain('SENTINEL');
+    expect(safe).toMatchObject({
+      category: 'provider_unavailable',
+      action: 'retry',
+      diagnostic: { stage: 'oauth_callback', type: 'Error' },
+    });
+    expect(safe.diagnostic.code).toBeUndefined();
+  });
+
+  it('does not trust a Proxy wrapped around a nominal external error', () => {
+    const sentinel = 'SENTINEL_EXTERNAL_PROXY';
+    const getter = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const getPrototypeOf = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const typed = asMCPExternalError(new Error(sentinel), {
+      stage: 'oauth',
+      category: 'provider_rejected',
+    });
+    const hostile = new Proxy(typed, {
+      getPrototypeOf,
+      getOwnPropertyDescriptor(target, property) {
+        if (property === 'name' || property === 'code' || property === 'category') {
+          return { configurable: true, get: getter };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    });
+
+    const safe = sanitizeMCPExternalError(hostile, { stage: 'oauth' });
+    expect(safe).toMatchObject({ category: 'unknown', action: 'retry' });
+    expect(JSON.stringify(safe)).not.toContain(sentinel);
+    expect(getter).not.toHaveBeenCalled();
+    expect(getPrototypeOf).toHaveBeenCalled();
+  });
+});

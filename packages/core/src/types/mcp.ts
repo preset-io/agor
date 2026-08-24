@@ -39,6 +39,7 @@ export interface MCPOAuthAttemptResult {
   mcp_server_id?: MCPServerID;
   oauth_mode?: MCPOAuthMode;
   failure_code?: string;
+  recovery?: MCPAuthRecovery;
 }
 
 export interface MCPOAuthStatusResult {
@@ -117,8 +118,49 @@ export interface MCPOAuthDCRDiagnostic {
 
 export interface MCPOAuthStartFailure {
   success: false;
+  /** Stable, secret-free message retained for older clients. */
   error: string;
-  diagnostic?: MCPOAuthDCRDiagnostic;
+  /** Structured recovery contract for UI, agents, and future gateway actions. */
+  recovery?: MCPAuthRecovery;
+  redirect_uri?: string;
+}
+
+export const MCP_AUTH_RECOVERY_CATEGORIES = [
+  'authentication_required',
+  'client_registration_required',
+  'client_registration_failed',
+  'metadata_incompatible',
+  'metadata_unavailable',
+  'redirect_configuration_required',
+  'authorization_denied',
+  'configuration_changed',
+  'permission_changed',
+  'provider_unavailable',
+  'provider_rejected',
+  'invalid_response',
+  'configuration_required',
+  'unknown',
+] as const;
+export type MCPAuthRecoveryCategory = (typeof MCP_AUTH_RECOVERY_CATEGORIES)[number];
+
+export const MCP_AUTH_RECOVERY_ACTIONS = [
+  'reauthenticate',
+  'configure_client',
+  'review_compatibility',
+  'configure_redirect',
+  'save_and_retry',
+  'retry',
+  'review_configuration',
+  'contact_admin',
+] as const;
+export type MCPAuthRecoveryAction = (typeof MCP_AUTH_RECOVERY_ACTIONS)[number];
+
+/** Secret-free, provider-agnostic recovery state. */
+export interface MCPAuthRecovery {
+  category: MCPAuthRecoveryCategory;
+  action: MCPAuthRecoveryAction;
+  message: string;
+  mcp_server_id?: MCPServerID;
   redirect_uri?: string;
 }
 
@@ -333,6 +375,17 @@ export interface MCPAuth {
 }
 
 /**
+ * Public PATCH contract for auth configuration.
+ *
+ * Omitted/undefined fields are preserved, null clears one field, and a type
+ * change replaces the object. Secret fields may carry the public redaction
+ * sentinel to explicitly preserve the stored value without exposing it.
+ */
+export type MCPAuthPatch = {
+  [Field in keyof MCPAuth]?: MCPAuth[Field] | null;
+};
+
+/**
  * JSON Schema type for tool input schemas
  */
 export type JSONSchema = Record<string, unknown>;
@@ -343,7 +396,7 @@ export type JSONSchema = Record<string, unknown>;
  */
 export interface MCPTool {
   name: string; // e.g., "mcp__filesystem__list_files"
-  description: string;
+  description?: string;
   input_schema?: JSONSchema; // Optional - not all MCP servers provide schemas
 }
 
@@ -354,6 +407,7 @@ export interface MCPTool {
 export interface MCPResource {
   uri: string; // e.g., "file:///path/to/file"
   name: string;
+  description?: string;
   mimeType?: string;
 }
 
@@ -363,13 +417,13 @@ export interface MCPResource {
  */
 export interface MCPPrompt {
   name: string; // Becomes slash command
-  description: string;
+  description?: string;
   arguments?: PromptArgument[];
 }
 
 export interface PromptArgument {
   name: string;
-  description: string;
+  description?: string;
   required?: boolean;
 }
 
@@ -421,6 +475,9 @@ export interface MCPServer {
 
   // Authentication (for HTTP/SSE transports)
   auth?: MCPAuth;
+
+  /** Daemon-owned monotonic revision of editor-controlled configuration. */
+  config_version?: number;
 
   /**
    * Read-only effective policy resolved by the daemon for Settings and other
@@ -512,7 +569,8 @@ export interface CreateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null explicitly creates a server with no authentication configuration. */
+  auth?: MCPAuth | null;
   scope: MCPScope;
   owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
@@ -532,7 +590,12 @@ export interface UpdateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null clears all authentication; otherwise applies MCPAuthPatch semantics. */
+  auth?: MCPAuthPatch | null;
+  /** Explicitly replace same-mode auth instead of merging it. PUT sets this by default. */
+  replace_auth?: boolean;
+  /** Optional compare-and-swap guard for concurrent editors. */
+  expected_config_version?: number;
   scope?: MCPScope;
   enabled?: boolean;
   transport?: 'stdio' | 'http' | 'sse';

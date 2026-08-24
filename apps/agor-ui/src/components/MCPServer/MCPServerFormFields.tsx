@@ -75,9 +75,9 @@ export interface MCPServerFormFieldsProps {
     resourceCount: number;
     promptCount: number;
     error?: string;
-    tools?: Array<{ name: string; description: string }>;
+    tools?: Array<{ name: string; description?: string }>;
     resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-    prompts?: Array<{ name: string; description: string }>;
+    prompts?: Array<{ name: string; description?: string }>;
   } | null;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
@@ -225,9 +225,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       } else {
         showError(data.error || 'Failed to disconnect OAuth');
       }
-    } catch (error) {
+    } catch {
       if (!operation.isCurrent()) return;
-      showError(`Disconnect error: ${error instanceof Error ? error.message : String(error)}`);
+      showError('OAuth disconnect failed. Check the connection and try again.');
     } finally {
       if (operation.isCurrent()) setDisconnectingOAuth(false);
     }
@@ -335,10 +335,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       } else {
         showInfo('No authentication required - ready to use');
       }
-    } catch (error) {
+    } catch {
       if (!operation.isCurrent()) return;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      showError(`Connection test failed: ${errorMessage}`);
+      showError('Connection test failed. Check the saved configuration and try again.');
     } finally {
       if (operation.isCurrent()) setTestingAuth(false);
     }
@@ -346,7 +345,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
   // One label for both the live and the blocked button, so a retry still reads
   // as a retry while it waits on a field.
-  const oauthStartLabel = oauthFailure?.diagnostic
+  const oauthStartLabel = oauthFailure?.recovery
     ? 'Save OAuth settings & retry'
     : oauthFailure
       ? 'Retry OAuth Flow'
@@ -354,6 +353,24 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
   const isRemoteTransport = isRemoteTransportValue(transport);
   const showAdvancedSection = isRemoteTransport && authType === 'oauth';
+  const savedSecretExtra = (formField: string) =>
+    mode === 'edit' ? (
+      <Space size={8} wrap>
+        <Typography.Text type="secondary">
+          Leaving this blank preserves the saved secret.
+        </Typography.Text>
+        <Button
+          size="small"
+          danger
+          onClick={() => {
+            form.setFieldValue(formField, '');
+            form.setFieldValue(`${formField}_clear`, true);
+          }}
+        >
+          Clear saved secret
+        </Button>
+      </Space>
+    ) : undefined;
 
   // ── Basic Information section ──────────────────────────────────────
   const isCreate = mode === 'create';
@@ -532,10 +549,18 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             <Form.Item
               label="Token"
               name="auth_token"
-              rules={[{ required: true, message: 'Please enter a bearer token' }]}
+              rules={
+                mode === 'create'
+                  ? [{ required: true, message: 'Please enter a bearer token' }]
+                  : []
+              }
               tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
+              extra={savedSecretExtra('auth_token')}
             >
-              <Input.Password placeholder="{{ user.env.API_TOKEN }} or raw token" />
+              <Input.Password
+                placeholder="{{ user.env.API_TOKEN }} or raw token"
+                onChange={() => form.setFieldValue('auth_token_clear', false)}
+              />
             </Form.Item>
           )}
 
@@ -552,18 +577,34 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API Token"
                 name="jwt_api_token"
-                rules={[{ required: true, message: 'Please enter the API token' }]}
+                rules={
+                  mode === 'create'
+                    ? [{ required: true, message: 'Please enter the API token' }]
+                    : []
+                }
                 tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
+                extra={savedSecretExtra('jwt_api_token')}
               >
-                <Input.Password placeholder="{{ user.env.JWT_TOKEN }} or raw token" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_TOKEN }} or raw token"
+                  onChange={() => form.setFieldValue('jwt_api_token_clear', false)}
+                />
               </Form.Item>
               <Form.Item
                 label="API Secret"
                 name="jwt_api_secret"
-                rules={[{ required: true, message: 'Please enter the API secret' }]}
+                rules={
+                  mode === 'create'
+                    ? [{ required: true, message: 'Please enter the API secret' }]
+                    : []
+                }
                 tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
+                extra={savedSecretExtra('jwt_api_secret')}
               >
-                <Input.Password placeholder="{{ user.env.JWT_SECRET }} or raw secret" />
+                <Input.Password
+                  placeholder="{{ user.env.JWT_SECRET }} or raw secret"
+                  onChange={() => form.setFieldValue('jwt_api_secret_clear', false)}
+                />
               </Form.Item>
             </>
           )}
@@ -846,10 +887,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Client Secret"
                     name="oauth_client_secret"
                     tooltip="Required for servers that use confidential clients. The secret is sent via HTTP Basic Auth during token exchange."
+                    extra={savedSecretExtra('oauth_client_secret')}
                   >
                     <Input.Password
                       placeholder="Enter client secret or {{ user.env.OAUTH_CLIENT_SECRET }}"
                       allowClear
+                      onChange={() => form.setFieldValue('oauth_client_secret_clear', false)}
                     />
                   </Form.Item>
                   <Form.Item

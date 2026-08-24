@@ -14,7 +14,6 @@ import {
   type AgorConfig,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
-  PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
@@ -22,10 +21,13 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
+  AmbiguousIdError,
   and,
   BoardRepository,
   BranchRepository,
   DiscordMessageDeliveryRepository,
+  EntityNotFoundError,
+  enqueueAfterTenantDatabaseCommit,
   eq,
   GatewayChannelRepository,
   generateId,
@@ -57,11 +59,16 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  hasTemplateMarker,
+  type MCPExternalErrorStage,
+  sanitizeMCPExternalError,
+} from '@agor/core/mcp';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
-import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AuthenticatedParams,
@@ -116,7 +123,11 @@ import {
   type OpenCodeNativeStateMutationFence,
 } from './integrations/opencode/native-state-coordinator.js';
 import { getDaemonMetrics } from './metrics/index.js';
-import { runInOAuthTenantScope, runInOAuthTenantWriteScope } from './oauth-auth-helpers.js';
+import {
+  runInOAuthTenantScope,
+  runInOAuthTenantWriteScope,
+  runInOAuthTenantWriteTransaction,
+} from './oauth-auth-helpers.js';
 import { persistOAuthToken } from './oauth-cache.js';
 import {
   emitHaNativeSocketEvent,
@@ -181,6 +192,10 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import {
+  classifyMCPAuthRecovery,
+  recoveryForOAuthAttemptFailure,
+} from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
 import { MCPCatalogReadinessService } from './services/mcp-catalog-readiness.js';
 import { MCPMarketplaceService } from './services/mcp-marketplace.js';
@@ -210,7 +225,10 @@ import {
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
-import { createMCPServersService } from './services/mcp-servers.js';
+import {
+  createMCPServersService,
+  runWithMCPServerMutationDatabase,
+} from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
@@ -1492,6 +1510,14 @@ export async function registerMCPServices(
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
   const lockOAuthGrantConfiguration =
     ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
+  const externalFailure = (event: string, stage: MCPExternalErrorStage, error: unknown) => {
+    const safe = sanitizeMCPExternalError(error, { stage });
+    const { type, code } = safe.diagnostic;
+    console.error(
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
+    );
+    return safe;
+  };
   const oauthFetch = async (
     input: string | URL | Request,
     init: RequestInit = {},
@@ -3001,9 +3027,7 @@ export async function registerMCPServices(
         return;
       }
     } catch (err) {
-      console.error(
-        `[OAuth Callback] Failed category=${err instanceof Error ? err.name : 'unknown'}`
-      );
+      externalFailure('OAuth Callback', 'oauth_callback', err);
       sendOAuthResultPage(
         res,
         false,
@@ -3114,29 +3138,61 @@ export async function registerMCPServices(
   // `registerMCPServices` is also exercised without a realtime transport in
   // service-only harnesses; there is nothing to publish in that shape.
   app.service('mcp-servers/oauth-browser-reservations').publish?.(() => []);
-  const invalidateOAuthGrantsAfterServerChange = async (
-    context: HookContext,
-    next: () => Promise<void>
-  ) => {
+  const coordinateMCPServerMutation = async (context: HookContext, next: () => Promise<void>) => {
+    // Service-level around hooks wrap the normal before-hook chain. Over REST,
+    // params.user/tenant do not exist until requireAuth runs, while Socket.io
+    // often arrives pre-populated. Authenticate explicitly before this hook
+    // reads tenant identity or opens the grant/config transaction; the regular
+    // before hook remains defense in depth and is harmlessly idempotent.
+    if (context.params.provider) await ctx.requireAuth(context);
     const tenantId = tenantIdFromParams(context.params as AuthenticatedParams);
-    const serverId = String(context.id ?? '');
-    await runInOAuthTenantWriteScope(db, tenantId, async () => {
-      if (durableOAuthFlows && tenantId && serverId) {
-        await lockOAuthGrantConfiguration(db, tenantId, serverId as MCPServerID);
+    const requestedServerId = String(context.id ?? '');
+    await runInOAuthTenantWriteTransaction(db, tenantId, async (scopedDb) => {
+      const repository = new MCPServerRepository(scopedDb);
+      let serverId: MCPServerID;
+      try {
+        serverId = await repository.resolveCanonicalId(requestedServerId);
+      } catch (error) {
+        if (!(error instanceof EntityNotFoundError) && !(error instanceof AmbiguousIdError)) {
+          throw error;
+        }
+        // Preserve the service's normal not-found/ambiguous-ID error mapping.
+        await next();
+        return;
       }
-      const before = serverId ? await new MCPServerRepository(db).findById(serverId) : null;
-      await next();
-      const after = serverId ? await new MCPServerRepository(db).findById(serverId) : null;
-      if (!hasMCPOAuthRelevantServerConfigurationChanged(before, after)) return;
-      await new UserMCPOAuthTokenRepository(db).deleteAllForServer(serverId as MCPServerID);
+      // Around hooks run before the ordinary authorization hooks. Rewriting to
+      // the canonical ID makes authorization, the repository write, advisory
+      // locking, snapshots, grants, and pending-flow cleanup use one identity.
+      context.id = serverId;
       if (durableOAuthFlows && tenantId) {
-        await durableOAuthFlows.invalidateForServer(tenantId, serverId as MCPServerID);
+        await lockOAuthGrantConfiguration(scopedDb, tenantId, serverId);
+      }
+      const before = await repository.findById(serverId);
+      await runWithMCPServerMutationDatabase(scopedDb, next);
+      const after = await repository.findById(serverId);
+      if (!hasMCPOAuthRelevantServerConfigurationChanged(before, after)) return;
+      await new UserMCPOAuthTokenRepository(scopedDb).deleteAllForServer(serverId);
+      if (durableOAuthFlows && tenantId) {
+        await durableOAuthFlows.invalidateForServer(tenantId, serverId);
       } else {
-        for (const [state, flow] of pendingOAuthFlows) {
-          if (flow.mcpServerId !== serverId) continue;
-          pendingOAuthFlows.delete(state);
-          markLocalOAuthAttempt(flow, 'failed', 'server_configuration_changed');
-          flow.tokenReject?.(new Error('MCP OAuth server configuration changed'));
+        const affectedLocalFlows = [...pendingOAuthFlows].filter(
+          ([, flow]) => flow.mcpServerId === serverId
+        );
+        // SQLite pending flows live in memory and therefore cannot join the DB
+        // transaction. Stage their destructive notification after commit so a
+        // failed config/grant transaction leaves them intact. A callback that
+        // races the tiny commit-to-callback interval still revalidates its
+        // saved-server fingerprint before token exchange/persistence.
+        const queued = enqueueAfterTenantDatabaseCommit(() => {
+          for (const [state, flow] of affectedLocalFlows) {
+            if (pendingOAuthFlows.get(state) !== flow) continue;
+            pendingOAuthFlows.delete(state);
+            markLocalOAuthAttempt(flow, 'failed', 'server_configuration_changed');
+            flow.tokenReject?.(new Error('MCP OAuth server configuration changed'));
+          }
+        });
+        if (!queued) {
+          throw new Error('MCP OAuth mutation did not own an atomic database transaction');
         }
       }
       console.log('[MCP OAuth Grant] grants_invalidated category=server_configuration_changed');
@@ -3144,8 +3200,8 @@ export async function registerMCPServices(
   };
   app.service('mcp-servers').hooks({
     around: {
-      patch: [invalidateOAuthGrantsAfterServerChange],
-      update: [invalidateOAuthGrantsAfterServerChange],
+      patch: [coordinateMCPServerMutation],
+      update: [coordinateMCPServerMutation],
     },
   });
 
@@ -3238,7 +3294,8 @@ export async function registerMCPServices(
         // particular, never downgrade a stale A request to a normal failure
         // response that B's mounted UI could consume.
         assertRequestAuthority?.();
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const safe = externalFailure('MCP JWT Test', 'jwt', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });
@@ -3304,10 +3361,7 @@ export async function registerMCPServices(
       // Do not downgrade an authority/deadline failure into "no fallback
       // challenge" and continue the browser flow.
       assertCurrent?.();
-      console.log(
-        '[OAuth Probe] Read-only tool-call fallback probe failed:',
-        probeError instanceof Error ? probeError.message : String(probeError)
-      );
+      externalFailure('OAuth Probe', 'discovery', probeError);
       return null;
     }
   }
@@ -3437,10 +3491,8 @@ export async function registerMCPServices(
           );
         } catch (fetchError) {
           assertInitialRequestAuthority?.();
-          return {
-            success: false,
-            error: `Failed to connect to MCP server: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`,
-          };
+          const safe = externalFailure('OAuth Test', 'discovery', fetchError);
+          return { success: false, error: safe.message, category: safe.category };
         }
 
         if (probeResponse.status !== 401) {
@@ -3458,10 +3510,6 @@ export async function registerMCPServices(
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
-        const allHeaders: Record<string, string> = {};
-        probeResponse.headers.forEach((value, key) => {
-          allHeaders[key] = value;
-        });
         console.log(`[OAuth Test] Probe response status=${probeResponse.status}`);
 
         let metadataUrl: string | null = null;
@@ -3529,8 +3577,14 @@ export async function registerMCPServices(
                   dcrMode: effectiveDcrMode,
                 });
               } catch (err) {
-                if (err instanceof PublicBaseUrlNotConfiguredError) {
-                  return { success: false, error: err.message, oauthType: 'oauth2.1' };
+                const recovery = classifyMCPAuthRecovery(err);
+                if (recovery.category === 'redirect_configuration_required') {
+                  return {
+                    success: false,
+                    error: recovery.message,
+                    recovery,
+                    oauthType: 'oauth2.1',
+                  };
                 }
                 throw err;
               }
@@ -3568,17 +3622,18 @@ export async function registerMCPServices(
                 message: 'OAuth 2.1 authentication successful!',
                 tokenValid: true,
                 mcpStatus: testResponse.status,
-                mcpStatusText: testResponse.statusText,
               };
             } catch (flowError) {
-              console.error(
-                `[OAuth Test] Browser flow failed category=${
-                  flowError instanceof Error ? flowError.name : 'unknown'
-                }`
-              );
+              const recovery = classifyMCPAuthRecovery(flowError, {
+                mcpServerId: data.mcp_server_id,
+              });
+              // Recovery must be fully derived before the external sanitizer;
+              // no post-sanitization branch may inspect the original unknown.
+              externalFailure('OAuth Test', 'oauth', flowError);
               return {
                 success: false,
-                error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,
+                error: recovery.message,
+                recovery,
                 oauthType: 'oauth2.1',
               };
             }
@@ -3684,11 +3739,12 @@ export async function registerMCPServices(
               requiresBrowserFlow: true,
             };
           } catch (metadataError) {
+            const safe = externalFailure('OAuth Test', 'oauth_metadata', metadataError);
             return {
               success: false,
-              error: `Failed to fetch OAuth metadata: ${metadataError instanceof Error ? metadataError.message : String(metadataError)}`,
+              error: safe.message,
+              category: safe.category,
               oauthType: 'oauth2.1',
-              metadataUrl: metadataUrl ?? undefined,
             };
           }
         }
@@ -3703,13 +3759,6 @@ export async function registerMCPServices(
         }
 
         if (probeResponse.status === 401) {
-          let responseBody = '';
-          try {
-            responseBody = await probeResponse.text();
-          } catch {
-            /* Ignore */
-          }
-
           if (effectiveClientId && effectiveClientSecret) {
             console.log('[OAuth Test] Using Client Credentials flow');
             const { fetchOAuthToken, inferOAuthTokenUrl } = await import(
@@ -3727,7 +3776,7 @@ export async function registerMCPServices(
                   oauthType: 'client_credentials',
                 };
             }
-            const { token, debugInfo } = await fetchOAuthToken(
+            const { token } = await fetchOAuthToken(
               {
                 token_url: tokenUrl,
                 client_id: effectiveClientId,
@@ -3762,10 +3811,9 @@ export async function registerMCPServices(
                 assertInitialRequestAuthority
               );
               mcpStatus = mcpResponse.status;
-              mcpStatusText = mcpResponse.statusText;
             } catch (mcpError) {
               assertInitialRequestAuthority?.();
-              mcpStatusText = mcpError instanceof Error ? mcpError.message : 'Connection failed';
+              mcpStatusText = externalFailure('OAuth Test', 'runtime', mcpError).message;
             }
             return {
               success: true,
@@ -3774,7 +3822,6 @@ export async function registerMCPServices(
               tokenUrlSource,
               mcpStatus,
               mcpStatusText,
-              debugInfo,
             };
           }
 
@@ -3784,9 +3831,6 @@ export async function registerMCPServices(
               'Server requires authentication (401) but OAuth 2.1 auto-discovery failed at every step.',
             oauthType: 'unknown',
             mcpStatus: probeResponse.status,
-            wwwAuthenticate: wwwAuthenticate || '<not present>',
-            responseHeaders: allHeaders,
-            responseBody: responseBody.substring(0, 500),
             hint:
               `${DISCOVERY_CASCADE_TRIED} ` +
               'None returned valid metadata. Options: (a) provide Client Credentials with explicit token URL, ' +
@@ -3796,11 +3840,26 @@ export async function registerMCPServices(
 
         return {
           success: false,
-          error: `MCP server returned ${probeResponse.status} ${probeResponse.statusText}`,
+          error: `MCP server returned status ${probeResponse.status}.`,
           mcpStatus: probeResponse.status,
         };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const recovery = classifyMCPAuthRecovery(error, {
+          mcpServerId: data.mcp_server_id,
+        });
+        if (
+          recovery.category === 'authentication_required' ||
+          recovery.category === 'permission_changed' ||
+          recovery.category === 'configuration_changed'
+        ) {
+          return {
+            success: false,
+            error: recovery.message,
+            recovery,
+          };
+        }
+        const safe = externalFailure('OAuth Test', 'oauth', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });
@@ -3843,10 +3902,17 @@ export async function registerMCPServices(
           savedServerId &&
           (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
         ) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error:
-              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3855,9 +3921,14 @@ export async function registerMCPServices(
         // fields remain accepted only for older callers.
         const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
         if (!effectiveMcpUrl) {
+          const recovery = classifyMCPAuthRecovery(
+            new OAuthConfigurationError('metadata_unavailable'),
+            { mcpServerId: savedServerId }
+          );
           return {
             success: false,
-            error: 'OAuth requires a saved MCP server URL. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3871,10 +3942,17 @@ export async function registerMCPServices(
             savedServer.url !== effectiveMcpUrl ||
             savedServer.auth?.type !== 'oauth')
         ) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'The saved MCP server changed before OAuth could start. Reload it, save the intended configuration, then retry.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error:
-              'PostgreSQL OAuth requires an enabled, saved MCP server matching this request. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3935,9 +4013,17 @@ export async function registerMCPServices(
         }
 
         if (probeResponse.status !== 401) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'This MCP server did not request OAuth authentication. Verify the saved MCP URL and authentication type, then retry.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error: 'Server did not return 401 — OAuth 2.1 authentication may not be required',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3954,9 +4040,16 @@ export async function registerMCPServices(
           })
         );
         if (!discovery) {
+          const recovery = classifyMCPAuthRecovery(
+            new OAuthConfigurationError('metadata_unavailable'),
+            {
+              mcpServerId: savedServerId,
+            }
+          );
           return {
             success: false,
-            error: `Server returned 401 but does not advertise OAuth metadata. ${DISCOVERY_CASCADE_TRIED} None succeeded.`,
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3986,11 +4079,15 @@ export async function registerMCPServices(
             requestAuthority: assertRequestAuthority,
           });
         } catch (err) {
-          if (err instanceof PublicBaseUrlNotConfiguredError) {
-            console.error('[OAuth Start]', err.message);
+          const recovery = classifyMCPAuthRecovery(err, {
+            mcpServerId: data.mcp_server_id,
+          });
+          if (recovery.category === 'redirect_configuration_required') {
+            console.error('[OAuth Start] Failed category=PublicBaseUrlNotConfiguredError');
             return {
               success: false,
-              error: err.message,
+              error: recovery.message,
+              recovery,
             } satisfies MCPOAuthStartFailure;
           }
           throw err;
@@ -4010,12 +4107,14 @@ export async function registerMCPServices(
         // provider diagnostic; callers may otherwise continue an obsolete
         // flow under the replacement identity on the same socket.
         assertRequestAuthority?.();
-        console.error(
-          `[OAuth Start] Failed category=${error instanceof Error ? error.name : 'unknown'}`
-        );
-        const diagnostic = error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
+        const preliminaryRecovery = classifyMCPAuthRecovery(error, {
+          mcpServerId: data.mcp_server_id,
+        });
         let redirectUri: string | null = null;
-        if (diagnostic) {
+        if (
+          preliminaryRecovery.category === 'client_registration_required' ||
+          preliminaryRecovery.category === 'client_registration_failed'
+        ) {
           try {
             redirectUri = await runWithinOAuthAuthority(
               assertRequestAuthority,
@@ -4026,10 +4125,19 @@ export async function registerMCPServices(
           }
         }
         assertRequestAuthority?.();
+        const recovery = redirectUri
+          ? classifyMCPAuthRecovery(error, {
+              mcpServerId: data.mcp_server_id,
+              redirectUri,
+            })
+          : preliminaryRecovery;
+        // This is deliberately the final consumer of the original unknown.
+        // Response construction below uses only the closed recovery contract.
+        externalFailure('OAuth Start', 'oauth', error);
         return {
           success: false,
-          error: error instanceof Error ? error.message : String(error),
-          ...(diagnostic ? { diagnostic } : {}),
+          error: recovery.message,
+          recovery,
           ...(redirectUri ? { redirect_uri: redirectUri } : {}),
         } satisfies MCPOAuthStartFailure;
       }
@@ -4039,6 +4147,22 @@ export async function registerMCPServices(
   app.service('mcp-servers/oauth-start').hooks({ before: { create: [ctx.requireAuth] } });
 
   // OAuth complete endpoint
+  const oauthCompletionFailure = (
+    failureCode: string,
+    mcpServerId?: string,
+    messageOverride?: string
+  ) => {
+    const recovery = recoveryForOAuthAttemptFailure(failureCode, mcpServerId);
+    return {
+      success: false as const,
+      error:
+        messageOverride ??
+        recovery?.message ??
+        'OAuth completion could not be validated. Reconnect this MCP server and try again.',
+      tokenObtained: false,
+      ...(recovery ? { recovery } : {}),
+    };
+  };
   app.use('/mcp-servers/oauth-complete', {
     async create(
       data: { callback_url: string } | { code: string; state: string; iss?: string },
@@ -4046,6 +4170,7 @@ export async function registerMCPServices(
     ) {
       let pendingFlow: PendingOAuthFlow | undefined;
       let completionStatus: 'failed' | 'ambiguous' | undefined;
+      let completionFailureCode: string | undefined;
       try {
         const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
@@ -4072,45 +4197,40 @@ export async function registerMCPServices(
           }
           const claimed = await durableOAuthFlows.claimForUser(activeTenantId, activeUserId, state);
           if (claimed.outcome === 'not_claimed') {
-            return {
-              success: claimed.flow?.status === 'succeeded',
-              error:
-                claimed.flow?.status === 'succeeded'
-                  ? undefined
-                  : terminalMessageForStatus(claimed.flow?.status ?? 'expired'),
-              tokenObtained: claimed.flow?.status === 'succeeded',
-            };
+            if (claimed.flow?.status === 'succeeded') {
+              return { success: true, tokenObtained: true };
+            }
+            return oauthCompletionFailure(
+              claimed.flow?.failureCode ?? 'authorization_failed',
+              claimed.flow?.mcpServerId
+            );
           }
           pendingFlow = pendingFromDurableClaim(durableOAuthFlows.openClaim(claimed.flow, state));
         } else {
           pendingFlow = pendingOAuthFlows.get(state);
           if (!pendingFlow) {
-            return {
-              success: false,
-              error: 'OAuth flow expired or not found. Please start the flow again.',
-            };
+            return oauthCompletionFailure('authorization_timed_out');
           }
           if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
-            return {
-              success: false,
-              error: 'OAuth flow belongs to a different tenant. Please restart the OAuth flow.',
-            };
+            return oauthCompletionFailure(
+              'authorization_failed',
+              undefined,
+              'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+            );
           }
           if (pendingFlow.userId && activeUserId && pendingFlow.userId !== activeUserId) {
-            return {
-              success: false,
-              error: 'OAuth flow belongs to a different user. Please restart the OAuth flow.',
-            };
+            return oauthCompletionFailure(
+              'permission_changed',
+              pendingFlow.mcpServerId,
+              'OAuth flow belongs to a different user. Please restart the OAuth flow.'
+            );
           }
           pendingOAuthFlows.delete(state);
           // Same age check the callback applies — see `isLocalOAuthFlowExpired`.
           if (isLocalOAuthFlowExpired(pendingFlow)) {
             markLocalOAuthAttempt(pendingFlow, 'expired', 'authorization_timed_out');
             pendingFlow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
-            return {
-              success: false,
-              error: 'OAuth flow expired or not found. Please start the flow again.',
-            };
+            return oauthCompletionFailure('authorization_timed_out', pendingFlow.mcpServerId);
           }
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
@@ -4128,6 +4248,7 @@ export async function registerMCPServices(
         if (pendingFlow) {
           const classification = classifyMCPOAuthCompletionFailure(error);
           const { ambiguous, failureCode } = classification;
+          completionFailureCode = failureCode;
           completionStatus = classification.status;
           if (pendingFlow.durableRecord) {
             try {
@@ -4149,14 +4270,19 @@ export async function registerMCPServices(
             )
           );
         }
-        console.error(
-          `[OAuth Complete] Failed category=${error instanceof Error ? error.name : 'unknown'}`
+        externalFailure('OAuth Complete', 'oauth_callback', error);
+        const recovery = recoveryForOAuthAttemptFailure(
+          completionFailureCode ?? 'authorization_failed',
+          pendingFlow?.mcpServerId
         );
         return {
           success: false,
-          error: pendingFlow
-            ? terminalMessageForStatus(completionStatus ?? 'failed')
-            : 'OAuth completion could not be validated. Start a new OAuth flow.',
+          error:
+            recovery?.message ??
+            (pendingFlow
+              ? terminalMessageForStatus(completionStatus ?? 'failed')
+              : 'OAuth completion could not be validated. Start a new OAuth flow.'),
+          ...(recovery ? { recovery } : {}),
         };
       }
     },
@@ -4218,11 +4344,7 @@ export async function registerMCPServices(
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
-        console.error(
-          `[OAuth Status] Token lookup failed category=${
-            error instanceof Error ? error.name : 'unknown'
-          }`
-        );
+        externalFailure('OAuth Status', 'oauth', error);
         return { authenticated_server_ids: [] };
       }
     },
@@ -4243,12 +4365,18 @@ export async function registerMCPServices(
           userId,
           attemptId as MCPOAuthAttemptID
         );
-        if (!attempt) return { status: 'not_found' as const };
+        if (!attempt) {
+          return {
+            status: 'not_found' as const,
+            recovery: recoveryForOAuthAttemptFailure('authorization_failed'),
+          };
+        }
         return {
           status: attempt.status,
           mcp_server_id: attempt.mcpServerId,
           oauth_mode: attempt.oauthMode,
           failure_code: attempt.failureCode ?? undefined,
+          recovery: recoveryForOAuthAttemptFailure(attempt.failureCode, attempt.mcpServerId),
         };
       }
 
@@ -4258,13 +4386,17 @@ export async function registerMCPServices(
         attempt.userId !== userId ||
         (attempt.tenantId && attempt.tenantId !== tenantId)
       ) {
-        return { status: 'not_found' as const };
+        return {
+          status: 'not_found' as const,
+          recovery: recoveryForOAuthAttemptFailure('authorization_failed'),
+        };
       }
       return {
         status: attempt.status,
         mcp_server_id: attempt.mcpServerId,
         oauth_mode: attempt.oauthMode,
         failure_code: attempt.failureCode,
+        recovery: recoveryForOAuthAttemptFailure(attempt.failureCode, attempt.mcpServerId),
       };
     },
   };
@@ -4527,11 +4659,7 @@ export async function registerMCPServices(
 
             headers[serverId] = { authorization: `Bearer ${accessToken}` };
           } catch (err) {
-            console.error(
-              `[OAuth AuthHeaders] request_failed category=${
-                err instanceof Error ? err.name : 'unknown_error'
-              }`
-            );
+            externalFailure('OAuth AuthHeaders', 'oauth', err);
             headers[serverId] = { error: 'unknown_error' };
           }
         })
@@ -4646,31 +4774,32 @@ export async function registerMCPServices(
 
         return { success: true, expires_at: expiresAt };
       } catch (err) {
-        if (
-          err instanceof InvalidGrantError ||
-          err instanceof MissingRefreshTokenError ||
-          err instanceof AmbiguousRefreshError ||
-          err instanceof GrantConfigurationChangedError
-        ) {
-          return { success: false, error: 'needs_reauth' };
+        try {
+          if (
+            err instanceof InvalidGrantError ||
+            err instanceof MissingRefreshTokenError ||
+            err instanceof AmbiguousRefreshError ||
+            err instanceof GrantConfigurationChangedError
+          ) {
+            return { success: false, error: 'needs_reauth' };
+          }
+          // A peer observed a known, non-ambiguous owner failure. Match the
+          // owner's retryable response rather than forcing one daemon's caller
+          // to reconnect for the same refresh generation.
+          if (err instanceof FailedRefreshError) {
+            return { success: false, error: 'token_refresh_failed' };
+          }
+          if (err instanceof MissingTokenEndpointError) {
+            return { success: false, error: 'missing_token_endpoint' };
+          }
+          if (err instanceof MissingClientIdError) {
+            return { success: false, error: 'missing_client_id' };
+          }
+        } catch {
+          // Hostile proxies are not trusted local refresh errors. Continue to
+          // the closed external sanitizer without serializing the original.
         }
-        // A peer observed a known, non-ambiguous owner failure. Match the
-        // owner's retryable response rather than forcing one daemon's caller
-        // to reconnect for the same refresh generation.
-        if (err instanceof FailedRefreshError) {
-          return { success: false, error: 'token_refresh_failed' };
-        }
-        if (err instanceof MissingTokenEndpointError) {
-          return { success: false, error: 'missing_token_endpoint' };
-        }
-        if (err instanceof MissingClientIdError) {
-          return { success: false, error: 'missing_client_id' };
-        }
-        console.error(
-          `[OAuth Refresh] refresh_failed category=${
-            err instanceof Error ? err.name : 'unknown_error'
-          }`
-        );
+        externalFailure('OAuth Refresh', 'oauth', err);
         return {
           success: false,
           error: 'token_refresh_failed',
@@ -4792,7 +4921,7 @@ export async function registerMCPServices(
         // like `{{ user.env.MCP_URL }}` have no scheme yet), so validating
         // pre-resolution would block legitimate templates from ever reaching
         // the resolver. The resolved URL is re-validated below before use.
-        const isTemplated = (url: string): boolean => url.includes('{{');
+        const isTemplated = (url: string): boolean => hasTemplateMarker(url);
 
         const hasInlineConfig = !!data.url;
         // `auth` is typed as the canonical MCPAuth (rather than narrowing to
@@ -5101,13 +5230,15 @@ export async function registerMCPServices(
             // missing-token signal — re-throw so the discover endpoint can
             // surface it to the caller instead of silently falling through to
             // an unauthenticated MCP probe.
-            if (error instanceof PublicBaseUrlNotConfiguredError) throw error;
-            if (error instanceof Forbidden || error instanceof Conflict) throw error;
-            console.error(
-              `[MCP Discovery] OAuth token acquisition failed category=${
-                error instanceof Error ? error.name : 'unknown'
-              }`
-            );
+            const recovery = classifyMCPAuthRecovery(error);
+            if (
+              recovery.category === 'redirect_configuration_required' ||
+              recovery.category === 'permission_changed' ||
+              recovery.category === 'configuration_changed'
+            ) {
+              throw error;
+            }
+            externalFailure('MCP Discovery OAuth token acquisition', 'discovery', error);
             return undefined;
           }
         };
@@ -5229,7 +5360,9 @@ export async function registerMCPServices(
             await connectWithTimeout(client, httpTransport);
           } catch (connectError) {
             assertCurrentRequestAuthority();
-            if (connectError instanceof Forbidden) throw connectError;
+            if (classifyMCPAuthRecovery(connectError).category === 'permission_changed') {
+              throw connectError;
+            }
             if (hadCachedOAuthToken && serverConfig.url && serverConfig.auth?.type === 'oauth') {
               const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
               if (freshToken) {
@@ -5267,7 +5400,12 @@ export async function registerMCPServices(
             description?: string;
             inputSchema?: Record<string, unknown>;
           }>;
-          type ResourcesResult = MCPListResult<{ uri: string; name: string; mimeType?: string }>;
+          type ResourcesResult = MCPListResult<{
+            uri: string;
+            name: string;
+            description?: string;
+            mimeType?: string;
+          }>;
           type PromptsResult = MCPListResult<{
             name: string;
             description?: string;
@@ -5304,20 +5442,21 @@ export async function registerMCPServices(
                   {
                     tools: toolsResult.tools.map((t) => ({
                       name: t.name,
-                      description: t.description || '',
+                      description: t.description,
                       input_schema: t.inputSchema,
                     })),
                     resources: resourcesResult.resources.map((r) => ({
                       uri: r.uri,
                       name: r.name,
+                      description: r.description,
                       mimeType: r.mimeType,
                     })),
                     prompts: promptsResult.prompts.map((p) => ({
                       name: p.name,
-                      description: p.description || '',
+                      description: p.description,
                       arguments: p.arguments?.map((a) => ({
                         name: a.name,
-                        description: a.description || '',
+                        description: a.description,
                         required: a.required,
                       })),
                     })),
@@ -5368,14 +5507,20 @@ export async function registerMCPServices(
           }
         }
       } catch (error) {
-        if (error instanceof PublicBaseUrlNotConfiguredError) {
-          console.error('[MCP Discovery]', error.message);
-          return { success: false, error: error.message };
+        const recovery = classifyMCPAuthRecovery(error);
+        if (recovery.category === 'redirect_configuration_required') {
+          console.error('[MCP Discovery] category=redirect_configuration_required');
+          return { success: false, error: recovery.message, recovery };
         }
-        console.error(
-          `[MCP Discovery] Failed category=${error instanceof Error ? error.name : 'unknown'}`
-        );
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        if (
+          recovery.category === 'authentication_required' ||
+          recovery.category === 'permission_changed' ||
+          recovery.category === 'configuration_changed'
+        ) {
+          return { success: false, error: recovery.message, recovery };
+        }
+        const safe = externalFailure('MCP Discovery', 'discovery', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });

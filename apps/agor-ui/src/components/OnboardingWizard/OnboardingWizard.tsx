@@ -27,7 +27,8 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -153,20 +154,6 @@ const LLM_OPTIONS: LlmOption[] = [
 // an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
 // the reason isn't a hover-only affordance (see frontend.md a11y guidance).
 const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
-
-// Visually hidden but exposed to assistive tech — carries the cap hint text
-// rendered inside disabled cards so it joins their accessible name.
-const SR_ONLY_STYLE: CSSProperties = {
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: 'hidden',
-  clip: 'rect(0, 0, 0, 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
-};
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
   const k = key.trim();
@@ -1074,7 +1061,7 @@ export function OnboardingWizard({
               aria-current={isCurrent ? 'step' : undefined}
               style={{ display: 'flex', alignItems: 'center' }}
             >
-              <span style={SR_ONLY_STYLE}>
+              <span style={VISUALLY_HIDDEN_STYLE}>
                 Step {index + 1} of {STEPS.length}: {STEP_META[step].label}.{' '}
                 {isCompleted ? 'Completed' : isCurrent ? 'Current step' : 'Not started'}.
               </span>
@@ -1259,7 +1246,7 @@ export function OnboardingWizard({
                   </div>
                   {/* Screen-reader-only cap reason — joins the disabled card's
                       accessible name so it isn't a hover-only affordance. */}
-                  {isDisabled && <span style={SR_ONLY_STYLE}>{GOAL_CAP_HINT}</span>}
+                  {isDisabled && <span style={VISUALLY_HIDDEN_STYLE}>{GOAL_CAP_HINT}</span>}
                 </button>
               </Tooltip>
             );

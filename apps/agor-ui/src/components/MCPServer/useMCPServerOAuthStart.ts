@@ -1,4 +1,4 @@
-import type { MCPOAuthDCRDiagnostic, MCPOAuthStartFailure } from '@agor/core/types';
+import type { MCPAuthRecovery, MCPOAuthStartFailure } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -10,7 +10,7 @@ import {
 
 export interface MCPServerOAuthFailure {
   message: string;
-  diagnostic?: MCPOAuthDCRDiagnostic;
+  recovery?: MCPAuthRecovery;
   redirectUri?: string;
 }
 
@@ -175,7 +175,14 @@ export function useMCPServerOAuthStart({
               onOAuthSucceeded?.();
             } else {
               if (!isCurrentStart()) return;
-              showError(oauthAttemptFailureMessage(attempt.status));
+              const message =
+                attempt.recovery?.message ?? oauthAttemptFailureMessage(attempt.status);
+              showError(message);
+              setOauthFailure({
+                message,
+                recovery: attempt.recovery,
+                redirectUri: attempt.recovery?.redirect_uri,
+              });
               setOauthCallbackModalVisible(false);
             }
           })
@@ -191,17 +198,18 @@ export function useMCPServerOAuthStart({
         if (!isCurrentStart()) return;
         setOauthFailure({
           message: data.error || 'Failed to start OAuth flow',
-          diagnostic: data.diagnostic,
-          redirectUri: data.redirect_uri,
+          recovery: data.recovery,
+          redirectUri: data.recovery?.redirect_uri ?? data.redirect_uri,
         });
       } else {
         if (!isCurrentStart()) return;
         setOauthFailure({ message: 'Failed to start OAuth flow' });
       }
-    } catch (error) {
+    } catch {
       if (isCurrentStart()) {
         setOauthFailure({
-          message: `OAuth flow error: ${error instanceof Error ? error.message : String(error)}`,
+          message:
+            'OAuth could not start. Check the connection and retry; ask an administrator to review the secure daemon logs if it continues.',
         });
       }
     } finally {

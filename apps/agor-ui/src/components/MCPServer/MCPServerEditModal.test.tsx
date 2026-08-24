@@ -469,6 +469,76 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     open.mockRestore();
   });
 
+  it('reloads fresh catalog policy after a CAS conflict without overwriting it on retry', async () => {
+    const conflict = Object.assign(new Error('conflict'), {
+      code: 409,
+      data: { current_config_version: 9 },
+    });
+    const patch = vi
+      .fn()
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({ config_version: 10 });
+    const latest = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000088',
+      name: 'managed-after-conflict',
+      description: 'edited elsewhere',
+      transport: 'http',
+      url: 'https://managed.example/mcp',
+      scope: 'global',
+      source: 'catalog',
+      catalog_entry_name: 'com.example/managed',
+      enabled: true,
+      config_version: 9,
+      auth: { type: 'oauth' },
+      oauth_compatibility_policy: {
+        effective_mode: 'marketplace',
+        managed_by_catalog: true,
+      },
+    } as MCPServer;
+    const get = vi.fn().mockResolvedValue(latest);
+    const client = {
+      service: vi.fn(() => ({ patch, get })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const stale = {
+      ...latest,
+      description: 'stale local copy',
+      config_version: 8,
+      source: 'user',
+      catalog_entry_name: undefined,
+      oauth_compatibility_policy: undefined,
+      auth: { type: 'oauth', oauth_compatibility_mode: 'strict' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={stale}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText('Newer MCP settings are available');
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Description')).toHaveValue('edited elsewhere')
+    );
+    expect(screen.getByLabelText('OAuth Compatibility')).toHaveValue('marketplace');
+
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'retry edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    const retry = patch.mock.calls[1]?.[1] as { expected_config_version: number; auth: object };
+    expect(retry.expected_config_version).toBe(9);
+    expect(retry.auth).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
   it.each(['Save', 'Start OAuth Flow'])(
     'blocks %s after authority is lost while the edit dialog remains open',
     async (action) => {

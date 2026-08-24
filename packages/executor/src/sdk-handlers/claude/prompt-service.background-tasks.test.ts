@@ -43,6 +43,8 @@ function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) 
     totalTokens: 15,
     maxTokens: 200_000,
     percentage: 0.0075,
+    memoryFiles: [{ path: 'SENTINEL_CONTEXT_MEMORY', type: 'project', tokens: 2 }],
+    providerExtension: 'SENTINEL_CONTEXT_EXTENSION',
   });
   const generator =
     typeof messages === 'function'
@@ -121,6 +123,11 @@ describe('ClaudePromptService background task query lifetime', () => {
     // `end` is an internal processor sentinel and is never yielded upstream.
     expect(events.filter((event) => event.type === 'end')).toHaveLength(0);
     expect(events.filter((event) => event.type === 'context_usage')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'context_usage')).toEqual({
+      type: 'context_usage',
+      contextUsage: { totalTokens: 15, maxTokens: 200_000, percentage: 0.0075 },
+    });
+    expect(JSON.stringify(events)).not.toContain('SENTINEL_CONTEXT');
     expect(query.getContextUsage).toHaveBeenCalledTimes(1);
     expect(query.releaseInput).toHaveBeenCalledTimes(1);
     const terminalResult = events.filter((event) => event.type === 'result').at(-1);

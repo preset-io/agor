@@ -1,11 +1,13 @@
 /**
  * SDK Response Types - Raw responses from each agentic tool SDK
  *
- * These types represent the exact, unaltered responses from each SDK.
- * They are stored in tasks.raw_sdk_response for debugging and auditing.
+ * These types represent the SDK response shapes used for token accounting.
+ * Before tasks.raw_sdk_response persistence, executor adapters project away
+ * provider error bodies and unknown extension metadata.
  *
  * IMPORTANT: These are the ACTUAL SDK types, imported directly from each SDK.
- * No transformations, no calculated fields - just pure SDK responses.
+ * The provider SDK types remain the source of truth for the allowlisted shape;
+ * the runtime values are deliberately not persisted verbatim.
  */
 
 import type { MessageID } from '@agor/core/types';
@@ -61,8 +63,7 @@ export type ClaudeCodeSdkResponseTyped = SDKResultMessage & {
 // ============================================================================
 
 /**
- * Codex SDK Response - Direct import from Codex SDK
- * This is the actual TurnCompletedEvent type with no modifications
+ * Codex SDK Response - closed accounting projection of TurnCompletedEvent.
  */
 export type CodexSdkResponse = TurnCompletedEvent;
 

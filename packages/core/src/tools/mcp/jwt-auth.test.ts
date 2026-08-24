@@ -1,6 +1,5 @@
 import http from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
-import { UnsafeOutboundUrlError } from '../../utils/safe-outbound-fetch';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 
@@ -56,6 +55,33 @@ describe('resolveMCPAuthHeaders OAuth authority', () => {
     ).resolves.toEqual({ Authorization: 'Bearer bound-token' });
   });
 
+  it('never logs an inferred or failed secret-bearing OAuth endpoint', async () => {
+    const sentinel = 'sentinel-oauth-endpoint-09e75';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        resolveMCPAuthHeaders(
+          {
+            type: 'oauth',
+            oauth_client_id: 'client',
+            oauth_client_secret: 'secret',
+          },
+          `https://${sentinel}.invalid/mcp`,
+          { disableProcessTokenCache: true }
+        )
+      ).resolves.toBeUndefined();
+
+      const logged = JSON.stringify([...log.mock.calls, ...warn.mock.calls]);
+      expect(logged).not.toContain(sentinel);
+      expect(log).toHaveBeenCalledWith('[OAuth] Token URL inferred from MCP endpoint');
+      expect(warn).toHaveBeenCalledWith('[OAuth] Token fetch failed');
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it('propagates authority loss during client-credential fetch instead of falling back', async () => {
     let signalRequest!: () => void;
     const requestStarted = new Promise<void>((resolve) => {
@@ -108,7 +134,7 @@ describe('JWT discovery authentication outbound policy', () => {
   ])('rejects loopback, private, metadata, and non-HTTPS destination %s', async (api_url) => {
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    ).rejects.toThrow('The MCP operation failed');
   });
 
   it('allows the narrow loopback development exception only when explicit', async () => {
@@ -119,7 +145,7 @@ describe('JWT discovery authentication outbound policy', () => {
 
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    ).rejects.toThrow('The MCP operation failed');
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
     ).resolves.toBe('development-token');
@@ -133,7 +159,7 @@ describe('JWT discovery authentication outbound policy', () => {
 
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('redirect is not allowed');
+    ).rejects.toThrow('The MCP operation failed');
   });
 
   it('bounds provider responses before parsing', async () => {
@@ -144,7 +170,7 @@ describe('JWT discovery authentication outbound policy', () => {
 
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('response is too large');
+    ).rejects.toThrow('The MCP operation failed');
   });
 
   it('does not expose a provider response body in errors', async () => {
@@ -158,7 +184,7 @@ describe('JWT discovery authentication outbound policy', () => {
       { allowLocalhostHttp: true, cache: false }
     ).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe('JWT token fetch failed (provider_rejected, status=401)');
+    expect((error as Error).message).toContain('provider rejected');
     expect((error as Error).message).not.toContain('internal-response-secret');
     expect((error as Error).message).not.toContain('error_description');
   });

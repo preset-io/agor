@@ -32,6 +32,7 @@
 
 import { isDatabaseUniqueConstraintError } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import { probeRemoteAuthType, probeRemoteBearerToken } from '@agor/core/mcp-catalog';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
@@ -58,6 +59,30 @@ import {
   isCurrentCatalogInstall,
 } from './mcp-catalog-install-policy.js';
 import type { MCPServersService } from './mcp-servers.js';
+
+/**
+ * A closed, daemon-authored control-plane response. Unlike provider/library
+ * exceptions, this is safe to preserve across the public service boundary and
+ * its credential_requirement value drives the Marketplace retry form.
+ */
+class CatalogConnectControlError extends BadRequest {}
+
+class CatalogCredentialRequirementError extends CatalogConnectControlError {
+  constructor(
+    message: string,
+    credentialRequirement: MCPCatalogConnectErrorData['credential_requirement']
+  ) {
+    super(message, { credential_requirement: credentialRequirement });
+  }
+}
+
+function isCatalogConnectControlError(error: unknown): error is CatalogConnectControlError {
+  try {
+    return error instanceof CatalogConnectControlError;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Auth fields that decide where an authorization code or a client credential is
@@ -320,7 +345,7 @@ async function resolveAuthRequirement(
 
   if (probed === 'none' || probed === 'oauth') {
     if (bearerToken !== undefined) {
-      throw new BadRequest(
+      throw new CatalogCredentialRequirementError(
         `${catalogDisplayName(entry)} is not asking for a bearer access token${
           probed === 'oauth' ? '; it signs you in with your own account' : ''
         }. Connect it again without one.`,
@@ -328,9 +353,7 @@ async function resolveAuthRequirement(
         // what the endpoint actually wants is what lets the form drop the
         // field and the user retry, rather than being held at a button that
         // submits something the daemon will refuse again.
-        {
-          credential_requirement: probed === 'oauth' ? 'oauth' : 'not_accepted',
-        } satisfies MCPCatalogConnectErrorData
+        probed === 'oauth' ? 'oauth' : 'not_accepted'
       );
     }
     return probed === 'none' ? { type: 'none' } : catalogOAuthConfig(entry);
@@ -338,15 +361,15 @@ async function resolveAuthRequirement(
 
   if (probed === 'credentials') {
     if (entry.credentials?.scheme !== 'bearer') {
-      throw new BadRequest(
+      throw new CatalogCredentialRequirementError(
         `${catalogDisplayName(entry)} requires credentials, but its reviewed credential scheme is not supported by Marketplace`,
-        { credential_requirement: 'unsupported' } satisfies MCPCatalogConnectErrorData
+        'unsupported'
       );
     }
     return resolveBearerTokenAuth(entry, bearerToken);
   }
 
-  throw new BadRequest(
+  throw new CatalogConnectControlError(
     `${catalogDisplayName(entry)} could not be reached, so it cannot be connected`
   );
 }
@@ -381,13 +404,13 @@ async function resolveBearerTokenAuth(
 ): Promise<MCPAuth> {
   const name = catalogDisplayName(entry);
   if (bearerToken === undefined) {
-    throw new BadRequest(
+    throw new CatalogCredentialRequirementError(
       `${name} needs a bearer access token; paste one to connect it`,
       // The mirror of the `not_accepted` case: the client asked without a key
       // because the entry said none was needed, and the endpoint disagreed.
       // Without this the drawer has no field to offer and the sentence above is
       // an instruction the user cannot follow.
-      { credential_requirement: 'required' } satisfies MCPCatalogConnectErrorData
+      'required'
     );
   }
 
@@ -397,14 +420,12 @@ async function resolveBearerTokenAuth(
     // Still `required` — the endpoint wants a key, this one was just wrong. A
     // client that has already revealed the field keeps it revealed, which is
     // what lets a typo be corrected in place.
-    throw new BadRequest(
+    throw new CatalogCredentialRequirementError(
       `${name} did not accept that bearer access token; check it and try again`,
-      {
-        credential_requirement: 'required',
-      } satisfies MCPCatalogConnectErrorData
+      'required'
     );
   }
-  throw new BadRequest(
+  throw new CatalogConnectControlError(
     `${name} did not answer as an MCP server when that bearer access token was tried, so it was not connected`
   );
 }
@@ -890,7 +911,17 @@ export function createMCPCatalogConnectService(
         ).claimCatalogConnectGeneration(userId, entry.name),
       };
       const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
-      const auth = await resolveAuthRequirement(entry, bearerToken);
+      let auth: MCPAuth;
+      try {
+        auth = await resolveAuthRequirement(entry, bearerToken);
+      } catch (error) {
+        if (isCatalogConnectControlError(error)) throw error;
+        const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
+        console.error(
+          `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${safe.category} type=${safe.diagnostic.type}`
+        );
+        throw new BadRequest(safe.message, { category: safe.category });
+      }
 
       const existing = await findExistingInstall(entry, auth, userId, params);
 
@@ -1082,9 +1113,9 @@ export function createMCPCatalogConnectService(
               provider: undefined,
             });
           } catch (cleanupError) {
+            const safe = sanitizeMCPExternalError(cleanupError, { stage: 'runtime' });
             console.warn(
-              `[mcp-catalog/connect] Left session ${session.session_id} behind after a failed connect:`,
-              cleanupError instanceof Error ? cleanupError.message : cleanupError
+              `[mcp-catalog/connect] compensation_failed resource=session session_id=${session.session_id} category=${safe.category} type=${safe.diagnostic.type}`
             );
           }
         }
@@ -1098,9 +1129,9 @@ export function createMCPCatalogConnectService(
               operationGeneration
             );
           } catch (cleanupError) {
+            const safe = sanitizeMCPExternalError(cleanupError, { stage: 'runtime' });
             console.warn(
-              `[mcp-catalog/connect] Left ${mcpServer.mcp_server_id} behind after a failed connect:`,
-              cleanupError instanceof Error ? cleanupError.message : cleanupError
+              `[mcp-catalog/connect] compensation_failed resource=mcp_server server_id=${mcpServer.mcp_server_id} category=${safe.category} type=${safe.diagnostic.type}`
             );
           }
         }

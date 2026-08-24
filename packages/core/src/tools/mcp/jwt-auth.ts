@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto';
 import type { MCPAuth } from '../../types/mcp';
 import { type OutboundDnsLookup, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { asMCPExternalError } from './external-error';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
@@ -80,27 +81,35 @@ export async function fetchJWTToken(
   }
 
   // Fetch new token
-  const response = await safeOutboundFetch(api_url, {
-    method: 'POST',
-    redirect: 'error',
-    timeoutMs: 15_000,
-    maxResponseBytes: 256 * 1024,
-    allowLocalhostHttp: options.allowLocalhostHttp ?? true,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name: api_token,
-      secret: api_secret,
-    }),
-    assertCurrent: options.assertCurrent,
-    resolveDns: options.resolveDns,
-  });
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(api_url, {
+      method: 'POST',
+      redirect: 'error',
+      timeoutMs: 15_000,
+      maxResponseBytes: 256 * 1024,
+      allowLocalhostHttp: options.allowLocalhostHttp ?? true,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: api_token,
+        secret: api_secret,
+      }),
+      assertCurrent: options.assertCurrent,
+      resolveDns: options.resolveDns,
+    });
+  } catch (error) {
+    // Network/TLS libraries may reflect the endpoint or request values. Keep
+    // their exception entirely behind the closed MCP error boundary.
+    options.assertCurrent?.();
+    throw asMCPExternalError(error, { stage: 'jwt' });
+  }
 
   if (!response.ok) {
     // Provider bodies frequently contain secrets or reflected internal data.
     // Emit only a stable category and status.
-    throw new Error(`JWT token fetch failed (provider_rejected, status=${response.status})`);
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'provider_rejected' });
   }
 
   let data: { access_token?: string; payload?: { access_token?: string } };
@@ -108,14 +117,14 @@ export async function fetchJWTToken(
     data = (await response.json()) as typeof data;
   } catch {
     options.assertCurrent?.();
-    throw new Error('JWT token fetch failed (invalid_response)');
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'invalid_response' });
   }
   options.assertCurrent?.();
 
   // Handle different response formats
   const token = data.access_token || data.payload?.access_token;
   if (!token) {
-    throw new Error('JWT response missing access_token field');
+    throw asMCPExternalError(undefined, { stage: 'jwt', category: 'invalid_response' });
   }
 
   // Cache the token
@@ -262,7 +271,9 @@ export async function resolveMCPAuthHeaders(
     let tokenUrl = auth.oauth_token_url;
     if (!tokenUrl && mcpUrl) {
       tokenUrl = inferOAuthTokenUrl(mcpUrl);
-      console.log(`[OAuth] Auto-detected token URL: ${tokenUrl}`);
+      // The inferred endpoint can retain user-derived origin/path material.
+      // Its presence is operationally useful; its value is not safe to log.
+      console.log('[OAuth] Token URL inferred from MCP endpoint');
     }
 
     if (!tokenUrl) {
@@ -289,11 +300,13 @@ export async function resolveMCPAuthHeaders(
       return {
         Authorization: `Bearer ${token}`,
       };
-    } catch (error) {
+    } catch {
       // Never downgrade identity/authority loss into an unauthenticated MCP
       // fallback after client credentials crossed the provider boundary.
       options.assertCurrent?.();
-      console.warn('[OAuth] Token fetch failed:', error instanceof Error ? error.message : error);
+      // Provider/network exceptions may include the endpoint, redirected URL,
+      // response body, or reflected credentials. Keep this diagnostic fixed.
+      console.warn('[OAuth] Token fetch failed');
       return undefined;
     }
   }

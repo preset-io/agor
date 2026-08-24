@@ -193,7 +193,7 @@ dbTest('Marketplace tool action reloads transport under the mutation lock', asyn
   await setPolicy(db, 'allow_private_only');
   const repo = new MCPServerRepository(db);
   const server = await seed(repo);
-  await repo.update(server.mcp_server_id, { transport: 'stdio' });
+  await repo.update(server.mcp_server_id, { transport: 'stdio', command: 'node' });
 
   await expect(
     new MCPMarketplaceToolPermissionService(db).create(

@@ -228,4 +228,39 @@ describe('resolveProbeServerTemplates', () => {
       expect(result.error).toContain('auth.oauth_client_secret');
     }
   });
+
+  it.each([
+    ['opening', 'SENTINEL_INLINE_OPEN_{{'],
+    ['closing', 'SENTINEL_INLINE_CLOSE_}}'],
+  ])('rejects a directly supplied unmatched %s delimiter', (_kind, marker) => {
+    const result = resolveProbeServerTemplates(
+      {
+        url: 'https://api.example.com/mcp',
+        transport: 'http',
+        headers: { 'X-Private': marker },
+        auth: { type: 'bearer', token: marker },
+      },
+      {}
+    );
+
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  it.each([
+    ['opening', 'SENTINEL_INLINE_ENV_OPEN_{{'],
+    ['closing', 'SENTINEL_INLINE_ENV_CLOSE_}}'],
+  ])('rejects an unmatched %s delimiter introduced by user.env', (_kind, marker) => {
+    const result = resolveProbeServerTemplates(
+      {
+        url: '{{ user.env.MCP_URL }}',
+        transport: 'http',
+        auth: { type: 'oauth', oauth_client_secret: '{{ user.env.SECRET }}' },
+      },
+      { MCP_URL: `https://api.example.com/${marker}`, SECRET: marker }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
 });

@@ -156,7 +156,10 @@ describe('member policy, as it lands in mcp_servers', () => {
     await expect(update(created.mcp_server_id, { scope: 'global' })).rejects.toThrow(
       /reach cannot be widened/
     );
-    await update(created.mcp_server_id, { display_name: 'DeepWiki' });
+    await update(created.mcp_server_id, {
+      display_name: 'DeepWiki',
+      url: 'https://example.com/mcp',
+    });
 
     const [server] = await storedServers();
     expect(server).toMatchObject({ scope: 'session', display_name: 'DeepWiki' });
@@ -271,7 +274,7 @@ describe('the MCP member policy endpoint, as it is registered', () => {
   it('registers the invalidation at the mcp-servers transport boundary', () => {
     const serviceRegistration = servicesSource.slice(
       servicesSource.indexOf("app.use('/mcp-servers', createMCPServersService(db)"),
-      servicesSource.indexOf('const invalidateOAuthGrantsAfterServerChange')
+      servicesSource.indexOf('const coordinateMCPServerMutation')
     );
     expect(serviceRegistration).toContain('events: [MCP_MEMBER_POLICY_CHANGED_EVENT]');
   });

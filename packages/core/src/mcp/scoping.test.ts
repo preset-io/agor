@@ -8,12 +8,13 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
     mcp_server_id: id,
     name,
     transport: 'http',
+    url: `https://${id}.example.test/mcp`,
     scope,
     source: 'user',
     enabled: true,
     created_at: new Date(),
     updated_at: new Date(),
-    auth: { type: 'token', token: `value-${id}` },
+    auth: { type: 'bearer', token: `value-${id}` },
   }) as unknown as MCPServer;
 
 /** A handler that can drop individual tools — keeps these cases about scoping. */
@@ -235,6 +236,165 @@ describe('getMcpServersForSession', () => {
       oauth_access_token: 'real-oauth-token',
     });
   });
+
+  it.each([
+    ['file protocol', 'file:///tmp/mcp'],
+    ['embedded credentials', 'https://user:secret@mcp.example.test'],
+    ['malformed URL', 'not a url'],
+  ])('withholds a server whose resolved URL uses %s before SDK dispatch', async (_label, url) => {
+    const invalid = { ...makeServer('invalid', 'global'), url } as MCPServer;
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: { listEffectiveServers: vi.fn().mockResolvedValue([invalid]) } as never,
+      },
+      ENFORCING
+    );
+
+    expect(servers).toEqual([]);
+  });
+
+  it('withholds malformed secret-bearing templates without leaking their values', async () => {
+    const sentinel = 'SENTINEL_NO_MCP_DISPATCH_19d2';
+    const malformed = `${sentinel}{{#if user.env.MISSING_SECRET}}`;
+    const invalid = {
+      ...makeServer('invalid-template', 'global'),
+      url: `https://mcp.example.test/${malformed}`,
+      headers: { Authorization: malformed },
+      env: { MCP_SECRET: malformed },
+      auth: {
+        type: 'jwt',
+        api_url: `https://auth.example.test/${malformed}`,
+        api_token: malformed,
+        api_secret: malformed,
+      },
+    } as MCPServer;
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const servers = await getMcpServersForSession(
+        'session-a' as SessionID,
+        {
+          mcpServerRepo: { findAll: vi.fn() } as never,
+          sessionMCPRepo: {
+            listEffectiveServers: vi.fn().mockResolvedValue([invalid]),
+          } as never,
+        },
+        ENFORCING
+      );
+
+      expect(servers).toEqual([]);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  const markerFieldCases = [
+    {
+      family: 'url',
+      build: (value: string) => ({
+        ...makeServer('marker-url', 'global'),
+        url: `https://mcp.example.test/${value}`,
+      }),
+    },
+    {
+      family: 'headers',
+      build: (value: string) => ({
+        ...makeServer('marker-headers', 'global'),
+        headers: { 'X-Private': value },
+      }),
+    },
+    {
+      family: 'env',
+      build: (value: string) => ({
+        ...makeServer('marker-env', 'global'),
+        env: { PRIVATE_VALUE: value },
+      }),
+    },
+    {
+      family: 'bearer',
+      build: (value: string) => ({
+        ...makeServer('marker-bearer', 'global'),
+        auth: { type: 'bearer' as const, token: value },
+      }),
+    },
+    {
+      family: 'jwt',
+      build: (value: string) => ({
+        ...makeServer('marker-jwt', 'global'),
+        auth: {
+          type: 'jwt' as const,
+          api_url: 'https://auth.example.test/token',
+          api_token: 'configured',
+          api_secret: value,
+        },
+      }),
+    },
+    {
+      family: 'oauth',
+      build: (value: string) => ({
+        ...makeServer('marker-oauth', 'global'),
+        auth: { type: 'oauth' as const, oauth_client_secret: value },
+      }),
+    },
+  ];
+
+  it.each(
+    markerFieldCases.flatMap(({ family, build }) =>
+      (['{{', '}}'] as const).flatMap((delimiter) =>
+        (['stored', 'user.env'] as const).map((source) => ({
+          family,
+          build,
+          delimiter,
+          source,
+        }))
+      )
+    )
+  )(
+    'withholds a $source unmatched $delimiter marker in $family before executor dispatch',
+    async ({ build, delimiter, source, family }) => {
+      const sentinel = `SENTINEL_${source === 'stored' ? 'STORED' : 'ENV'}_${family}_${delimiter === '{{' ? 'OPEN' : 'CLOSE'}_${delimiter}`;
+      const storedValue = source === 'stored' ? sentinel : '{{ user.env.INJECTED_MARKER }}';
+      const userEnv = source === 'user.env' ? { INJECTED_MARKER: sentinel } : {};
+      const invalid = build(storedValue) as MCPServer;
+      const previousKeys = process.env.AGOR_USER_ENV_KEYS;
+      const previousValue = process.env.INJECTED_MARKER;
+      process.env.AGOR_USER_ENV_KEYS = Object.keys(userEnv).join(',');
+      Object.assign(process.env, userEnv);
+      const spies = [
+        vi.spyOn(console, 'log').mockImplementation(() => undefined),
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+        vi.spyOn(console, 'error').mockImplementation(() => undefined),
+        vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+      ];
+      try {
+        const servers = await getMcpServersForSession(
+          'session-a' as SessionID,
+          {
+            mcpServerRepo: { findAll: vi.fn() } as never,
+            sessionMCPRepo: {
+              listEffectiveServers: vi.fn().mockResolvedValue([invalid]),
+            } as never,
+          },
+          ENFORCING
+        );
+        expect(servers).toEqual([]);
+        expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      } finally {
+        if (previousKeys === undefined) delete process.env.AGOR_USER_ENV_KEYS;
+        else process.env.AGOR_USER_ENV_KEYS = previousKeys;
+        if (previousValue === undefined) delete process.env.INJECTED_MARKER;
+        else process.env.INJECTED_MARKER = previousValue;
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
 });
 
 describe('getMcpServersForSession - tool_permissions admission gate', () => {

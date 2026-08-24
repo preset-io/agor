@@ -1,11 +1,15 @@
 import http, { type Server as HttpServer } from 'node:http';
 import {
   createDatabaseAsync,
+  eq,
   MCPServerRepository,
+  mcpServers,
   runMigrations,
+  shortId,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import {
   type Application,
@@ -45,9 +49,12 @@ import {
 // The boundary under test is daemon discovery/OAuth authority, not the MCP
 // SDK's stream parser. Mock only the post-grant capability client so Vitest
 // does not try to type-strip eventsource-parser's published TypeScript file.
+const mcpClientTestState = vi.hoisted(() => ({ connectError: undefined as unknown }));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
-    async connect() {}
+    async connect() {
+      if (mcpClientTestState.connectError) throw mcpClientTestState.connectError;
+    }
     async close() {}
     async listTools() {
       return { tools: [] };
@@ -390,6 +397,7 @@ async function createHarness(
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
     outboundDnsLookup?: OutboundDnsLookup;
+    requireAuth?: RegisterServicesContext['requireAuth'];
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -460,12 +468,33 @@ async function createHarness(
     UI_PORT: 5173,
     branchRbacEnabled: false,
     allowSuperadmin: false,
-    requireAuth: async (context) => context,
+    requireAuth: options.requireAuth ?? (async (context) => context),
     deployment: {} as RegisterServicesContext['deployment'],
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
+  // The production registerHooks chain turns the catalog service's private
+  // params capability into the persisted provenance stamp. This service-only
+  // harness installs that narrow seam explicitly so the repository's trusted
+  // CREATE contract can reject incomplete catalog provenance.
+  app.service('mcp-servers').hooks({
+    before: {
+      create: [
+        (context) => {
+          const entryName = (
+            context.params as AuthenticatedParams & {
+              mcpCatalogInstall?: { entry_name?: string };
+            }
+          ).mcpCatalogInstall?.entry_name;
+          if (entryName && context.data && !Array.isArray(context.data)) {
+            context.data.catalog_entry_name = entryName;
+          }
+          return context;
+        },
+      ],
+    },
+  } as never);
 
   const invokeCallback = async (
     query: Record<string, string>
@@ -855,6 +884,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  mcpClientTestState.connectError = undefined;
   await Promise.all(realSocketHarnesses.splice(0).map((harness) => harness.close()));
   await Promise.all(providers.splice(0).map((provider) => provider.close()));
   for (const db of databases.splice(0)) {
@@ -975,7 +1005,7 @@ describe('real Feathers Socket.IO request authority', () => {
       )
     ).resolves.toMatchObject({
       success: false,
-      error: expect.stringMatching(/invalid, expired, or already used/i),
+      error: expect.stringMatching(/authority|reservation|expired/i),
     });
     expect(provider.requests).toEqual([]);
   });
@@ -1006,6 +1036,49 @@ describe('real Feathers Socket.IO request authority', () => {
 
     await expect(request).rejects.toThrow(/authority/i);
     expect(provider.requests).toEqual([]);
+  });
+
+  it('sanitizes a secret-bearing DNS exception on a genuine test-jwt socket call', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const sentinel = 'SENTINEL_REAL_SOCKET_DNS_1b7e';
+    const getter = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const hostileFailure = new TypeError(`DNS reflected https://${sentinel}.example.test`);
+    Object.defineProperties(hostileFailure, {
+      name: { get: getter },
+      code: { get: getter },
+    });
+    const harness = await createRealSocketHarness(provider, {
+      outboundDnsLookup: async () => {
+        throw hostileFailure;
+      },
+    });
+    realSocketHarnesses.push(harness);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const realtimeSpy = vi.fn();
+    for (const event of ['created', 'updated', 'patched', 'removed'] as const) {
+      harness.client.service('mcp-servers').on(event, realtimeSpy);
+    }
+    try {
+      const result = await harness.client.service('mcp-servers/test-jwt').create({
+        api_url: 'https://auth.example.test/token',
+        api_token: 'configured',
+        api_secret: sentinel,
+      });
+      expect(result).toMatchObject({ success: false, category: 'provider_unavailable' });
+      expect(JSON.stringify(result)).not.toContain(sentinel);
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(sentinel);
+      expect(getter).not.toHaveBeenCalled();
+      expect(JSON.stringify(await new MCPServerRepository(harness.rawDb).findAll())).not.toContain(
+        sentinel
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(realtimeSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('fences oauth-start when A becomes B during the authoritative DB read', async () => {
@@ -1099,6 +1172,267 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', {
+      requireAuth: async () => {
+        throw new Error('REST authentication rejected before MCP mutation');
+      },
+    });
+    databases.push(harness.rawDb);
+
+    await expect(
+      harness.app
+        .service('mcp-servers')
+        .patch(
+          harness.server.mcp_server_id,
+          { display_name: 'must-not-commit' },
+          { ...paramsFor(harness), provider: 'rest' }
+        )
+    ).rejects.toThrow('REST authentication rejected before MCP mutation');
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id)
+    ).resolves.not.toMatchObject({ display_name: 'must-not-commit' });
+  });
+
+  it('deletes incompatible durable grants when OAuth subject mode changes', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const grants = new UserMCPOAuthTokenRepository(harness.rawDb);
+    await expect(
+      grants.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+
+    await harness.app
+      .service('mcp-servers')
+      .patch(harness.server.mcp_server_id, { auth: { oauth_mode: 'shared' } }, paramsFor(harness));
+
+    await expect(
+      grants.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
+    await expect(
+      grants.getToken(null, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
+  });
+
+  it('rolls back the MCP server mutation when SQLite grant cleanup fails', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const before = await new MCPServerRepository(harness.rawDb).findById(
+      harness.server.mcp_server_id
+    );
+    const cleanup = vi
+      .spyOn(UserMCPOAuthTokenRepository.prototype, 'deleteAllForServer')
+      .mockRejectedValueOnce(new Error('injected grant cleanup failure'));
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers')
+          .patch(
+            harness.server.mcp_server_id,
+            { auth: { oauth_mode: 'shared' } },
+            paramsFor(harness)
+          )
+      ).rejects.toThrow('injected grant cleanup failure');
+    } finally {
+      cleanup.mockRestore();
+    }
+
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id)
+    ).resolves.toMatchObject({
+      config_version: before?.config_version,
+      auth: { oauth_mode: 'per_user' },
+    });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+  });
+
+  it('keeps a local pending flow usable when the SQLite mutation rolls back', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+      attempt_id: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(started.success).toBe(true);
+    expect(state).toBeTruthy();
+
+    const cleanup = vi
+      .spyOn(UserMCPOAuthTokenRepository.prototype, 'deleteAllForServer')
+      .mockRejectedValueOnce(new Error('injected local-flow rollback'));
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers')
+          .patch(
+            harness.server.mcp_server_id,
+            { auth: { oauth_mode: 'shared' } },
+            paramsFor(harness)
+          )
+      ).rejects.toThrow('injected local-flow rollback');
+    } finally {
+      cleanup.mockRestore();
+    }
+
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-attempt-status')
+        .get(started.attempt_id, paramsFor(harness))
+    ).resolves.toMatchObject({ status: 'pending' });
+    await expect(harness.callback(state!)).resolves.toMatchObject({ status: 200 });
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id)
+    ).resolves.toMatchObject({ auth: { oauth_mode: 'per_user' } });
+  });
+
+  it('uses the canonical ID for a short-ID mutation with a real grant and local pending flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      authorizationUrl: string;
+      attempt_id: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const updated = await harness.app
+      .service('mcp-servers')
+      .patch(
+        shortId(harness.server.mcp_server_id),
+        { auth: { oauth_scope: 'canonical-short-id' } },
+        paramsFor(harness)
+      );
+    expect(updated).toMatchObject({
+      mcp_server_id: harness.server.mcp_server_id,
+      auth: { oauth_scope: 'canonical-short-id' },
+    });
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toBeNull();
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-attempt-status')
+        .get(started.attempt_id, paramsFor(harness))
+    ).resolves.toMatchObject({
+      status: 'failed',
+      failure_code: 'server_configuration_changed',
+      recovery: expect.objectContaining({ category: 'configuration_changed' }),
+    });
+    await expect(harness.callback(state!)).resolves.toMatchObject({ status: 400 });
+  });
+
+  it('rolls back the MCP server mutation when durable pending-flow cleanup fails', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const invalidateForServer = vi.fn(async () => {
+      throw new Error('injected pending-flow cleanup failure');
+    });
+    const harness = await createHarness(provider, 'per_user', {
+      durableAuthority: {
+        invalidateForServer,
+        maintain: vi.fn(),
+      } as unknown as NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+    const before = await new MCPServerRepository(harness.rawDb).findById(
+      harness.server.mcp_server_id
+    );
+
+    await expect(
+      harness.app
+        .service('mcp-servers')
+        .patch(harness.server.mcp_server_id, { auth: { oauth_mode: 'shared' } }, paramsFor(harness))
+    ).rejects.toThrow('injected pending-flow cleanup failure');
+
+    expect(invalidateForServer).toHaveBeenCalledWith('default', harness.server.mcp_server_id);
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id)
+    ).resolves.toMatchObject({
+      config_version: before?.config_version,
+      auth: { oauth_mode: 'per_user' },
+    });
+  });
+
+  it('serializes literal-memory readers across config and grant cleanup', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+
+    const cleanupStarted = deferred<void>();
+    const releaseCleanup = deferred<void>();
+    const originalDeleteAllForServer = UserMCPOAuthTokenRepository.prototype.deleteAllForServer;
+    const cleanup = vi
+      .spyOn(UserMCPOAuthTokenRepository.prototype, 'deleteAllForServer')
+      .mockImplementationOnce(async function (...args) {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        return originalDeleteAllForServer.apply(this, args);
+      });
+    try {
+      const mutation = harness.app
+        .service('mcp-servers')
+        .patch(
+          harness.server.mcp_server_id,
+          { auth: { oauth_mode: 'shared' } },
+          paramsFor(harness)
+        );
+      await cleanupStarted.promise;
+
+      let readerFinished = false;
+      const observation = Promise.all([
+        new MCPServerRepository(harness.rawDb).findById(harness.server.mcp_server_id),
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        ),
+      ]).finally(() => {
+        readerFinished = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(readerFinished).toBe(false);
+
+      releaseCleanup.resolve();
+      await mutation;
+      const [server, grant] = await observation;
+      expect(server?.auth).toMatchObject({ oauth_mode: 'shared' });
+      expect(grant).toBeNull();
+    } finally {
+      releaseCleanup.resolve();
+      cleanup.mockRestore();
+    }
+  });
+
   it('does not dispatch test-jwt caller secrets when socket authority changes during DNS', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -1186,6 +1520,55 @@ describe('SQLite saved-row OAuth authority', () => {
     await expect(request).rejects.toThrow(/authority/i);
     expect(provider.requests).toEqual([]);
     expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('returns only closed OAuth start/discovery recovery for hostile network proxies', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const sentinel = 'SENTINEL_OAUTH_HOSTILE_PROXY_219f';
+    const getter = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const hostile = new Proxy(new Error(sentinel), {
+      getPrototypeOf() {
+        throw new Error(sentinel);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        if (property === 'name' || property === 'code') {
+          return { configurable: true, get: getter };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    });
+    const harness = await createHarness(provider, undefined, {
+      outboundDnsLookup: async () => {
+        throw hostile;
+      },
+    });
+    databases.push(harness.rawDb);
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      url: provider.savedMcpUrl.replace('127.0.0.1', 'localhost'),
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const oauthStart = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      mcpClientTestState.connectError = hostile;
+      const discovery = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(oauthStart).toMatchObject({ success: false, recovery: { category: 'unknown' } });
+      expect(discovery).toMatchObject({ success: false, category: 'unknown' });
+      expect(JSON.stringify({ oauthStart, discovery, logs: errorSpy.mock.calls })).not.toContain(
+        sentinel
+      );
+      expect(getter).not.toHaveBeenCalled();
+      expect(provider.requests).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('abandons oauth-start when its authoritative saved-row read finishes under B', async () => {
@@ -1325,14 +1708,20 @@ describe('SQLite saved-row OAuth authority', () => {
         authorizationUrl?: string;
         attempt_id?: string;
         redirect_uri?: string;
-        diagnostic?: { stage?: string; http_status?: number };
+        diagnostic?: unknown;
+        recovery?: { category?: string; action?: string; redirect_uri?: string };
       };
 
       expect(result).toMatchObject({
         success: false,
         redirect_uri: 'https://agor.example.test/mcp-servers/oauth-callback',
-        diagnostic: { stage: 'dcr_registration', http_status: 418 },
+        recovery: {
+          category: 'client_registration_failed',
+          action: 'configure_client',
+          redirect_uri: 'https://agor.example.test/mcp-servers/oauth-callback',
+        },
       });
+      expect(result.diagnostic).toBeUndefined();
       expect(result.authorizationUrl).toBeUndefined();
       expect(result.attempt_id).toBeUndefined();
       expect(policyLog).toHaveBeenCalledWith(
@@ -1568,7 +1957,10 @@ describe('SQLite saved-row OAuth authority', () => {
         },
         paramsFor(harness)
       )
-    ).resolves.toMatchObject({ success: false, error: expect.stringMatching(/operation/i) });
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/authority|reservation/i),
+    });
     expect(provider.requests).toHaveLength(before);
 
     // Mismatch consumed the nonce. Neither the original caller nor a replay on
@@ -2157,9 +2549,14 @@ describe('SQLite saved-row OAuth authority', () => {
     // credential-peer matching. Mutating it therefore isolates the assertion:
     // only hydration's current binding check can remove the credential that
     // would otherwise make connect reuse this row.
-    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
-      catalog_entry_name: 'drifted/catalog-stamp',
-    });
+    // Simulate historical/on-disk drift below the now-closed repository and
+    // import contracts. Public and trusted writes can no longer create this
+    // inconsistent provenance combination, but grant hydration must remain
+    // fail-closed if an older database already contains it.
+    await update(harness.rawDb, mcpServers)
+      .set({ catalog_entry_name: 'drifted/catalog-stamp' })
+      .where(eq(mcpServers.mcp_server_id, harness.server.mcp_server_id))
+      .run();
 
     const entry = {
       name: 'test/sqlite-current-binding',

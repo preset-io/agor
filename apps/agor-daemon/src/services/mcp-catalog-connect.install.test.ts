@@ -31,6 +31,7 @@ import type {
   MCPMemberPolicy,
   MCPServer,
   User,
+  UserID,
   UserRole,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -335,12 +336,27 @@ describe('the write hook this seam depends on', () => {
       name: 'Mallory',
       role: 'member',
     })) as User;
+    const patchTarget = await new MCPServerRepository(rawDb).create({
+      name: 'registered-hook-patch-target',
+      transport: 'http',
+      url: 'https://mcp.example.test',
+      scope: 'global',
+      owner_user_id: bob.user_id as UserID,
+      source: 'user',
+    });
 
     const registeredHooks = captureRegisteredMcpServerCreateHooks(db);
     const createAs = async (caller: User, data: Record<string, unknown>) => {
       const context = {
         method: 'create',
-        data,
+        data: {
+          name: 'registered-hook-test',
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          scope: 'global',
+          enabled: true,
+          ...data,
+        },
         params: {
           provider: 'rest',
           user: { user_id: caller.user_id, role: 'member' },
@@ -353,7 +369,7 @@ describe('the write hook this seam depends on', () => {
     const patchAs = async (caller: User, data: Record<string, unknown>) => {
       const context = {
         method: 'patch',
-        id: '01900000-0000-7000-8000-000000000099',
+        id: patchTarget.mcp_server_id,
         data,
         params: {
           provider: 'rest',
@@ -388,7 +404,7 @@ describe('the write hook this seam depends on', () => {
   });
 
   it.each(['marketplace', 'future-mode'])(
-    'rejects public create and patch compatibility mode %s before authorization',
+    'rejects public create and patch compatibility mode %s at the authorized write boundary',
     async (mode) => {
       const { bob, createAs, patchAs } = await standUpDaemonHooks();
       const data = {

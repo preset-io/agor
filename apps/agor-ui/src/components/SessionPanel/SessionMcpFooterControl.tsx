@@ -220,8 +220,14 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
                     ? 'Reconnect to the Agor daemon before changing OAuth credentials.'
                     : 'Your account can no longer change OAuth credentials.'
                 }
+                configureAllowed={editMutationAllowed}
+                configureBlockedReason={
+                  !connectionReady
+                    ? 'Reconnect to the Agor daemon before changing saved credentials.'
+                    : 'Only an administrator can change saved credentials.'
+                }
                 onOAuthAttemptStarted={markNewOAuthAttempt}
-                onEdit={handleEditServer}
+                onEdit={editMutationAllowed ? handleEditServer : undefined}
               />
             ))}
           </Space>

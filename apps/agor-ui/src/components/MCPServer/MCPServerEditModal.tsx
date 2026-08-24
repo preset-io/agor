@@ -54,9 +54,9 @@ interface TestResult {
   resourceCount: number;
   promptCount: number;
   error?: string;
-  tools?: Array<{ name: string; description: string }>;
+  tools?: Array<{ name: string; description?: string }>;
   resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-  prompts?: Array<{ name: string; description: string }>;
+  prompts?: Array<{ name: string; description?: string }>;
 }
 
 /**
@@ -95,6 +95,11 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   // render. Gating on this keeps Save from flashing disabled while the modal
   // animates in.
   const [formHydrated, setFormHydrated] = useState(false);
+  const [configConflict, setConfigConflict] = useState(false);
+  const [reloadingLatest, setReloadingLatest] = useState(false);
+  const [managedOAuthCompatibilityMode, setManagedOAuthCompatibilityMode] = useState<
+    'strict' | 'marketplace' | undefined
+  >();
   const [formRevision, bumpFormRevision] = useFormRevision();
   const operationGuard = useAuthorityOperationGuard(
     authorityKey && mutationAllowed ? [authorityKey, client, mutationAllowed] : null
@@ -114,6 +119,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       : [];
   const saveBlocked = !mutationAllowed || missingRequiredFields.length > 0;
   const mutationStateRef = useRef({ allowed: mutationAllowed, reason: mutationBlockedReason });
+  const configVersionRef = useRef(1);
   mutationStateRef.current = { allowed: mutationAllowed, reason: mutationBlockedReason };
 
   // Hydrate the form when the modal opens or the user swaps to a different
@@ -125,9 +131,12 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     if (!open || !server) return;
 
     setTestResult(null);
+    setConfigConflict(false);
+    configVersionRef.current = server.config_version ?? 1;
     setPreserveAbsentDcrMode(false);
     setPreserveAbsentCompatibilityMode(false);
     setPreserveAbsentGrantType(false);
+    setManagedOAuthCompatibilityMode(undefined);
     const serverAuthType = (server.auth?.type as 'none' | 'bearer' | 'jwt' | 'oauth') || 'none';
     setAuthType(serverAuthType);
     setTransport(server.transport || (server.url ? 'http' : 'stdio'));
@@ -161,6 +170,11 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       const managedCompatibilityMode = server.oauth_compatibility_policy?.managed_by_catalog
         ? server.oauth_compatibility_policy.effective_mode
         : undefined;
+      setManagedOAuthCompatibilityMode(
+        managedCompatibilityMode === 'strict' || managedCompatibilityMode === 'marketplace'
+          ? managedCompatibilityMode
+          : undefined
+      );
       setPreserveAbsentDcrMode(server.auth?.oauth_dcr_mode === undefined);
       setPreserveAbsentCompatibilityMode(server.auth?.oauth_compatibility_mode === undefined);
       setPreserveAbsentGrantType(server.auth?.oauth_grant_type === undefined);
@@ -196,6 +210,9 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     setPreserveAbsentCompatibilityMode(false);
     setPreserveAbsentGrantType(false);
     setFormHydrated(false);
+    setConfigConflict(false);
+    setReloadingLatest(false);
+    setManagedOAuthCompatibilityMode(undefined);
     onClose();
   };
 
@@ -253,14 +270,17 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         success: boolean;
         error?: string;
         capabilities?: { tools: number; resources: number; prompts: number };
-        tools?: Array<{ name: string; description: string }>;
+        tools?: Array<{ name: string; description?: string }>;
         resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-        prompts?: Array<{ name: string; description: string }>;
+        prompts?: Array<{ name: string; description?: string }>;
       };
 
       if (!operation.isCurrent()) return;
 
       if (data.success && data.capabilities) {
+        const refreshed = await client.service('mcp-servers').get(server.mcp_server_id);
+        if (!operation.isCurrent()) return;
+        configVersionRef.current = refreshed.config_version ?? configVersionRef.current;
         setTestResult({
           success: true,
           toolCount: data.capabilities.tools,
@@ -279,15 +299,14 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           error: data.error || 'Connection test failed',
         });
       }
-    } catch (error) {
+    } catch {
       if (!operation.isCurrent()) return;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setTestResult({
         success: false,
         toolCount: 0,
         resourceCount: 0,
         promptCount: 0,
-        error: errorMessage,
+        error: 'Connection test failed. Check the saved configuration and try again.',
       });
     } finally {
       browserAttempt?.cleanup();
@@ -319,6 +338,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         scope: values.scope,
         enabled: values.enabled,
         transport: values.transport,
+        expected_config_version: configVersionRef.current,
       };
 
       if (values.transport === 'stdio') {
@@ -336,6 +356,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         preserveAbsentDcrMode,
         preserveAbsentCompatibilityMode,
         preserveAbsentGrantType,
+        forPatch: true,
       });
 
       if (!operation.isCurrent()) return false;
@@ -343,10 +364,20 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         showError(mutationStateRef.current.reason);
         return false;
       }
-      await client.service('mcp-servers').patch(server.mcp_server_id, updates);
+      const updated = await client.service('mcp-servers').patch(server.mcp_server_id, updates);
+      configVersionRef.current = updated.config_version ?? configVersionRef.current + 1;
       return operation.isCurrent();
     } catch (error) {
       if (!operation.isCurrent()) return false;
+      const conflictData = (error as { code?: number; data?: { current_config_version?: number } })
+        ?.data;
+      if ((error as { code?: number })?.code === 409 || conflictData?.current_config_version) {
+        setConfigConflict(true);
+        showError(
+          'This MCP server changed on another device. Reload the latest version before saving again.'
+        );
+        return false;
+      }
       // Name the field, rather than letting a rejected validation surface as
       // the generic message its non-Error shape would produce.
       const errorMessage =
@@ -363,6 +394,66 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       if (!operation.isCurrent()) return;
       showSuccess('MCP server updated successfully');
       closeAndReset();
+    }
+  };
+
+  const reloadLatest = async () => {
+    if (!client || !server) return;
+    setReloadingLatest(true);
+    try {
+      const latest = await client.service('mcp-servers').get(server.mcp_server_id);
+      configVersionRef.current = latest.config_version ?? 1;
+      const latestAuthType = latest.auth?.type || 'none';
+      const latestManagedMode = latest.oauth_compatibility_policy?.managed_by_catalog
+        ? latest.oauth_compatibility_policy.effective_mode
+        : undefined;
+      setManagedOAuthCompatibilityMode(
+        latestManagedMode === 'strict' || latestManagedMode === 'marketplace'
+          ? latestManagedMode
+          : undefined
+      );
+      setPreserveAbsentDcrMode(latest.auth?.oauth_dcr_mode === undefined);
+      setPreserveAbsentCompatibilityMode(latest.auth?.oauth_compatibility_mode === undefined);
+      setPreserveAbsentGrantType(latest.auth?.oauth_grant_type === undefined);
+      setTransport(latest.transport);
+      setAuthType(latestAuthType);
+      // Deliberately discard dirty fields. The conflict alert names this
+      // behavior so an editor never mistakes Reload for a rebase operation.
+      form.resetFields();
+      form.setFieldsValue({
+        name: latest.name,
+        display_name: latest.display_name,
+        description: latest.description,
+        transport: latest.transport,
+        command: latest.command,
+        args: latest.args?.join(', '),
+        url: latest.url,
+        scope: latest.scope,
+        enabled: latest.enabled,
+        env: latest.env ? JSON.stringify(latest.env, null, 2) : undefined,
+        headers: latest.headers ? JSON.stringify(latest.headers, null, 2) : undefined,
+        auth_type: latestAuthType,
+        auth_token: latest.auth?.token,
+        jwt_api_url: latest.auth?.api_url,
+        jwt_api_token: latest.auth?.api_token,
+        jwt_api_secret: latest.auth?.api_secret,
+        oauth_authorization_url: latest.auth?.oauth_authorization_url,
+        oauth_token_url: latest.auth?.oauth_token_url,
+        oauth_client_id: latest.auth?.oauth_client_id,
+        oauth_client_secret: latest.auth?.oauth_client_secret,
+        oauth_scope: latest.auth?.oauth_scope,
+        oauth_grant_type: latest.auth?.oauth_grant_type || 'client_credentials',
+        oauth_mode: latest.auth?.oauth_mode || 'per_user',
+        oauth_compatibility_mode:
+          latestManagedMode ?? latest.auth?.oauth_compatibility_mode ?? 'strict',
+        oauth_dcr_mode: latest.auth?.oauth_dcr_mode || 'advertised',
+      });
+      setConfigConflict(false);
+      bumpFormRevision();
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to reload the latest MCP server');
+    } finally {
+      setReloadingLatest(false);
     }
   };
 
@@ -412,6 +503,20 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           style={{ marginTop: 16 }}
         />
       )}
+      {configConflict && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Newer MCP settings are available"
+          description="Reloading fetches the current server and discards your unsaved edits."
+          action={
+            <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
+              Reload latest
+            </Button>
+          }
+          style={{ marginTop: 16 }}
+        />
+      )}
       <Form
         form={form}
         layout="vertical"
@@ -444,13 +549,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           mutationAllowed={mutationAllowed}
           mutationBlockedReason={mutationBlockedReason}
           formRevision={formRevision}
-          managedOAuthCompatibilityMode={
-            server?.oauth_compatibility_policy?.managed_by_catalog &&
-            (server.oauth_compatibility_policy.effective_mode === 'strict' ||
-              server.oauth_compatibility_policy.effective_mode === 'marketplace')
-              ? server.oauth_compatibility_policy.effective_mode
-              : undefined
-          }
+          managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
         />
       </Form>
     </Modal>

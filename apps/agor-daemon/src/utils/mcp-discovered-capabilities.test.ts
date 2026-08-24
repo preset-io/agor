@@ -116,6 +116,64 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
     );
   });
 
+  it('accepts protocol-legal capabilities with optional descriptions and schemas', async () => {
+    const snapshot = await captureSnapshot();
+    const legal = {
+      tools: [{ name: 'no-description' }],
+      resources: [
+        { uri: 'file:///a', name: 'a' },
+        { uri: 'file:///b', name: 'b', description: 'optional' },
+      ],
+      prompts: [{ name: 'prompt', arguments: [{ name: 'subject' }] }],
+    };
+    await runWithTenantDatabaseTransaction(db, undefined, (scopedDb) =>
+      persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, legal, masterSecret)
+    );
+
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      legal
+    );
+    await expect(
+      new MCPServerRepository(db).update(server.mcp_server_id, { display_name: 'Still editable' })
+    ).resolves.toMatchObject({ display_name: 'Still editable', ...legal });
+  });
+
+  it('fails closed on oversized or malicious provider discovery before persistence', async () => {
+    for (const malicious of [
+      {
+        tools: Array.from({ length: 257 }, (_, index) => ({ name: `tool-${index}` })),
+        resources: [],
+        prompts: [],
+      },
+      {
+        tools: [{ name: 'escape', provider_secret: 'must-not-persist' }],
+        resources: [],
+        prompts: [],
+      },
+      {
+        tools: [{ name: 'shape', input_schema: { value: () => 'not-json' } }],
+        resources: [],
+        prompts: [],
+      },
+    ]) {
+      const snapshot = await captureSnapshot();
+      await expect(
+        runWithTenantDatabaseTransaction(db, undefined, (scopedDb) =>
+          persistDiscoveredMCPCapabilities(
+            scopedDb,
+            undefined,
+            snapshot,
+            malicious as never,
+            masterSecret
+          )
+        )
+      ).rejects.toThrow(/at most 256|Unknown tools\[0\] field|must be an object/);
+      expect(
+        (await new MCPServerRepository(db).findById(server.mcp_server_id))?.tools
+      ).toBeUndefined();
+    }
+  });
+
   it('rejects endpoint A to B while provider I/O is held and writes no stale capabilities', async () => {
     const snapshot = await captureSnapshot();
     let releaseNetwork!: () => void;

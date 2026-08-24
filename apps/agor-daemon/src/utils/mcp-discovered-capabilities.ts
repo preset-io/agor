@@ -12,6 +12,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { assertValidDiscoveredMCPCapabilities } from '@agor/core/mcp';
 import { isAtLeastMemberRole, mayMemberUseMCPTransport } from '@agor/core/mcp/member-policy';
 import type {
   MCPAuth,
@@ -233,6 +234,10 @@ export async function persistDiscoveredMCPCapabilities(
   capabilities: DiscoveredMCPCapabilities,
   masterSecret: string
 ): Promise<void> {
+  // Provider discovery output is untrusted input. Bound and close it before
+  // any durable work so an oversized or extension-bearing response cannot be
+  // persisted and later bypass API redaction/export assumptions.
+  assertValidDiscoveredMCPCapabilities(capabilities);
   assertTenantDiscoveryScope(db, true);
   if (tenantId) await assertTenantWritable(db, tenantId);
 

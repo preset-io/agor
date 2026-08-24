@@ -3,7 +3,7 @@ import {
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
-import type { MCPOAuthDCRMode } from '@agor-live/client';
+import type { MCPAuthPatch, MCPOAuthDCRMode } from '@agor-live/client';
 
 /**
  * OAuth utility functions extracted from MCPServersTable for testability.
@@ -191,10 +191,31 @@ export function buildAuthFromValues(
     preserveAbsentDcrMode?: boolean;
     preserveAbsentCompatibilityMode?: boolean;
     preserveAbsentGrantType?: boolean;
+    forPatch: true;
+  }
+): MCPAuthPatch | null;
+export function buildAuthFromValues(
+  values: Record<string, unknown>,
+  options?: {
+    preserveAbsentDcrMode?: boolean;
+    preserveAbsentCompatibilityMode?: boolean;
+    preserveAbsentGrantType?: boolean;
+    forPatch?: false;
+  }
+): BuiltAuth | undefined;
+export function buildAuthFromValues(
+  values: Record<string, unknown>,
+  options: {
+    preserveAbsentDcrMode?: boolean;
+    preserveAbsentCompatibilityMode?: boolean;
+    preserveAbsentGrantType?: boolean;
+    forPatch?: boolean;
   } = {}
-): BuiltAuth | undefined {
+): BuiltAuth | MCPAuthPatch | null | undefined {
   const authType = values.auth_type;
-  if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') return undefined;
+  if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') {
+    return options.forPatch ? null : undefined;
+  }
 
   const auth: BuiltAuth = { type: authType };
   if (authType === 'bearer') {
@@ -217,6 +238,41 @@ export function buildAuthFromValues(
     }
     if (options.preserveAbsentGrantType && values.oauth_grant_type === 'client_credentials') {
       delete auth.oauth_grant_type;
+    }
+  }
+  if (options.forPatch) {
+    const formToAuthField: Record<string, string> = {
+      auth_token: 'token',
+      jwt_api_url: 'api_url',
+      jwt_api_token: 'api_token',
+      jwt_api_secret: 'api_secret',
+      oauth_authorization_url: 'oauth_authorization_url',
+      oauth_token_url: 'oauth_token_url',
+      oauth_client_id: 'oauth_client_id',
+      oauth_client_secret: 'oauth_client_secret',
+      oauth_scope: 'oauth_scope',
+      oauth_grant_type: 'oauth_grant_type',
+    };
+    for (const [formField, authField] of Object.entries(formToAuthField)) {
+      const isSecret = [
+        'auth_token',
+        'jwt_api_token',
+        'jwt_api_secret',
+        'oauth_client_secret',
+      ].includes(formField);
+      if (values[`${formField}_clear`] === true) {
+        (auth as unknown as Record<string, unknown>)[authField] = null;
+      } else if (Object.hasOwn(values, formField) && values[formField] === '' && !isSecret) {
+        (auth as unknown as Record<string, unknown>)[authField] = null;
+      }
+    }
+    for (const [field, value] of Object.entries(auth)) {
+      const isSecret = ['token', 'api_token', 'api_secret', 'oauth_client_secret'].includes(field);
+      if (field !== 'type' && typeof value === 'string' && value.trim() === '' && !isSecret) {
+        (auth as unknown as Record<string, unknown>)[field] = null;
+      } else if (isSecret && value === '') {
+        delete (auth as unknown as Record<string, unknown>)[field];
+      }
     }
   }
   return auth;

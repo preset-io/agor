@@ -7,6 +7,7 @@
  */
 
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { projectClaudeResultResponse, projectNormalizedSdkResponse } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type AgorConfig,
@@ -68,7 +69,7 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from '@agor/core/lib/feathers-validation';
-import { isMCPServerUsableBy } from '@agor/core/mcp';
+import { assertValidMCPServerWrite, isMCPServerUsableBy } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   Board,
@@ -563,6 +564,44 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'gateway-channels',
 ] as const;
 
+/**
+ * Closed MCP-server transport contract. Public REST/Socket.IO callers receive
+ * the narrow editor schema; trusted in-process catalog/import/discovery calls
+ * use the explicit internal schema that includes provenance/capabilities.
+ */
+export function validateMcpServerWriteInput(context: HookContext, create: boolean): HookContext {
+  const items = Array.isArray(context.data) ? context.data : [context.data];
+  const catalogEntryName = (
+    context.params as typeof context.params & {
+      mcpCatalogInstall?: { entry_name?: string };
+    }
+  ).mcpCatalogInstall?.entry_name;
+  try {
+    for (const item of items) {
+      // Marketplace connect is a public request that deliberately calls this
+      // service through a daemon-owned params capability. Validate the exact
+      // provenance stamp that the following authorization hook will inject;
+      // ordinary REST/Socket.IO callers cannot manufacture params fields.
+      const validatedItem =
+        catalogEntryName && item && typeof item === 'object' && !Array.isArray(item)
+          ? { ...item, catalog_entry_name: catalogEntryName }
+          : item;
+      assertValidMCPServerWrite(validatedItem, {
+        operation: create ? 'create' : 'mutation',
+        // Lack of a transport provider is not itself an authorization
+        // capability: built-in MCP tools and other in-process callers still
+        // operate on behalf of a user. The catalog's daemon-owned stamp is the
+        // only current path that may write protected provenance fields.
+        trusted: Boolean(catalogEntryName),
+        requireConfiguredCredentials: create && !catalogEntryName,
+      });
+    }
+  } catch (error) {
+    throw new BadRequest(error instanceof Error ? error.message : 'Invalid MCP server input');
+  }
+  return context;
+}
+
 /** Caller-specific Knowledge command responses must never become service events. */
 export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): HookContext {
   context.event = null;
@@ -656,6 +695,51 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   }
 
   return context;
+}
+
+/**
+ * Defense in depth at the executor -> daemon persistence/realtime boundary.
+ * The executor projects Claude results first, but an old or compromised
+ * executor must not be able to reintroduce provider result/error prose or SDK
+ * extension objects into Task state.
+ */
+export function projectExecutorTaskSdkResponse(
+  tasks: Pick<TaskRepository, 'findById'>,
+  sessions: Pick<SessionRepository, 'findById'>
+) {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!context.params.provider || typeof context.id !== 'string') return context;
+    const write =
+      context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+        ? (context.data as Record<string, unknown>)
+        : undefined;
+    if (!write) return context;
+
+    // Normalized responses are independently executor-owned input. An old or
+    // compromised executor can omit raw_sdk_response entirely, so close this
+    // object before any persistence/realtime path without conditioning it on
+    // agent type or a raw response being present.
+    if (Object.hasOwn(write, 'normalized_sdk_response')) {
+      const projected = projectNormalizedSdkResponse(write.normalized_sdk_response);
+      if (projected) write.normalized_sdk_response = projected;
+      else delete write.normalized_sdk_response;
+    }
+
+    if (!Object.hasOwn(write, 'raw_sdk_response')) return context;
+
+    const task = await tasks.findById(context.id as Task['task_id']);
+    if (!task) throw new NotFound('Task not found');
+    const session = await sessions.findById(task.session_id);
+    if (!session) throw new NotFound('Session not found');
+
+    if (session.agentic_tool === 'claude-code') {
+      write.raw_sdk_response = projectClaudeResultResponse(write.raw_sdk_response) ?? {
+        type: 'result',
+        subtype: 'unknown',
+      };
+    }
+    return context;
+  };
 }
 
 /** Run an identity-only service's database-reading before hooks in one short unit of work. */
@@ -2360,11 +2444,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('mcp-servers')?.hooks({
     before: {
-      all: [typedValidateQuery(mcpServerQueryValidator), requireAuth],
+      // Authentication must run before query parsing so unauthenticated callers
+      // cannot use validation errors as a schema oracle.
+      all: [requireAuth, typedValidateQuery(mcpServerQueryValidator)],
       find: [scopeMcpServerFindToUsable],
-      create: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
-      update: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
-      patch: [validateMcpServerOAuthCompatibility, authorizeMcpServerWriteHook],
+      create: [
+        authorizeMcpServerWriteHook,
+        (context) => validateMcpServerWriteInput(context, true),
+        validateMcpServerOAuthCompatibility,
+      ],
+      update: [
+        authorizeMcpServerWriteHook,
+        (context) => validateMcpServerWriteInput(context, false),
+        validateMcpServerOAuthCompatibility,
+      ],
+      patch: [
+        authorizeMcpServerWriteHook,
+        (context) => validateMcpServerWriteInput(context, false),
+        validateMcpServerOAuthCompatibility,
+      ],
       remove: [authorizeMcpServerWriteHook],
     },
     after: {
@@ -3328,6 +3426,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         protectServerManagedTaskWrites,
+        projectExecutorTaskSdkResponse(taskRepository, sessionsRepository),
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
