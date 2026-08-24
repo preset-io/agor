@@ -77,10 +77,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import {
-  createFreshTenantWriteDatabaseRunner,
-  deferWithTenantContext,
-} from '../utils/tenant-db-scope.js';
+import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
@@ -1405,10 +1402,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<Task> {
     const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      this.db,
-      terminationTenantId
-    );
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(this.db, terminationTenantId, work);
     const task = await runInFreshTerminationTenantWriteDatabase(() =>
       this.taskRepo.recordExecutorQuiescence(data)
     );
@@ -1552,10 +1547,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       throw new BadRequest('sdk_version must be a bounded identifier');
     }
 
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      this.db,
-      getCurrentTenantId() ?? params?.tenant?.tenant_id
-    );
+    const terminationTenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(this.db, terminationTenantId, work);
 
     const current = await this.get(data.task_id, params);
     const mode = current.sdk_watchdog_mode ?? 'observe';

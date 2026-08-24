@@ -12,6 +12,7 @@ describe('prompt and widget transaction scopes', () => {
 
     expect(promptStart).toBeGreaterThan(0);
     expect(prompt).toContain('registerLongAuthenticatedRoute(');
+    expect(prompt).toContain('assertTenantWriteAdmission(db, promptTenantId)');
     expect(prompt).toContain('bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db))');
     expect(prompt).toContain(
       'isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool)'

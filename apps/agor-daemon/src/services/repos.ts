@@ -58,7 +58,7 @@ import {
   requestExecutor,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
-import { createFreshTenantWriteDatabaseRunner } from '../utils/tenant-db-scope.js';
+import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
 /**
@@ -405,7 +405,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             // write-gated tenant unit. Standalone SQLite retains its historical
             // unscoped internal-service behavior.
             if (tenantId) {
-              await createFreshTenantWriteDatabaseRunner(this.db, tenantId)(resolveDurableFailure);
+              await withFreshTenantWrite(this.db, tenantId, resolveDurableFailure);
             } else {
               await resolveDurableFailure();
             }

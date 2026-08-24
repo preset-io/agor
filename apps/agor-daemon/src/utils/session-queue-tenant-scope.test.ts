@@ -2,6 +2,7 @@ import {
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
+  TenantWriteGateActiveError,
 } from '@agor/core/db';
 import type { SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -265,6 +266,47 @@ describe('session queue tenant scope', () => {
 
     expect(work).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.any(String) }));
+  });
+
+  it('blocks a deferred queue drain at short tenant write admission', async () => {
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            value_text: JSON.stringify({
+              generation: 'queue-gate-generation',
+              acquiredAt: '2026-08-24T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const work = vi.fn(async () => undefined);
+
+    const error = await new Promise<unknown>((resolve) => {
+      deferWithSessionQueueTenantScope(
+        {
+          db: db as never,
+          config: {
+            database: { dialect: 'postgresql' },
+            multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+          },
+          sessionId: 'session-1' as SessionID,
+          params: { tenant: { tenant_id: 'tenant-frozen', source: 'explicit' } },
+          label: 'frozen queue drain',
+        },
+        work,
+        resolve
+      );
+    });
+
+    expect(error).toBeInstanceOf(TenantWriteGateActiveError);
+    expect(work).not.toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledOnce();
   });
 
   it('defers request-less queue drains with a trusted tenant hint', async () => {

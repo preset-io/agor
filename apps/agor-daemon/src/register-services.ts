@@ -230,7 +230,7 @@ import {
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
-import { createFreshTenantWriteDatabaseRunner } from './utils/tenant-db-scope.js';
+import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -1016,10 +1016,8 @@ function createExecuteHandler(
     );
 
     const taskId = data.taskId;
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      db,
-      tenantId
-    );
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(db, tenantId, work);
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the session OWNER's effective filesystem access to

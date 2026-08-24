@@ -289,9 +289,10 @@ describe('tenant-scoped custom-route registration', () => {
     installed: {
       around?: { all?: Array<(context: HookContext, next: () => Promise<void>) => Promise<void>> };
     },
-    next: () => Promise<void>
+    next: () => Promise<void>,
+    method = 'create'
   ) {
-    const context = { method: 'create', params: {}, data: {} } as HookContext;
+    const context = { method, params: {}, data: {} } as HookContext;
     const run = (installed.around?.all ?? []).reduceRight<() => Promise<void>>(
       (inner, hook) => () => hook(context, inner),
       next
@@ -334,5 +335,23 @@ describe('tenant-scoped custom-route registration', () => {
       code: 503,
     });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not over-gate a recognized custom read on the installed route boundary', async () => {
+    const execute = vi.fn(async () => [
+      {
+        value_text: JSON.stringify({
+          generation: 'gate-generation',
+          acquiredAt: '2026-08-21T00:00:00.000Z',
+        }),
+      },
+    ]);
+    const { installed } = installRoute(execute);
+    const handler = vi.fn(async () => undefined);
+
+    await runInstalledAroundHooks(installed ?? {}, handler, 'getPrimaryTeammate');
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
   });
 });

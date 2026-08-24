@@ -59,18 +59,17 @@ const executorMocks = vi.hoisted(() => ({
 }));
 const delegatedHomeMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => undefined) }));
 const tenantScopeMocks = vi.hoisted(() => {
-  const runFreshWrite = vi.fn(async (work: () => Promise<unknown>) => work());
-  return {
-    runFreshWrite,
-    createFreshTenantWriteDatabaseRunner: vi.fn(() => runFreshWrite),
-  };
+  const withFreshTenantWrite = vi.fn(
+    async (_db: unknown, _tenantId: string, work: () => Promise<unknown>) => work()
+  );
+  return { withFreshTenantWrite };
 });
 vi.mock('../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: delegatedHomeMocks.resolve,
 }));
 vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/tenant-db-scope.js')>()),
-  createFreshTenantWriteDatabaseRunner: tenantScopeMocks.createFreshTenantWriteDatabaseRunner,
+  withFreshTenantWrite: tenantScopeMocks.withFreshTenantWrite,
 }));
 vi.mock('../utils/spawn-executor.js', () => {
   return {
@@ -81,8 +80,7 @@ vi.mock('../utils/spawn-executor.js', () => {
 });
 
 beforeEach(() => {
-  tenantScopeMocks.runFreshWrite.mockClear();
-  tenantScopeMocks.createFreshTenantWriteDatabaseRunner.mockClear();
+  tenantScopeMocks.withFreshTenantWrite.mockClear();
 });
 
 describe('ReposService.addLocalRepository executor boundary', () => {
@@ -425,11 +423,11 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
 
     await spawnOptions?.onExit?.(17);
 
-    expect(tenantScopeMocks.createFreshTenantWriteDatabaseRunner).toHaveBeenCalledWith(
+    expect(tenantScopeMocks.withFreshTenantWrite).toHaveBeenCalledWith(
       db,
-      'tenant-a'
+      'tenant-a',
+      expect.any(Function)
     );
-    expect(tenantScopeMocks.runFreshWrite).toHaveBeenCalledOnce();
     expect(repos.get).toHaveBeenCalledWith(current.repo_id);
     expect(repos.patch).toHaveBeenCalledWith(current.repo_id, {
       clone_status: 'failed',

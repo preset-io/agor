@@ -215,11 +215,12 @@ import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
-  createFreshTenantWriteDatabaseRunner,
+  assertTenantWriteAdmission,
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
   createTenantWriteGateAroundHook,
   deferWithTenantContext,
+  withFreshTenantWrite,
 } from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
@@ -1786,9 +1787,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const promptTenantId = getCurrentTenantId();
         if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
-        await runWithTenantDatabaseScope(db, promptTenantId, (tenantDb) =>
-          assertTenantWritable(tenantDb, promptTenantId)
-        );
+        await assertTenantWriteAdmission(db, promptTenantId);
 
         // Derive external provenance server-side. Only provider-less,
         // daemon-internal producers may preserve an explicit gateway source.
@@ -2919,10 +2918,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
-        const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-          db,
-          getCurrentTenantId()
-        );
+        const terminationTenantId = getCurrentTenantId();
+        const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+          withFreshTenantWrite(db, terminationTenantId, work);
         const session = await inCurrentTenantDatabaseScope(() =>
           app.service('sessions').get(id, params)
         );

@@ -46,8 +46,6 @@ function readHeaderValue(
 
 type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefined;
 
-export type TenantDatabaseRunner = <T>(work: () => Promise<T>) => Promise<T>;
-
 /**
  * Enforce the tenant freeze gate inside an already-open tenant transaction.
  * Shared by ordinary Feathers services and custom authenticated routes so a
@@ -96,7 +94,7 @@ export function createTenantWriteAdmissionAroundHook(db: TenantScopeAwareDatabas
       const tenantId = context.params.tenant?.tenant_id ?? getCurrentTenantId();
       if (tenantId) {
         try {
-          await createFreshTenantWriteDatabaseRunner(db, tenantId)(async () => undefined);
+          await assertTenantWriteAdmission(db, tenantId);
         } catch (error) {
           if (error instanceof TenantWriteGateActiveError) {
             throw new Unavailable(error.message);
@@ -115,7 +113,7 @@ export function resolveTenantIdForDeferredScope(params?: unknown): string | unde
 }
 
 /**
- * Build the mutation boundary used by long-lived tenant orchestration.
+ * Run one mutation boundary used by long-lived tenant orchestration.
  *
  * Executor callbacks and termination coordinators can outlive the request
  * transaction that created them. AsyncLocalStorage propagates that transaction
@@ -123,20 +121,28 @@ export function resolveTenantIdForDeferredScope(params?: unknown): string | unde
  * rejoin a possibly committed scope. Always leave any inherited DB scope, open
  * one new short tenant transaction, and enforce the write gate inside it.
  */
-export function createFreshTenantWriteDatabaseRunner(
+export function withFreshTenantWrite<T>(
   db: TenantScopeAwareDatabase,
-  tenantId: string | undefined
-): TenantDatabaseRunner {
+  tenantId: string | undefined,
+  work: () => Promise<T>
+): Promise<T> {
   if (!tenantId) {
     throw new Error('Missing tenant context for tenant-scoped mutation');
   }
-  return <T>(work: () => Promise<T>): Promise<T> =>
-    runWithoutTenantDatabaseScope(() =>
-      runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-        await assertTenantWritable(scoped, tenantId);
-        return work();
-      })
-    );
+  return runWithoutTenantDatabaseScope(() =>
+    runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await assertTenantWritable(scoped, tenantId);
+      return work();
+    })
+  );
+}
+
+/** Assert write admission in one fresh, short tenant database unit. */
+export function assertTenantWriteAdmission(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined
+): Promise<void> {
+  return withFreshTenantWrite(db, tenantId, async () => undefined);
 }
 
 /**
@@ -168,10 +174,7 @@ export function deferWithTenantDatabaseScope(
       setImmediate(() => {
         // Deferred tenant writer: fail closed at the write gate (see
         // assertTenantWritable) inside the fresh transaction before the work.
-        void runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-          await assertTenantWritable(scoped, tenantId);
-          await work();
-        }).catch((error) => {
+        void withFreshTenantWrite(db, tenantId, work).catch((error) => {
           if (onError) {
             onError(error);
             return;
