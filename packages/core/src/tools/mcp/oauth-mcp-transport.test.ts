@@ -957,8 +957,14 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(String(tokenCall?.[1]?.body)).not.toContain('client_id=');
   });
 
-  it('records the advertised client_secret_post method on the flow context', async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+  it('uses advertised client_secret_post for the authorization-code exchange', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === 'https://api.hubspot.example/oauth/v1/token' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ access_token: 'hubspot-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       throw new Error(`unexpected fetch: ${url}`);
     }) as unknown as typeof fetch;
 
@@ -982,6 +988,21 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     );
 
     expect(ctx.tokenEndpointAuthMethod).toBe('client_secret_post');
+
+    const tokenResponse = await completeMCPOAuthFlow(ctx, 'auth-code', ctx.state, {
+      cacheToken: false,
+    });
+    expect(tokenResponse.access_token).toBe('hubspot-token');
+
+    const tokenCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url) === 'https://api.hubspot.example/oauth/v1/token');
+    expect(tokenCall).toBeTruthy();
+    const headers = (tokenCall?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(String(tokenCall?.[1]?.body));
+    expect(body.get('client_id')).toBe('manual-client');
+    expect(body.get('client_secret')).toBe('manual-secret');
   });
 
   it('records client_secret_basic when the server advertises no auth methods', async () => {
