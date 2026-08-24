@@ -434,17 +434,42 @@ describe('getMcpServersForSession', () => {
   );
   it('can surface a sanitized authority failure separately from credential unavailability', async () => {
     const server = makeServer('oauth-server', 'session', 'oauth');
-    server.auth = { type: 'oauth' };
+    server.url = 'https://provider.example/mcp';
+    server.auth = {
+      type: 'oauth',
+      oauth_client_id: 'client-id',
+      oauth_client_secret: 'client-secret',
+      oauth_token_url: 'https://provider.example/token',
+    };
+    const repositoryDetail = 'repository-sensitive-detail';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([server]),
+        } as never,
+        mcpOAuthAuthHeadersRepo: {
+          getAuthHeaders: vi.fn().mockRejectedValue(new Error(repositoryDetail)),
+        } as never,
+      },
+      ENFORCING
+    );
 
     await expect(
-      resolveScopedMCPAuthHeaders(
-        { server, source: 'session-assigned', oauthAuthResolution: 'error' },
-        { surfaceAuthorityError: true }
-      )
+      resolveScopedMCPAuthHeaders(servers[0], { surfaceAuthorityError: true })
     ).rejects.toMatchObject({
       name: 'MCPOAuthAuthorityUnavailableError',
       message: 'OAuth credential authority unavailable',
     });
+    expect(servers[0].oauthAuthResolution).toBe('error');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      '[mcp.auth] authority_unavailable authority=executor_repository'
+    );
+    expect(warn.mock.calls.flat().join(' ')).not.toContain(repositoryDetail);
   });
 });
 
