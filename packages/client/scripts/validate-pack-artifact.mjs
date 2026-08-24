@@ -80,8 +80,7 @@ const dependencySections = [
   ['optionalDependencies', packedManifest.optionalDependencies ?? {}],
 ];
 
-const privateWorkspacePackagePattern =
-  /^@agor\/(?:core|agentic-tools|agentic-tool-opencode)(?:\/|$)/;
+const privateWorkspacePackagePattern = /^@agor\//;
 
 for (const [sectionName, deps] of dependencySections) {
   for (const [name, version] of Object.entries(deps)) {
@@ -133,8 +132,8 @@ for (const file of typeFiles) {
   }
 }
 
-const privateReferenceProbe = "type Leaked = import('@agor/core/types').Session;";
-if (findPrivateWorkspaceModuleReference(privateReferenceProbe) !== '@agor/core/types') {
+const privateReferenceProbe = "type Leaked = import('@agor/git').GitRepo;";
+if (findPrivateWorkspaceModuleReference(privateReferenceProbe) !== '@agor/git') {
   fail('Private workspace reference detector does not recognize declaration import() types');
 }
 
