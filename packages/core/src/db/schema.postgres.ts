@@ -125,6 +125,10 @@ export const sessions = pgTable(
     // migration; new occurrences remain NULL until initialization, retention,
     // and schedule metadata are durable.
     scheduler_init_completed_at: t.timestamp('scheduler_init_completed_at'),
+    scheduler_init_failure_code: text('scheduler_init_failure_code'),
+    scheduler_init_failure_stage: text('scheduler_init_failure_stage'),
+    scheduler_init_attempt_count: integer('scheduler_init_attempt_count').notNull().default(0),
+    scheduler_init_retry_at: t.timestamp('scheduler_init_retry_at'),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -239,7 +243,7 @@ export const sessions = pgTable(
     schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
       .on(table.created_at, table.session_id)
       .where(
-        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL AND (${table.scheduler_init_failure_code} IS NULL OR ${table.scheduler_init_retry_at} IS NOT NULL)`
       ),
   })
 );

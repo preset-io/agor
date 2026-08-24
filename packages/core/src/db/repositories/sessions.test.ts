@@ -6,7 +6,7 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { SessionRow } from '../schema';
@@ -16,6 +16,7 @@ import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 /**
@@ -95,6 +96,10 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     scheduled_from_branch: false,
     schedule_id: null,
     scheduler_init_completed_at: null,
+    scheduler_init_failure_code: null,
+    scheduler_init_failure_stage: null,
+    scheduler_init_attempt_count: 0,
+    scheduler_init_retry_at: null,
     ready_for_prompt: false,
     archived: false,
     archived_reason: null,
@@ -1429,6 +1434,117 @@ describe('SessionRepository schedule-link queries', () => {
       expect(pending.find((ref) => ref.session_id === created.session_id)).toMatchObject({
         session_id: created.session_id,
         scheduled_run_at: 1_700_000_000_000,
+      });
+    }
+  );
+
+  dbTest('applies durable scheduler retry eligibility and permanent diagnosis', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const retrying = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: 1_700_000_000_010,
+        scheduled_from_branch: true,
+      })
+    );
+    const permanent = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: 1_700_000_000_011,
+        scheduled_from_branch: true,
+      })
+    );
+
+    const retry = await repo.markScheduledInitializationRetry({
+      sessionId: retrying.session_id,
+      code: 'initialization_transient',
+      stage: 'prompt_admission',
+    });
+    await repo.markScheduledInitializationPermanentFailure({
+      sessionId: permanent.session_id,
+      code: 'mcp_server_not_usable',
+      stage: 'mcp_attachment',
+    });
+
+    expect(
+      await repo.findIncompleteScheduledRefs(10, undefined, { eligibleAt: retry.retryAt - 1 })
+    ).toEqual([]);
+    expect(
+      (await repo.findIncompleteScheduledRefs(10, undefined, { eligibleAt: retry.retryAt })).map(
+        (ref) => ref.session_id
+      )
+    ).toEqual([retrying.session_id]);
+    expect(await repo.findById(permanent.session_id)).toMatchObject({
+      status: SessionStatus.FAILED,
+      scheduler_init_failure_code: 'mcp_server_not_usable',
+      scheduler_init_failure_stage: 'mcp_attachment',
+      scheduler_init_attempt_count: 1,
+    });
+  });
+
+  dbTest(
+    'fences scheduler completion and permanent failure against durable Tasks',
+    async ({ db }) => {
+      const sessionsRepo = new SessionRepository(db);
+      const tasksRepo = new TaskRepository(db);
+      const branch = await createTestBranch(db);
+      const scheduleId = await createTestSchedule(db, branch.branch_id);
+      const withTask = await sessionsRepo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_020,
+          scheduled_from_branch: true,
+        })
+      );
+      await tasksRepo.createPending({
+        task_id: generateId(),
+        session_id: withTask.session_id,
+        full_prompt: 'durable scheduler task',
+        created_by: withTask.created_by,
+        status: TaskStatus.QUEUED,
+      });
+
+      expect(
+        await sessionsRepo.markScheduledInitializationPermanentFailure({
+          sessionId: withTask.session_id,
+          code: 'mcp_server_not_usable',
+          stage: 'mcp_attachment',
+        })
+      ).toBe('task_exists');
+      expect(await sessionsRepo.markScheduledInitializationComplete(withTask.session_id)).toBe(
+        true
+      );
+      expect(await sessionsRepo.findById(withTask.session_id)).toMatchObject({
+        status: SessionStatus.IDLE,
+        scheduler_init_failure_code: undefined,
+      });
+
+      const permanentlyFailed = await sessionsRepo.create(
+        createSessionData({
+          branch_id: branch.branch_id,
+          schedule_id: scheduleId,
+          scheduled_run_at: 1_700_000_000_021,
+          scheduled_from_branch: true,
+        })
+      );
+      expect(
+        await sessionsRepo.markScheduledInitializationPermanentFailure({
+          sessionId: permanentlyFailed.session_id,
+          code: 'mcp_server_not_usable',
+          stage: 'mcp_attachment',
+        })
+      ).toBe('recorded');
+      expect(
+        await sessionsRepo.markScheduledInitializationComplete(permanentlyFailed.session_id)
+      ).toBe(false);
+      expect(await sessionsRepo.findById(permanentlyFailed.session_id)).toMatchObject({
+        status: SessionStatus.FAILED,
+        scheduler_init_failure_code: 'mcp_server_not_usable',
       });
     }
   );

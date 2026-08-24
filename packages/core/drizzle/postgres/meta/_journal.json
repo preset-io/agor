@@ -647,6 +647,13 @@
       "breakpoints": true
     },
     {
+      "idx": 93,
+      "version": "7",
+      "when": 1787529600000,
+      "tag": "0093_scheduler_poison_recovery",
+      "breakpoints": true
+    },
+    {
       "idx": 94,
       "version": "7",
       "when": 1787616000000,
