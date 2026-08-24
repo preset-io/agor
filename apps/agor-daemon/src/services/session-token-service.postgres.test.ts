@@ -27,7 +27,10 @@ import { AuthenticationService, feathers } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
+import {
+  getExecutorConnectionCandidate,
+  getOrCreateExecutorConnectionRevocationFence,
+} from '../auth/executor-connection-admission.js';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -138,6 +141,12 @@ describe('executor token Feathers authentication contract', () => {
       expect(result).not.toHaveProperty('session_id');
       expect(result).not.toHaveProperty('task_id');
       expect(result).not.toHaveProperty('branch_id');
+      expect(getExecutorConnectionCandidate(result)).toMatchObject({
+        tenantId: 'tenant-fast-auth',
+        taskId: 'task-fast-auth',
+        tokenFingerprint: fingerprint(await token),
+        revocationGeneration: 0,
+      });
       expect(connection).toMatchObject({
         authenticated: true,
         authentication: {
@@ -217,18 +226,18 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         { connection: reconnectConnection }
       );
 
-      expect(initial).toMatchObject({
-        session_id: 'session-peer',
-        task_id: 'task-peer',
-        branch_id: 'branch-peer',
-        user: { user_id: 'user-peer' },
-      });
-      expect(reconnect).toMatchObject({
-        session_id: 'session-peer',
-        task_id: 'task-peer',
-        branch_id: 'branch-peer',
-        user: { user_id: 'user-peer' },
-      });
+      for (const result of [initial, reconnect]) {
+        expect(result).toMatchObject({ user: { user_id: 'user-peer' } });
+        expect(result).not.toHaveProperty('session_id');
+        expect(result).not.toHaveProperty('task_id');
+        expect(result).not.toHaveProperty('branch_id');
+        expect(getExecutorConnectionCandidate(result)).toMatchObject({
+          tenantId,
+          taskId: 'task-peer',
+          tokenFingerprint: fingerprint(token),
+          revocationGeneration: 0,
+        });
+      }
       expect(initialConnection).toMatchObject({
         authenticated: true,
         authentication: {
@@ -304,15 +313,21 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       for (let connectionNumber = 0; connectionNumber < 2; connectionNumber += 1) {
         const connection: Record<string, unknown> = {};
-        await expect(
-          authenticationB.create(
-            { strategy: 'jwt', accessToken: reconnectableToken },
-            { connection }
-          )
-        ).resolves.toMatchObject({
-          session_id: 'session-two-app',
-          task_id: 'task-two-app',
+        const result = await authenticationB.create(
+          { strategy: 'jwt', accessToken: reconnectableToken },
+          { connection }
+        );
+        expect(result).toMatchObject({
           user: { user_id: 'user-two-app' },
+        });
+        expect(result).not.toHaveProperty('session_id');
+        expect(result).not.toHaveProperty('task_id');
+        expect(result).not.toHaveProperty('branch_id');
+        expect(getExecutorConnectionCandidate(result)).toMatchObject({
+          tenantId,
+          taskId: 'task-two-app',
+          tokenFingerprint: fingerprint(reconnectableToken),
+          revocationGeneration: 0,
         });
         expect(connection).toHaveProperty('authentication.strategy', 'jwt');
       }
