@@ -89,6 +89,63 @@ describe('executor acknowledgement failure convergence', () => {
     expect(mutationCount).toBe(1);
   });
 
+  it('does not reconnect a credential revoked after its terminal Task acknowledgement', async () => {
+    const app = feathersExpress(feathers());
+    let handshakeAuthenticationCount = 0;
+    app.use('tasks', {
+      async patch(id: string, data: Partial<Task>) {
+        return { task_id: id, session_id: SESSION_ID, ...data };
+      },
+    });
+    app.configure(
+      socketio({}, (io) => {
+        io.use((socket, next) => {
+          if (socket.handshake.auth?.token !== SESSION_TOKEN) {
+            next(new Error('Invalid executor handshake token'));
+            return;
+          }
+          handshakeAuthenticationCount += 1;
+          next();
+        });
+        io.on('connection', (socket) => {
+          socket.use((packet, next) => {
+            const [event, path] = packet;
+            if (event === 'patch' && path === 'tasks') {
+              const acknowledge = packet[packet.length - 1];
+              if (typeof acknowledge === 'function') {
+                packet[packet.length - 1] = (...args: unknown[]) => {
+                  acknowledge(...args);
+                  setTimeout(() => socket.disconnect(true), 0);
+                };
+              }
+            }
+            next();
+          });
+        });
+      })
+    );
+
+    server = await new Promise<Server>((resolve) => {
+      const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+
+    client = await createExecutorClient(`http://127.0.0.1:${address.port}`, SESSION_TOKEN);
+    const disconnected = new Promise<void>((resolve) => client?.io.once('disconnect', resolve));
+    await expect(
+      client.service('tasks').patch(TASK_ID, {
+        status: TaskStatus.COMPLETED,
+        completed_at: '2026-08-24T00:00:00.000Z',
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.COMPLETED });
+    await disconnected;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(handshakeAuthenticationCount).toBe(1);
+    expect(client.io.connected).toBe(false);
+  });
+
   it('rejects a stranded mutation once and converges through the executor terminal boundary', async () => {
     const app = feathersExpress(feathers());
     let mutationCount = 0;

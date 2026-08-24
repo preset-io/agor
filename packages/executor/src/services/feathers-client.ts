@@ -9,6 +9,7 @@
 
 import { type AgorClient, createClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
+import { isTerminalTaskStatus } from '@agor/core/types';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -29,7 +30,10 @@ function feathersClientDebug(...args: unknown[]): void {
   }
 }
 
-export function registerExecutorClientHooks(client: AgorClient): void {
+export function registerExecutorClientHooks(
+  client: AgorClient,
+  onTerminalTaskAcknowledged?: () => void
+): void {
   client.hooks({
     before: {
       all: [
@@ -52,6 +56,20 @@ export function registerExecutorClientHooks(client: AgorClient): void {
               `Executor transcript data is ${byteSize} bytes, exceeding the ${EXECUTOR_REQUEST_DATA_BUDGET_BYTES}-byte transport budget (${path}.${context.method}). ` +
                 `Reduce the tool result size at the source (e.g. pagination, filtering, or result limits).`
             );
+          }
+          return context;
+        },
+      ],
+    },
+    after: {
+      all: [
+        async (context) => {
+          if (
+            context.path === 'tasks' &&
+            context.method === 'patch' &&
+            isTerminalTaskStatus(context.result?.status)
+          ) {
+            onTerminalTaskAcknowledged?.();
           }
           return context;
         },
@@ -110,7 +128,10 @@ export async function createExecutorClient(
     ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
     socketAuthentication: { accessToken: sessionToken },
   });
-  registerExecutorClientHooks(client);
+  let terminalTaskAcknowledged = false;
+  registerExecutorClientHooks(client, () => {
+    terminalTaskAcknowledged = true;
+  });
 
   let serverDisconnectReconnectAttempts = 0;
   let serverDisconnectReconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,6 +194,13 @@ export async function createExecutorClient(
 
     serverDisconnectReconnectTimer = setTimeout(() => {
       serverDisconnectReconnectTimer = undefined;
+      // Socket.IO may deliver an acknowledgement and the following namespace
+      // disconnect in one transport batch. Client after-hooks settle on the
+      // next microtask, so re-check before reopening the now-revoked bearer.
+      if (terminalTaskAcknowledged) {
+        resetServerDisconnectRecovery();
+        return;
+      }
       client.io.connect();
     }, delayMs);
   };
@@ -182,6 +210,10 @@ export async function createExecutorClient(
     logSocketEvent('disconnected', reason);
 
     if (reason === 'io server disconnect') {
+      if (terminalTaskAcknowledged) {
+        resetServerDisconnectRecovery();
+        return;
+      }
       // Socket.IO intentionally disables automatic reconnect after a server-
       // initiated namespace disconnect. In practice, long executor tasks can
       // see this at the same ~15-minute boundary as proxy transport rotation.

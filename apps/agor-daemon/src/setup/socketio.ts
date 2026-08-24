@@ -13,6 +13,7 @@
  * agor.db, and the JWT secret). See `terminal:*` handlers below.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   type ResolvedMultiTenancyConfig,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
@@ -272,7 +273,9 @@ export interface SocketIOResult {
  * user stays on the same board.
  */
 const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
-const EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS = 5_000;
+// Longer than the executor's 60s Feathers acknowledgement deadline. The
+// authority is fenced synchronously; this timer bounds only transport cleanup.
+const EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS = 65_000;
 
 function deferExecutorTransportWork(work: () => void): void {
   // Transport-only callback: it must never perform database or tenant-owned
@@ -292,13 +295,24 @@ function deferExecutorTransportWork(work: () => void): void {
  * room membership have already been removed synchronously, so this bounded
  * drain window grants no residual service or realtime access.
  */
-function disconnectRevokedExecutorAfterTransportDrain(socket: Socket): void {
+interface ExecutorRpcAcknowledgement {
+  socket: Socket;
+  revoked: boolean;
+  acknowledgeRetirement?: () => void;
+}
+
+const executorRpcAcknowledgement = new AsyncLocalStorage<ExecutorRpcAcknowledgement>();
+
+function disconnectRevokedExecutorAfterTransportDrain(
+  socket: Socket,
+  waitForAcknowledgement: boolean
+): () => void {
   // The lightweight Socket.IO unit harness has no Engine.IO transport. Keep
   // its behavior representative without requiring transport internals there.
   const connection = socket.conn;
   if (!connection) {
     deferExecutorTransportWork(() => socket.disconnect(true));
-    return;
+    return () => undefined;
   }
 
   let finished = false;
@@ -351,9 +365,12 @@ function disconnectRevokedExecutorAfterTransportDrain(socket: Socket): void {
   socket.once('disconnect', onSocketDisconnect);
   deadline = setTimeout(disconnect, EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS);
   deadline.unref?.();
-  // Feathers queues the acknowledgement after the service promise resolves.
-  // Inspect on the next turn, after that queueing opportunity.
-  deferExecutorTransportWork(inspectTransport);
+  if (!waitForAcknowledgement) deferExecutorTransportWork(inspectTransport);
+  return () => {
+    // The wrapped Feathers callback has synchronously handed the response to
+    // Socket.IO's encoder. Only now is transport writability meaningful.
+    deferExecutorTransportWork(inspectTransport);
+  };
 }
 
 function bearerTokenFromHeader(value: string | string[] | undefined): string | undefined {
@@ -769,7 +786,16 @@ export function createSocketIOConfig(
           // before closing so a successful durable write is not reported as a
           // task failure by the executor.
           retireSocketConnectionAuthority(app, feathers);
-          disconnectRevokedExecutorAfterTransportDrain(socket);
+          const rpc = executorRpcAcknowledgement.getStore();
+          const waitsForThisRpc = rpc?.socket === socket;
+          const acknowledgeRetirement = disconnectRevokedExecutorAfterTransportDrain(
+            socket,
+            waitsForThisRpc
+          );
+          if (waitsForThisRpc) {
+            rpc.revoked = true;
+            rpc.acknowledgeRetirement = acknowledgeRetirement;
+          }
         }
       }
     };
@@ -795,6 +821,24 @@ export function createSocketIOConfig(
         return;
       }
       activeConnections++;
+      // Bind revocation to the exact Feathers acknowledgement whose service
+      // call caused it. A next-turn/idle-transport heuristic is insufficient:
+      // Feathers invokes this callback only after the service promise returns,
+      // and a disconnect may otherwise overtake the response encoder.
+      socket.use?.((packet, next) => {
+        const lastIndex = packet.length - 1;
+        const acknowledgement = packet[lastIndex];
+        if (typeof acknowledgement !== 'function') {
+          next();
+          return;
+        }
+        const rpc: ExecutorRpcAcknowledgement = { socket, revoked: false };
+        packet[lastIndex] = (...args: unknown[]) => {
+          acknowledgement(...args);
+          if (rpc.revoked) rpc.acknowledgeRetirement?.();
+        };
+        executorRpcAcknowledgement.run(rpc, next);
+      });
       bindTerminalRequestJoin(feathersSocket);
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: handshake, principal: ${authority?.principal.kind ?? 'invalid'}, user: ${authority?.principal.kind === 'user' ? shortId(authority.principal.userId) : 'none'}, total: ${activeConnections})`
