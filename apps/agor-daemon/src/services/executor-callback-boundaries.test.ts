@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
+import { gatewaySlackUploadExecutorCommandId } from '../auth/executor-command-ids.js';
 import { ArtifactsService } from './artifacts.js';
 import { GatewayChannelsService } from './gateway-channels.js';
 
@@ -22,17 +23,17 @@ const gatewayChannel = {
 const executorParams = {
   provider: 'socketio',
   user: {
-    user_id: 'executor-service',
-    email: 'executor@agor.internal',
-    role: 'service',
-    _isServiceAccount: true,
+    user_id: '019f9ffb-89e3-7129-83fb-28c6967d1b18',
+    email: 'member@example.com',
+    role: 'member',
   },
   authentication: {
+    strategy: 'jwt',
     payload: {
-      executor_action: 'gateway.slack-file-upload',
-      executor_gateway_channel_id: gatewayChannel.id,
-      executor_slack_channel_id: 'C123',
-      executor_branch_id: gatewayChannel.target_branch_id,
+      type: 'executor-session',
+      purpose: 'executor-command',
+      session_id: gatewaySlackUploadExecutorCommandId(gatewayChannel.id, 'C123'),
+      branch_id: gatewayChannel.target_branch_id,
     },
   },
 };
@@ -63,7 +64,7 @@ describe('executor callback boundaries', () => {
           },
         }
       )
-    ).rejects.toThrow('Only an executor service account');
+    ).rejects.toThrow('not scoped to this artifact operation');
   });
 
   it('rejects Slack uploads from a normal member', async () => {
@@ -87,7 +88,7 @@ describe('executor callback boundaries', () => {
           },
         }
       )
-    ).rejects.toThrow('Only an executor service account');
+    ).rejects.toThrow('not scoped to this Slack upload');
   });
 
   it.each([
@@ -131,10 +132,8 @@ describe('executor callback boundaries', () => {
   });
 
   it.each([
-    ['executor_action', 'artifact.validate'],
-    ['executor_gateway_channel_id', '019fa080-5573-7960-a851-2b03286d2a00'],
-    ['executor_slack_channel_id', 'C999'],
-    ['executor_branch_id', '019fa07c-b353-7a6b-abd9-9adf1017b990'],
+    ['session_id', 'gateway.slack-file-upload:wrong:scope'],
+    ['branch_id', '019fa07c-b353-7a6b-abd9-9adf1017b990'],
   ])('rejects a Slack callback with a mismatched %s claim', async (claim, value) => {
     const service = new GatewayChannelsService(null as never);
     vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
@@ -175,16 +174,51 @@ describe('executor callback boundaries', () => {
           name: 'Injected artifact',
         },
         {
-          ...executorParams,
+          provider: 'socketio',
+          user: {
+            user_id: '019f9ffb-89e3-7129-83fb-28c6967d1b18',
+            email: 'member@example.com',
+            role: 'member',
+          },
           authentication: {
+            strategy: 'jwt',
             payload: {
-              executor_action: 'artifact.validate',
-              executor_user_id: '019f9ffb-89e3-7129-83fb-28c6967d1b18',
-              executor_branch_id: gatewayChannel.target_branch_id,
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'artifact.validate',
+              branch_id: gatewayChannel.target_branch_id,
             },
           },
         }
       )
     ).rejects.toThrow('not scoped to this artifact operation');
+  });
+
+  it('accepts an exact delegated-user artifact validation callback', async () => {
+    const service = new ArtifactsService(null as never, {} as never);
+    const userId = '019f9ffb-89e3-7129-83fb-28c6967d1b18';
+
+    await expect(
+      service.validateFromExecutor(
+        {
+          files: { '/index.js': 'console.log("ok")' },
+          branch_id: gatewayChannel.target_branch_id,
+        },
+        {
+          provider: 'socketio',
+          user: { user_id: userId, email: 'member@example.com', role: 'member' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'artifact.validate',
+              branch_id: gatewayChannel.target_branch_id,
+              sub: userId,
+            },
+          },
+        }
+      )
+    ).resolves.toMatchObject({ status: 'success', errors: [] });
   });
 });

@@ -3,7 +3,6 @@ import { resolveTenantContext } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
-import { isExecutorSessionTokenPayload } from '../auth/executor-session-token.js';
 import {
   joinSessionStreamChannel,
   leaveSessionStreamChannel,
@@ -51,11 +50,6 @@ export function createSessionStreamsService(
 ) {
   const resolveRealtimeTenantId = (params: Params): string =>
     multiTenancy ? resolveTenantContext(multiTenancy, { params }).tenant_id : 'standalone';
-  const rejectTaskExecutor = (params: Params): void => {
-    if (isExecutorSessionTokenPayload(params.authentication?.payload)) {
-      throw new Forbidden('Task executor tokens cannot subscribe to session streams');
-    }
-  };
   // Reuse the canonical session read as the access gate AND to resolve the
   // caller-supplied id (which may be a short id / alias) to the row's full
   // session_id. Neutralize the query so the sessions query validator doesn't
@@ -77,7 +71,6 @@ export function createSessionStreamsService(
 
   return {
     async create(data: SubscribeData, params: Params): Promise<SessionStreamSubscription> {
-      rejectTaskExecutor(params);
       const connection = (params as { connection?: unknown } | undefined)?.connection;
       if (!connection) {
         throw new BadRequest('session stream subscription requires a realtime connection');
@@ -112,7 +105,6 @@ export function createSessionStreamsService(
     },
 
     async remove(id: string, params: Params): Promise<SessionStreamSubscription> {
-      rejectTaskExecutor(params);
       const connection = (params as { connection?: unknown } | undefined)?.connection;
       const sessionId = typeof id === 'string' ? id : '';
       if (!connection || !sessionId) {

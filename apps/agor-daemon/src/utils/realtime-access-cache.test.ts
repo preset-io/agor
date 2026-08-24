@@ -1,4 +1,4 @@
-import type { Branch } from '@agor/core/types';
+import { type Branch, type BranchID, BranchRealtimeVisibilityMode } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   bindRealtimeAccessCacheInvalidation,
@@ -9,6 +9,14 @@ import {
 
 function branch(id: string, others_can: Branch['others_can'] = 'none'): Branch {
   return { branch_id: id, others_can } as Branch;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe('RealtimeAccessCache', () => {
@@ -185,5 +193,58 @@ describe('RealtimeAccessCache', () => {
     expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
     expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
     expect(sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let an in-flight visibility read restore a grant after full invalidation', async () => {
+    const oldRead = deferred<Branch>();
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi
+        .fn()
+        .mockImplementationOnce(() => oldRead.promise)
+        .mockResolvedValueOnce(branch('b1', 'none')),
+      findExplicitViewUserIds: vi.fn().mockResolvedValue([]),
+    } as unknown as RealtimeAccessBranchRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository,
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(),
+        findCreatedByBySessionId: vi.fn(),
+      },
+    });
+
+    const pending = cache.getBranchVisibility('b1');
+    cache.clearAll();
+    oldRead.resolve(branch('b1', 'session'));
+
+    await expect(pending).resolves.toEqual({
+      mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+      userIds: new Set(),
+    });
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries in-flight session mappings invalidated by a branch revocation', async () => {
+    const oldRead = deferred<BranchID | null>();
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi
+        .fn()
+        .mockImplementationOnce(() => oldRead.promise)
+        .mockResolvedValueOnce(null),
+      findCreatedByBySessionId: vi.fn(),
+    } as unknown as RealtimeAccessSessionRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository: {
+        findRealtimeVisibilityBranch: vi.fn(),
+        findExplicitViewUserIds: vi.fn(),
+      },
+      sessionsRepository,
+    });
+
+    const pending = cache.getBranchIdForSession('s1');
+    cache.invalidateBranch('b1');
+    oldRead.resolve('b1' as BranchID);
+
+    await expect(pending).resolves.toBeNull();
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
   });
 });

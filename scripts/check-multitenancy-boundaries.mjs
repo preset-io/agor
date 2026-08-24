@@ -121,11 +121,7 @@ const checks = [
     ],
     // Custom HTTP middleware must pass a mutable params object so verified
     // tenant context is available to authentication hooks and user loading.
-    baseline: {
-      // These executor-facing routes authenticate narrow service tokens and
-      // consume claims directly; they do not perform an authenticated user lookup.
-      'apps/agor-daemon/src/register-routes.ts': 2,
-    },
+    baseline: {},
   },
   {
     name: 'raw tenant database scope imports',
@@ -149,6 +145,12 @@ const checks = [
     baseline: {
       // Test-only async flush helpers / event loop flushes.
       'apps/agor-daemon/src/services/branches.test.ts': 1,
+      // Executor-token revocation clears authority synchronously, then yields
+      // one event-loop turn before transport teardown so the terminal RPC ack
+      // can flush. The callback performs no database or tenant-owned work.
+      'apps/agor-daemon/src/setup/socketio.ts': 1,
+      // Event-loop flushes for the exact-token disconnect assertions above.
+      'apps/agor-daemon/src/setup/socketio.test.ts': 2,
       'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
       // The two tenant-aware deferral helpers deliberately leave the current
       // ALS store before scheduling and then re-enter identity or DB scope.

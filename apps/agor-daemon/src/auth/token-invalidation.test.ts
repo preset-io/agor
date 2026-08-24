@@ -17,6 +17,7 @@ import { createUsersService, type UsersService } from '../services/users';
 import { ApiKeyStrategy } from './api-key-strategy';
 import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook';
 import { createRefreshTokenService } from './refresh-token-service';
+import { RuntimeJWTStrategy } from './runtime-jwt-strategy';
 import {
   issueRuntimeToken,
   issueRuntimeTokenPair,
@@ -25,7 +26,6 @@ import {
   readRuntimeTenantClaim,
   runtimeTenantClaims,
 } from './runtime-tokens';
-import { ServiceJWTStrategy } from './service-jwt-strategy';
 import {
   AUTH_CREDENTIAL_GENERATION_CLAIM,
   AUTH_TOKEN_ISSUED_AT_MS_CLAIM,
@@ -130,7 +130,7 @@ function createAuthApp(
   app.use('users', usersService);
 
   const authentication = new AuthenticationService(app);
-  authentication.register('jwt', new ServiceJWTStrategy());
+  authentication.register('jwt', new RuntimeJWTStrategy());
   const localStrategy = new AgorLocalStrategy();
   authentication.register('local', localStrategy);
   const apiKeysRepo = new UserApiKeysRepository(db);

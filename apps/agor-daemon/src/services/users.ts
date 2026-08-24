@@ -1300,8 +1300,8 @@ export class UsersService {
    * Feathers RPC so per-user credentials flow through the daemon's auth
    * boundary instead of being baked into spawn payloads.
    *
-   * Auth: service-account JWTs may fetch any user's env (executor is trusted).
-   * User JWTs may only fetch their own env.
+   * Auth: explicit daemon service JWTs may fetch any user's env. Delegated
+   * executors and ordinary user JWTs may fetch only their own env.
    */
   async getGitEnvironment(
     data: { userId: string },
@@ -1310,8 +1310,8 @@ export class UsersService {
     const userId = data.userId as UserID;
     const caller = (params as AuthenticatedParams | undefined)?.user;
 
-    // Auth check: service accounts can fetch any user's env;
-    // regular users can only fetch their own.
+    // Auth check: explicit daemon service accounts can fetch any user's env;
+    // delegated executors and other user identities can fetch only their own.
     if (params?.provider) {
       if (!caller) {
         throw new NotAuthenticated('Authentication required');

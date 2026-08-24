@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAX_TENANT_ID_LENGTH } from '../types/tenant';
 import {
   assertValidMultiTenancyConfig,
   DEFAULT_STATIC_TENANT_ID,
@@ -122,6 +123,27 @@ describe('multi-tenancy config and tenant resolution', () => {
       { authPayload: { tenant_id: 'tenant-a' } }
     );
     expect(ctx).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+  });
+
+  it('enforces the shared tenant authority bound before transport publication', () => {
+    const boundaryTenant = 't'.repeat(MAX_TENANT_ID_LENGTH);
+    expect(
+      resolveTenantContext(
+        { multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' } },
+        { authPayload: { tenant_id: boundaryTenant } }
+      ).tenant_id
+    ).toBe(boundaryTenant);
+    expect(() =>
+      resolveTenantContext(
+        { multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' } },
+        { authPayload: { tenant_id: `${boundaryTenant}x` } }
+      )
+    ).toThrow(/must not exceed/);
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        multi_tenancy: { mode: 'static', static_tenant_id: `${boundaryTenant}x` },
+      })
+    ).toThrow(/static_tenant_id must not exceed/);
   });
 
   it('resolves required tenant from trusted header when configured', () => {

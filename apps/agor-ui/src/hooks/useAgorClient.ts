@@ -13,9 +13,8 @@ import {
   markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
-  TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
-import { getStoredRefreshToken, type RefreshResult } from '../utils/tokenRefresh';
+import { getStoredRefreshToken } from '../utils/tokenRefresh';
 import { announceSessionStreamsCapability } from './sessionStreamsCapability';
 
 interface UseAgorClientResult {
@@ -29,6 +28,15 @@ interface UseAgorClientResult {
 interface UseAgorClientOptions {
   url?: string;
   accessToken?: string | null;
+  /** Identity of the authenticated authority represented by accessToken. */
+  authorityGeneration: number;
+}
+
+interface BoundAgorClient {
+  client: AgorClient;
+  url: string;
+  authorityGeneration: number;
+  accessTokenRef: { current: string | null | undefined };
 }
 
 /**
@@ -37,27 +45,45 @@ interface UseAgorClientOptions {
  * @param options - Connection options (url, accessToken)
  * @returns Client instance, connection state, and error
  */
-export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClientResult {
-  const { url = getDaemonUrl(), accessToken } = options;
+export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResult {
+  const { url = getDaemonUrl(), accessToken, authorityGeneration } = options;
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(!!accessToken);
   const [error, setError] = useState<string | null>(null);
-  const clientRef = useRef<AgorClient | null>(null);
-
-  // Every namespace handshake reads this ref. Token rotation updates the next
-  // handshake credential without replacing authority on the live connection;
-  // a natural reconnect always presents the latest token.
-  const accessTokenRef = useRef(accessToken);
-  const accessTokenPropRef = useRef(accessToken);
-  if (accessTokenPropRef.current !== accessToken) {
-    accessTokenPropRef.current = accessToken;
-    accessTokenRef.current = accessToken;
-  }
+  const clientBindingRef = useRef<BoundAgorClient | null>(null);
   const hasToken = !!accessToken;
 
+  // A render for a new authenticated authority must never expose the old
+  // client's socket while waiting for effect cleanup. Only a client created
+  // for the exact daemon URL + authority generation is render-visible.
+  const currentBinding = clientBindingRef.current;
+  const visibleBinding =
+    hasToken &&
+    currentBinding?.url === url &&
+    currentBinding.authorityGeneration === authorityGeneration
+      ? currentBinding
+      : null;
+
+  // Routine token refresh keeps the same authority and socket. Store the new
+  // credential for its next natural reconnect, but never transfer a token to
+  // a binding created for a different URL or authority generation.
+  useEffect(() => {
+    const binding = clientBindingRef.current;
+    if (
+      binding?.url === url &&
+      binding.authorityGeneration === authorityGeneration &&
+      accessToken
+    ) {
+      binding.accessTokenRef.current = accessToken;
+    }
+  }, [url, authorityGeneration, accessToken]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: token value changes update the credential ref only when URL+authorityGeneration still match; rebuilding would disconnect a healthy same-authority socket
   useEffect(() => {
     let mounted = true;
     let client: AgorClient | null = null;
+    const connectionAccessTokenRef = { current: accessToken };
+    let binding: BoundAgorClient | null = null;
     let hasConnectedOnce = false; // Track if we've ever connected successfully
 
     // Bookkeeping for the manual reconnect path used on 'io server disconnect'.
@@ -102,7 +128,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
     let authenticatedReconnect: Promise<void> | null = null;
     const reconnectWithAuthenticatedHandshake = (nextAccessToken?: string): Promise<void> => {
-      if (nextAccessToken) accessTokenRef.current = nextAccessToken;
+      if (nextAccessToken) connectionAccessTokenRef.current = nextAccessToken;
       if (authenticatedReconnect) return authenticatedReconnect;
       if (!client) return Promise.reject(new Error('Socket client is unavailable'));
 
@@ -172,7 +198,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
         setConnecting(false);
         setConnected(false);
         setError(null);
-        clientRef.current = null;
+        clientBindingRef.current = null;
         return;
       }
 
@@ -184,10 +210,16 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
       // Create client (autoConnect: false, so we control connection timing)
       const socketClient = createClient(url, false, {
-        socketAuthentication: { accessToken: () => accessTokenRef.current },
+        socketAuthentication: { accessToken: () => connectionAccessTokenRef.current },
       });
       client = socketClient;
-      clientRef.current = socketClient;
+      binding = {
+        client: socketClient,
+        url,
+        authorityGeneration,
+        accessTokenRef: connectionAccessTokenRef,
+      };
+      clientBindingRef.current = binding;
 
       // Store client globally for Vite HMR cleanup
       if (typeof window !== 'undefined') {
@@ -347,24 +379,11 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
     connect();
 
-    // Routine access-token rotation does not tear down a healthy authenticated
-    // connection. Store the new credential for the next natural Socket.IO
-    // handshake; the daemon's immutable connection authority remains valid
-    // until disconnect or explicit revocation.
-    const handleTokensRefreshed = (event: Event) => {
-      if (!mounted) return;
-      const detail = (event as CustomEvent<RefreshResult>).detail;
-      if (!detail) return;
-      accessTokenRef.current = detail.accessToken;
-    };
-    window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
-
     // Cleanup on unmount
     return () => {
       mounted = false;
       clearManualReconnectTimer();
       clearDisconnectGrace();
-      window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
       if (client?.io) {
         // Remove all listeners to prevent memory leaks
         client.io.removeAllListeners();
@@ -378,19 +397,22 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       ) {
         delete (window as unknown as { __agorClient?: AgorClient }).__agorClient;
       }
+      if (clientBindingRef.current === binding) {
+        clientBindingRef.current = null;
+      }
     };
     // The dep list deliberately uses `hasToken` (presence), not the token
-    // value itself: see the accessTokenRef comment above. Rebuilds happen
-    // only on login/logout and url changes; in-session token replacements
-    // update the next-handshake credential through the handler above.
-  }, [url, hasToken]);
+    // value itself. Rebuilds happen on authority replacement, login/logout,
+    // and URL changes; same-authority token refresh updates only the binding's
+    // next-handshake credential.
+  }, [url, hasToken, authorityGeneration]);
 
   /**
    * Manually retry connection
    * Useful when auto-reconnect fails or user wants to force reconnect
    */
   const retryConnection = () => {
-    const client = clientRef.current;
+    const client = visibleBinding?.client;
     if (!client?.io) return;
 
     // If already connected, disconnect first
@@ -405,10 +427,10 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
   };
 
   return {
-    client: clientRef.current,
-    connected,
-    connecting,
-    error,
+    client: visibleBinding?.client ?? null,
+    connected: !!visibleBinding && connected,
+    connecting: hasToken ? !visibleBinding || connecting : false,
+    error: hasToken && !visibleBinding ? null : error,
     retryConnection,
   };
 }

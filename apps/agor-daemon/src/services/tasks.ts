@@ -83,6 +83,10 @@ import {
 } from '../utils/tenant-db-scope.js';
 import type { SessionsService } from './sessions';
 
+export interface TaskExecutorCredentialRevoker {
+  revokeTaskTokens(taskId: string): Promise<number>;
+}
+
 /**
  * Task service params
  */
@@ -161,7 +165,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     Promise<CompletionCallbackDispatchResult>
   >();
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
+  ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -505,6 +513,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<TerminationSettlementResult> {
     const result = await this.taskRepo.settleTermination(input);
+    // Repository settlement is used by cooperative stop, watchdog, startup
+    // reconciliation, and force-fail paths. It must retire the same exact Task
+    // lease as a normal executor terminal patch.
+    await this.retireTaskExecutorCredentials(result.task);
     if (result.outcome !== 'transitioned' && result.outcome !== 'unverified') return result;
 
     await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
@@ -598,6 +610,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     await run();
+  }
+
+  private async retireTaskExecutorCredentials(task: Task): Promise<void> {
+    if (!isTerminalTaskStatus(task.status)) return;
+    await this.executorCredentialRevoker?.revokeTaskTokens(task.task_id);
   }
 
   private async triggerQueueProcessingAfterCommit(
@@ -765,6 +782,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       return currentTask;
     }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
+      // A prior terminal patch may have committed before durable credential
+      // revocation failed. Treat any idempotent terminal retry as a repair
+      // opportunity instead of returning a still-live executor lease.
+      await this.retireTaskExecutorCredentials(currentTask);
       console.warn(
         `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +
           `(${currentTask.status} → ${nextStatus})`
@@ -783,6 +804,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const result = params?.provider
       ? await this.taskRepo.updateFromExecutor(id, data)
       : await super.patch(id, data, params);
+
+    // Task terminality is the one lifecycle boundary shared by local and
+    // off-host executors. Retire every bearer for this exact task before any
+    // completion orchestration can advertise it as finished.
+    if (isAnalyticsTerminalTransition && !Array.isArray(result)) {
+      await this.retireTaskExecutorCredentials(result);
+    }
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
@@ -1652,6 +1680,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: TenantScopeAwareDatabase, app: Application): TasksService {
-  return new TasksService(db, app);
+export function createTasksService(
+  db: TenantScopeAwareDatabase,
+  app: Application,
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker
+): TasksService {
+  return new TasksService(db, app, executorCredentialRevoker);
 }

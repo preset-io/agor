@@ -28,7 +28,10 @@ import {
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+  TaskRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -40,7 +43,14 @@ import {
   validateManagedEnvLifecyclePolicy,
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+} from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Board,
@@ -72,14 +82,10 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  requestExecutor,
-  spawnExecutor,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
@@ -153,6 +159,7 @@ export type EnvironmentHealthCheckOptions =
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
+  private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
@@ -181,8 +188,37 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     this.branchRepo = branchRepo;
     this.boardRepo = new BoardRepository(db);
+    this.taskRepo = new TaskRepository(db);
     this.db = db;
     this.app = app;
+  }
+
+  /** Refuse a metadata cascade that would orphan a live executor lease. */
+  private async assertNoUnfinishedTasks(
+    branchId: BranchID,
+    taskRepo: TaskRepository = this.taskRepo
+  ): Promise<void> {
+    if (await taskRepo.hasNonterminalForBranch(branchId)) {
+      throw new Conflict(
+        `Cannot delete branch ${branchId} while it has unfinished tasks. Stop them first.`
+      );
+    }
+  }
+
+  private removalRepositories(scoped: TenantScopedDatabase): {
+    branchRepo: BranchRepository;
+    taskRepo: TaskRepository;
+  } {
+    // Lightweight service tests use one in-memory repository seam. Native
+    // production transactions provide a distinct scoped handle, which must
+    // own every query participating in the check-and-cascade invariant.
+    if (Object.is(scoped, this.db)) {
+      return { branchRepo: this.branchRepo, taskRepo: this.taskRepo };
+    }
+    return {
+      branchRepo: new BranchRepository(scoped),
+      taskRepo: new TaskRepository(scoped),
+    };
   }
 
   /** Short tenant/RLS unit of work for custom methods that bypass Feathers hooks. */
@@ -388,20 +424,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId =
       ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
       branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken(`environment-${action}`, userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, `environment-${action}`, userId, branch.branch_id)
     );
-    if (!sessionToken) {
-      throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
-    }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(
       branch,
@@ -514,20 +539,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId =
       ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
       branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken('environment-logs', userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, 'environment-logs', userId, branch.branch_id)
     );
-    if (!sessionToken) {
-      throw new Error('Session token service unavailable; cannot fetch environment logs');
-    }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
     const result = await requestExecutor(
@@ -1277,14 +1291,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { deleteFromFilesystem } = params?.query || {};
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
-    // Get branch details before deletion
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Remove from database FIRST for instant UI feedback
-    // CASCADE will clean up related comments automatically
-    const result = await super.remove(id, params);
+    // The active-task guard and metadata cascade are one native transaction on
+    // both databases. Otherwise a task could start between the check and the
+    // delete and leave a valid executor lease with no owning task row.
+    const { branch, result } = await runWithTenantDatabaseTransaction(
+      this.db,
+      tenantId,
+      async (scoped) => {
+        const { branchRepo, taskRepo } = this.removalRepositories(scoped);
+        const branch = await branchRepo.findById(id);
+        if (!branch) throw new NotFound(`Branch not found: ${id}`);
+        await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
+        // Remove from database FIRST for instant UI feedback. CASCADE cleans
+        // up related comments and terminal tasks.
+        await branchRepo.delete(id);
+        return { branch, result: branch };
+      }
+    );
 
-    // Then remove from filesystem via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
+    // Then remove from filesystem via a one-purpose executor (fire-and-forget).
+    // The daemon owns metadata; the payload contains only authoritative paths.
     if (deleteFromFilesystem) {
       console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
 
@@ -1292,52 +1318,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // never selects or impersonates a host account.
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        branch.created_by,
+        (params as AuthenticatedParams).user!.user_id,
         this.app.get('config')
       );
-
-      // Generate session token for executor authentication. Hook chain
-      // enforces auth before we get here, so non-null assertion is safe.
-      const userId = (params as AuthenticatedParams).user!.user_id as UserID;
-      const appWithToken = this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-      };
-
-      // Generate token and spawn executor (fire-and-forget)
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-remove', userId, { branchId: branch.branch_id, maxUses: -1 })
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Already deleted above
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — executor needs this to pick the right
-                // teardown path (clone-mode just rm -rf; worktree-mode also
-                // runs `git worktree remove --force` against the base repo).
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.remove ${branch.name}]`,
-              delegatedHomeKey: delegatedHomeKey,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch removal:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
+      spawnExecutor(
+        {
+          command: 'git.branch.remove',
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            branchesRoot: getBranchesDir(tenantId),
+            // Clean up the branch if it was created by Agor.
+            branch: branch.ref,
+            deleteBranch: branch.new_branch,
+            // Branch storage mode — executor needs this to pick the right
+            // teardown path (clone-mode just rm -rf; worktree-mode also runs
+            // `git worktree remove --force` against the base repo).
+            storageMode: branch.storage_mode ?? 'worktree',
+          },
+        },
+        {
+          logPrefix: `[BranchesService.remove ${branch.name}]`,
+          delegatedHomeKey,
+        }
+      );
     }
 
     return result as Branch;
@@ -1353,18 +1357,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
     const removalParams = params ?? ({} as BranchParams);
-    return this.withTenantDatabase(removalParams, async () => {
-      const branch = (await super.get(id, removalParams)) as Branch;
+    const tenantId = removalParams.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const { branchRepo, taskRepo } = this.removalRepositories(scoped);
+      const branch = await branchRepo.findById(id);
+      if (!branch) throw new NotFound(`Branch not found: ${id}`);
+      await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
       await captureBranchRemovalRealtimeVisibility({
         params: removalParams,
-        branchRepository: this.branchRepo,
+        branchRepository: branchRepo,
         branchId: branch.branch_id,
       });
 
-      // Feathers replaces registered standard methods with event-producing
-      // wrappers. The adapter call performs only the metadata deletion; the
-      // explicit event below is the single authoritative tombstone.
-      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      // This custom method deliberately bypasses Feathers' standard method
+      // wrapper. The explicit event below is the single authoritative
+      // tombstone and drains only after the transaction commits.
+      await branchRepo.delete(branch.branch_id);
+      const removedBranch = branch;
       emitServiceEvent(this.app, {
         path: 'branches',
         event: 'removed',
@@ -1417,112 +1426,72 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Perform filesystem action via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
-    // Use the executor so filesystem operations follow the selected substrate.
+    // Prepare the one-purpose filesystem action now, but dispatch it only
+    // after metadata succeeds. In particular, an unfinished-task delete guard
+    // must fail before any branch directory can be removed.
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-
-    if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
-
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken('branch-clean', userId ?? currentUserId, {
-            branchId: branch.branch_id,
-            maxUses: -1,
-          }) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.clean',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchPath: branch.path,
-              },
-            },
-            {
-              logPrefix: `[BranchesService.clean ${branch.name}]`,
-            }
+    const delegatedHomeKey =
+      filesystemAction === 'preserved'
+        ? undefined
+        : await resolveDelegatedExecutionHomeKey(
+            this.db,
+            userId ?? currentUserId,
+            this.app.get('config')
           );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch cleaning:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    } else if (filesystemAction === 'deleted') {
+    const dispatchFilesystemAction = (): void => {
+      if (filesystemAction === 'cleaned') {
+        console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
+        spawnExecutor(
+          {
+            command: 'git.branch.clean',
+            params: { branchPath: branch.path },
+          },
+          {
+            logPrefix: `[BranchesService.clean ${branch.name}]`,
+            delegatedHomeKey,
+          }
+        );
+        return;
+      }
+      if (filesystemAction !== 'deleted') return;
+
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
       const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+      spawnExecutor(
+        {
+          command: 'git.branch.remove',
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            branchesRoot: getBranchesDir(tenantId),
+            // Clean up the branch if it was created by Agor.
+            branch: branch.ref,
+            deleteBranch: branch.new_branch,
+            // Branch storage mode — see sibling call site comment in
+            // `BranchesService.remove` above for why this matters.
+            storageMode: branch.storage_mode ?? 'worktree',
+          },
+        },
+        {
+          logPrefix: `[BranchesService.delete ${branch.name}]`,
+          delegatedHomeKey,
+        }
+      );
+    };
 
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken(
-            'branch-delete',
-            userId ?? currentUserId,
-            {
-              branchId: branch.branch_id,
-              maxUses: -1,
-            }
-          ) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Daemon handles DB deletion separately
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — see sibling call site comment in
-                // `BranchesService.remove` above for why this matters.
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.delete ${branch.name}]`,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch deletion:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    }
-
-    // Retire branch-scoped terminal attachments before archive/delete. The
-    // local event handles this replica; serverSideEmit carries only trusted
-    // tenant/branch lifecycle metadata (never terminal contents) to peer
-    // replicas when the HA adapter is available.
+    // Retire branch-scoped terminals only after the metadata transition wins.
+    // The local event handles this replica; serverSideEmit carries only the
+    // trusted tenant/branch lifecycle tuple to peers.
     const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
-    const terminalClose = {
-      tenantId: String(terminalTenantId),
-      branchId: branch.branch_id,
+    const retireBranchTerminals = (): void => {
+      const terminalClose = {
+        tenantId: String(terminalTenantId),
+        branchId: branch.branch_id,
+      };
+      this.app.emit?.('terminal:close-branch', terminalClose);
+      this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
     };
-    this.app.emit?.('terminal:close-branch', terminalClose);
-    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
@@ -1578,6 +1547,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
 
+      retireBranchTerminals();
+      dispatchFilesystemAction();
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
@@ -1586,6 +1557,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await this.removeMetadataWithRealtime(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
+      retireBranchTerminals();
+      dispatchFilesystemAction();
       return { deleted: true, branch_id: id };
     }
   }
@@ -1642,8 +1615,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = params?.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const statusToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-filesystem-status',
+      userId,
+      branch.branch_id
     );
     const statusResult = await requestExecutor(
       {
@@ -1704,12 +1682,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       try {
-        // Use a service JWT so the executor can patch rendered env command
-        // templates without tripping requireAdminForEnvConfig when unarchive
-        // is performed by a non-admin user.
-        const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
+        const sessionToken = await issueExecutorCommandToken(
+          this.app,
+          'git.branch.add',
+          userId,
+          branch.branch_id
         );
         spawnExecutor(
           {

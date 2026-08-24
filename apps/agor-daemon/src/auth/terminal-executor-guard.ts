@@ -1,7 +1,7 @@
 /**
  * Terminal-executor identity guard.
  *
- * A terminal-scoped executor token (see terminals.ts / ServiceJWTStrategy)
+ * A terminal-scoped executor token (see terminals.ts / RuntimeJWTStrategy)
  * authenticates ONLY the Socket.IO terminal channel — those events are handled
  * in socketio.ts, outside Feathers, and are gated on `terminal_user_id`.
  *

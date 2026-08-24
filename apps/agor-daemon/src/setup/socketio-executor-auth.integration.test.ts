@@ -6,9 +6,9 @@ import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getAuthenticatedConnectionAuthority } from '../auth/authenticated-connection-authority.js';
-import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-capability.js';
+import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
+import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
-import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import {
   type SessionTokenAuthorityStore,
   SessionTokenService,
@@ -88,10 +88,18 @@ function emitControlEventToExecutorRoom(
 async function startHarness(
   options: {
     pauseValidation?: boolean;
+    pauseAdmission?: boolean;
     reconnectionAttempts?: number;
     sessionTokenExpirationMs?: number;
   } = {}
-): Promise<Harness & { validationStarted?: Promise<void>; releaseValidation?: () => void }> {
+): Promise<
+  Harness & {
+    validationStarted?: Promise<void>;
+    releaseValidation?: () => void;
+    admissionStarted?: Promise<void>;
+    releaseAdmission?: () => void;
+  }
+> {
   const app = feathersExpress(feathers());
   let markValidationStarted!: () => void;
   let releaseValidation!: () => void;
@@ -105,10 +113,25 @@ async function startHarness(
         releaseValidation = resolve;
       })
     : undefined;
+  let markAdmissionStarted!: () => void;
+  let releaseAdmission!: () => void;
+  const admissionStarted = options.pauseAdmission
+    ? new Promise<void>((resolve) => {
+        markAdmissionStarted = resolve;
+      })
+    : undefined;
+  const admissionGate = options.pauseAdmission
+    ? new Promise<void>((resolve) => {
+        releaseAdmission = resolve;
+      })
+    : undefined;
   let revoked = false;
+  let issuedFingerprint: string | undefined;
   let userTokensValidAfter: Date | undefined;
   const authorityStore: SessionTokenAuthorityStore = {
-    async issue() {},
+    async issue(input) {
+      issuedFingerprint = input.tokenFingerprint;
+    },
     async validateAndConsume(input) {
       if (validationGate) {
         markValidationStarted();
@@ -128,9 +151,9 @@ async function startHarness(
       revoked = true;
       return true;
     },
-    async revokeSession() {
+    async revokeByTask() {
       revoked = true;
-      return 1;
+      return issuedFingerprint ? [issuedFingerprint] : [];
     },
     async purgeRetained() {
       return 0;
@@ -180,8 +203,12 @@ async function startHarness(
   app.use(
     'tasks',
     {
-      async get(id: string) {
-        return { task_id: id };
+      async get(id: string, params: { user?: { user_id?: string } }) {
+        return {
+          task_id: id,
+          tenant_id: getCurrentTenantId(),
+          user_id: params.user?.user_id,
+        };
       },
       async connectExecutor(data: { task_id: string }, params: { user?: { user_id?: string } }) {
         return {
@@ -190,8 +217,12 @@ async function startHarness(
           user_id: params.user?.user_id,
         };
       },
+      async finish(data: { task_id: string }) {
+        await sessionTokens.revokeTaskTokens(data.task_id);
+        return { accepted: true, task_id: data.task_id };
+      },
     },
-    { events: ['termination_requested'], methods: ['get', 'connectExecutor'] }
+    { events: ['termination_requested'], methods: ['get', 'connectExecutor', 'finish'] }
   );
   app.service('tasks').hooks({
     around: {
@@ -216,12 +247,20 @@ async function startHarness(
   const authentication = new AuthenticationService(app);
   authentication.register(
     'jwt',
-    new ServiceJWTStrategy({
+    new RuntimeJWTStrategy({
       sessionTokenService: sessionTokens,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy: MULTI_TENANCY,
     })
   );
+  if (admissionGate) {
+    const originalHandleConnection = authentication.handleConnection.bind(authentication);
+    authentication.handleConnection = async (...args) => {
+      await originalHandleConnection(...args);
+      markAdmissionStarted();
+      await admissionGate;
+    };
+  }
   app.use('authentication', authentication);
 
   const socketConfig = createSocketIOConfig(app as never, {
@@ -244,7 +283,7 @@ async function startHarness(
     socketAuthentication: { accessToken: token },
   });
   client.io.connect();
-  if (!options.pauseValidation) await waitForConnect(client);
+  if (!options.pauseValidation && !options.pauseAdmission) await waitForConnect(client);
 
   return {
     app,
@@ -268,6 +307,7 @@ async function startHarness(
       }
     ),
     ...(validationStarted ? { validationStarted, releaseValidation } : {}),
+    ...(admissionStarted ? { admissionStarted, releaseAdmission } : {}),
   };
 }
 
@@ -306,14 +346,15 @@ describe('executor Socket.IO connection capability', () => {
     expect(getSocketAuthState(serverSocket!)).toMatchObject({
       userId: null,
       isService: false,
-      isTaskExecutor: true,
+      isExecutor: true,
       tenant: { tenant_id: TENANT_ID },
     });
-    expect(getAuthenticatedConnectionAuthority(connection)?.executorCapability).toMatchObject({
-      sessionId: SESSION_ID,
-      taskId: TASK_ID,
-      branchId: BRANCH_ID,
+    expect(getAuthenticatedConnectionAuthority(connection)).toMatchObject({
       tenant: { tenant_id: TENANT_ID },
+      principal: {
+        kind: 'executor',
+        taskId: TASK_ID,
+      },
     });
     expect(connection?.tenant).toMatchObject({ tenant_id: TENANT_ID });
     await expect(
@@ -328,7 +369,91 @@ describe('executor Socket.IO connection capability', () => {
     const disconnected = waitForDisconnect(harness.client);
     await runWithTenantContext(TENANT_ID, () => harness.sessionTokens.revokeToken(harness.token));
     await disconnected;
-    expect(getAuthenticatedConnectionAuthority(connection)?.executorCapability).toBeUndefined();
+    expect(getAuthenticatedConnectionAuthority(connection)).toBeUndefined();
+  });
+
+  it('projects a taskless command as the initiating user without granting a task room', async () => {
+    const harness = await startHarness();
+    harnesses.push(harness);
+    const commandToken = await runWithTenantContext(TENANT_ID, () =>
+      harness.sessionTokens.generateCommandToken('branch-files-read', USER_ID, BRANCH_ID)
+    );
+    const commandClient = createClient(harness.url, false, {
+      reconnectionAttempts: 0,
+      socketAuthentication: { accessToken: commandToken },
+    });
+
+    try {
+      commandClient.io.connect();
+      await waitForConnect(commandClient);
+      const serverSocket = harness.socketConfig
+        .getSocketServer()
+        ?.sockets.sockets.get(commandClient.io.id!);
+      const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> })
+        .feathers;
+      const authority = getAuthenticatedConnectionAuthority(connection);
+
+      expect(connection).toMatchObject({
+        authenticated: true,
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+        tenant: { tenant_id: TENANT_ID },
+      });
+      expect(authority).toMatchObject({
+        tenant: { tenant_id: TENANT_ID },
+        principal: { kind: 'executor' },
+      });
+      expect(authority?.principal).not.toHaveProperty('taskId');
+      expect(executorRoomConnections(harness)).not.toContain(connection);
+      await expect(commandClient.service('tasks').get(TASK_ID)).resolves.toEqual({
+        task_id: TASK_ID,
+        tenant_id: TENANT_ID,
+        user_id: USER_ID,
+      });
+    } finally {
+      commandClient.io.close();
+    }
+  });
+
+  it('retires the active task room and connection when task lifecycle revokes its lease', async () => {
+    const harness = await startHarness();
+    harnesses.push(harness);
+    await waitForConnect(harness.client);
+    const serverSocket = harness.socketConfig
+      .getSocketServer()
+      ?.sockets.sockets.get(harness.client.io.id!);
+    const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> }).feathers;
+    expect(harness.app.channels).toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+
+    const disconnected = waitForDisconnect(harness.client);
+    await runWithTenantContext(TENANT_ID, () => harness.sessionTokens.revokeTaskTokens(TASK_ID));
+    expect(getAuthenticatedConnectionAuthority(connection)).toBeUndefined();
+    expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+    await disconnected;
+
+    await expect(
+      runWithTenantContext(TENANT_ID, () =>
+        harness.sessionTokens.validateToken(harness.token, { taskId: TASK_ID })
+      )
+    ).resolves.toBeNull();
+  });
+
+  it('acknowledges a self-revoking task RPC before disconnecting its executor', async () => {
+    const harness = await startHarness();
+    harnesses.push(harness);
+    await waitForConnect(harness.client);
+    const disconnected = waitForDisconnect(harness.client);
+
+    const tasks = harness.client.service('tasks') as unknown as {
+      methods?: (...names: string[]) => unknown;
+      finish(data: { task_id: string }): Promise<unknown>;
+    };
+    tasks.methods?.('finish');
+    await expect(tasks.finish({ task_id: TASK_ID })).resolves.toEqual({
+      accepted: true,
+      task_id: TASK_ID,
+    });
+
+    await disconnected;
   });
 
   it('rejects login when revocation lands after authority validation starts', async () => {
@@ -346,6 +471,24 @@ describe('executor Socket.IO connection capability', () => {
     });
     // The revoked handshake is never accepted and therefore cannot install a
     // passive task publication room.
+    expect(harness.client.io.connected).toBe(false);
+    expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
+  });
+
+  it('rejects login when revocation lands after authority commit but before admission', async () => {
+    const harness = await startHarness({ pauseAdmission: true });
+    harnesses.push(harness);
+    const connectionAttempt = waitForConnect(harness.client);
+    await harness.admissionStarted;
+
+    await runWithTenantContext(TENANT_ID, () => harness.sessionTokens.revokeToken(harness.token));
+    expect(harness.client.io.connected).toBe(false);
+
+    harness.releaseAdmission?.();
+    const rejection = await connectionAttempt.catch((error) => error);
+    expect(rejection).toMatchObject({
+      data: { code: 401, className: 'not-authenticated' },
+    });
     expect(harness.client.io.connected).toBe(false);
     expect(harness.app.channels).not.toContain(executorTaskChannelName(TENANT_ID, TASK_ID));
   });
@@ -401,15 +544,17 @@ describe('executor Socket.IO connection capability', () => {
         accessToken: harness.userToken,
       })
     ).rejects.toMatchObject({ code: 401 });
-    expect(getAuthenticatedConnectionAuthority(connection)?.executorCapability).toMatchObject({
-      sessionId: SESSION_ID,
-      taskId: TASK_ID,
+    expect(getAuthenticatedConnectionAuthority(connection)).toMatchObject({
       tenant: { tenant_id: TENANT_ID },
+      principal: {
+        kind: 'executor',
+        taskId: TASK_ID,
+      },
     });
     expect(getSocketAuthState(serverSocket!)).toMatchObject({
       userId: null,
       isService: false,
-      isTaskExecutor: true,
+      isExecutor: true,
       tenant: { tenant_id: TENANT_ID },
     });
     expect(executorRoomConnections(harness)).toContain(connection);
@@ -520,7 +665,7 @@ describe('executor Socket.IO connection capability', () => {
     expect(getSocketAuthState(newServerSocket!)).toMatchObject({
       userId: null,
       isService: false,
-      isTaskExecutor: true,
+      isExecutor: true,
       tenant: { tenant_id: TENANT_ID },
     });
     expect(executorRoomConnections(harness)).not.toContain(oldConnection);
@@ -636,7 +781,7 @@ describe('executor Socket.IO connection capability', () => {
       ?.sockets.sockets.get(harness.client.io.id!);
     const connection = (serverSocket as unknown as { feathers?: Record<string, unknown> }).feathers;
     expect(getAuthenticatedConnectionAuthority(connection)).toMatchObject({
-      principal: { kind: 'task-executor' },
+      principal: { kind: 'executor' },
       retireAtExpiry: true,
     });
 

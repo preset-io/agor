@@ -47,17 +47,14 @@ import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  requestExecutor,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -738,9 +735,7 @@ async function runBranchKnowledgeCommand(
   const result = await requestExecutor(
     {
       command,
-      sessionToken: generateScopedServiceToken(
-        ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
-      ),
+      sessionToken: await issueExecutorCommandToken(ctx.app, command, ctx.userId, branchId),
       daemonUrl: getDaemonUrl(),
       params,
     },

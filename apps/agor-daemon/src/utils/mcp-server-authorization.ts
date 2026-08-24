@@ -268,9 +268,9 @@ export const MCP_CAPABILITY_ISSUING_SERVICE_PATHS = [
  *   and nothing re-asked at the finish.
  * - `oauth-auth-headers` refreshes and persists new access tokens
  *   (`refreshAndPersistToken`), which is minting by the same definition, but is
- *   called by an executor under a session token or service account. Flooring
- *   that caller would floor a robot; the standing that matters is the grant
- *   owner's.
+ *   called by a delegated task executor or explicit daemon service account.
+ *   The task executor carries its user, but the grant owner's standing is
+ *   still read fresh; a daemon service identity has no user standing at all.
  *
  * So both ask this about the *subject* rather than the requester. `shared`
  * grants keep their admin floor — they were always admin-only to start
@@ -318,7 +318,7 @@ export async function isMcpGrantOwnerEntitled(
  * on the same question is how the first one was lost.
  *
  * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
- * provider, and an executor service account carries no role to floor.
+ * provider, and an explicit daemon service account carries no role to floor.
  */
 export function assertMcpCapabilityRole(
   params: AuthenticatedParams | undefined,
@@ -449,7 +449,7 @@ async function decidePolicyAndOwnership(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
-  // Internal daemon calls and executor service accounts are not members;
+  // Internal daemon calls and explicit daemon service accounts are not members;
   // they carry no policy and no ownership, matching `ensureMinimumRole`.
   if (!params?.provider) return {};
   const user = params.user;

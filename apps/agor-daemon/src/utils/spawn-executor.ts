@@ -1295,17 +1295,17 @@ export function getDaemonUrl(): string {
 }
 
 /**
- * Create a short-lived service token for executor authentication
+ * Create a short-lived reserved service-identity token.
  *
- * This token is used by the executor to authenticate with the daemon
- * when making Feathers API calls. It's a special "service" token that
- * allows the executor to perform privileged operations.
+ * Production callers reach this low-level signer only through the explicit
+ * daemon-system and restricted-terminal wrappers below. User-triggered
+ * executors authenticate with delegated-user credentials instead.
  *
  * @param jwtSecret - The daemon's JWT secret
  * @param expiresIn - Token expiration (default: 5 minutes)
  * @returns JWT access token
  */
-export function createServiceToken(
+function createServiceToken(
   jwtSecret: string,
   expiresIn?: SignOptions['expiresIn'],
   scope: Record<string, unknown> = {}
@@ -1342,7 +1342,7 @@ export function serviceTokenScopeForCurrentTenant(): Record<string, unknown> {
 }
 
 /**
- * Generate a session token from the Feathers app
+ * Issue one reserved service-family token from the Feathers app.
  *
  * Convenience function that extracts the JWT secret from the app
  * and creates a service token.
@@ -1350,7 +1350,7 @@ export function serviceTokenScopeForCurrentTenant(): Record<string, unknown> {
  * @param app - FeathersJS application with sessionTokenService
  * @returns JWT access token
  */
-export function generateSessionToken(
+function issueReservedServiceTokenFromApp(
   app: {
     settings: { authentication?: { secret?: string } };
   },
@@ -1365,22 +1365,39 @@ export function generateSessionToken(
 }
 
 /**
- * Generate an executor service token from the same ambient tenant context used
- * to render the command template.
+ * Generate a full daemon service token for an explicit system job.
  *
- * Tenant claims are applied after extra claims so callers cannot spoof or
- * override the trusted runtime tenant.
+ * User-triggered executors must use delegated-user credentials instead. This
+ * intentionally accepts no caller-provided scope: extra JWT claims do not
+ * restrict a service account's ordinary Feathers authority.
  */
-export function generateScopedServiceToken(
+export function generateDaemonServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  extraScope: Record<string, unknown> = {},
   expiresIn?: SignOptions['expiresIn']
 ): string {
-  return generateSessionToken(
+  return issueReservedServiceTokenFromApp(app, serviceTokenScopeForCurrentTenant(), expiresIn);
+}
+
+export interface TerminalExecutorTokenScope {
+  terminal_user_id: string;
+  terminal_id: string;
+  terminal_branch_id: string;
+  terminal_owner_boot_id: string;
+}
+
+/** Generate the separately restricted identity for one live PTY attachment. */
+export function generateTerminalExecutorToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  scope: TerminalExecutorTokenScope,
+  expiresIn: SignOptions['expiresIn']
+): string {
+  return issueReservedServiceTokenFromApp(
     app,
-    { ...extraScope, ...serviceTokenScopeForCurrentTenant() },
+    { ...scope, ...serviceTokenScopeForCurrentTenant() },
     expiresIn
   );
 }

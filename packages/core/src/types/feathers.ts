@@ -51,7 +51,7 @@ export interface AuthenticatedUser {
   email: string;
   /** User role (for authorization) - always defined, defaults to 'member' */
   role: string;
-  /** True for service accounts (executor) — bypasses RBAC checks */
+  /** True only for explicit daemon service accounts — bypasses normal user RBAC checks. */
   _isServiceAccount?: boolean;
   /**
    * True for terminal-executor tokens: a RESTRICTED identity that authenticates
@@ -333,7 +333,7 @@ export interface AuthenticationResult {
   accessToken: string;
   /** Authentication metadata */
   authentication: {
-    /** Strategy used (e.g., 'local', 'jwt', 'api-key', 'session-token') */
+    /** Strategy used (e.g., 'local', 'jwt', or 'api-key') */
     strategy: string;
     /** Token (may be undefined depending on strategy) */
     accessToken?: string;

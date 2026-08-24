@@ -1,18 +1,16 @@
 /**
- * Service JWT Authentication Strategy
+ * Runtime JWT Authentication Strategy
  *
- * Custom JWT strategy that handles both:
- * 1. Regular user JWTs (standard authentication flow)
- * 2. Service JWTs (for executor and internal service authentication)
- *
- * Service tokens have `sub: 'executor-service'` and `type: 'service'`.
- * Instead of looking up a user from the database, we return a synthetic
- * service user with elevated privileges.
+ * One verified JWT boundary handles ordinary users, delegated-user executor
+ * credentials, restricted terminal identities, and explicit internal service
+ * accounts. Executors load the initiating user's current entity and use its
+ * normal Feathers/RBAC authority; only `type: 'service'` with the reserved
+ * subject materializes the synthetic service account.
  */
 
 import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
 import { JWTStrategy, NotAuthenticated } from '@agor/core/feathers';
-import type { Params, UserAuthMetadata } from '@agor/core/types';
+import type { Params, TenantContext, UserAuthMetadata } from '@agor/core/types';
 import {
   fingerprintExecutorSessionToken,
   type SessionTokenService,
@@ -23,14 +21,14 @@ import {
   retireAuthenticatedConnectionAuthority,
 } from './authenticated-connection-authority.js';
 import {
-  attachExecutorConnectionCapabilityCandidate,
+  attachExecutorConnectionCandidate,
   type ExecutorConnectionRevocationFence,
-} from './executor-connection-capability.js';
+} from './executor-connection-admission.js';
 import {
   getExecutorSessionTokenSessionId,
   isExecutorSessionTokenPayload,
 } from './executor-session-token.js';
-import { readRuntimeTenantClaim } from './runtime-tokens.js';
+import { resolveSignedRuntimeTenant } from './runtime-tokens.js';
 import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
 
@@ -40,39 +38,42 @@ type AuthenticationResult = NonNullable<Parameters<JWTStrategy['handleConnection
 function propagateTenantFromJwtPayload(
   params: Params,
   payload: UserAuthTokenPayload | null | undefined,
-  tenantClaim?: string
+  multiTenancy?: ResolvedMultiTenancyConfig
 ): void {
-  const tenantId = readRuntimeTenantClaim(payload ?? undefined, tenantClaim);
-  if (!tenantId) return;
-  const tenantParams = params as Params & {
-    tenant?: { tenant_id: string; source: 'auth_claim' };
-  };
-  tenantParams.tenant ??= { tenant_id: tenantId, source: 'auth_claim' };
+  // JWTStrategy may invoke getEntity with a params projection that omits the
+  // payload after getEntityId already reconciled and installed tenant context.
+  // Never try to manufacture tenant authority from an absent payload here.
+  if (!payload) return;
+  const tenant = resolveSignedRuntimeTenant(multiTenancy, payload);
+  if (!tenant) return;
+  const tenantParams = params as Params & { tenant?: TenantContext };
+  if (tenantParams.tenant && tenantParams.tenant.tenant_id !== tenant.tenant_id) {
+    throw new NotAuthenticated('Conflicting authenticated tenant authority');
+  }
+  tenantParams.tenant ??= tenant;
 }
 
-export interface ServiceJWTStrategyOptions {
+export interface RuntimeJWTStrategyOptions {
   sessionTokenService?: SessionTokenService;
   multiTenancy?: ResolvedMultiTenancyConfig;
   executorRevocationFence?: ExecutorConnectionRevocationFence;
 }
 
 /**
- * Extended JWT Strategy that handles service tokens
+ * Extended JWT strategy for every daemon runtime credential family.
  *
- * Service tokens are used by the executor to authenticate with the daemon
- * for privileged executor operations (git.*, etc.)
+ * Executor-session tokens are delegated users, not service accounts; explicit
+ * service and terminal identities remain separate credential families.
  */
-export class ServiceJWTStrategy extends JWTStrategy {
+export class RuntimeJWTStrategy extends JWTStrategy {
   private readonly sessionTokenService?: SessionTokenService;
-  private readonly tenantClaim: string;
   private readonly executorRevocationFence?: ExecutorConnectionRevocationFence;
   private readonly multiTenancy?: ResolvedMultiTenancyConfig;
 
-  constructor(options: ServiceJWTStrategyOptions = {}) {
+  constructor(options: RuntimeJWTStrategyOptions = {}) {
     super();
     this.sessionTokenService = options.sessionTokenService;
     this.multiTenancy = options.multiTenancy;
-    this.tenantClaim = options.multiTenancy?.auth_claim ?? 'tenant_id';
     this.executorRevocationFence = options.executorRevocationFence;
   }
 
@@ -92,7 +93,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
    *
    * AuthenticationService awaits every strategy's handleConnection hook before
    * publishing the login event or acknowledging the request. Installing the
-   * immutable Feathers identity projection, tenant, and executor capability
+   * immutable Feathers identity projection, tenant, and executor authority
    * here makes all later channel/request consumers independent of Socket.IO
    * listener registration order. The base JWT handler is intentionally not
    * called: it would retain raw bearer material and re-arm bearer expiry as a
@@ -119,7 +120,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
     }
 
     if (event === 'logout' || event === 'disconnect') {
-      retireAuthenticatedConnectionAuthority(app, connection);
+      retireAuthenticatedConnectionAuthority(connection);
       if (event === 'logout') app.emit('disconnect', connection);
     }
   }
@@ -149,7 +150,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
     propagateTenantFromJwtPayload(
       params,
       (params.authentication as { payload?: UserAuthTokenPayload } | undefined)?.payload,
-      this.tenantClaim
+      this.multiTenancy
     );
 
     markAuthenticationUserLookup(params);
@@ -163,7 +164,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
     // getEntityId runs only after JWTStrategy has verified the signature. Set
     // tenant context here—before getEntity's tenant-scoped user lookup—rather
     // than trusting `jwt.decode()` in authenticate.
-    propagateTenantFromJwtPayload(params, payload, this.tenantClaim);
+    propagateTenantFromJwtPayload(params, payload, this.multiTenancy);
     if (payload?.sub === 'executor-service' && payload.type !== 'service') {
       // getEntityId runs after signature verification and before getEntity.
       // Reject here so an access token using the reserved subject can never be
@@ -174,10 +175,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
   }
 
   /**
-   * Override authenticate to handle service tokens in the payload
-   *
-   * Service tokens have `type: 'service'` in the JWT payload.
-   * We need to handle them specially to avoid the standard user lookup.
+   * Reconcile the verified runtime credential family after base JWT auth.
+   * Explicit service and terminal identities receive their narrow synthetic
+   * entities; executor-session credentials retain the real user loaded above.
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
@@ -189,7 +189,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
       [key: string]: unknown;
     };
 
-    // Check if this is a service token by looking at the decoded payload
+    // Classify only the already-verified payload.
     const payload = result.authentication?.payload as
       | (UserAuthTokenPayload & {
           session_id?: string;
@@ -233,7 +233,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
           },
         };
       }
-      // Full service account (git/prompt/etc. executor paths).
+      // Full daemon service account. User-triggered task and filesystem
+      // executors use executor-session delegation instead; this branch is
+      // reserved for explicit daemon-owned system jobs.
       return {
         ...result,
         user: {
@@ -253,6 +255,10 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!isExecutorSessionTokenPayload(payload)) {
         throw new Error('Invalid executor token purpose');
       }
+      // Base JWT authentication has already loaded the real initiating user.
+      // Keep that entity unchanged: ordinary services must apply exactly the
+      // same current user/RBAC hooks as UI, CLI, and API clients. The claims
+      // below are additional authority only at explicit executor-only gates.
       const token = authentication?.accessToken;
       if (!token || !this.sessionTokenService) {
         throw new Error('Executor token validation unavailable');
@@ -261,8 +267,11 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!sessionId || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
         throw new Error('Executor token is missing durable connection scope');
       }
-      const tenantId = readRuntimeTenantClaim(payload, this.tenantClaim);
-      const revocationSnapshot = this.executorRevocationFence?.snapshot(tenantId);
+      const tenantId = resolveSignedRuntimeTenant(this.multiTenancy, payload)?.tenant_id;
+      if (!tenantId || !this.executorRevocationFence) {
+        throw new Error('Executor tenant admission is unavailable');
+      }
+      const revocationGeneration = this.executorRevocationFence.snapshot(tenantId);
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
         tenantId,
         userId: typeof payload.sub === 'string' ? payload.sub : undefined,
@@ -273,24 +282,13 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!sessionInfo) {
         throw new Error('Invalid or expired executor token');
       }
-      const executorResult = {
-        ...result,
-        session_id: sessionInfo.session_id,
-        task_id: sessionInfo.task_id,
-        branch_id: sessionInfo.branch_id,
-      };
-      if (revocationSnapshot) {
-        attachExecutorConnectionCapabilityCandidate(executorResult, {
-          ...(tenantId ? { tenantId } : {}),
-          sessionId: sessionInfo.session_id,
-          ...(sessionInfo.task_id ? { taskId: sessionInfo.task_id } : {}),
-          ...(sessionInfo.branch_id ? { branchId: sessionInfo.branch_id } : {}),
-          expiresAt: payload.exp * 1000,
-          tokenFingerprint: fingerprintExecutorSessionToken(token),
-          revocationSnapshot,
-        });
-      }
-      return executorResult;
+      attachExecutorConnectionCandidate(result, {
+        tenantId,
+        ...(sessionInfo.task_id ? { taskId: sessionInfo.task_id } : {}),
+        tokenFingerprint: fingerprintExecutorSessionToken(token),
+        revocationGeneration,
+      });
+      return result;
     }
 
     if (

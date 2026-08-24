@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => {
     databaseScopeDepth: 0,
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
-    generateScopedServiceToken: vi.fn(() => 'terminal-token'),
+    generateTerminalExecutorToken: vi.fn(() => 'terminal-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
     resolveDelegatedHomeKey: vi.fn(() => ({
       unixUser: null,
@@ -87,7 +87,7 @@ vi.mock('../utils/branch-authorization.js', () => ({
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: mocks.generateScopedServiceToken,
+  generateTerminalExecutorToken: mocks.generateTerminalExecutorToken,
   getDaemonUrl: mocks.getDaemonUrl,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
@@ -240,7 +240,7 @@ describe('process-affine attachment creation', () => {
       ready: false,
     });
     expect(result.channel).toBe(terminalChannelName('tenant-x', 'user-1', result.terminalId));
-    expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
+    expect(mocks.generateTerminalExecutorToken).toHaveBeenCalledWith(
       expect.anything(),
       {
         terminal_user_id: 'user-1',

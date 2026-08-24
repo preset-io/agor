@@ -12,12 +12,12 @@ import type { BoardID, TenantContext, User, UserID } from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
+import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from '../auth/runtime-tokens.js';
-import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import {
   bindRealtimeAccessCacheInvalidation,
   RealtimeAccessCache,
@@ -155,7 +155,7 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
     },
   });
   const authentication = new AuthenticationService(app);
-  authentication.register('jwt', new ServiceJWTStrategy({ multiTenancy }));
+  authentication.register('jwt', new RuntimeJWTStrategy({ multiTenancy }));
   app.use('authentication', authentication);
 
   const options: SocketIOOptions = {

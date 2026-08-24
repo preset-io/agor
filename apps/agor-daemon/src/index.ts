@@ -68,7 +68,6 @@ import type { HookContext, User } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
-import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
@@ -268,9 +267,7 @@ async function startDaemonWithOwnedMetrics(
   // --------------------------------------------------------------------------
   // Auth configuration
   // --------------------------------------------------------------------------
-  const authenticatedHook = scopeExecutorRuntimeAuth(
-    authenticate({ strategies: ['api-key', 'jwt'] })
-  );
+  const authenticatedHook = authenticate({ strategies: ['api-key', 'jwt'] });
   const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
 
   const enforcePasswordChange = async (context: HookContext) => {

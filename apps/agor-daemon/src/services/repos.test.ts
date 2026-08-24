@@ -64,7 +64,6 @@ vi.mock('../utils/executor-delegated-home.js', () => ({
 vi.mock('../utils/spawn-executor.js', () => {
   return {
     requestExecutor: executorMocks.requestExecutor,
-    generateScopedServiceToken: vi.fn(() => 'scoped-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon'),
     spawnExecutorFireAndForget: executorMocks.spawnExecutorFireAndForget,
   };
@@ -135,6 +134,9 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };
     const app = {
       get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'branches') return branches;
@@ -196,6 +198,9 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     };
     const app = {
       get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
@@ -260,6 +265,9 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     };
     const app = {
       get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
@@ -301,6 +309,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     const repos = { patch: vi.fn() };
     const app = {
       get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
       settings: { authentication: { secret: 'test-secret' } },
       service: vi.fn((name: string) => {
         if (name === 'repos') return repos;
@@ -318,13 +329,106 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     } as never);
 
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
-      expect.objectContaining({ command: 'git.clone' }),
+      expect.objectContaining({
+        command: 'git.clone',
+        params: expect.objectContaining({ importEnvironmentConfig: false }),
+      }),
       expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
+    );
+  });
+
+  it('permits .agor.yml environment import only for an authenticated admin', async () => {
+    const repos = { patch: vi.fn() };
+    const app = {
+      get: () => ({}),
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+      },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'repos') return repos;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'create').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor-admin-clone',
+    } as never);
+
+    await service.cloneRepository({ url: 'https://github.com/preset-io/agor-admin-clone.git' }, {
+      provider: 'rest',
+      user: {
+        user_id: '550e8400-e29b-41d4-a716-446655440004',
+        role: 'admin',
+      },
+    } as never);
+
+    expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.clone',
+        params: expect.objectContaining({ importEnvironmentConfig: true }),
+      }),
+      expect.anything()
     );
   });
 });
 
 describe('ReposService.remove branch inventory', () => {
+  it('passes the authorized unbounded filesystem inventory without a service bearer', async () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/repo',
+      repo_type: 'remote',
+      local_path: '/managed/repos/preset-io/repo',
+    };
+    const branches = [
+      {
+        branch_id: '550e8400-e29b-41d4-a716-446655440002',
+        repo_id: repo.repo_id,
+        name: 'feature',
+        path: '/managed/worktrees/preset-io/repo/feature',
+      },
+    ];
+    repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue(branches);
+    repositoryMocks.lockRepoForBranchInventory.mockReset().mockResolvedValue(repo);
+    repositoryMocks.deleteRepo.mockReset().mockResolvedValue(undefined);
+    executorMocks.requestExecutor.mockResolvedValueOnce({ success: true, data: {} });
+    const branchService = { removeMetadataWithRealtime: vi.fn(async () => undefined) };
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branchService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const tx = { run: vi.fn() };
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (transaction: unknown) => Promise<unknown>) => work(tx)),
+    };
+    const service = new ReposService(db as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+
+    await service.remove(repo.repo_id, {
+      query: { cleanup: true },
+      tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+    } as never);
+
+    expect(executorMocks.requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.repo.delete',
+        params: expect.objectContaining({
+          repoId: repo.repo_id,
+          repoPath: repo.local_path,
+          branchPaths: [branches[0].path],
+        }),
+      }),
+      expect.anything()
+    );
+    expect(executorMocks.requestExecutor.mock.calls[0]?.[0]).not.toHaveProperty('sessionToken');
+  });
+
   it('uses the unbounded repository inventory after locking instead of Feathers pagination', async () => {
     const repo = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',

@@ -3,7 +3,7 @@ import type {
   BranchRemovalRealtimeVisibilitySnapshot,
 } from '../types/realtime';
 import { BranchRealtimeVisibilityMode } from '../types/realtime';
-import type { TenantID } from '../types/tenant';
+import { MAX_TENANT_ID_LENGTH, type TenantID } from '../types/tenant';
 
 /**
  * Wire revision for the internal cross-replica Feathers publication relay.
@@ -107,7 +107,7 @@ export function isRealtimeRelayEnvelope(value: unknown): value is RealtimeRelayE
     envelope.version === REALTIME_RELAY_VERSION &&
     typeof envelope.tenantId === 'string' &&
     envelope.tenantId.length > 0 &&
-    envelope.tenantId.length <= 128 &&
+    envelope.tenantId.length <= MAX_TENANT_ID_LENGTH &&
     typeof envelope.path === 'string' &&
     envelope.path.length > 0 &&
     envelope.path.length <= 128 &&

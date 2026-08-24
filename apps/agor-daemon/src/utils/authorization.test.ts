@@ -161,7 +161,7 @@ describe('requireMinimumRole (hook factory)', () => {
 });
 
 describe('registerAuthenticatedRoute', () => {
-  it('installs executor runtime scope validation on custom routes', async () => {
+  it('authorizes an executor credential as its delegated user on custom routes', async () => {
     const installed: { before?: Record<string, Array<(context: HookContext) => unknown>> } = {};
     const app = {
       use: () => undefined,
@@ -189,6 +189,7 @@ describe('registerAuthenticatedRoute', () => {
         provider: 'rest',
         user: { user_id: 'u1', email: 'a@b.c', role: ROLES.MEMBER },
         authentication: {
+          strategy: 'jwt',
           payload: {
             type: 'executor-session',
             purpose: 'executor-task',
@@ -200,7 +201,9 @@ describe('registerAuthenticatedRoute', () => {
     } as HookContext;
 
     const hooks = installed.before?.create ?? [];
-    expect(hooks).toHaveLength(3);
-    await expect(hooks[1](context)).rejects.toThrow(/task scope/);
+    expect(hooks).toHaveLength(2);
+    for (const hook of hooks) {
+      await expect(Promise.resolve(hook(context))).resolves.toBe(context);
+    }
   });
 });

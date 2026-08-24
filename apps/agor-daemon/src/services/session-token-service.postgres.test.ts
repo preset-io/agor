@@ -27,13 +27,13 @@ import { AuthenticationService, feathers } from '@agor/core/feathers';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-capability.js';
+import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
 } from '../auth/executor-session-token.js';
+import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
-import { ServiceJWTStrategy } from '../auth/service-jwt-strategy.js';
 import { type SessionTokenAuthorityStore, SessionTokenService } from './session-token-service.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -77,7 +77,7 @@ function makeExecutorAuthenticationService(sessionTokenService: SessionTokenServ
   const authentication = new AuthenticationService(app);
   authentication.register(
     'jwt',
-    new ServiceJWTStrategy({
+    new RuntimeJWTStrategy({
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy: {
@@ -106,8 +106,8 @@ describe('executor token Feathers authentication contract', () => {
       async revoke() {
         return true;
       },
-      async revokeSession() {
-        return 1;
+      async revokeByTask() {
+        return [];
       },
       async purgeRetained() {
         return 0;
@@ -133,11 +133,11 @@ describe('executor token Feathers authentication contract', () => {
         { connection }
       );
       expect(result).toMatchObject({
-        session_id: 'session-fast-auth',
-        task_id: 'task-fast-auth',
-        branch_id: 'branch-fast-auth',
         user: { user_id: 'user-fast-auth' },
       });
+      expect(result).not.toHaveProperty('session_id');
+      expect(result).not.toHaveProperty('task_id');
+      expect(result).not.toHaveProperty('branch_id');
       expect(connection).toMatchObject({
         authenticated: true,
         authentication: {
@@ -443,6 +443,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         jwt.verify(token, jwtSecret, { issuer: 'agor', audience: 'https://agor.dev' })
       ).toBeTruthy();
       await expect(daemonB.validateToken(token, { tenantId })).resolves.toBeNull();
+    });
+
+    it('revokes every retry credential for one terminal task without widening to its session', async () => {
+      const tenantId = `executor-task-revoke-${randomUUID()}`;
+      const [first, retry, sibling] = await runWithTenantDatabaseScope(dbA, tenantId, () =>
+        Promise.all([
+          daemonA.generateToken('session-task-revoke', 'user-task-revoke', {
+            taskId: 'task-terminal',
+          }),
+          daemonA.generateToken('session-task-revoke', 'user-task-revoke', {
+            taskId: 'task-terminal',
+          }),
+          daemonA.generateToken('session-task-revoke', 'user-task-revoke', {
+            taskId: 'task-sibling',
+          }),
+        ])
+      );
+
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, () => daemonA.revokeTaskTokens('task-terminal'))
+      ).resolves.toBe(2);
+      await expect(daemonB.validateToken(first, { tenantId })).resolves.toBeNull();
+      await expect(daemonB.validateToken(retry, { tenantId })).resolves.toBeNull();
+      await expect(daemonB.validateToken(sibling, { tenantId })).resolves.toMatchObject({
+        task_id: 'task-sibling',
+      });
     });
 
     it('rejects expired PostgreSQL authority on a peer even while the JWT remains valid', async () => {

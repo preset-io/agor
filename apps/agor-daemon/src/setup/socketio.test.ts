@@ -34,9 +34,9 @@ import {
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
 import {
-  attachExecutorConnectionCapabilityCandidate,
+  attachExecutorConnectionCandidate,
   getOrCreateExecutorConnectionRevocationFence,
-} from '../auth/executor-connection-capability.js';
+} from '../auth/executor-connection-admission.js';
 import {
   boardPresenceRoomName,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
@@ -404,7 +404,7 @@ it('clears distributed authorization caches without disconnecting sockets for ad
   });
 });
 
-it('fences an already-authenticated task executor on exact and HA session revocation', () => {
+it('fences already-authenticated task executors on local and HA exact revocation', async () => {
   const { app, io } = buildHarness({
     adapter: {} as never,
     multiTenancy: {
@@ -431,13 +431,11 @@ it('fences an already-authenticated task executor on exact and HA session revoca
       },
     },
   };
-  attachExecutorConnectionCapabilityCandidate(exactResult, {
+  attachExecutorConnectionCandidate(exactResult, {
     tenantId: tenantA.tenant_id,
-    sessionId: 'session-1',
     taskId: 'task-1',
-    expiresAt: Date.now() + 60_000,
     tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
-    revocationSnapshot: fence.snapshot(tenantA.tenant_id),
+    revocationGeneration: fence.snapshot(tenantA.tenant_id),
   });
   finalizeAuthenticatedConnectionAuthority({
     connection: exact.feathers,
@@ -455,6 +453,8 @@ it('fences an already-authenticated task executor on exact and HA session revoca
     tenantId: 'tenant-a',
     tokenFingerprint: fingerprintExecutorSessionToken(exactToken),
   });
+  expect(getAuthenticatedConnectionAuthority(exact.feathers)).toBeUndefined();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   expect(exact.connected).toBe(false);
   expect(io.serverSideEmitted).toContainEqual({
     event: HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
@@ -480,13 +480,11 @@ it('fences an already-authenticated task executor on exact and HA session revoca
       },
     },
   };
-  attachExecutorConnectionCapabilityCandidate(sessionResult, {
+  attachExecutorConnectionCandidate(sessionResult, {
     tenantId: tenantB.tenant_id,
-    sessionId: 'session-2',
     taskId: 'task-2',
-    expiresAt: Date.now() + 60_000,
     tokenFingerprint: fingerprintExecutorSessionToken('another-token'),
-    revocationSnapshot: fence.snapshot(tenantB.tenant_id),
+    revocationGeneration: fence.snapshot(tenantB.tenant_id),
   });
   finalizeAuthenticatedConnectionAuthority({
     connection: session.feathers,
@@ -502,8 +500,10 @@ it('fences an already-authenticated task executor on exact and HA session revoca
 
   io.serverHandlers.get(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT)?.({
     tenantId: 'tenant-b',
-    sessionId: 'session-2',
+    tokenFingerprint: fingerprintExecutorSessionToken('another-token'),
   });
+  expect(getAuthenticatedConnectionAuthority(session.feathers)).toBeUndefined();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   expect(session.connected).toBe(false);
 });
 
@@ -625,7 +625,7 @@ function asServicePostConnect(socket: FakeSocket) {
  * A terminal executor socket: a RESTRICTED identity user-scoped via
  * `terminal_user_id`. Deliberately NOT a full service account (no
  * `_isServiceAccount`) — that's the whole point of the terminal-scoped token.
- * Mirrors what ServiceJWTStrategy mints for a token carrying terminal_user_id.
+ * Mirrors what RuntimeJWTStrategy mints for a token carrying terminal_user_id.
  */
 function asServiceForUser(
   socket: FakeSocket,
@@ -1328,7 +1328,7 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('not scoped to a terminal user')
+        expect.stringContaining('terminal executor is not scoped to a user')
       );
     });
 
@@ -1878,13 +1878,11 @@ describe('configureChannels tenant isolation', () => {
     taskId: string
   ) {
     const fence = getOrCreateExecutorConnectionRevocationFence(app);
-    attachExecutorConnectionCapabilityCandidate(authResult, {
+    attachExecutorConnectionCandidate(authResult, {
       tenantId,
-      sessionId,
       taskId,
-      expiresAt: Date.now() + 60_000,
       tokenFingerprint: fingerprintExecutorSessionToken(`${sessionId}:${taskId}`),
-      revocationSnapshot: fence.snapshot(tenantId),
+      revocationGeneration: fence.snapshot(tenantId),
     });
   }
 
@@ -1933,7 +1931,7 @@ describe('configureChannels tenant isolation', () => {
       writable: false,
     });
 
-    retireAuthenticatedConnectionAuthority(app, connection);
+    retireAuthenticatedConnectionAuthority(connection);
     expect(getAuthenticatedConnectionAuthority(connection)).toBeUndefined();
     expect(connection).not.toHaveProperty('tenant');
     expect(() =>
@@ -2048,7 +2046,7 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.get('authenticated')).toEqual([connection]);
   });
 
-  it('joins the task room from the finalized executor capability', () => {
+  it('joins the task room from finalized executor authority', () => {
     const { app, handlers, joins } = makeChannelHarness();
     configureChannels(app);
     const connection = { data: {} } as any;
@@ -2069,11 +2067,45 @@ describe('configureChannels tenant isolation', () => {
     finalizeLogin(app, handlers, connection, authResult, REQUIRED_TENANCY);
 
     expect(joins.get(executorTaskChannelName('tenant-a', 'task-1'))).toEqual([connection]);
-    expect(getAuthenticatedConnectionAuthority(connection)?.executorCapability).toMatchObject({
+    expect(getAuthenticatedConnectionAuthority(connection)).toMatchObject({
       tenant: { tenant_id: 'tenant-a' },
-      sessionId: 'session-1',
-      taskId: 'task-1',
+      principal: {
+        kind: 'executor',
+        taskId: 'task-1',
+      },
     });
+  });
+
+  it('does not join a task room when revocation lands after authority commit', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app);
+    const connection = { data: {} } as any;
+    const authResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: 'task-1',
+          session_id: 'session-1',
+          tenant_id: 'tenant-a',
+        },
+      },
+    };
+    const fence = getOrCreateExecutorConnectionRevocationFence(app);
+    attachTaskExecutorCandidate(app, authResult, 'tenant-a', 'session-1', 'task-1');
+    finalizeAuthenticatedConnectionAuthority({
+      connection,
+      authResult,
+      multiTenancy: REQUIRED_TENANCY,
+      executorRevocationFence: fence,
+    });
+
+    fence.record({ tenantId: 'tenant-a', tokenFingerprint: fingerprintExecutorSessionToken('x') });
+    handlers.get('connection')?.(connection);
+
+    expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
   });
 
   it('does not trust an unscoped login or mismatched result task claim', () => {

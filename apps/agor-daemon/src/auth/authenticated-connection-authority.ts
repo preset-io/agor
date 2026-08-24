@@ -1,13 +1,10 @@
 import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
-import { type Application, NotAuthenticated } from '@agor/core/feathers';
+import { NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedUser, TenantContext } from '@agor/core/types';
-import { leaveAllExecutorTaskChannels } from '../utils/realtime-publish.js';
 import {
-  commitExecutorConnectionCapability,
-  type ExecutorConnectionCapability,
   type ExecutorConnectionRevocationFence,
-  getExecutorConnectionCapabilityCandidate,
-} from './executor-connection-capability.js';
+  getExecutorConnectionCandidate,
+} from './executor-connection-admission.js';
 import { isExecutorSessionTokenPayload } from './executor-session-token.js';
 import { resolveSignedRuntimeTenant } from './runtime-tokens.js';
 import { isTerminalExecutorIdentity } from './terminal-executor-guard.js';
@@ -43,7 +40,12 @@ export type AuthenticatedConnectionPrincipal =
       branchId: string;
       ownerBootId: string;
     }
-  | { kind: 'task-executor'; userId: string };
+  | {
+      kind: 'executor';
+      taskId?: string;
+      tokenFingerprint: string;
+      revocationGeneration: number;
+    };
 
 /**
  * Immutable authority established before Socket.IO accepts a connection.
@@ -56,7 +58,6 @@ export type AuthenticatedConnectionPrincipal =
 export interface AuthenticatedConnectionAuthority {
   readonly principal: AuthenticatedConnectionPrincipal;
   readonly tenant?: TenantContext;
-  readonly executorCapability?: ExecutorConnectionCapability;
   /** Absolute expiry of the bearer accepted at the namespace handshake. */
   readonly expiresAt?: number;
   /** Whether this connection capability itself must be retired at `expiresAt`. */
@@ -157,28 +158,33 @@ export function finalizeAuthenticatedConnectionAuthority(
   }
   const trustedTenant = tenant ? Object.freeze({ ...tenant }) : undefined;
 
-  const executorCandidate = getExecutorConnectionCapabilityCandidate(authResult);
+  const executorCandidate = getExecutorConnectionCandidate(authResult);
   const isExecutorLogin = Boolean(executorCandidate) || isExecutorSessionTokenPayload(payload);
-  let executorCapability: ExecutorConnectionCapability | undefined;
   if (isExecutorLogin) {
     if (!executorCandidate || !trustedTenant || !executorRevocationFence) {
       throw new NotAuthenticated('Executor connection authority is unavailable');
     }
-    executorCapability = commitExecutorConnectionCapability(
-      executorCandidate,
-      trustedTenant,
-      executorRevocationFence
-    );
-    if (!executorCapability) {
+    if (
+      executorCandidate.tenantId !== trustedTenant.tenant_id ||
+      !executorRevocationFence.isCurrent(
+        executorCandidate.tenantId,
+        executorCandidate.revocationGeneration
+      )
+    ) {
       throw new NotAuthenticated('Executor connection authority was revoked');
     }
   }
 
   const user = result.user;
   let principal: AuthenticatedConnectionPrincipal;
-  if (executorCapability) {
+  if (executorCandidate) {
     if (!user?.user_id) throw new NotAuthenticated('Executor user authority is unavailable');
-    principal = { kind: 'task-executor', userId: user.user_id };
+    principal = {
+      kind: 'executor',
+      ...(executorCandidate.taskId ? { taskId: executorCandidate.taskId } : {}),
+      tokenFingerprint: executorCandidate.tokenFingerprint,
+      revocationGeneration: executorCandidate.revocationGeneration,
+    };
   } else if (isTerminalExecutorIdentity(user)) {
     if (
       !trustedTenant ||
@@ -219,10 +225,7 @@ export function finalizeAuthenticatedConnectionAuthority(
   const authority = Object.freeze({
     principal: Object.freeze(principal),
     ...(trustedTenant ? { tenant: trustedTenant } : {}),
-    ...(executorCapability ? { executorCapability } : {}),
-    ...(expiresAt === undefined && executorCapability?.expiresAt === undefined
-      ? {}
-      : { expiresAt: expiresAt ?? executorCapability?.expiresAt }),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
     retireAtExpiry,
   });
   Object.defineProperty(connection, CONNECTION_AUTHORITY, {
@@ -238,6 +241,21 @@ export function finalizeAuthenticatedConnectionAuthority(
   return authority;
 }
 
+/**
+ * Recheck executor admission at each Socket.IO pending-to-active handoff.
+ * Other principals do not use the executor revocation fence.
+ */
+export function isAuthenticatedConnectionAuthorityCurrent(
+  authority: AuthenticatedConnectionAuthority,
+  fence: ExecutorConnectionRevocationFence
+): boolean {
+  return (
+    authority.principal.kind !== 'executor' ||
+    (!!authority.tenant &&
+      fence.isCurrent(authority.tenant.tenant_id, authority.principal.revocationGeneration))
+  );
+}
+
 export function getAuthenticatedConnectionAuthority(
   connection: unknown
 ): AuthenticatedConnectionAuthority | undefined {
@@ -247,11 +265,7 @@ export function getAuthenticatedConnectionAuthority(
 }
 
 /** Retire connection-scoped tenant/executor authority on logout or disconnect. */
-export function retireAuthenticatedConnectionAuthority(
-  app: Application,
-  connection: unknown
-): void {
-  leaveAllExecutorTaskChannels(app, connection);
+export function retireAuthenticatedConnectionAuthority(connection: unknown): void {
   if (!connection || typeof connection !== 'object') return;
   const feathersConnection = connection as AuthenticatedConnection & AuthorityCarrier;
   Reflect.deleteProperty(feathersConnection, CONNECTION_AUTHORITY);

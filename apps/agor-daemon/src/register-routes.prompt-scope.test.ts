@@ -36,7 +36,7 @@ describe('prompt and widget transaction scopes', () => {
     expect(rbacCheck).toBeLessThan(taskAdmission);
 
     // Internal/daemon callers (spawn-prompt forward, widgets, scheduler,
-    // gateway) and executor service accounts are exempt from the user-facing
+    // gateway) and explicit daemon service accounts are exempt from the user-facing
     // branch check.
     expect(prompt).toContain('const isInternalPrompt = !params.provider;');
     expect(prompt).toContain('_isServiceAccount');

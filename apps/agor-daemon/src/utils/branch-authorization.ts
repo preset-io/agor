@@ -313,8 +313,9 @@ export async function cacheBranchAccess(
  * Managed environment controls may run shell/webhook actions with impact tied
  * to the branch rather than the triggering user. Keep these controls limited
  * to users with effective `all` permission on the branch and global admins.
- * Internal daemon/service-account calls bypass so health loops and executor
- * plumbing can continue to operate.
+ * Internal daemon/service-account calls bypass so daemon-owned health and
+ * maintenance work can continue to operate. User-triggered executors do not
+ * use that bypass; they retain the initiating user's ordinary branch RBAC.
  */
 export async function ensureCanControlBranchEnvironment(
   branchRepo: BranchRepository,
@@ -1269,9 +1270,8 @@ export async function assertSessionUnixIdentityUnchanged(
  * process is already running as the stamped user: refusing its writes only loses
  * the transcript, and the launch that mattered was already gated by
  * `prepareSessionForExecutorStart`. The exemption compares the token's own
- * session claim rather than merely asking whether an executor token is present,
- * so it cannot be widened by a caller registering this hook somewhere
- * `executorRuntimeScopeGuard` has not already pinned the claims.
+ * session claim rather than merely asking whether an executor credential is
+ * present, so taskless command executors cannot acquire the exemption.
  *
  * @param userRepo - UserRepository instance
  */

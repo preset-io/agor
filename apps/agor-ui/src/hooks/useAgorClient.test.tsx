@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resetRefreshFailureState,
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
-  TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import { useAgorClient } from './useAgorClient';
 
@@ -128,7 +127,13 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     const { client, create } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
-    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
+    renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'access-token',
+        authorityGeneration: 1,
+      })
+    );
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create).toHaveBeenCalledWith({ capability: true });
@@ -140,7 +145,13 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     const { client, create, fireIo, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
-    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
+    renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'access-token',
+        authorityGeneration: 1,
+      })
+    );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
     act(() => {
@@ -154,32 +165,81 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     expect(client.authenticate).not.toHaveBeenCalled();
   });
 
-  it('updates the next handshake token without reconnecting a healthy socket', async () => {
+  it('updates the next handshake token without replacing a same-authority socket', async () => {
     const { client, create, io } = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(client as never);
 
-    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'access-token' }));
+    const { result, rerender } = renderHook(
+      ({ accessToken }) =>
+        useAgorClient({
+          url: 'http://daemon.test',
+          accessToken,
+          authorityGeneration: 7,
+        }),
+      { initialProps: { accessToken: 'access-token' } }
+    );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const originalClient = result.current.client;
 
     const clientOptions = vi.mocked(createClient).mock.calls[0][2];
     const tokenSource = clientOptions?.socketAuthentication?.accessToken;
     expect(typeof tokenSource).toBe('function');
     expect((tokenSource as () => string | null | undefined)()).toBe('access-token');
 
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent(TOKENS_REFRESHED_EVENT, {
-          detail: { accessToken: 'fresh', refreshToken: 'r' },
-        })
-      );
-    });
+    rerender({ accessToken: 'fresh' });
 
     await waitFor(() => expect((tokenSource as () => string | null | undefined)()).toBe('fresh'));
+    expect(result.current.client).toBe(originalClient);
     expect(create).toHaveBeenCalledTimes(1);
     expect(createClient).toHaveBeenCalledTimes(1);
     expect(io.disconnect).not.toHaveBeenCalled();
     expect((tokenSource as () => string | null | undefined)()).toBe('fresh');
     expect(client.authenticate).not.toHaveBeenCalled();
+  });
+
+  it('replaces and closes the client when authenticated authority changes', async () => {
+    const first = makeSeamClient();
+    const second = makeSeamClient();
+    vi.mocked(createClient)
+      .mockReturnValueOnce(first.client as never)
+      .mockReturnValueOnce(second.client as never);
+    const renderExposures: Array<{ generation: number; client: unknown }> = [];
+
+    const { result, rerender } = renderHook(
+      ({ accessToken, authorityGeneration }) => {
+        const value = useAgorClient({
+          url: 'http://daemon.test',
+          accessToken,
+          authorityGeneration,
+        });
+        renderExposures.push({ generation: authorityGeneration, client: value.client });
+        return value;
+      },
+      {
+        initialProps: { accessToken: 'tenant-a-token', authorityGeneration: 1 },
+      }
+    );
+
+    await waitFor(() => expect(result.current.client).toBe(first.client));
+    rerender({ accessToken: 'tenant-b-token', authorityGeneration: 2 });
+
+    // React may already have run the new effect by the time rerender returns,
+    // but no generation-2 render may expose generation 1's client.
+    expect(
+      renderExposures
+        .filter(({ generation }) => generation === 2)
+        .every(({ client }) => client !== first.client)
+    ).toBe(true);
+    expect(first.io.close).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.client).toBe(second.client));
+    expect(createClient).toHaveBeenCalledTimes(2);
+
+    const firstTokenSource =
+      vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+    const secondTokenSource =
+      vi.mocked(createClient).mock.calls[1][2]?.socketAuthentication?.accessToken;
+    expect((firstTokenSource as () => string | null | undefined)()).toBe('tenant-a-token');
+    expect((secondTokenSource as () => string | null | undefined)()).toBe('tenant-b-token');
   });
 
   it('refreshes over REST and retries when an authenticated handshake is rejected', async () => {
@@ -199,7 +259,13 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
       })
     );
 
-    renderHook(() => useAgorClient({ url: 'http://daemon.test', accessToken: 'stale' }));
+    renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'stale',
+        authorityGeneration: 1,
+      })
+    );
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(createRestClient).toHaveBeenCalledWith('http://daemon.test');
@@ -230,7 +296,11 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
     try {
       const { result } = renderHook(() =>
-        useAgorClient({ url: 'http://daemon.test', accessToken: 'stale' })
+        useAgorClient({
+          url: 'http://daemon.test',
+          accessToken: 'stale',
+          authorityGeneration: 1,
+        })
       );
 
       await waitFor(() =>

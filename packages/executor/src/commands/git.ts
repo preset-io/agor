@@ -332,35 +332,6 @@ async function fetchBranchForRepo(client: AgorClient, repoId: string, branchId: 
   return branch;
 }
 
-interface BranchPathRecord {
-  repo_id?: string;
-  path?: string;
-}
-
-async function fetchAllBranchesForRepo(
-  client: AgorClient,
-  repoId: string
-): Promise<BranchPathRecord[]> {
-  const branches: BranchPathRecord[] = [];
-  const limit = 1000;
-  let skip = 0;
-
-  while (true) {
-    const result = await client.service('branches').find({
-      query: { repo_id: repoId, $limit: limit, $skip: skip },
-    });
-    const page = (Array.isArray(result) ? result : result.data) as BranchPathRecord[];
-    branches.push(...page);
-
-    if (Array.isArray(result)) break;
-    if (page.length === 0 || branches.length >= result.total) break;
-
-    skip += page.length;
-  }
-
-  return branches;
-}
-
 /**
  * Handle branch.agor-yml.import command.
  * Reads branch-scoped .agor.yml from a managed checkout.
@@ -465,7 +436,7 @@ export async function handleGitRepoRealignOrigin(
   payload: GitRepoRealignOriginPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const repoId = payload.params.repoId;
+  const { repoId, repoPath, remoteUrl, repoSlug } = payload.params;
 
   if (options.dryRun) {
     return {
@@ -478,23 +449,13 @@ export async function handleGitRepoRealignOrigin(
     };
   }
 
-  let client: AgorClient | null = null;
-
   try {
-    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
-    client = await createExecutorClient(daemonUrl, payload.sessionToken);
-
-    const repo = await client.service('repos').get(repoId);
-    if (repo.repo_type !== 'remote' || !repo.remote_url || !repo.local_path) {
-      return { success: true, data: { repoId, changed: false, skipped: true } };
-    }
-
-    const result = await ensureGitRemoteUrl(repo.local_path, 'origin', repo.remote_url);
+    const result = await ensureGitRemoteUrl(repoPath, 'origin', remoteUrl);
     if (result.changed) {
       const { redactUrlUserinfo } = await import('@agor/core/config');
       console.warn(
-        `[SECURITY] Realigned remote.origin.url for repo ${repo.repo_id} (slug=${repo.slug}); ` +
-          `canonical URL now: ${redactUrlUserinfo(repo.remote_url)}`
+        `[SECURITY] Realigned remote.origin.url for repo ${repoId} (slug=${repoSlug}); ` +
+          `canonical URL now: ${redactUrlUserinfo(remoteUrl)}`
       );
     }
 
@@ -516,14 +477,6 @@ export async function handleGitRepoRealignOrigin(
         details: { repoId },
       },
     };
-  } finally {
-    if (client) {
-      try {
-        client.io.disconnect();
-      } catch {
-        // Ignore disconnect errors
-      }
-    }
   }
 }
 
@@ -548,34 +501,14 @@ export async function handleGitRepoDelete(
     };
   }
 
-  let client: AgorClient | null = null;
   const deletedPaths: string[] = [];
-  let repoPath: string | undefined;
+  const { repoPath, branchPaths } = payload.params;
 
   try {
-    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
-    client = await createExecutorClient(daemonUrl, payload.sessionToken);
-
-    const repo = await client.service('repos').get(repoId);
-    repoPath = repo.local_path;
-    if (!repoPath) {
-      throw new Error(`Repo ${repoId} has no local_path`);
-    }
-
-    const branches = await fetchAllBranchesForRepo(client, repoId);
-
-    const foreignBranches = branches.filter((branch) => branch.repo_id !== repoId);
-    if (foreignBranches.length > 0) {
-      throw new Error(
-        `SAFETY CHECK FAILED: Found ${foreignBranches.length} branch(es) not belonging to repo ${repoId}`
-      );
-    }
-
-    for (const branch of branches) {
-      if (!branch.path) continue;
-      await deleteBranchDirectory(branch.path, payload.params.branchesRoot);
-      deletedPaths.push(branch.path);
-      console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branch.path}`);
+    for (const branchPath of branchPaths) {
+      await deleteBranchDirectory(branchPath, payload.params.branchesRoot);
+      deletedPaths.push(branchPath);
+      console.log(`🗑️  [git.repo.delete] Deleted branch directory: ${branchPath}`);
     }
 
     await deleteRepoDirectory(repoPath, payload.params.reposRoot);
@@ -604,14 +537,6 @@ export async function handleGitRepoDelete(
         },
       },
     };
-  } finally {
-    if (client) {
-      try {
-        client.io.disconnect();
-      } catch {
-        // Ignore disconnect errors
-      }
-    }
   }
 }
 
@@ -725,17 +650,19 @@ export async function handleGitClone(
       const agorYmlPath = join(cloneResult.path, '.agor.yml');
       let environment: import('@agor/core/types').RepoEnvironment | null = null;
 
-      try {
-        const parsed = parseAgorYml(agorYmlPath);
-        if (parsed) {
-          environment = parsed;
-          console.log(`[git.clone] Loaded environment config from .agor.yml`);
+      if (payload.params.importEnvironmentConfig) {
+        try {
+          const parsed = parseAgorYml(agorYmlPath);
+          if (parsed) {
+            environment = parsed;
+            console.log(`[git.clone] Loaded environment config from .agor.yml`);
+          }
+        } catch (error) {
+          console.warn(
+            `[git.clone] Failed to parse .agor.yml:`,
+            error instanceof Error ? error.message : String(error)
+          );
         }
-      } catch (error) {
-        console.warn(
-          `[git.clone] Failed to parse .agor.yml:`,
-          error instanceof Error ? error.message : String(error)
-        );
       }
 
       // User-supplied default_branch wins over the auto-detected origin/HEAD.
@@ -870,85 +797,6 @@ export async function handleGitClone(
 }
 
 /**
- * Render environment command templates with the materialized branch context.
- *
- * @param client - Feathers client
- * @param branchId - Branch ID
- * @param repoId - Repo ID
- * @param configuredHostIp - Host IP override from daemon-resolved config (config.daemon.host_ip_address)
- * @returns Rendered template fields
- */
-async function renderEnvironmentTemplates(
-  client: AgorClient,
-  branchId: string,
-  repoId: string,
-  configuredHostIp: string | undefined
-): Promise<{
-  start_command?: string;
-  stop_command?: string;
-  nuke_command?: string;
-  health_check_url?: string;
-  app_url?: string;
-  logs_command?: string;
-  environment_variant?: string;
-}> {
-  // Import dependencies dynamically
-  const { renderBranchSnapshot } = await import('@agor/core/environment/render-snapshot');
-  const { resolveHostIpAddress } = await import('@agor/core/utils/host-ip');
-
-  // Fetch branch and repo from database
-  const branch = await client.service('branches').get(branchId);
-  const repo = await client.service('repos').get(repoId);
-
-  // v2 environment is the source of truth; `environment_config` is a derived
-  // legacy view. If neither is present, nothing to render.
-  if (!repo.environment) {
-    return {};
-  }
-
-  // Resolve host IP for {{host.ip_address}} (frozen into rendered commands).
-  // Override comes from daemon-resolved config slice; autodetected fallback
-  // happens inside resolveHostIpAddress when undefined.
-  const hostIpAddress = resolveHostIpAddress(configuredHostIp);
-
-  // Honor an explicit variant override if the branch already picked one;
-  // otherwise fall through to `environment.default` inside renderBranchSnapshot.
-  let snapshot: ReturnType<typeof renderBranchSnapshot>;
-  try {
-    snapshot = renderBranchSnapshot(
-      { slug: repo.slug, environment: repo.environment },
-      {
-        branch_unique_id: branch.branch_unique_id,
-        name: branch.name,
-        path: branch.path,
-        custom_context: branch.custom_context,
-        host_ip_address: hostIpAddress,
-        base_ref: branch.base_ref,
-        ref_type: branch.ref_type,
-      },
-      branch.environment_variant
-    );
-  } catch (err) {
-    console.warn(
-      `[renderEnvironmentTemplates] Failed to render environment for ${branch.name}:`,
-      err
-    );
-    return {};
-  }
-  if (!snapshot) return {};
-
-  return {
-    start_command: snapshot.start || undefined,
-    stop_command: snapshot.stop || undefined,
-    nuke_command: snapshot.nuke,
-    health_check_url: snapshot.health,
-    app_url: snapshot.app,
-    logs_command: snapshot.logs,
-    environment_variant: snapshot.variant,
-  };
-}
-
-/**
  * Handle git.branch.add command
  *
  * Creates a git branch at the specified path.
@@ -987,9 +835,8 @@ export async function handleGitBranchAdd(
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
     console.log('[git.branch.add] Connected to daemon');
 
-    // Resolve filesystem-bearing repository metadata through the scoped
-    // service token in this same executor. This makes authorization, trusted
-    // path resolution, credential scrub, and materialization one operation.
+    // Resolve filesystem-bearing repository metadata through the initiating
+    // user's delegated Feathers authority in this same executor.
     const repo = await client.service('repos').get(payload.params.repoId);
     const branchRecord = await client.service('branches').get(branchId);
     if (branchRecord.repo_id !== payload.params.repoId) {
@@ -1088,47 +935,30 @@ export async function handleGitBranchAdd(
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
-    // Render environment command templates.
-    let renderedTemplates:
-      | {
-          start_command?: string;
-          stop_command?: string;
-          nuke_command?: string;
-          health_check_url?: string;
-          app_url?: string;
-          logs_command?: string;
-        }
-      | undefined;
-
-    if (branchId) {
-      try {
-        console.log(
-          `[git.branch.add] Rendering environment templates for branch ${shortId(branchId)}`
-        );
-        renderedTemplates = await renderEnvironmentTemplates(
-          client,
-          branchId,
-          repoId,
-          payload.resolvedConfig?.daemon?.host_ip_address
-        );
-        console.log(`[git.branch.add] Templates rendered successfully`);
-      } catch (error) {
-        console.error(
-          `[git.branch.add] Failed to render templates:`,
-          error instanceof Error ? error.message : String(error)
-        );
-        // Don't fail the entire operation if template rendering fails
-      }
-    }
-
-    // Patch branch status to 'ready' (DB record was created by daemon with 'creating')
+    // Persist only filesystem outcome directly. Executable environment
+    // rendering belongs to the daemon's existing authorization/validation
+    // boundary and is derived there from trusted repo configuration.
     if (branchId) {
       console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
-      await client.service('branches').patch(branchId, {
-        filesystem_status: 'ready',
-        ...(renderedTemplates || {}),
-      });
+      await client.service('branches').patch(branchId, { filesystem_status: 'ready' });
       console.log(`[git.branch.add] Branch marked as ready`);
+
+      if (repo.environment) {
+        try {
+          const renderer = client.service(`branches/${branchId}/render-environment`) as unknown as {
+            create(data: Record<string, never>): Promise<unknown>;
+          };
+          await renderer.create({});
+          console.log(`[git.branch.add] Environment templates rendered by daemon`);
+        } catch (error) {
+          console.error(
+            `[git.branch.add] Failed to render templates:`,
+            error instanceof Error ? error.message : String(error)
+          );
+          // Filesystem materialization succeeded; keep the branch usable even
+          // if environment rendering is independently unavailable.
+        }
+      }
     }
 
     return {
@@ -1228,8 +1058,6 @@ export async function handleGitBranchRemove(
   payload: GitBranchRemovePayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const deleteDbRecord = payload.params.deleteDbRecord ?? true;
-
   // Dry run mode
   if (options.dryRun) {
     return {
@@ -1240,20 +1068,12 @@ export async function handleGitBranchRemove(
         branchId: payload.params.branchId,
         branchPath: payload.params.branchPath,
         force: payload.params.force,
-        deleteDbRecord,
         storageMode: payload.params.storageMode,
       },
     };
   }
 
-  let client: AgorClient | null = null;
-
   try {
-    // Connect to daemon
-    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
-    client = await createExecutorClient(daemonUrl, payload.sessionToken);
-    console.log('[git.branch.remove] Connected to daemon');
-
     const branchId = payload.params.branchId;
     const branchPath = payload.params.branchPath;
     const branchesRoot = payload.params.branchesRoot;
@@ -1375,27 +1195,12 @@ export async function handleGitBranchRemove(
       console.log('[git.branch.remove] Branch does not exist on filesystem, skipping git removal');
     }
 
-    // Delete DB record if requested (default: true)
-    let dbRecordDeleted = false;
-
-    if (deleteDbRecord) {
-      console.log(`[git.branch.remove] Deleting branch record: ${branchId}`);
-
-      // Delete branch via Feathers service
-      // The daemon's branches service handles cascades and hooks
-      await client.service('branches').remove(branchId);
-      dbRecordDeleted = true;
-
-      console.log(`[git.branch.remove] Branch record deleted`);
-    }
-
     return {
       success: true,
       data: {
         branchId,
         branchPath,
         filesystemRemoved,
-        dbRecordDeleted,
       },
     };
   } catch (error) {
@@ -1413,14 +1218,6 @@ export async function handleGitBranchRemove(
         },
       },
     };
-  } finally {
-    if (client) {
-      try {
-        client.io.disconnect();
-      } catch {
-        // Ignore disconnect errors
-      }
-    }
   }
 }
 

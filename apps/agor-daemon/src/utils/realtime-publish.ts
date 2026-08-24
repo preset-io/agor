@@ -138,7 +138,7 @@ function visibilityFromRemovalSnapshot(
  * Private control-plane room for the one executor JWT scoped to a Task.
  *
  * Unlike normal Task events, membership is not derived from branch visibility:
- * configureChannels joins this room only after ServiceJWTStrategy has verified
+ * configureChannels joins this room only after RuntimeJWTStrategy has verified
  * an `executor-session` token whose signed `task_id` matches the room. There is
  * no client-callable subscribe method.
  */
@@ -999,25 +999,34 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             allowSuperadmin
           );
         }
-        // Shared boards are visible tenant-wide. For private boards, evaluate
-        // the same repository predicate as boards.get for each connected user
-        // at publication time; a room join or stale client cache is never
-        // treated as authorization.
-        const record = asRecord(data);
-        if (context.path === 'boards' && record?.access_mode === 'shared') return tenantScoped;
+        // Resolve the current board row before using its visibility. Event
+        // payloads also cross the Redis relay and can be stale or forged, so
+        // fields such as `access_mode` are data to publish, never authority.
+        // A hard delete is the sole exception and was handled above using the
+        // server-captured pre-delete visibility snapshot.
+        let loadedBoard: Awaited<ReturnType<BoardRepository['findById']>>;
+        try {
+          loadedBoard = await boardRepository.findById(scope.boardId);
+        } catch {
+          return filterToServiceConnections(tenantScoped);
+        }
+        if (!loadedBoard) return filterToServiceConnections(tenantScoped);
+        const currentBoard = loadedBoard;
+        if (currentBoard.access_mode === 'shared') return tenantScoped;
+
+        // For a current private board, evaluate the same repository predicate
+        // as boards.get for each connected user at publication time; a room
+        // join, payload field, or stale client cache is never authorization.
         const visibleUserIds = new Set<string>();
         await Promise.all(
           uniqueUserIds(tenantScoped).map(async (userId) => {
             try {
-              if (await boardRepository.canView(scope.boardId!, userId as UserID)) {
+              if (await boardRepository.canView(currentBoard.board_id, userId as UserID)) {
                 visibleUserIds.add(userId);
               }
             } catch {
-              // Board may have just been removed. The tombstone is narrowed to
-              // its creator/admins rather than widening to the tenant.
-              if (context.event === 'removed' && extractCreatedBy(data) === userId) {
-                visibleUserIds.add(userId);
-              }
+              // Concurrent deletion or ACL lookup failure fails narrow for
+              // this principal. Deleted boards require the snapshot above.
             }
           })
         );

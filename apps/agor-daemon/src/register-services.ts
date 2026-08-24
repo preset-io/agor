@@ -85,6 +85,7 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -340,7 +341,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.service('/session-streams').publish(() => []);
 
-  app.use('/tasks', createTasksService(db, app), {
+  app.use('/tasks', createTasksService(db, app, sessionTokenService), {
     methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -1005,12 +1006,11 @@ function createExecuteHandler(
       {
         taskId: data.taskId,
         branchId: session.branch_id,
-        // Executor JWTs authenticate on every daemon API call over the runtime
-        // connection, so low per-call max-use limits make normal execution
-        // fail after startup. Keep expiry + revocation for these scoped runtime
-        // credentials; reconnect reuses the same token and does not consume a
-        // separate connection allowance. Bounded tokens retain per-validation
-        // use counting for compatibility.
+        // Executor JWTs authenticate at Socket.IO handshake/reconnect (and on
+        // every REST request), so low use limits make normal execution fail
+        // during transport recovery. Keep expiry + lifecycle revocation for
+        // these runtime credentials. Bounded tokens retain per-validation use
+        // counting for compatibility.
         maxUses: -1,
       }
     );
@@ -3612,7 +3612,7 @@ export async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[]; executorSessionToken?: string },
+      data: { mcp_server_ids: string[] },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -3629,33 +3629,11 @@ export async function registerMCPServices(
         return { headers };
       }
 
-      const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
-        ?.session_id;
+      const executorSessionId = authenticatedTaskExecutorRuntimeScope(params)?.sessionId;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
-        sessionId,
+      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+        sessionId: executorSessionId,
       });
-      let executorSessionId = sessionId;
-      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
-        const executorTokenService = (
-          app as unknown as {
-            sessionTokenService?: {
-              validateToken: (
-                token: string,
-                expected?: { sessionId?: string; taskId?: string; branchId?: string }
-              ) => Promise<{ session_id: string } | null>;
-            };
-          }
-        ).sessionTokenService;
-        const sessionInfo = await executorTokenService?.validateToken(
-          data.executorSessionToken,
-          {}
-        );
-        if (sessionInfo?.session_id) {
-          executorSessionId = sessionInfo.session_id;
-          trustedSessionExecutor = true;
-        }
-      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -3705,9 +3683,9 @@ export async function registerMCPServices(
        *
        * A refresh is not a read: `refreshAndPersistToken` obtains and stores a
        * *new* access token, which is issuance by the same definition the rest of
-       * this file uses. The caller here is an executor under a session token or
-       * a service account, so flooring the caller would floor a robot — the
-       * standing that matters belongs to the user the grant is keyed on.
+       * this file uses. A delegated task executor already carries its user's
+       * identity; an explicit daemon service account does not. In either case,
+       * the standing that matters belongs to the user the grant is keyed on.
        *
        * Resolved once. Every per-user grant in one request belongs to the same
        * user: `tokenUserId` is the caller's own id, and cross-user lookup is

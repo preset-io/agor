@@ -104,7 +104,12 @@ export function useAuth(): UseAuthReturn {
   const noteAuthenticatedUser = useCallback(
     (user: User) => {
       const nextUserId = user.user_id;
-      if (activeUserIdRef.current && activeUserIdRef.current !== nextUserId) {
+      // The generation identifies a committed authenticated authority, not
+      // merely an explicit logout/login operation. The first null -> user
+      // commit and a live A -> B replacement must both retire work owned by
+      // the preceding authority. A routine token refresh for the same user
+      // deliberately preserves the generation (and therefore the socket).
+      if (activeUserIdRef.current !== nextUserId) {
         advanceAuthenticationGeneration();
       }
       activeUserIdRef.current = nextUserId;
@@ -510,7 +515,15 @@ export function useAuth(): UseAuthReturn {
     // Invalidate caller-owned work synchronously, including a same-user
     // logout/login or explicit re-login.
     invalidateAuthentication();
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    // Do not keep exposing the preceding user's access token under the newly
+    // advanced generation while the replacement login is in flight.
+    setState({
+      user: null,
+      accessToken: null,
+      authenticated: false,
+      loading: true,
+      error: null,
+    });
 
     try {
       const client = await createRestClient(getDaemonUrl());

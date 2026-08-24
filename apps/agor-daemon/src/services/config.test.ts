@@ -29,7 +29,6 @@ vi.mock('./credential-home-identity.js', () => homeMocks);
 
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { TaskID, UserID } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
 import { ConfigService } from './config.js';
 
 describe('ConfigService.resolveApiKey', () => {
@@ -87,7 +86,7 @@ describe('ConfigService.resolveApiKey', () => {
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
-  it('allows executor service accounts and resolves for the task creator', async () => {
+  it('allows an explicit daemon service account and resolves for the task creator', async () => {
     const service = new ConfigService({} as never);
     service.app = {
       service(name: string) {
@@ -142,7 +141,13 @@ describe('ConfigService.resolveApiKey', () => {
       {
         provider: 'socketio',
         authentication: {
-          payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            task_id: 'task-1',
+            session_id: 'session-1',
+          },
         },
       } as never
     );
@@ -153,6 +158,70 @@ describe('ConfigService.resolveApiKey', () => {
       db: {},
       tool: 'codex',
     });
+  });
+
+  it('does not grant plaintext credentials to taskless command delegation', async () => {
+    const service = new ConfigService({} as never);
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          user: { user_id: 'creator-1' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'branch-clean',
+              branch_id: 'branch-1',
+            },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('requires the signed session and branch to match the task session', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({ agentic_tool: 'codex', branch_id: 'branch-1' })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const request = (sessionId: string, branchId: string) =>
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: sessionId,
+              branch_id: branchId,
+            },
+          },
+        } as never
+      );
+
+    await expect(request('session-2', 'branch-1')).rejects.toBeInstanceOf(Forbidden);
+    await expect(request('session-1', 'branch-2')).rejects.toBeInstanceOf(Forbidden);
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
   it('forwards the resolved tenant into the lookups and scopes key resolution to it', async () => {
@@ -178,7 +247,13 @@ describe('ConfigService.resolveApiKey', () => {
         provider: 'socketio',
         tenant,
         authentication: {
-          payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            task_id: 'task-1',
+            session_id: 'session-1',
+          },
         },
       } as never
     );
@@ -197,130 +272,26 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
-  it('allows executor runtime tokens passed as explicit session-token proof', async () => {
+  it('rejects executor scope reconstructed from caller bearer or transport fields', async () => {
     const service = new ConfigService({} as never);
-    service.app = {
-      sessionTokenService: {
-        validateToken: vi.fn(async () => ({ task_id: 'task-1' })),
-      },
-      service(name: string) {
-        if (name === 'tasks') {
-          return {
-            get: vi.fn(async () => ({
-              created_by: 'creator-1' as UserID,
-              session_id: 'session-1',
-            })),
-          };
-        }
-        if (name === 'sessions') {
-          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    } as never;
-
-    const result = await service.resolveApiKey(
-      {
-        taskId: 'task-1' as TaskID,
-        keyName: 'OPENAI_API_KEY',
-        tool: 'codex',
-        executorSessionToken: 'executor-jwt',
-      },
-      {
-        provider: 'socketio',
-        user: { user_id: 'creator-1' },
-      } as never
-    );
-
-    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
-    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
-      userId: 'creator-1',
-      db: {},
+    const data = {
+      taskId: 'task-1' as TaskID,
+      keyName: 'OPENAI_API_KEY',
       tool: 'codex',
-    });
-  });
-
-  it('recovers executor runtime scope from the verified access token when payload is absent', async () => {
-    const service = new ConfigService({} as never);
-    service.app = {
-      service(name: string) {
-        if (name === 'tasks') {
-          return {
-            get: vi.fn(async () => ({
-              created_by: 'creator-1' as UserID,
-              session_id: 'session-1',
-            })),
-          };
-        }
-        if (name === 'sessions') {
-          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    } as never;
-    const accessToken = jwt.sign(
-      {
-        type: 'executor-session',
-        purpose: 'executor-task',
-        task_id: 'task-1',
-      },
-      'test-secret'
-    );
-
-    const result = await service.resolveApiKey(
-      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
-      {
-        provider: 'socketio',
-        authentication: { accessToken },
-        user: { user_id: 'creator-1' },
-      } as never
-    );
-
-    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
-    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
-      userId: 'creator-1',
-      db: {},
-      tool: 'codex',
-    });
-  });
-
-  it('allows executor runtime tokens when Socket.io preserved scope fields without payload', async () => {
-    const service = new ConfigService({} as never);
-    service.app = {
-      service(name: string) {
-        if (name === 'tasks') {
-          return {
-            get: vi.fn(async () => ({
-              created_by: 'creator-1' as UserID,
-              session_id: 'session-1',
-            })),
-          };
-        }
-        if (name === 'sessions') {
-          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
+      executorSessionToken: 'caller-bearer',
     } as never;
 
-    const result = await service.resolveApiKey(
-      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
-      {
+    await expect(
+      service.resolveApiKey(data, {
         provider: 'socketio',
-        authentication: { strategy: 'jwt' },
+        authentication: { strategy: 'jwt', accessToken: 'caller-bearer' },
         user: { user_id: 'creator-1' },
         task_id: 'task-1',
         session_id: 'session-1',
-        branch_id: 'branch-1',
-      } as never
-    );
+      } as never)
+    ).rejects.toBeInstanceOf(Forbidden);
 
-    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
-    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
-      userId: 'creator-1',
-      db: {},
-      tool: 'codex',
-    });
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
   it('rejects executor runtime tokens for a different API key than the session tool uses', async () => {
@@ -343,7 +314,13 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
           },
         } as never
       )
@@ -372,7 +349,13 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
           },
         } as never
       )
@@ -424,7 +407,13 @@ describe('ConfigService.resolveApiKey', () => {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
           authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
           },
         } as never
       )
@@ -494,7 +483,13 @@ describe('ConfigService.resolveApiKey', () => {
             provider: 'socketio',
             tenant: { tenant_id: 'tenant-1' },
             authentication: {
-              payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+              strategy: 'jwt',
+              payload: {
+                type: 'executor-session',
+                purpose: 'executor-task',
+                task_id: 'task-1',
+                session_id: 'session-1',
+              },
             },
           } as never
         )
@@ -540,7 +535,13 @@ describe('ConfigService.resolveApiKey', () => {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
           authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
           },
         } as never
       )
@@ -585,7 +586,13 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           authentication: {
-            payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
           },
         } as never
       )

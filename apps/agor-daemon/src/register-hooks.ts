@@ -90,9 +90,8 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import {
-  executorRuntimeScopeGuard,
   isTaskScopedExecutorRequest,
-  requireExecutorRuntimeToken,
+  requireTaskScopedExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -345,10 +344,10 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
  * so widening the whitelist here cannot accidentally leak metadata writes.
  *
- * NOTE: `sdk_session_id` is on this list because the executor
- * authenticates as the session creator (see auth/session-token-strategy.ts),
- * not as a service account. Proper long-term fix is to give the executor a
- * service-account token so these patches bypass RBAC entirely.
+ * NOTE: `sdk_session_id` is on this list because a task executor authenticates
+ * as the initiating user and reports the SDK handle during that user's prompt
+ * lifecycle. This exception does not grant service-account access; task result
+ * writes are independently bound to the exact signed task context.
  */
 export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'tasks',
@@ -786,10 +785,10 @@ function redactMCPServerPayload(result: any): any {
  * `result` and `dispatch` answer different questions and get different
  * answers:
  *
- * - `context.result` is what the CALLER receives. An in-process call or the
- *   executor's service account legitimately needs raw values to start servers
- *   and resolve templates, which is what `shouldExposeMCPServerSecrets`
- *   decides.
+ * - `context.result` is what the CALLER receives. An in-process call, explicit
+ *   daemon service account, or exact task-executor scope may legitimately need
+ *   raw values to start servers and resolve templates, which is what
+ *   `shouldExposeMCPServerSecrets` decides.
  * - `context.dispatch` is what EVERYONE ELSE receives — Feathers builds the
  *   channel broadcast from `dispatch ?? result`, and `mcp-servers` events go
  *   to the tenant-wide authenticated channel. Its audience is by definition
@@ -917,7 +916,9 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (context.path === 'users') {
     if (context.method === 'create') return 'none';
     if (context.method === 'remove') return 'evict';
-    return ['password', 'role', 'tokens_valid_after'].some((field) => Object.hasOwn(data, field))
+    return ['password', 'role', 'tokens_valid_after', 'must_change_password'].some((field) =>
+      Object.hasOwn(data, field)
+    )
       ? 'evict'
       : 'none';
   }
@@ -1443,7 +1444,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('messages').hooks({
     before: {
-      all: [typedValidateQuery(messageQueryValidator), requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(messageQueryValidator), requireAuth],
       find: [
         // RBAC: Scope messages.find() to sessions the caller can access.
         // Without this backstop, any authenticated member could list messages
@@ -1631,7 +1632,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
    * user's artifact — role-only gating is not enough.
    *
    * Runs AFTER requireMinimumRole (which guarantees `params.user`), skips
-   * internal calls (no provider) and service accounts (executor).
+   * internal calls (no provider) and explicit daemon service accounts.
    */
   const ensureArtifactOwnerOrAdmin = () => async (context: HookContext) => {
     if (!context.params.provider) return context;
@@ -1952,7 +1953,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('branches').hooks({
     before: {
-      all: [typedValidateQuery(branchQueryValidator), requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(branchQueryValidator), requireAuth],
       find: [
         // RBAC: mark external regular-user finds for BranchesService to compose
         // the shared branch visibility predicate directly into its SQL read.
@@ -2139,13 +2140,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const queryForUserId = (context.params?.query as Record<string, unknown>)?.forUserId as
       | string
       | undefined;
-    const authPayloadType = (
-      context.params?.authentication as { payload?: { type?: unknown } } | undefined
-    )?.payload?.type;
     const userId = resolveForUserIdWithGate({
       queryForUserId,
       isServiceAccount: context.params?.user?._isServiceAccount,
-      authPayloadType,
       callerUserId: context.params?.user?.user_id,
     });
     const injectToken = async (server: MCPServer) => {
@@ -2925,7 +2922,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   app.service('sessions').hooks({
     before: {
-      all: [typedValidateQuery(sessionQueryValidator), requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(sessionQueryValidator), requireAuth],
       find: [
         // RBAC: mark external regular-user finds for SessionsService to compose
         // the shared branch visibility predicate directly into its SQL read.
@@ -3212,7 +3209,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
   tasksService.hooks({
     before: {
-      all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
+      all: [typedValidateQuery(taskQueryValidator), requireAuth],
       find: [
         // RBAC: Scope tasks.find() to sessions the caller can access.
         ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleSessionsSql(superadminOpts)] : []),
@@ -3244,10 +3241,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-      connectExecutor: [requireExecutorRuntimeToken()],
-      reportTerminationComplete: [requireExecutorRuntimeToken()],
-      reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
-      reportSdkHealthFailure: [requireExecutorRuntimeToken()],
+      connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
+      reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
+      reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],
+      reportSdkHealthFailure: [requireTaskScopedExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch

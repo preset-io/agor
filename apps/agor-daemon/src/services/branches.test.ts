@@ -23,13 +23,16 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
     ...actual,
     spawnExecutor: vi.fn(),
     requestExecutor: vi.fn(),
-    generateScopedServiceToken: vi.fn(() => 'service-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
 
 function createTenantScopeTestDb() {
-  return { run: vi.fn() };
+  const db = {
+    run: vi.fn(),
+    transaction: vi.fn(async (work: (scoped: unknown) => Promise<unknown>) => work(db)),
+  };
+  return db;
 }
 
 function createRenderEnvHarness(opts: {
@@ -51,7 +54,7 @@ function createRenderEnvHarness(opts: {
   const app = {
     get: () => ({}),
     sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
+      generateCommandToken: vi.fn(async () => 'executor-token'),
     },
     service(path: string) {
       if (path === 'repos') return { get: reposGet };
@@ -98,7 +101,7 @@ function createPatchHarness(opts: {
   const app = {
     get: () => ({}),
     sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
+      generateCommandToken: vi.fn(async () => 'executor-token'),
     },
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
@@ -178,7 +181,7 @@ function createServiceHarness() {
   };
 
   const sessionTokenService = {
-    generateToken: vi.fn(async () => 'executor-token'),
+    generateCommandToken: vi.fn(async () => 'executor-token'),
   };
   const app = {
     get: () => ({}),
@@ -199,9 +202,16 @@ function createServiceHarness() {
       branchRepo: BranchRepository;
     }
   ).branchRepo;
+  const taskRepo = (
+    service as unknown as {
+      taskRepo: { hasNonterminalForBranch: ReturnType<typeof vi.fn> };
+    }
+  ).taskRepo;
+  taskRepo.hasNonterminalForBranch = vi.fn(async () => false);
   return {
     service,
     branchRepo,
+    taskRepo,
     boardObjectsService,
     sessionsService,
     branchesService,
@@ -533,7 +543,7 @@ describe('BranchesService environment start async behavior', () => {
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
-      sessionTokenService: { generateToken: ReturnType<typeof vi.fn> };
+      sessionTokenService: { generateCommandToken: ReturnType<typeof vi.fn> };
     };
     const branch = {
       branch_id: 'wt-logs' as BranchID,
@@ -564,10 +574,10 @@ describe('BranchesService environment start async behavior', () => {
       logs: 'line 1\nline 2',
     });
 
-    expect(app.sessionTokenService.generateToken).toHaveBeenCalledWith(
+    expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
       'environment-logs',
       branch.created_by,
-      { branchId: branch.branch_id, maxUses: -1 }
+      branch.branch_id
     );
     expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1092,6 +1102,8 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 });
 
 describe('BranchesService.unarchive', () => {
+  const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
+
   it('preserves existing board_id when options.boardId is not provided', async () => {
     const { service, boardObjectsService, sessionsService } = createServiceHarness();
     const branchId = 'wt-1' as BranchID;
@@ -1116,7 +1128,7 @@ describe('BranchesService.unarchive', () => {
       y: 222,
     });
 
-    await service.unarchive(branchId);
+    await service.unarchive(branchId, undefined, userParams);
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1126,7 +1138,7 @@ describe('BranchesService.unarchive', () => {
         archived_by: undefined,
         filesystem_status: undefined,
       }),
-      undefined
+      userParams
     );
     expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
 
@@ -1162,7 +1174,7 @@ describe('BranchesService.unarchive', () => {
     } as never);
     boardObjectsService.findByBranchId.mockResolvedValue({ object_id: 'existing' });
 
-    await service.unarchive(branchId);
+    await service.unarchive(branchId, undefined, userParams);
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).not.toHaveBeenCalled();
@@ -1193,7 +1205,7 @@ describe('BranchesService.unarchive', () => {
       y: 8,
     });
 
-    await service.unarchive(branchId, { boardId: newBoardId });
+    await service.unarchive(branchId, { boardId: newBoardId }, userParams);
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1201,7 +1213,7 @@ describe('BranchesService.unarchive', () => {
         archived: false,
         board_id: newBoardId,
       }),
-      undefined
+      userParams
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: newBoardId,
@@ -1273,6 +1285,49 @@ describe('BranchesService.archiveOrDelete', () => {
     );
   });
 
+  it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
+    const { service, sessionTokenService } = createServiceHarness();
+    const branchId = 'wt-delete-files' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Delete Files',
+      path: '/safe/worktrees/repo/feature',
+      archived: false,
+      board_id: 'board-a',
+      storage_mode: 'clone',
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    vi.spyOn(service, 'patch').mockResolvedValue({ ...branch, archived: true });
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'archive', filesystemAction: 'deleted' },
+      params
+    );
+
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.remove',
+        params: expect.objectContaining({
+          branchId,
+          branchPath: branch.path,
+          storageMode: 'clone',
+        }),
+      }),
+      expect.objectContaining({ logPrefix: `[BranchesService.delete ${branch.name}]` })
+    );
+    const payload = mockedSpawnExecutor.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('sessionToken');
+    expect(payload).not.toHaveProperty('daemonUrl');
+    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+  });
+
   it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
     const { service, branchRepo, branchesService } = createServiceHarness();
     const branchId = 'wt-delete-op' as BranchID;
@@ -1320,6 +1375,39 @@ describe('BranchesService.archiveOrDelete', () => {
         params,
       })
     );
+  });
+
+  it('refuses metadata deletion while a descendant task is unfinished', async () => {
+    const { service, branchRepo, taskRepo, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-running' as BranchID;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Delete Running',
+      path: '/tmp/wt-delete-running',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(branch);
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    taskRepo.hasNonterminalForBranch.mockResolvedValue(true);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete');
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+
+    await expect(
+      service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        params
+      )
+    ).rejects.toThrow(/unfinished tasks/i);
+
+    expect(repositoryDelete).not.toHaveBeenCalled();
+    expect(branchesService.emit).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
   it('captures hard-delete visibility after authorization, inside the metadata transaction', async () => {
@@ -1388,7 +1476,7 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(get).not.toHaveBeenCalled();
     expect(stopEnvironment).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
-    expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 });

@@ -97,8 +97,16 @@ import {
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-capability.js';
-import { isExecutorSessionTokenPayload } from './auth/executor-session-token.js';
+import {
+  gatewaySlackUploadExecutorCommandId,
+  uploadMaterializeExecutorCommandId,
+} from './auth/executor-command-ids.js';
+import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-admission.js';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  matchesExecutorCommandRuntimeScope,
+  matchesTaskExecutorRuntimeScope,
+} from './auth/executor-runtime-scope.js';
 import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
 import { createRefreshTokenService } from './auth/refresh-token-service.js';
@@ -294,12 +302,18 @@ function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
 }
 
-export function requireStreamingPublisherCapability(params: RouteParams): void {
-  if (
-    !isServiceAccountRoute(params) &&
-    !isExecutorSessionTokenPayload(params.authentication?.payload)
-  ) {
+export function requireStreamingPublisherCapability(
+  params: RouteParams,
+  eventData: Record<string, unknown>
+): void {
+  if (isServiceAccountRoute(params)) return;
+
+  const scope = authenticatedTaskExecutorRuntimeScope(params);
+  if (!scope?.taskId || eventData.task_id !== scope.taskId) {
     throw new Forbidden('Streaming events require an executor-scoped token');
+  }
+  if (!matchesTaskExecutorRuntimeScope(scope, eventData)) {
+    throw new Forbidden('Streaming event session does not match executor scope');
   }
 }
 
@@ -537,6 +551,48 @@ export function createRegisteredMCPCatalogConnectService(
   });
 }
 
+interface BearerHttpAuthenticationService {
+  create(
+    data: { strategy: 'jwt'; accessToken: string },
+    params: AuthenticatedParams
+  ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+}
+
+/**
+ * Authenticate one raw HTTP bearer at the same tenant-aware boundary used by
+ * Feathers REST middleware. The mutable params object passed into the strategy
+ * is reused in the result so verified tenant context cannot be lost between
+ * user lookup and the route's authorization checks.
+ */
+export async function authenticateBearerHttpRequest(input: {
+  authentication: BearerHttpAuthenticationService;
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+  headers: Record<string, unknown>;
+  token: string;
+}): Promise<AuthenticatedParams> {
+  const authParams: AuthenticatedParams = { headers: input.headers };
+  const result = await input.authentication.create(
+    { strategy: 'jwt', accessToken: input.token },
+    authParams
+  );
+  return {
+    ...authParams,
+    user: result.user,
+    provider: 'rest',
+    authentication: result.authentication,
+    tenant:
+      authParams.tenant ??
+      resolveTenantContext(input.multiTenancy, {
+        params: {
+          authentication: result.authentication,
+          headers: input.headers,
+        },
+        authPayload: result.authentication?.payload,
+        headers: input.headers,
+      }),
+  };
+}
+
 export function createUploadAuthMiddleware(input: {
   authentication: {
     create(
@@ -555,30 +611,12 @@ export function createUploadAuthMiddleware(input: {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      const authParams: AuthenticatedParams = { headers: req.headers };
-      const result = await input.authentication.create(
-        { strategy: 'jwt', accessToken: token },
-        authParams
-      );
-      const authenticatedParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
+      req.feathers = await authenticateBearerHttpRequest({
+        authentication: input.authentication,
+        multiTenancy: input.multiTenancy,
         headers: req.headers,
-      };
-      req.feathers = {
-        ...authenticatedParams,
-        tenant:
-          authParams.tenant ??
-          resolveTenantContext(input.multiTenancy, {
-            params: {
-              authentication: result.authentication,
-              headers: req.headers,
-            },
-            authPayload: result.authentication?.payload,
-            headers: req.headers,
-          }),
-      };
+        token,
+      });
       next();
     } catch (error) {
       console.error('❌ [Upload Auth] Authentication failed:', error);
@@ -740,9 +778,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const authStrategiesArray = ['api-key', 'jwt', 'local'];
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantTokenClaim = multiTenancy.auth_claim ?? 'tenant_id';
-  if (sessionTokenService) {
-    authStrategiesArray.push('session-token');
-  }
 
   // Access token TTL — short by design. The /authentication/refresh route
   // (and the after-hook below) issues a 30-day refresh token so users stay
@@ -775,13 +810,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Configure authentication
   const authentication = new AuthenticationService(app);
 
-  // Import custom JWT strategy that handles service tokens
-  const { ServiceJWTStrategy } = await import('./auth/service-jwt-strategy.js');
+  // Register the runtime JWT strategy for user, executor, terminal, and daemon credentials.
+  const { RuntimeJWTStrategy } = await import('./auth/runtime-jwt-strategy.js');
 
   // Register authentication strategies
   authentication.register(
     'jwt',
-    new ServiceJWTStrategy({
+    new RuntimeJWTStrategy({
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
@@ -1047,7 +1082,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
-        requireStreamingPublisherCapability(params);
+        requireStreamingPublisherCapability(params, data.data);
         app.service('messages').emit(data.event, data.data);
         if (isServiceAccountRoute(params)) {
           const gatewayStreamingEvent =
@@ -1086,7 +1121,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
-        requireStreamingPublisherCapability(params);
+        requireStreamingPublisherCapability(params, data.data);
         app.service('tasks').emit(data.event, data.data);
         if (isServiceAccountRoute(params) && data.event === 'tool:start') {
           const sessionId =
@@ -2309,9 +2344,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const uploadRepo = new UploadRepository(db);
   const uploadMiddleware = createUploadMiddleware(getUploadStagingStore());
 
-  // Executor-only data plane for staged upload materialization. The scoped
-  // service token stays in the Authorization header (never URL/query/logs) and
-  // binds exactly one tenant + session + upload handle.
+  // Executor-only data plane for staged upload materialization. The bounded
+  // delegated-user command token stays in the Authorization header (never
+  // URL/query/logs) and binds exactly one tenant + branch + session + handle.
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).get('/executor/uploads/:uploadRef/content', async (req: any, res: any) => {
     try {
@@ -2319,27 +2354,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Authentication required' });
       }
-      const result = await app.service('authentication').create({
-        strategy: 'jwt',
-        accessToken: authHeader.slice(7),
+      const params = await authenticateBearerHttpRequest({
+        authentication: app.service('authentication'),
+        multiTenancy,
+        headers: req.headers,
+        token: authHeader.slice(7),
       });
-      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
       const uploadRef = req.params.uploadRef;
+      const sessionId = String(req.headers['x-agor-session-id'] ?? '');
+      const branchId = claims?.branch_id;
+      const tenant = params.tenant;
       if (
-        claims?.type !== 'service' ||
-        claims.executor_action !== 'upload.materialize' ||
-        claims.executor_upload_ref !== uploadRef ||
-        typeof claims.executor_session_id !== 'string' ||
-        typeof claims.executor_branch_id !== 'string' ||
-        typeof claims.tenant_id !== 'string'
+        typeof branchId !== 'string' ||
+        !tenant?.tenant_id ||
+        !sessionId ||
+        !matchesExecutorCommandRuntimeScope(
+          params,
+          uploadMaterializeExecutorCommandId(sessionId, uploadRef),
+          branchId
+        )
       ) {
         return res.status(403).json({ error: 'Upload transfer capability denied' });
       }
       const store = getUploadStagingStore();
       const owner = {
-        tenantId: claims.tenant_id as import('@agor/core/types').TenantID,
-        sessionId: claims.executor_session_id as SessionID,
-        branchId: claims.executor_branch_id as import('@agor/core/types').BranchID,
+        tenantId: tenant.tenant_id,
+        sessionId: sessionId as SessionID,
+        branchId: branchId as import('@agor/core/types').BranchID,
         ref: uploadRef as import('@agor/core/types').UploadRef,
       };
       const metadata = await store.inspect(owner);
@@ -2373,39 +2415,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Authentication required' });
       }
-      const result = await app.service('authentication').create({
-        strategy: 'jwt',
-        accessToken: authHeader.slice(7),
+      const params = await authenticateBearerHttpRequest({
+        authentication: app.service('authentication'),
+        multiTenancy,
+        headers: req.headers,
+        token: authHeader.slice(7),
       });
-      const claims = result.authentication?.payload as Record<string, unknown> | undefined;
+      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
       const gatewayChannelId = String(req.headers['x-agor-gateway-channel-id'] ?? '');
       const channel = String(req.headers['x-agor-slack-channel-id'] ?? '');
       const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+      const branchId = claims?.branch_id;
       if (
-        claims?.type !== 'service' ||
-        claims.executor_action !== 'gateway.slack-file-upload' ||
-        claims.executor_gateway_channel_id !== gatewayChannelId ||
-        claims.executor_slack_channel_id !== channel ||
+        typeof branchId !== 'string' ||
+        !matchesExecutorCommandRuntimeScope(
+          params,
+          gatewaySlackUploadExecutorCommandId(gatewayChannelId, channel),
+          branchId
+        ) ||
         !Number.isSafeInteger(size) ||
         size < 0 ||
         size > getUploadLimits().maxFileBytes
       ) {
         return res.status(403).json({ error: 'Slack upload capability denied' });
       }
-      const authParams = {
-        user: result.user,
-        provider: 'rest',
-        authentication: result.authentication,
-        headers: req.headers,
-      };
-      const params = {
-        ...authParams,
-        tenant: resolveTenantContext(multiTenancy, {
-          params: authParams,
-          authPayload: result.authentication?.payload,
-          headers: req.headers,
-        }),
-      } as AuthenticatedParams;
       let received = 0;
       const limiter = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
@@ -4206,16 +4239,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const mcpService = app.service('mcp-servers');
         const queryForUserId =
           typeof params.query?.forUserId === 'string' ? params.query.forUserId : undefined;
-        const authPayloadType = (
-          params as RouteParams & { authentication?: { payload?: { type?: unknown } } }
-        ).authentication?.payload?.type;
         const routeUser = params.user as
           | (NonNullable<RouteParams['user']> & { _isServiceAccount?: boolean })
           | undefined;
         const userId = resolveForUserIdWithGate({
           queryForUserId,
           isServiceAccount: routeUser?._isServiceAccount,
-          authPayloadType,
           callerUserId: params.user?.user_id,
         });
         const rawLookupParams = {

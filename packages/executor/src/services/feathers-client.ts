@@ -1,8 +1,10 @@
 /**
- * Feathers Client for Executor
+ * Executor Daemon Client
  *
- * Creates authenticated connection to daemon for database/service operations.
- * Uses session token for authentication instead of user credentials.
+ * Creates the executor's authenticated Feathers connection for daemon service
+ * operations. The daemon-issued credential establishes the trusted tenant and
+ * principal at the Socket.IO handshake; service hooks own authorization after
+ * that point.
  */
 
 import { type AgorClient, createClient } from '@agor/core/api';
@@ -59,10 +61,10 @@ export function registerExecutorClientHooks(client: AgorClient): void {
 }
 
 /**
- * Create Feathers client connected to daemon with session token authentication
+ * Create a Feathers client with daemon-issued handshake authentication.
  *
  * @param daemonUrl - URL of the daemon (e.g., http://localhost:3030)
- * @param sessionToken - Session token for authentication
+ * @param sessionToken - Daemon-issued executor credential
  * @returns Authenticated Feathers client
  */
 export interface ExecutorClientHooks {
@@ -90,9 +92,10 @@ export async function createExecutorClient(
     console.log(`[executor] Socket ${event} after ${elapsedSeconds}s${suffix}`);
   };
 
-  // The task-scoped token is available before the transport exists. Present it
-  // on every namespace handshake so the daemon installs immutable executor,
-  // tenant, session, task, and branch authority before accepting the socket.
+  // The credential is available before the transport exists. Present it on
+  // every namespace handshake so the daemon installs immutable principal and
+  // tenant authority (plus task/branch context when present) before accepting
+  // the socket.
   const client = createClient(daemonUrl, false, {
     verbose: DEBUG_FEATHERS_CLIENT, // Log connection status for debugging
     // Executors may run for much longer than common proxy/websocket connection
@@ -100,19 +103,14 @@ export async function createExecutorClient(
     // turns a recoverable transport rotation into a permanent daemon
     // disconnect: heartbeats stop, terminal task patches are lost, and the
     // daemon eventually marks the task failed via stale heartbeat/onExit
-    // safety nets. Match the browser client and keep retrying for the task's
-    // lifetime. Every automatic reconnect performs a fresh authenticated
-    // handshake with the same scoped bearer.
+    // safety nets. Match the browser client and keep retrying for a live
+    // credential's lifetime. Every automatic reconnect performs a fresh
+    // authenticated handshake with the same bearer.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
     ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
     socketAuthentication: { accessToken: sessionToken },
   });
   registerExecutorClientHooks(client);
-
-  // Keep the executor JWT available for downstream process boundaries and
-  // daemon endpoints that require an explicit task-scoped bearer, rather than
-  // relying on the in-process Socket.IO connection projection.
-  (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
 
   let serverDisconnectReconnectAttempts = 0;
   let serverDisconnectReconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -254,8 +252,3 @@ export async function createExecutorClient(
 
   return client;
 }
-
-/**
- * Create Feathers client (alias for createExecutorClient for backward compatibility)
- */
-export const createFeathersClient = createExecutorClient;

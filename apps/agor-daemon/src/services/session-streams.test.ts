@@ -34,14 +34,15 @@ function makeApp(
 const connection = { id: 'socket-1' };
 
 describe('session-streams service', () => {
-  it('rejects task-executor tokens instead of granting transcript rooms', async () => {
-    const { app, channel } = makeApp(async () => ({ session_id: 's1' }));
+  it('applies the ordinary session access gate to delegated executor users', async () => {
+    const { app, join, get } = makeApp(async () => ({ session_id: 's1' }));
     const service = createSessionStreamsService(app);
 
     await expect(
       service.create({ session_id: 's1' }, {
         connection,
         authentication: {
+          strategy: 'jwt',
           payload: {
             type: 'executor-session',
             purpose: 'executor-task',
@@ -49,8 +50,9 @@ describe('session-streams service', () => {
           },
         },
       } as never)
-    ).rejects.toThrow('Task executor tokens cannot subscribe');
-    expect(channel).not.toHaveBeenCalled();
+    ).resolves.toEqual({ session_id: 's1', subscribed: true });
+    expect(get).toHaveBeenCalledWith('s1', expect.objectContaining({ query: {} }));
+    expect(join).toHaveBeenCalledWith(connection);
   });
 
   it('joins the per-session channel after an access check passes', async () => {

@@ -25,12 +25,14 @@ import type {
   TaskID,
   UserID,
 } from '@agor/core/types';
-import jwt from 'jsonwebtoken';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  matchesTaskExecutorRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
 import {
   resolveExecutionCredentialHome,
   sameExecutionCredentialHome,
 } from './credential-home-identity.js';
-import type { SessionTokenService } from './session-token-service.js';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
@@ -44,58 +46,6 @@ const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
 
 function isResolvableApiKeyName(value: string): value is ApiKeyName {
   return Object.hasOwn(RESOLVABLE_API_KEY_NAMES, value);
-}
-
-type ExecutorTokenPayload = {
-  type?: string;
-  purpose?: string;
-  session_id?: string;
-  sessionId?: string;
-  task_id?: string;
-  branch_id?: string;
-};
-
-function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
-  const authParams = params as
-    | (AuthenticatedParams & { task_id?: string; authentication?: { strategy?: string } })
-    | undefined;
-  const payload = authParams?.authentication?.payload as ExecutorTokenPayload | undefined;
-  if (payload?.type === 'executor-session' && payload.purpose === 'executor-task') {
-    return payload;
-  }
-
-  // Feathers transports do not consistently preserve the decoded JWT payload
-  // on params.authentication. The token was already verified by requireAuth
-  // before this service method runs, so decoding here is only to recover
-  // trusted scope claims for executor-session JWTs.
-  const accessToken = (params as AuthenticatedParams | undefined)?.authentication?.accessToken;
-  if (typeof accessToken === 'string') {
-    const decoded = jwt.decode(accessToken) as ExecutorTokenPayload | null;
-    if (decoded?.type === 'executor-session' && decoded.purpose === 'executor-task') {
-      return decoded;
-    }
-  }
-
-  // Socket.io executor logins may preserve auth-result scope fields on the
-  // connection even when the decoded JWT payload is not carried forward into
-  // later service params. Keep the secret resolver restricted to task-scoped
-  // executor JWTs by only accepting this fallback for JWT-authenticated
-  // connections that have a task claim minted by ServiceJWTStrategy.
-  if (authParams?.authentication?.strategy === 'jwt' && authParams.task_id) {
-    const scopedParams = params as
-      | (Params & { session_id?: string; sessionId?: string; task_id?: string; branch_id?: string })
-      | undefined;
-    return {
-      type: 'executor-session',
-      purpose: 'executor-task',
-      task_id: authParams.task_id,
-      session_id: scopedParams?.session_id,
-      sessionId: scopedParams?.sessionId,
-      branch_id: scopedParams?.branch_id,
-    };
-  }
-
-  return undefined;
 }
 
 /**
@@ -131,14 +81,6 @@ export class ConfigService {
        * sweep (legacy behavior preserved for non-SDK callers).
        */
       tool?: AgenticToolName;
-      /**
-       * Explicit task-scoped executor JWT proof. The Socket.io connection can
-       * authenticate as the session creator user while dropping custom JWT
-       * claims from later service params, so executors include the minted token
-       * on this secret-resolution call and the daemon validates its signature,
-       * scope, and active token authority.
-       */
-      executorSessionToken?: string;
     },
     params?: Params
   ): Promise<{
@@ -158,34 +100,17 @@ export class ConfigService {
     // service account or with a task-scoped executor runtime JWT. Normal
     // user/API-key auth must not resolve raw configured keys. The former
     // general-purpose /config read endpoint no longer exists.
-    let executorPayload = getExecutorTokenPayload(params);
-    if (!executorPayload && params?.provider && data.executorSessionToken) {
-      const sessionTokenService = (
-        this.app as unknown as {
-          sessionTokenService?: SessionTokenService;
-        }
-      )?.sessionTokenService;
-      const sessionInfo = await sessionTokenService?.validateToken(data.executorSessionToken, {
-        taskId,
-      });
-      if (sessionInfo?.task_id === taskId) {
-        executorPayload = {
-          type: 'executor-session',
-          purpose: 'executor-task',
-          task_id: sessionInfo.task_id,
-        };
-      }
-    }
+    const executorScope = authenticatedTaskExecutorRuntimeScope(params);
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
       const isServiceAccount = caller?._isServiceAccount === true;
-      if (!isServiceAccount && !executorPayload) {
+      if (!isServiceAccount && !executorScope) {
         if (!caller) {
           throw new NotAuthenticated('Authentication required');
         }
         throw new Forbidden('Only executor runtime credentials may resolve API keys');
       }
-      if (executorPayload?.task_id && executorPayload.task_id !== taskId) {
+      if (executorScope && executorScope.taskId !== taskId) {
         throw new Forbidden('Executor token task scope does not match this request');
       }
     }
@@ -207,19 +132,27 @@ export class ConfigService {
       }
     } catch (err) {
       console.warn(`[Config.resolveApiKey] Failed to fetch task ${taskId}:`, err);
-      if (executorPayload) {
+      if (executorScope) {
         throw new Forbidden('Executor token task scope could not be verified');
       }
     }
 
-    if (executorPayload && (!userId || !sessionId)) {
+    if (
+      executorScope &&
+      (!userId ||
+        !sessionId ||
+        !matchesTaskExecutorRuntimeScope(executorScope, {
+          task_id: taskId,
+          session_id: sessionId,
+        }))
+    ) {
       throw new Forbidden('Executor token task scope could not be verified');
     }
 
     // Executor runtime calls are narrowly scoped to the SDK for this session.
     // Do not let a compromised executor token ask for another tool's bucket or
     // an unrelated credential name.
-    if (executorPayload) {
+    if (executorScope) {
       const verifiedSessionId = sessionId;
       if (!verifiedSessionId) {
         throw new Forbidden('Executor token task scope could not be verified');
@@ -236,7 +169,10 @@ export class ConfigService {
         throw new Forbidden('Executor token tool scope could not be verified');
       }
       const session = await sessionsService.get(verifiedSessionId, internalParams);
-      if (session?.agentic_tool !== tool) {
+      if (
+        session?.agentic_tool !== tool ||
+        (executorScope.branchId && executorScope.branchId !== session.branch_id)
+      ) {
         throw new Forbidden('Executor token tool scope does not match this session');
       }
     }

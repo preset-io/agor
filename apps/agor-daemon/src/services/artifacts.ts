@@ -57,6 +57,7 @@ import {
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -67,11 +68,8 @@ import {
   normalizeSandpackConfigForRender,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  requestExecutor,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 import type { UsersService } from './users.js';
 
 /**
@@ -525,13 +523,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       'session'
     );
 
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      {
-        executor_action: 'artifact.publish',
-        executor_user_id: params.user?.user_id,
-        executor_branch_id: branch.branch_id,
-      }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'artifact.publish',
+      userId,
+      branch.branch_id
     );
     const result = await requestExecutor(
       {
@@ -548,7 +546,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -593,8 +591,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     params?: ArtifactParams
   ): Promise<Artifact> {
-    const claims = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
-    const userId = claims.executor_user_id as UserID;
+    const userId = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
     const matchedBranchId = data.branch_id as BranchID;
     const provenanceSubpath = data.subpath ?? '';
     const files = data.files;
@@ -1002,8 +999,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-artifact-land',
+      userId,
+      branchId
     );
     const result = await requestExecutor(
       {
@@ -1021,7 +1023,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.land ${branchId}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -1727,16 +1729,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
     const result = await requestExecutor(
       {
         command: 'branch.artifact.validate',
-        sessionToken: generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          {
-            executor_action: 'artifact.validate',
-            executor_user_id: params.user?.user_id,
-            executor_branch_id: branch.branch_id,
-          }
+        sessionToken: await issueExecutorCommandToken(
+          this.app,
+          'artifact.validate',
+          userId,
+          branch.branch_id
         ),
         daemonUrl: getDaemonUrl(),
         params: { branchId: branch.branch_id, subpath: input.subpath },
@@ -1745,7 +1747,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -1779,22 +1781,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     params: ArtifactParams | undefined,
     action: 'artifact.publish' | 'artifact.validate',
     branchId: string | undefined
-  ): Record<string, unknown> {
+  ): UserID {
     const caller = params?.user;
     if (!caller) throw new NotAuthenticated('Authentication required');
-    if (!caller._isServiceAccount) {
-      throw new Forbidden('Only an executor service account may invoke this method');
-    }
-    const claims = params.authentication?.payload as Record<string, unknown> | undefined;
     if (
-      claims?.executor_action !== action ||
-      typeof claims.executor_user_id !== 'string' ||
       typeof branchId !== 'string' ||
-      claims.executor_branch_id !== branchId
+      !matchesExecutorCommandRuntimeScope(params, action, branchId)
     ) {
       throw new Forbidden('Executor token is not scoped to this artifact operation');
     }
-    return claims;
+    return caller.user_id as UserID;
   }
 
   async checkBuild(artifactId: string): Promise<{

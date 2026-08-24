@@ -57,7 +57,7 @@ export interface RealtimeAuthorizationInvalidation {
   disconnectSockets?: boolean;
 }
 
-/** Internal exact/session executor capability revocation signal. */
+/** Internal exact executor-token revocation signal. */
 export const HA_EXECUTOR_TOKEN_INVALIDATION_EVENT = 'agor:executor-token-invalidated:v1';
 
 /** Process-local notification emitted before stale sockets are disconnected. */

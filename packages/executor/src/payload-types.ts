@@ -231,6 +231,13 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     createDbRecord: z.boolean().optional().default(true),
 
     /**
+     * Import executable environment configuration from the cloned
+     * `.agor.yml`. This capability is derived by the daemon from the
+     * initiating user's admin role and defaults closed for direct callers.
+     */
+    importEnvironmentConfig: z.boolean().optional().default(false),
+
+    /**
      * Pre-existing repo row to patch with clone outcome. When set, the
      * executor patches this row with `clone_status: 'ready'` (success) or
      * `'failed'` (with `clone_error`) instead of creating a new row. The
@@ -303,20 +310,13 @@ export type GitBranchAddPayload = z.infer<typeof GitBranchAddPayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git branch remove payload - remove branch filesystem and database resources
- *
- * When deleteDbRecord is true (default), the executor will:
- * 1. Remove the git branch from filesystem
- * 2. Delete the branch record from database via Feathers
+ * Git branch remove payload — remove only daemon-authorized filesystem state.
+ * Branch metadata and cascades remain entirely daemon-owned.
  */
 export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.remove'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Branch ID (UUID) - required for DB record deletion */
+    /** Branch ID (UUID) retained for bounded diagnostics. */
     branchId: z.string().uuid(),
 
     /** Path to the branch to remove */
@@ -327,9 +327,6 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
 
     /** Force removal even if dirty */
     force: z.boolean().optional(),
-
-    /** Delete DB record after removal (default: true) */
-    deleteDbRecord: z.boolean().optional().default(true),
 
     /** Branch name to delete after branch removal */
     branch: z.string().optional(),
@@ -368,10 +365,6 @@ export type GitBranchRemovePayload = z.infer<typeof GitBranchRemovePayloadSchema
  */
 export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.clean'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
     /** Path to the branch to clean */
     branchPath: z.string(),
@@ -674,13 +667,15 @@ export type EnvironmentLogsPayload = z.infer<typeof EnvironmentLogsPayloadSchema
  */
 export const GitRepoRealignOriginPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.repo.realign-origin'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Repo ID to inspect and realign */
+    /** Repo identity retained for bounded diagnostics. */
     repoId: z.string().uuid(),
+    /** Daemon-authoritative managed repository path. */
+    repoPath: z.string().min(1),
+    /** Daemon-authoritative canonical origin URL. */
+    remoteUrl: z.string().min(1),
+    /** Redacted human-readable identifier for the security log. */
+    repoSlug: z.string().min(1),
   }),
 });
 
@@ -714,12 +709,13 @@ export type GitManagedCredentialsReconcilePayload = z.infer<
 export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.repo.delete'),
 
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Repo being deleted; executor fetches the concrete managed paths itself. */
+    /** Repo being deleted (diagnostic attribution only). */
     repoId: z.string().uuid(),
+    /** Daemon-authoritative managed repository path. */
+    repoPath: z.string().min(1),
+    /** Daemon-authoritative managed branch paths from the unbounded inventory. */
+    branchPaths: z.array(z.string().min(1)),
     /** Tenant-scoped root that is allowed to contain the managed repository. */
     reposRoot: z.string().min(1),
     /** Tenant-scoped root that is allowed to contain managed branches. */

@@ -19,21 +19,24 @@ import {
 } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type {
-  BoardID,
-  CursorLeaveEvent,
-  CursorMovedEvent,
-  CursorMoveEvent,
-  PresenceUpdatedEvent,
-  TenantContext,
-  TerminalAllocatedEvent,
+import {
+  type BoardID,
+  type CursorLeaveEvent,
+  type CursorMovedEvent,
+  type CursorMoveEvent,
+  MAX_TENANT_ID_LENGTH,
+  type PresenceUpdatedEvent,
+  type TenantContext,
+  type TerminalAllocatedEvent,
 } from '@agor/core/types';
 import type { Server, ServerOptions, Socket } from 'socket.io';
 import {
   getAuthenticatedConnectionAuthority,
+  isAuthenticatedConnectionAuthorityCurrent,
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
-import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-capability.js';
+import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
+import type { ExecutorSessionTokenRevocation } from '../auth/executor-session-token.js';
 import {
   boardPresenceRoomName,
   emitHaNativeSocketEvent,
@@ -47,13 +50,15 @@ import {
   tenantUserChannelName,
   terminalChannelName,
 } from '../realtime/routing.js';
-import type { ExecutorSessionTokenRevocation } from '../services/session-token-service.js';
 import type { TerminalAttachmentIdentity } from '../services/terminals.js';
 import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
 } from '../terminal-socket-connection.js';
-import { joinExecutorTaskChannel } from '../utils/realtime-publish.js';
+import {
+  joinExecutorTaskChannel,
+  leaveAllExecutorTaskChannels,
+} from '../utils/realtime-publish.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -78,6 +83,12 @@ interface FeathersSocket extends Socket {
     lastPresenceEmitAt?: number;
   };
   handshake: Socket['handshake'] & { headers?: Record<string, string | string[] | undefined> };
+}
+
+/** Remove realtime capability before clearing the authentication projection. */
+function retireSocketConnectionAuthority(app: Application, connection: unknown): void {
+  leaveAllExecutorTaskChannels(app, connection);
+  retireAuthenticatedConnectionAuthority(connection);
 }
 
 export interface SocketIOOptions {
@@ -126,19 +137,21 @@ export interface SocketIOOptions {
 /**
  * Auth state derived from a socket. Returned by {@link getSocketAuthState}.
  *
- * - `userId` is the authenticated user's id, or null for unauthenticated/service.
- * - `isService` is true for executor service tokens (no backing real user,
- *   but trusted).
+ * - `userId` is the authenticated interactive user's id. Delegated executor
+ *   connections deliberately remain a separate native-socket principal even
+ *   though Feathers service calls project their initiating user.
+ * - `isService` is true only for explicit daemon service identities and the
+ *   separately restricted terminal-executor identity.
  *
- * `isAuthenticated` is intentionally not a field — it's `!!(userId ||
- * isService)` and would only create drift between the two representations.
- * Callers that need it should compute `auth.userId !== null || auth.isService`.
+ * `isAuthenticated` is intentionally not a field: user, service, and executor
+ * principals are already represented independently, and a fourth mutable flag
+ * would only create drift.
  */
 export interface SocketAuthState {
   userId: string | null;
   isService: boolean;
-  /** Task-scoped executor tokens are authenticated but never user/service sockets. */
-  isTaskExecutor?: boolean;
+  /** Delegated-user executor credential at the native Socket.IO boundary. */
+  isExecutor?: boolean;
   tenant?: TenantContext;
   /**
    * For terminal executor service sockets: the single user this executor is
@@ -155,7 +168,7 @@ export interface SocketAuthState {
 function socketAuthState(
   userId: string | null,
   isService: boolean,
-  isTaskExecutor: boolean,
+  isExecutor: boolean,
   tenant?: TenantContext,
   terminalUserId?: string,
   terminalId?: string,
@@ -163,7 +176,7 @@ function socketAuthState(
   terminalOwnerBootId?: string
 ): SocketAuthState {
   const state: SocketAuthState = { userId, isService };
-  if (isTaskExecutor) state.isTaskExecutor = true;
+  if (isExecutor) state.isExecutor = true;
   if (tenant) state.tenant = tenant;
   if (terminalUserId) state.terminalUserId = terminalUserId;
   if (terminalId) state.terminalId = terminalId;
@@ -186,7 +199,7 @@ export function getSocketAuthState(socket: Socket): SocketAuthState {
   const authority = getAuthenticatedConnectionAuthority(s.feathers);
   if (!authority) return socketAuthState(null, false, false);
   const tenant = authority.tenant;
-  if (authority.principal.kind === 'task-executor') {
+  if (authority.principal.kind === 'executor') {
     return socketAuthState(null, false, true, tenant);
   }
   if (authority.principal.kind === 'terminal-executor') {
@@ -212,7 +225,7 @@ export function getSocketAuthState(socket: Socket): SocketAuthState {
  * `userId || isService` pattern at call sites.
  */
 function isAuthenticated(auth: SocketAuthState): boolean {
-  return auth.userId !== null || auth.isService || auth.isTaskExecutor === true;
+  return auth.userId !== null || auth.isService || auth.isExecutor === true;
 }
 
 /**
@@ -360,7 +373,7 @@ export function createSocketIOConfig(
         if (remaining <= 0) {
           // Retire synchronously before ending the namespace so no handler can
           // observe stale authority during disconnect propagation.
-          retireAuthenticatedConnectionAuthority(app, socket.feathers);
+          retireSocketConnectionAuthority(app, socket.feathers);
           socket.disconnect(true);
           return;
         }
@@ -533,6 +546,9 @@ export function createSocketIOConfig(
         await authentication.handleConnection('login', connection, result);
         const authority = getAuthenticatedConnectionAuthority(connection);
         if (!authority) throw new Error('Authenticated connection authority is unavailable');
+        if (!isAuthenticatedConnectionAuthorityCurrent(authority, executorRevocationFence)) {
+          throw new Error('Executor connection authority was revoked during connection setup');
+        }
         if (multiTenancy && !authority.tenant) {
           // Fail closed if authentication and transport wiring ever drift: a
           // configured tenant-aware daemon must never accept an unscoped
@@ -560,7 +576,7 @@ export function createSocketIOConfig(
       } catch (error) {
         console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
         authenticationFailures = Math.min(authenticationFailures + 1, Number.MAX_SAFE_INTEGER);
-        retireAuthenticatedConnectionAuthority(app, fs.feathers);
+        retireSocketConnectionAuthority(app, fs.feathers);
         const publicError = new Error('Invalid or expired authentication token') as Error & {
           data: { code: number; className: string };
         };
@@ -600,7 +616,7 @@ export function createSocketIOConfig(
       if (
         typeof data?.tenantId !== 'string' ||
         data.tenantId.length === 0 ||
-        data.tenantId.length > 128
+        data.tenantId.length > MAX_TENANT_ID_LENGTH
       ) {
         return;
       }
@@ -639,7 +655,7 @@ export function createSocketIOConfig(
       const tenantId =
         typeof data?.tenantId === 'string' &&
         data.tenantId.length > 0 &&
-        data.tenantId.length <= 128
+        data.tenantId.length <= MAX_TENANT_ID_LENGTH
           ? data.tenantId
           : undefined;
       if (multiTenancy && !tenantId) return;
@@ -647,16 +663,11 @@ export function createSocketIOConfig(
         typeof data?.tokenFingerprint === 'string' && /^[a-f0-9]{64}$/.test(data.tokenFingerprint)
           ? data.tokenFingerprint
           : undefined;
-      const sessionId =
-        typeof data?.sessionId === 'string' && data.sessionId.length > 0
-          ? data.sessionId
-          : undefined;
-      if (!tokenFingerprint && !sessionId) return;
+      if (!tokenFingerprint) return;
 
       const revocation: ExecutorSessionTokenRevocation = {
         ...(tenantId ? { tenantId } : {}),
-        ...(tokenFingerprint ? { tokenFingerprint } : {}),
-        ...(sessionId ? { sessionId } : {}),
+        tokenFingerprint,
       };
       // Fence first. Authentication may have completed its database authority
       // read but not yet reached the final synchronous authenticated-connection
@@ -666,17 +677,15 @@ export function createSocketIOConfig(
 
       for (const socket of io.sockets.sockets.values()) {
         const feathers = (socket as FeathersSocket).feathers;
-        const capability = getAuthenticatedConnectionAuthority(feathers)?.executorCapability;
-        if (!capability) continue;
-        if (tenantId && capability.tenant.tenant_id !== tenantId) continue;
-        const exactMatch = tokenFingerprint && capability.tokenFingerprint === tokenFingerprint;
-        const sessionMatch = sessionId && capability.sessionId === sessionId;
-        // Exact revocation must not widen into a session-wide fence merely
-        // because the diagnostic session id accompanies it. Session-wide
-        // revocation is represented by omitting tokenFingerprint.
-        if (tokenFingerprint ? exactMatch : sessionMatch) {
-          retireAuthenticatedConnectionAuthority(app, feathers);
-          socket.disconnect(true);
+        const authority = getAuthenticatedConnectionAuthority(feathers);
+        if (authority?.principal.kind !== 'executor') continue;
+        if (tenantId && authority.tenant?.tenant_id !== tenantId) continue;
+        if (authority.principal.tokenFingerprint === tokenFingerprint) {
+          // Retire the Feathers projection synchronously so no subsequent RPC
+          // can reuse the lease. Disconnect on the next turn so the terminal
+          // lifecycle RPC that committed revocation can still deliver its ack.
+          retireSocketConnectionAuthority(app, feathers);
+          setImmediate(() => socket.disconnect(true));
         }
       }
     };
@@ -691,10 +700,18 @@ export function createSocketIOConfig(
 
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
-      activeConnections++;
       const feathersSocket = socket as FeathersSocket;
-      bindTerminalRequestJoin(feathersSocket);
       const authority = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
+      if (
+        authority &&
+        !isAuthenticatedConnectionAuthorityCurrent(authority, executorRevocationFence)
+      ) {
+        retireSocketConnectionAuthority(app, feathersSocket.feathers);
+        socket.disconnect(true);
+        return;
+      }
+      activeConnections++;
+      bindTerminalRequestJoin(feathersSocket);
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: handshake, principal: ${authority?.principal.kind ?? 'invalid'}, user: ${authority?.principal.kind === 'user' ? shortId(authority.principal.userId) : 'none'}, total: ${activeConnections})`
       );
@@ -923,7 +940,7 @@ export function createSocketIOConfig(
         console.warn(
           `🚫 ${event} rejected on socket ${socket.id}: ${reason} ` +
             `(authenticated=${isAuthenticated(auth)} service=${auth.isService} ` +
-            `taskExecutor=${auth.isTaskExecutor === true} tenantBound=${!!auth.tenant} ` +
+            `executor=${auth.isExecutor === true} tenantBound=${!!auth.tenant} ` +
             `terminalScoped=${!!auth.terminalId})`
         );
       };
@@ -996,14 +1013,14 @@ export function createSocketIOConfig(
       };
 
       // Common preflight for executor-emitted terminal events
-      // (output/exit/tab/ready/error). Requires a service socket whose token is
-      // terminal-scoped (`terminalUserId`, bound at spawn time) AND whose scope
+      // (output/exit/tab/ready/error). Requires a restricted terminal-executor
+      // socket (`terminalUserId`, bound at spawn time) AND whose scope
       // matches the payload userId. The scope is required unconditionally: the
       // only legitimate emitter of these events is the terminal executor, which
       // always carries it, so a generic/unscoped service token has no business
       // driving another user's terminal. Returns true when the event may
       // proceed.
-      const requireServiceForOwnTerminal = (
+      const requireTerminalExecutorForOwnTerminal = (
         event: string,
         payloadUserId: unknown,
         payloadTerminalId: unknown
@@ -1014,7 +1031,7 @@ export function createSocketIOConfig(
         }
         const auth = getSocketAuthState(socket);
         if (!auth.isService) {
-          rejectTerminal(event, `only service tokens may emit ${event}`);
+          rejectTerminal(event, `only a terminal executor may emit ${event}`);
           return null;
         }
         if (typeof payloadUserId !== 'string' || !payloadUserId) {
@@ -1022,13 +1039,13 @@ export function createSocketIOConfig(
           return null;
         }
         if (!auth.terminalUserId) {
-          rejectTerminal(event, 'service token is not scoped to a terminal user');
+          rejectTerminal(event, 'terminal executor is not scoped to a user');
           return null;
         }
         if (auth.terminalUserId !== payloadUserId) {
           rejectTerminal(
             event,
-            `service token scoped to ${shortId(auth.terminalUserId)}… may not act for ` +
+            `terminal executor scoped to ${shortId(auth.terminalUserId)}… may not act for ` +
               `${shortId(payloadUserId)}…`
           );
           return null;
@@ -1038,7 +1055,7 @@ export function createSocketIOConfig(
           !payloadTerminalId ||
           auth.terminalId !== payloadTerminalId
         ) {
-          rejectTerminal(event, 'service token is not scoped to this terminal instance');
+          rejectTerminal(event, 'terminal executor is not scoped to this terminal instance');
           return null;
         }
         if (
@@ -1054,7 +1071,7 @@ export function createSocketIOConfig(
           return null;
         }
         if (!auth.terminalBranchId) {
-          rejectTerminal(event, 'service token is not scoped to a terminal branch');
+          rejectTerminal(event, 'terminal executor is not scoped to a branch');
           return null;
         }
         if (!matchesLocalTerminalAttachment(auth)) {
@@ -1086,7 +1103,7 @@ export function createSocketIOConfig(
         }
         // Channel membership determines who RECEIVES a user's terminal traffic
         // (output/input/resize), so it must be scoped to that user. A terminal
-        // executor's service token is bound to a single user (`terminalUserId`)
+        // terminal executor capability is bound to one user (`terminalUserId`)
         // and may only join THAT user's channel — not any user's. A service
         // token with no terminal scope has no business on a terminal channel at
         // all. User sockets may only join their own channel.
@@ -1187,7 +1204,7 @@ export function createSocketIOConfig(
       // arbitrary output (e.g. fake "permission granted" prompts) into
       // another user's terminal.
       socket.on('terminal:output', (data: { userId: string; terminalId: string; data: string }) => {
-        const auth = requireServiceForOwnTerminal(
+        const auth = requireTerminalExecutorForOwnTerminal(
           'terminal:output',
           data?.userId,
           data?.terminalId
@@ -1263,7 +1280,11 @@ export function createSocketIOConfig(
           tabName: string;
           cwd?: string;
         }) => {
-          const auth = requireServiceForOwnTerminal('terminal:tab', data?.userId, data?.terminalId);
+          const auth = requireTerminalExecutorForOwnTerminal(
+            'terminal:tab',
+            data?.userId,
+            data?.terminalId
+          );
           if (!auth) return;
           const channel = terminalChannelName(
             auth.tenant!.tenant_id,
@@ -1280,7 +1301,7 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:exit',
         (data: { userId: string; terminalId: string; exitCode: number; signal?: number }) => {
-          const auth = requireServiceForOwnTerminal(
+          const auth = requireTerminalExecutorForOwnTerminal(
             'terminal:exit',
             data?.userId,
             data?.terminalId
@@ -1307,7 +1328,9 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:ready',
         (data: { userId: string; terminalId: string; sessionName?: string; tabName?: string }) => {
-          if (!requireServiceForOwnTerminal('terminal:ready', data?.userId, data?.terminalId)) {
+          if (
+            !requireTerminalExecutorForOwnTerminal('terminal:ready', data?.userId, data?.terminalId)
+          ) {
             return;
           }
           app.emit('terminal:ready', data);
@@ -1318,7 +1341,9 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:error',
         (data: { userId: string; terminalId: string; message?: string }) => {
-          if (!requireServiceForOwnTerminal('terminal:error', data?.userId, data?.terminalId)) {
+          if (
+            !requireTerminalExecutorForOwnTerminal('terminal:error', data?.userId, data?.terminalId)
+          ) {
             return;
           }
           app.emit('terminal:error', data);
@@ -1330,7 +1355,7 @@ export function createSocketIOConfig(
         activeConnections--;
         clearAuthorityExpiry(socket);
         invalidateTerminalRequestJoin(socket as FeathersSocket);
-        retireAuthenticatedConnectionAuthority(app, (socket as FeathersSocket).feathers);
+        retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
         const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;
         if (reason === 'transport error') {
           console.warn(message);
@@ -1375,18 +1400,24 @@ export function createSocketIOConfig(
 
 /** Configure Feathers publication channels from immutable handshake authority. */
 export function configureChannels(app: Application): void {
+  const executorRevocationFence = getOrCreateExecutorConnectionRevocationFence(app);
   app.on('connection', (connection: unknown) => {
     const authority = getAuthenticatedConnectionAuthority(connection);
-    if (!authority) return;
+    if (
+      !authority ||
+      !isAuthenticatedConnectionAuthorityCurrent(authority, executorRevocationFence)
+    ) {
+      return;
+    }
 
     // Terminal executors consume only their exactly-scoped raw terminal room.
     // They never enter Feathers publication channels.
     if (authority.principal.kind === 'terminal-executor') return;
 
-    if (authority.principal.kind === 'task-executor') {
-      const capability = authority.executorCapability;
-      if (capability?.taskId) {
-        joinExecutorTaskChannel(app, capability.tenant.tenant_id, capability.taskId, connection);
+    if (authority.principal.kind === 'executor') {
+      const tenantId = authority.tenant?.tenant_id;
+      if (tenantId && authority.principal.taskId) {
+        joinExecutorTaskChannel(app, tenantId, authority.principal.taskId, connection);
       }
       return;
     }

@@ -400,6 +400,7 @@ function AppContent() {
     retryConnection,
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
+    authorityGeneration: authenticationGeneration,
   });
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
 

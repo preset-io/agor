@@ -8,13 +8,13 @@ vi.mock('../utils/executor-delegated-home.js', () => ({
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   requestExecutor: vi.fn(),
 }));
 
 const app = {
   get: () => ({}),
+  sessionTokenService: { generateCommandToken: vi.fn(async () => 'user-token') },
   settings: { authentication: { secret: 'test' } },
 } as never;
 
@@ -45,6 +45,7 @@ describe('FilesService tenant scope', () => {
         query: { sessionId: 'session-1' as never, search: 'readme' },
         session: { session_id: 'session-1', branch_id: 'branch-1' },
         branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
       } as never)
     );
 

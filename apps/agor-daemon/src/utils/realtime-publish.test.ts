@@ -349,6 +349,74 @@ describe('HA Feathers publication relay', () => {
     expect(channel.connections).not.toContain(tenantBUser);
   });
 
+  it('re-resolves board authority instead of trusting a relayed shared payload', async () => {
+    const allowed = { user: user('allowed') };
+    const denied = { user: user('denied') };
+    const otherTenant = { user: user('other-tenant') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: vi.fn((handler) => {
+        remoteHandler = handler;
+      }),
+    };
+    const app = makeApp(
+      [allowed, denied, otherTenant],
+      {},
+      {
+        'tenant:tenant-a': [allowed, denied],
+        'tenant:tenant-b': [otherTenant],
+      }
+    );
+    const currentBoard = vi.fn(async () => ({
+      board_id: 'board-a',
+      access_mode: 'private' as const,
+    }));
+    const canView = vi.fn(async (_boardId: string, userId: string) => userId === 'allowed');
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: true,
+      ...repos({ branch: branch('unused'), permissions: {} }),
+      boardRepository: {
+        findById: currentBoard,
+        canView,
+      } as unknown as BoardRepository,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: relay,
+    });
+
+    const forgedSharedEnvelope = {
+      version: REALTIME_RELAY_VERSION,
+      tenantId: 'tenant-a',
+      path: 'boards',
+      event: 'patched',
+      method: 'patch',
+      id: 'board-a',
+      data: { board_id: 'board-a', access_mode: 'shared' },
+    };
+    await remoteHandler?.(forgedSharedEnvelope);
+
+    expect(currentBoard).toHaveBeenCalledWith('board-a');
+    expect(canView).toHaveBeenCalledTimes(2);
+    expect(app.emit).toHaveBeenCalledOnce();
+    const currentPrivateDelivery = app.emit.mock.calls[0]?.[2] as FakeChannel;
+    expect(currentPrivateDelivery.connections).toEqual([allowed]);
+    expect(currentPrivateDelivery.connections).not.toContain(denied);
+    expect(currentPrivateDelivery.connections).not.toContain(otherTenant);
+
+    // Once the current row is gone, the same payload carries no authority.
+    // Only a server-captured boardRemovalVisibility snapshot can publish a
+    // deleted board tombstone.
+    app.emit.mockClear();
+    currentBoard.mockResolvedValueOnce(null as never);
+    await remoteHandler?.(forgedSharedEnvelope);
+    expect(app.emit).not.toHaveBeenCalled();
+  });
+
   it('relays a branch tombstone snapshot and re-applies tenant/RBAC containment on the receiving replica', async () => {
     const allowed = { user: user('allowed') };
     const denied = { user: user('denied') };
@@ -811,6 +879,7 @@ function repos(options: {
   /** Owning user id returned by findCreatedByBySessionId (owner-fallback tests). */
   owner?: string | null;
   boardPermissions?: Record<string, boolean>;
+  boardAccessMode?: 'private' | 'shared';
 }) {
   const viewableUserIds = Object.entries(options.permissions)
     .filter(([, permission]) =>
@@ -832,6 +901,10 @@ function repos(options: {
     ),
   } as unknown as RealtimeAccessSessionRepository;
   const boardRepository = {
+    findById: vi.fn(async (boardId: string) => ({
+      board_id: boardId,
+      access_mode: options.boardAccessMode ?? 'private',
+    })),
     canView: vi.fn(async (_boardId: string, userId: string) =>
       options.boardPermissions
         ? options.boardPermissions[userId] === true
@@ -2579,11 +2652,41 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       }
     );
 
+    it('does not trust a local shared payload over the current private board', async () => {
+      const allowed = { user: user('allowed') };
+      const denied = { user: user('denied') };
+      const app = allowlistApp([allowed, denied]);
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: true,
+        ...repos({
+          branch: branch('unused'),
+          permissions: {},
+          boardPermissions: { allowed: true, denied: false },
+        }),
+      });
+
+      const result = await app.runPublish(
+        { board_id: 'private-board', access_mode: 'shared' },
+        { path: 'boards', method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([allowed]);
+    });
+
     it('a shared board row still reaches the whole tenant', async () => {
       const u1 = { user: user('u1') };
       const u2 = { user: user('u2') };
       const app = allowlistApp([u1, u2]);
-      configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
+      configureRealtimePublish({
+        app,
+        branchRbacEnabled: true,
+        ...repos({
+          branch: branch('b1', 'none'),
+          permissions: {},
+          boardAccessMode: 'shared',
+        }),
+      });
 
       const result = await app.runPublish(
         { board_id: 'shared-board', access_mode: 'shared' },

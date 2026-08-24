@@ -100,6 +100,8 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     ['boards', 'patch', { default_others_fs_access: 'read' }],
     ['boards', 'remove', {}],
     ['users', 'patch', { role: 'suspended' }],
+    ['users', 'patch', { must_change_password: true }],
+    ['users', 'update', { must_change_password: false }],
     ['users', 'remove', {}],
     ['branches/:id/owners', 'remove', {}],
     ['branches/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
@@ -376,6 +378,7 @@ describe('protectServerManagedTaskWrites', () => {
         ...(options.executorTaskId
           ? {
               authentication: {
+                strategy: 'jwt',
                 payload: { ...executorPayload, task_id: options.executorTaskId },
               },
             }

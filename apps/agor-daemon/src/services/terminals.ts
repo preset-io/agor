@@ -42,7 +42,7 @@ import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runt
 import { isSuperAdmin } from '../utils/branch-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
-  generateScopedServiceToken,
+  generateTerminalExecutorToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
@@ -328,7 +328,7 @@ export class TerminalsService {
       startedAt: new Date(),
     };
 
-    const token = generateScopedServiceToken(
+    const token = generateTerminalExecutorToken(
       this.app,
       {
         terminal_user_id: userId,
