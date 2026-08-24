@@ -2,6 +2,7 @@
 
 import { execFileSync, execSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -14,6 +15,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tempDir = mkdtempSync(path.join(os.tmpdir(), 'agor-client-pack-'));
@@ -21,6 +23,18 @@ const tempDir = mkdtempSync(path.join(os.tmpdir(), 'agor-client-pack-'));
 function fail(message) {
   console.error(`❌ ${message}`);
   process.exitCode = 1;
+}
+
+function commandErrorMessage(error) {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  const commandError = error;
+  const diagnostics = [commandError.stdout, commandError.stderr]
+    .map((output) => (output ? String(output).trim() : ''))
+    .filter(Boolean);
+  return [error.message, ...diagnostics].join('\n');
 }
 
 function listFilesRecursive(dir) {
@@ -66,16 +80,31 @@ const dependencySections = [
   ['optionalDependencies', packedManifest.optionalDependencies ?? {}],
 ];
 
+const privateWorkspacePackagePattern =
+  /^@agor\/(?:core|agentic-tools|agentic-tool-opencode)(?:\/|$)/;
+
 for (const [sectionName, deps] of dependencySections) {
   for (const [name, version] of Object.entries(deps)) {
     if (typeof version === 'string' && version.startsWith('workspace:')) {
       fail(`Packed manifest contains workspace protocol in ${sectionName}: ${name}=${version}`);
     }
+    if (privateWorkspacePackagePattern.test(name)) {
+      fail(`Packed manifest contains private workspace package in ${sectionName}: ${name}`);
+    }
   }
 }
 
-if (packedManifest.dependencies && Object.hasOwn(packedManifest.dependencies, '@agor/core')) {
-  fail('Packed manifest must not contain @agor/core as a runtime dependency');
+function findPrivateWorkspaceModuleReference(content) {
+  const moduleInfo = ts.preProcessFile(content, true, true);
+  const references = [
+    ...moduleInfo.importedFiles,
+    ...moduleInfo.typeReferenceDirectives,
+    ...moduleInfo.libReferenceDirectives,
+    ...moduleInfo.referencedFiles,
+  ];
+  return references
+    .map((reference) => reference.fileName)
+    .find((specifier) => privateWorkspacePackagePattern.test(specifier));
 }
 
 const packedFiles = listFilesRecursive(packedRoot);
@@ -84,23 +113,50 @@ const typeFiles = packedFiles.filter(
   (file) => file.endsWith('.d.ts') || file.endsWith('.d.cts') || file.endsWith('.d.mts')
 );
 
-// Matches imports of private workspace packages, but not comments or doc-strings.
-const workspaceImportPattern =
-  /(?:^|[\s;])(?:import|export|require)\s.*['"]@agor\/(?:core|agentic-tools|agentic-tool-opencode)(?:\/[^'"]*)?['"]/m;
-
 for (const file of runtimeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (workspaceImportPattern.test(content)) {
+  const privateReference = findPrivateWorkspaceModuleReference(content);
+  if (privateReference) {
     fail(
-      `Runtime artifact still references a workspace package: ${path.relative(packedRoot, file)}`
+      `Runtime artifact still references private workspace package ${privateReference}: ${path.relative(packedRoot, file)}`
     );
   }
 }
 
 for (const file of typeFiles) {
   const content = readFileSync(file, 'utf8');
-  if (workspaceImportPattern.test(content)) {
-    fail(`Type artifact still references a workspace package: ${path.relative(packedRoot, file)}`);
+  const privateReference = findPrivateWorkspaceModuleReference(content);
+  if (privateReference) {
+    fail(
+      `Type artifact still references private workspace package ${privateReference}: ${path.relative(packedRoot, file)}`
+    );
+  }
+}
+
+const privateReferenceProbe = "type Leaked = import('@agor/core/types').Session;";
+if (findPrivateWorkspaceModuleReference(privateReferenceProbe) !== '@agor/core/types') {
+  fail('Private workspace reference detector does not recognize declaration import() types');
+}
+
+const packedNodeModules = path.join(packedRoot, 'node_modules');
+mkdirSync(packedNodeModules, { recursive: true });
+const linkedDependencies = new Set();
+for (const [sectionName, deps] of dependencySections) {
+  for (const name of Object.keys(deps)) {
+    if (linkedDependencies.has(name)) {
+      continue;
+    }
+    const source = path.join(packageDir, 'node_modules', ...name.split('/'));
+    if (!existsSync(source)) {
+      if (sectionName !== 'optionalDependencies') {
+        fail(`Installed package is missing packed ${sectionName} dependency: ${name}`);
+      }
+      continue;
+    }
+    const destination = path.join(packedNodeModules, ...name.split('/'));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    symlinkSync(source, destination, 'junction');
+    linkedDependencies.add(name);
   }
 }
 
@@ -114,11 +170,6 @@ const requiredRuntimeExports = [
   'REPO_SLUG_PATTERN',
 ];
 try {
-  symlinkSync(
-    path.join(packageDir, 'node_modules'),
-    path.join(packedRoot, 'node_modules'),
-    'junction'
-  );
   execFileSync(process.execPath, [
     '--input-type=module',
     '-e',
@@ -126,7 +177,7 @@ try {
   ]);
 } catch (error) {
   fail(
-    `Packed client entrypoint failed or is missing public runtime exports: ${error instanceof Error ? error.message : String(error)}`
+    `Packed client entrypoint failed or is missing public runtime exports: ${commandErrorMessage(error)}`
   );
 }
 
@@ -208,9 +259,7 @@ void (undefined as unknown as PublicClientTypes);
     }
   );
 } catch (error) {
-  fail(
-    `Packed client declarations are missing public client types: ${error instanceof Error ? error.message : String(error)}`
-  );
+  fail(`Packed client declarations are missing public client types: ${commandErrorMessage(error)}`);
 }
 
 try {
