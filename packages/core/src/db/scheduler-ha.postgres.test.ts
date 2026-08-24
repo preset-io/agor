@@ -248,10 +248,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     );
     expect(transitions.map((transition) => transition.attempt).sort()).toEqual([1, 2]);
     await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
-      expect(await new SessionRepository(scoped).findById(session.session_id)).toMatchObject({
+      const repo = new SessionRepository(scoped);
+      expect(await repo.findById(session.session_id)).toMatchObject({
         scheduler_init_attempt_count: 2,
         scheduler_init_failure_code: 'initialization_transient',
       });
+      expect(
+        (await repo.findIncompleteScheduledRefs(100)).map((ref) => ref.session_id)
+      ).not.toContain(session.session_id);
     });
   });
 

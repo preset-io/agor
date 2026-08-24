@@ -596,8 +596,7 @@ export class SchedulerService {
     const find = async (tenantId?: TenantID | string) => {
       const refs = await this.sessionRepo.findIncompleteScheduledRefs(
         this.config.scanBatchSize,
-        this.recoveryCursor,
-        Date.now()
+        this.recoveryCursor
       );
       if (refs.length === 0 && this.recoveryCursor) {
         // Wrap on the next tick. Advancing even past poison rows prevents one

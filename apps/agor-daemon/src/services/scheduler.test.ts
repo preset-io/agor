@@ -649,7 +649,23 @@ describe('scheduler HA occurrence recovery', () => {
         expect(prompt).toHaveBeenCalledOnce();
 
         nowSpy.mockReturnValue(retryAt);
-        await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
+        const eligible = await new SessionRepository(db).findIncompleteScheduledRefs(
+          10,
+          undefined,
+          {
+            eligibleAt: retryAt,
+          }
+        );
+        expect(eligible.map((ref) => ref.session_id)).toContain(session.session_id);
+        await (
+          scheduler as unknown as {
+            recoverIncompleteSession(
+              sessionId: Session['session_id'],
+              scheduledRunAt: number,
+              now: number
+            ): Promise<void>;
+          }
+        ).recoverIncompleteSession(session.session_id, session.scheduled_run_at!, retryAt);
         expect(prompt).toHaveBeenCalledTimes(2);
         expect(
           await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)

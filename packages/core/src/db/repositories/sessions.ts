@@ -1085,7 +1085,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findIncompleteScheduledRefs(
     limit = 25,
     after?: IncompleteScheduledSessionCursor,
-    now = Date.now()
+    options?: { eligibleAt?: number }
   ): Promise<IncompleteScheduledSessionRef[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Incomplete scheduled Session limit must be between 1 and 1000');
@@ -1107,6 +1107,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           )
         )
       : undefined;
+    // Production retry eligibility uses the same database clock that authors
+    // retry deadlines. eligibleAt exists only for deterministic repository tests.
+    const retryEligibilityTime =
+      options?.eligibleAt !== undefined
+        ? new Date(options.eligibleAt)
+        : isPostgresDatabase(this.db)
+          ? sql`CURRENT_TIMESTAMP`
+          : sql`CAST(strftime('%s', 'now') AS integer) * 1000`;
     const rows = await select(this.db, columns)
       .from(sessions)
       .where(
@@ -1118,7 +1126,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
             isNull(sessions.scheduler_init_failure_code),
             and(
               isNotNull(sessions.scheduler_init_retry_at),
-              lte(sessions.scheduler_init_retry_at, new Date(now))
+              lte(sessions.scheduler_init_retry_at, retryEligibilityTime)
             )
           ),
           afterCondition

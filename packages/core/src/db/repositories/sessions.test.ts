@@ -1470,9 +1470,11 @@ describe('SessionRepository schedule-link queries', () => {
       stage: 'mcp_attachment',
     });
 
-    expect(await repo.findIncompleteScheduledRefs(10, undefined, retry.retryAt - 1)).toEqual([]);
     expect(
-      (await repo.findIncompleteScheduledRefs(10, undefined, retry.retryAt)).map(
+      await repo.findIncompleteScheduledRefs(10, undefined, { eligibleAt: retry.retryAt - 1 })
+    ).toEqual([]);
+    expect(
+      (await repo.findIncompleteScheduledRefs(10, undefined, { eligibleAt: retry.retryAt })).map(
         (ref) => ref.session_id
       )
     ).toEqual([retrying.session_id]);
